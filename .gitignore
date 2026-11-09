@@ -83,6 +83,7 @@ Thumbs.db
 /crates/threers-node/*.node
 /crates/threers-node/node_modules/
 /crates/threers-node/*.tgz
+/crates/threers-node/npm/*/*.tgz
 /crates/threers-node/npm/**/*.node
 # Accidental create-npm-dir output keyed by rustc triple
 /crates/threers-node/aarch64-*/

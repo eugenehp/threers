@@ -193,13 +193,12 @@ impl EarthTextures {
         maps.albedo = self
             .read_raw(&self.day, TextureFormat::Rgba8UnormSrgb, &mut src)
             .map(|mut day| {
-                if !self.ice_cap.is_empty() {
-                    if let Some(cap) =
+                if !self.ice_cap.is_empty()
+                    && let Some(cap) =
                         self.read_raw(&self.ice_cap, TextureFormat::Rgba8UnormSrgb, &mut src)
-                    {
-                        let (from, to) = self.ice_cap_band;
-                        super::blend_polar_cap(&mut day, &cap, from, to);
-                    }
+                {
+                    let (from, to) = self.ice_cap_band;
+                    super::blend_polar_cap(&mut day, &cap, from, to);
                 }
                 super::ease_poles(&mut day);
                 Arc::new(day)
@@ -242,19 +241,23 @@ impl EarthTextures {
         }
 
         if self.fallback && !maps.is_complete() {
-            let gen = generate_earth_maps(self.fallback_width);
+            let fallback_maps = generate_earth_maps(self.fallback_width);
             let mut fill = |slot: &mut Option<Arc<Texture>>, from: Option<Arc<Texture>>, name| {
                 if slot.is_none() {
                     *slot = from;
                     src.generated.push(String::from(name));
                 }
             };
-            fill(&mut maps.albedo, gen.albedo, "albedo");
-            fill(&mut maps.normal, gen.normal, "normal");
-            fill(&mut maps.roughness, gen.roughness, "roughness");
-            fill(&mut maps.night, gen.night, "night");
-            fill(&mut maps.clouds, gen.clouds, "clouds");
-            fill(&mut maps.displacement, gen.displacement, "displacement");
+            fill(&mut maps.albedo, fallback_maps.albedo, "albedo");
+            fill(&mut maps.normal, fallback_maps.normal, "normal");
+            fill(&mut maps.roughness, fallback_maps.roughness, "roughness");
+            fill(&mut maps.night, fallback_maps.night, "night");
+            fill(&mut maps.clouds, fallback_maps.clouds, "clouds");
+            fill(
+                &mut maps.displacement,
+                fallback_maps.displacement,
+                "displacement",
+            );
         }
 
         (maps, src)
@@ -447,7 +450,7 @@ pub fn scale_albedo(src: &Texture, factor: f32) -> Texture {
         (e * 255.0).round() as u8
     };
     let mut data = src.data.as_ref().clone();
-    for px in data.chunks_exact_mut(4) {
+    for px in data.as_chunks_mut::<4>().0 {
         for c in px.iter_mut().take(3) {
             *c = to_srgb(to_linear(*c) * factor);
         }
@@ -526,11 +529,15 @@ mod tests {
         // White throughout, both ways — the alpha does the shaping.
         assert!(clear
             .data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .all(|p| p[..3] == [255, 255, 255]));
         assert!(thick
             .data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .all(|p| p[..3] == [255, 255, 255]));
         // Black sky is fully transparent; bright cloud is fully opaque.
         assert_eq!(clear.data[3], 0);

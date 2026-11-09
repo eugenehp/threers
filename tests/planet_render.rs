@@ -133,7 +133,7 @@ fn the_atmosphere_does_not_bury_the_planet() {
 fn brightest_longitude(night: &threers::Texture) -> f32 {
     let w = night.width as usize;
     let mut per_column = vec![0u32; w];
-    for (i, p) in night.data.chunks_exact(4).enumerate() {
+    for (i, p) in night.data.as_chunks::<4>().0.iter().enumerate() {
         if p[0] > 40 {
             per_column[i % w] += 1;
         }
@@ -141,7 +141,7 @@ fn brightest_longitude(night: &threers::Texture) -> f32 {
     let x = per_column
         .iter()
         .enumerate()
-        .max_by_key(|(_, &c)| c)
+        .max_by_key(|&(_, &c)| c)
         .map(|(x, _)| x)
         .unwrap_or(0);
     ((x as f32 + 0.5) / w as f32 - 0.5) * std::f32::consts::TAU

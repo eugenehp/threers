@@ -35,7 +35,7 @@ impl GizmoGeometry {
     /// `BufferGeometry.applyMatrix4`: positions through the matrix, normals
     /// through its normal matrix and renormalised.
     pub fn apply_matrix4(&mut self, m: &M4) {
-        for p in self.position.chunks_exact_mut(3) {
+        for p in self.position.as_chunks_mut::<3>().0 {
             let v = math::apply_m4([p[0] as f64, p[1] as f64, p[2] as f64], m);
             p[0] = v[0] as f32;
             p[1] = v[1] as f32;
@@ -43,7 +43,7 @@ impl GizmoGeometry {
         }
         if !self.normal.is_empty() {
             let nm = math::normal_matrix(m);
-            for n in self.normal.chunks_exact_mut(3) {
+            for n in self.normal.as_chunks_mut::<3>().0 {
                 let v =
                     math::normalize(math::apply_m3([n[0] as f64, n[1] as f64, n[2] as f64], &nm));
                 n[0] = v[0] as f32;
@@ -354,7 +354,7 @@ pub fn octahedron(radius: f64, detail: usize) -> GizmoGeometry {
         ]
     };
     let mut vb: Vec<f64> = Vec::new();
-    for f in INDICES.chunks_exact(3) {
+    for f in INDICES.as_chunks::<3>().0 {
         let (a, b, c) = (vtx(f[0]), vtx(f[1]), vtx(f[2]));
         let cols = detail + 1;
         let mut v: Vec<Vec<V3>> = Vec::new();
@@ -386,14 +386,14 @@ pub fn octahedron(radius: f64, detail: usize) -> GizmoGeometry {
             }
         }
     }
-    for p in vb.chunks_exact_mut(3) {
+    for p in vb.as_chunks_mut::<3>().0 {
         let n = math::scale(math::normalize([p[0], p[1], p[2]]), radius);
         p.copy_from_slice(&n);
     }
     let azimuth = |v: V3| js::atan2(v[2], -v[0]);
     let inclination = |v: V3| js::atan2(-v[1], (v[0] * v[0] + v[2] * v[2]).sqrt());
     let mut uv: Vec<f64> = Vec::new();
-    for p in vb.chunks_exact(3) {
+    for p in vb.as_chunks::<3>().0 {
         let v = [p[0], p[1], p[2]];
         let u = azimuth(v) / 2.0 / PI + 0.5;
         let w = inclination(v) / PI + 0.5;
@@ -401,7 +401,7 @@ pub fn octahedron(radius: f64, detail: usize) -> GizmoGeometry {
     }
     // correctUVs
     let mut j = 0;
-    for t in vb.chunks_exact(9) {
+    for t in vb.as_chunks::<9>().0 {
         let a = [t[0], t[1], t[2]];
         let b = [t[3], t[4], t[5]];
         let c = [t[6], t[7], t[8]];
@@ -420,7 +420,7 @@ pub fn octahedron(radius: f64, detail: usize) -> GizmoGeometry {
         j += 6;
     }
     // correctSeam
-    for t in uv.chunks_exact_mut(6) {
+    for t in uv.as_chunks_mut::<6>().0 {
         let (x0, x1, x2) = (t[0], t[2], t[4]);
         let max = x0.max(x1).max(x2);
         let min = x0.min(x1).min(x2);
@@ -440,7 +440,13 @@ pub fn octahedron(radius: f64, detail: usize) -> GizmoGeometry {
     if detail == 0 {
         // computeVertexNormals (non-indexed): the face cross product, stored,
         // then normalizeNormals.
-        for (t, n) in g.position.chunks_exact(9).zip(g.normal.chunks_exact_mut(9)) {
+        for (t, n) in g
+            .position
+            .as_chunks::<9>()
+            .0
+            .iter()
+            .zip(g.normal.as_chunks_mut::<9>().0)
+        {
             let p = |i: usize| [t[i] as f64, t[i + 1] as f64, t[i + 2] as f64];
             let (pa, pb, pc) = (p(0), p(3), p(6));
             let cb = math::cross(math::sub(pc, pb), math::sub(pa, pb));
@@ -451,7 +457,7 @@ pub fn octahedron(radius: f64, detail: usize) -> GizmoGeometry {
             }
         }
     }
-    for n in g.normal.chunks_exact_mut(3) {
+    for n in g.normal.as_chunks_mut::<3>().0 {
         let v = math::normalize([n[0] as f64, n[1] as f64, n[2] as f64]);
         n[0] = v[0] as f32;
         n[1] = v[1] as f32;

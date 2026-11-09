@@ -863,7 +863,7 @@ pub fn equirect_to_cube_faces(src: &Texture, face_size: u32) -> Vec<Texture> {
     let texel = |x: usize, y: usize, c: usize| -> f32 {
         let o = (y * sw + x) * bpp;
         if half {
-            crate::renderer::gpu_texture::f16_bits_to_f32(u16::from_le_bytes([
+            crate::math::float::f16_to_f32(u16::from_le_bytes([
                 src.data[o + c * 2],
                 src.data[o + c * 2 + 1],
             ]))
@@ -963,7 +963,7 @@ pub fn equirect_to_cube_faces(src: &Texture, face_size: u32) -> Vec<Texture> {
                     let o = i * bpp;
                     for c in 0..bpp.min(4) {
                         if half {
-                            let h = crate::renderer::gpu_texture::f32_to_f16_bits(s[c]);
+                            let h = crate::math::float::f32_to_f16(s[c]);
                             row[o + c * 2..o + c * 2 + 2].copy_from_slice(&h.to_le_bytes());
                         } else {
                             row[o + c] = (s[c].clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -1086,7 +1086,7 @@ pub fn generate_starfield(width: u32, count: u32) -> Texture {
 
     let data = buf
         .iter()
-        .flat_map(|&v| crate::renderer::gpu_texture::f32_to_f16_bits(v).to_le_bytes())
+        .flat_map(|&v| crate::math::float::f32_to_f16(v).to_le_bytes())
         .collect::<Vec<u8>>();
     let mut t = Texture::new(width, height, TextureFormat::Rgba16Float, data);
     t.wrap_s = TextureWrap::Repeat;
@@ -1311,7 +1311,7 @@ mod tests {
     /// A solid-colour equirectangular map.
     fn flat(w: u32, h: u32, rgb: [u8; 3]) -> Texture {
         let mut data = vec![255u8; (w * h * 4) as usize];
-        for px in data.chunks_exact_mut(4) {
+        for px in data.as_chunks_mut::<4>().0 {
             px[..3].copy_from_slice(&rgb);
         }
         Texture::new(w, h, TextureFormat::Rgba8UnormSrgb, data)
@@ -1546,10 +1546,8 @@ mod tests {
         assert_eq!(faces.len(), 6);
         let peak = faces
             .iter()
-            .flat_map(|f| f.data.chunks_exact(2))
-            .map(|b| {
-                crate::renderer::gpu_texture::f16_bits_to_f32(u16::from_le_bytes([b[0], b[1]]))
-            })
+            .flat_map(|f| f.data.as_chunks::<2>().0)
+            .map(|b| crate::math::float::f16_to_f32(u16::from_le_bytes([b[0], b[1]])))
             .fold(0.0f32, f32::max);
         assert!(
             peak > 1.0,
@@ -1674,7 +1672,13 @@ mod tests {
         // pass almost nothing and the night side comes out uniformly black.
         let night = generate_earth_maps(512).night.unwrap();
         let total = night.data.len() / 4;
-        let bright = night.data.chunks_exact(4).filter(|p| p[0] >= 40).count();
+        let bright = night
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] >= 40)
+            .count();
         let fraction = bright as f32 / total as f32;
         assert!(
             (0.003..0.04).contains(&fraction),
@@ -1683,7 +1687,14 @@ mod tests {
         );
         // And the brightest cores have to actually reach the top of the range,
         // or the emissive has nothing to work with.
-        let peak = night.data.chunks_exact(4).map(|p| p[0]).max().unwrap();
+        let peak = night
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[0])
+            .max()
+            .unwrap();
         assert!(peak > 150, "the brightest city is only {peak}/255");
 
         // Cities are on land: nowhere the elevation map calls ocean is lit.
@@ -1802,11 +1813,17 @@ mod tests {
     fn clouds_carry_their_shape_in_the_alpha_channel() {
         let maps = generate_earth_maps(256);
         let clouds = maps.clouds.unwrap();
-        let alphas: Vec<u8> = clouds.data.chunks_exact(4).map(|p| p[3]).collect();
+        let alphas: Vec<u8> = clouds
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[3])
+            .collect();
         assert!(alphas.iter().any(|&a| a > 200), "no thick cloud anywhere");
         assert!(alphas.iter().any(|&a| a < 20), "no clear sky anywhere");
         // …and the colour is white throughout, so the alpha does the shaping.
-        assert!(clouds.data.chunks_exact(4).all(|p| p[0] == 255));
+        assert!(clouds.data.as_chunks::<4>().0.iter().all(|p| p[0] == 255));
     }
 
     #[test]
@@ -1839,9 +1856,11 @@ mod tests {
 
     /// The sky as linear RGB triples.
     fn sky_pixels(t: &Texture) -> Vec<[f32; 3]> {
-        use crate::renderer::gpu_texture::f16_bits_to_f32;
+        use crate::math::float::f16_to_f32 as f16_bits_to_f32;
         t.data
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .map(|p| {
                 let h = |i: usize| f16_bits_to_f32(u16::from_le_bytes([p[i * 2], p[i * 2 + 1]]));
                 [h(0), h(1), h(2)]

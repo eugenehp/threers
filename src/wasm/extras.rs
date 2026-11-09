@@ -211,7 +211,7 @@ pub fn helper_skeleton(
     bone_worlds: &[f64],
     parents: &[i32],
 ) -> WebHelperGeometry {
-    let bones: Vec<lines::Mat4> = bone_worlds.chunks_exact(16).map(mat4).collect();
+    let bones: Vec<lines::Mat4> = bone_worlds.as_chunks::<16>().0.to_vec();
     helper(lines::skeleton(&mat4(root_world), &bones, parents))
 }
 
@@ -231,7 +231,7 @@ pub fn helper_box_of_objects(
     positions: &[f32],
     counts: &[u32],
 ) -> WebHelperGeometry {
-    let mats: Vec<lines::Mat4> = worlds.chunks_exact(16).map(mat4).collect();
+    let mats: Vec<lines::Mat4> = worlds.as_chunks::<16>().0.to_vec();
     let mut slices = Vec::with_capacity(counts.len());
     let mut at = 0usize;
     for &n in counts {
@@ -359,5 +359,46 @@ impl WebThreeSimplexNoise {
     }
     pub fn noise4d(&self, x: f64, y: f64, z: f64, w: f64) -> f64 {
         self.inner.noise4d(x, y, z, w)
+    }
+}
+
+// ---- extras ----
+#[wasm_bindgen]
+pub struct WebOctree {
+    pub(super) inner: crate::Octree,
+}
+#[wasm_bindgen]
+impl WebOctree {
+    #[wasm_bindgen(constructor)]
+    pub fn new(bb: &WebBox3, max_depth: u32, max_points: usize) -> WebOctree {
+        WebOctree {
+            inner: crate::Octree::new(bb.inner, max_depth, max_points),
+        }
+    }
+    pub fn insert(&mut self, p: &WebVector3) {
+        self.inner.insert(p.inner);
+    }
+}
+
+#[wasm_bindgen]
+pub struct WebSimplexNoise;
+#[wasm_bindgen]
+impl WebSimplexNoise {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> WebSimplexNoise {
+        WebSimplexNoise
+    }
+    pub fn noise2(&self, x: f32, y: f32) -> f32 {
+        crate::SimplexNoise::noise2(x, y)
+    }
+}
+
+#[wasm_bindgen]
+pub struct WebMarchingCubes;
+#[wasm_bindgen]
+impl WebMarchingCubes {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> WebMarchingCubes {
+        WebMarchingCubes
     }
 }

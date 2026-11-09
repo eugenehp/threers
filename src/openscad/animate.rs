@@ -6,19 +6,17 @@
 //! [`color()`](crate::openscad::Solid::color) gave them, frames a camera on the
 //! model, and hands the result to the renderer or to video export.
 //!
-//! ```no_run
+//! ```ignore
 //! use threers::openscad::animate::{ScadAnimation, ScadCamera, ScadRender};
-//! // `export_video` needs the `video` feature; hidden behind a `cfg` so this
-//! // compiles as documentation whether or not the feature is on.
-//! # #[cfg(feature = "video")]
-//! # fn demo() {
+//! // Video export is `threers-video`'s, as an extension trait on `ScadRender`.
+//! use threers_video::ScadVideo;
+//!
 //! // A model that opens over one loop of $t.
 //! let mut animation = ScadAnimation::from_file("hinge.scad").frames(120).fps(30);
 //! ScadRender::new(1280, 720)
 //!     .camera(ScadCamera::turntable())
 //!     .export_video(&mut animation, "hinge.mp4")
 //!     .unwrap();
-//! # }
 //! ```
 //!
 //! | Piece | Role |
@@ -1605,17 +1603,14 @@ impl ScadLighting {
 ///
 /// ```no_run
 /// use threers::openscad::animate::{ScadAnimation, ScadCamera, ScadRender};
-/// // `export_video` needs the `video` feature; hidden behind a `cfg` so this
-/// // still compiles as documentation when it is off.
-/// # #[cfg(feature = "video")]
-/// # fn demo() {
 /// let mut animation = ScadAnimation::from_file("part.scad").frames(90);
-/// ScadRender::new(1280, 720)
+/// // RGBA8 frames; `threers-video`'s `ScadVideo` encodes them to a file.
+/// # #[cfg(feature = "render")]
+/// let frames = ScadRender::new(1280, 720)
 ///     .supersample(2)
 ///     .camera(ScadCamera::turntable())
-///     .export_video(&mut animation, "part.mp4")
+///     .render_frames(&mut animation)
 ///     .unwrap();
-/// # }
 /// ```
 pub struct ScadRender {
     width: u32,
@@ -2025,6 +2020,8 @@ impl ScadRender {
 // Render / export
 // ---------------------------------------------------------------------------
 
+/// Rendering the frames needs the GPU.
+#[cfg(feature = "render")]
 impl ScadRender {
     /// Evaluate `animation` and render every frame to tightly-packed RGBA8.
     ///
@@ -2100,48 +2097,6 @@ impl ScadRender {
         Ok(paths)
     }
 
-    /// Render `animation` and encode it to `output`, picking the codec from the
-    /// file extension (`.mp4` → H.264, `.webm` → VP9, `.gif`, `.apng`).
-    ///
-    /// Needs the `video` feature. For control over quality, captions, or the
-    /// codec, build your own [`VideoOptions`](crate::video::VideoOptions) and
-    /// use [`export_video_with`](Self::export_video_with).
-    #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
-    pub fn export_video(
-        &self,
-        animation: &mut ScadAnimation,
-        output: impl AsRef<std::path::Path>,
-    ) -> Result<(), String> {
-        let path = output.as_ref();
-        let codec = codec_for_path(path);
-        let options = crate::video::VideoOptions::new(path.to_string_lossy().into_owned())
-            .fps(animation.frame_rate())
-            .codec(codec);
-        self.export_video_with(animation, &options)
-    }
-
-    /// Render `animation` and encode it with explicit
-    /// [`VideoOptions`](crate::video::VideoOptions) — the way to set quality,
-    /// a codec that does not match the extension, or subtitles.
-    ///
-    /// The options' `fps` is used as given; set it from
-    /// [`ScadAnimation::frame_rate`] to keep playback at the authored rate.
-    #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
-    pub fn export_video_with(
-        &self,
-        animation: &mut ScadAnimation,
-        options: &crate::video::VideoOptions,
-    ) -> Result<(), String> {
-        let frames = self.render_frames(animation)?;
-        if frames.is_empty() {
-            return Err("animation produced no frames".into());
-        }
-        crate::video::export_video(self.width, self.height, frames.len(), options, |i| {
-            frames[i].clone()
-        })
-        .map_err(|e| e.to_string())
-    }
-
     /// A headless renderer sized for this configuration.
     fn headless(&self) -> Result<crate::renderer::HeadlessRenderer, String> {
         crate::renderer::HeadlessRenderer::builder()
@@ -2176,24 +2131,6 @@ impl ScadRender {
         // to be dropped or it would grow for the whole animation.
         renderer.renderer().clear_geometry_cache();
         rgba
-    }
-}
-
-/// Pick a codec from an output path's extension.
-#[cfg(all(feature = "video", not(target_arch = "wasm32")))]
-fn codec_for_path(path: &std::path::Path) -> crate::video::VideoCodec {
-    use crate::video::VideoCodec;
-    match path
-        .extension()
-        .map(|e| e.to_string_lossy().to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("webm") => VideoCodec::Vp9,
-        Some("gif") => VideoCodec::Gif,
-        Some("apng" | "png") => VideoCodec::Apng,
-        Some("mov") => VideoCodec::Hevc,
-        // `.mp4` and anything unrecognized: the most widely playable option.
-        _ => VideoCodec::H264,
     }
 }
 

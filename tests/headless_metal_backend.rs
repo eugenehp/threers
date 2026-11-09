@@ -7,6 +7,7 @@
 #![cfg(metal_backend)]
 
 use threers::lights::{AmbientLight, DirectionalLight};
+use threers::RenderBackend;
 use threers::{
     BoxGeometry, Color, HeadlessRenderer, Mesh, Object3D, PerspectiveCamera, PlaneGeometry, Scene,
     StandardMaterial, Vector3,
@@ -68,22 +69,17 @@ fn camera() -> PerspectiveCamera {
 }
 
 fn build(metal: bool, format: wgpu::TextureFormat, ss: u32, msaa: u32) -> HeadlessRenderer {
-    // SAFETY: this file has one test, so nothing else reads the environment
-    // while it changes.
-    unsafe {
-        if metal {
-            std::env::set_var("THREERS_BACKEND", "metal");
-        } else {
-            std::env::remove_var("THREERS_BACKEND");
-        }
-    }
     let mut hr = HeadlessRenderer::builder()
+        .backend(if metal {
+            RenderBackend::Metal
+        } else {
+            RenderBackend::Wgpu
+        })
         .size(W, H)
         .supersample(ss)
         .color_format(format)
         .build()
         .expect("headless renderer");
-    unsafe { std::env::remove_var("THREERS_BACKEND") };
     hr.set_msaa(msaa);
     assert_eq!(hr.is_native_metal(), metal, "backend for {format:?}");
     hr
@@ -93,8 +89,10 @@ fn build(metal: bool, format: wgpu::TextureFormat, ss: u32, msaa: u32) -> Headle
 fn diff(a: &[u8], b: &[u8]) -> (f64, u8) {
     assert_eq!(a.len(), b.len());
     let mut d: Vec<u8> = a
-        .chunks_exact(4)
-        .zip(b.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
         .flat_map(|(p, q)| (0..3).map(move |c| p[c].abs_diff(q[c])))
         .collect();
     let mean = d.iter().map(|&v| v as f64).sum::<f64>() / d.len() as f64;
@@ -236,7 +234,12 @@ fn the_metal_backend_draws_what_wgpu_draws() {
             hr.render_to_rgba(&mut custom_scene(), &cam)
         })
         .collect();
-    let lit = customs[1].chunks_exact(4).filter(|p| p[0] > 40).count();
+    let lit = customs[1]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| p[0] > 40)
+        .count();
     assert!(
         lit > 500,
         "the custom shader drew almost nothing on Metal ({lit} px)"

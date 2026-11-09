@@ -735,7 +735,14 @@ pub fn decode_png(bytes: &[u8]) -> Result<PngImage, String> {
                 colour = data[9];
                 interlace = data[12];
             }
-            b"PLTE" => palette = data.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+            b"PLTE" => {
+                palette = data
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|c| [c[0], c[1], c[2]])
+                    .collect()
+            }
             b"tRNS" => trns = data.to_vec(),
             b"IDAT" => idat.extend_from_slice(data),
             b"IEND" => break,

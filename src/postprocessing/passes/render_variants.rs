@@ -633,12 +633,11 @@ impl Pass for RenderTransitionPass {
                 if self.use_texture { 1.0 } else { 0.0 },
                 0.0,
             ]);
-        if self.use_texture {
-            if let Some(tex) = &self.texture {
-                if let Some(t) = upload::texture_target(ctx.renderer, tex, &mut self.uploaded) {
-                    fx = fx.depth(&t);
-                }
-            }
+        if self.use_texture
+            && let Some(tex) = &self.texture
+            && let Some(t) = upload::texture_target(ctx.renderer, tex, &mut self.uploaded)
+        {
+            fx = fx.depth(&t);
         }
         ctx.fx(fx, dest);
     }

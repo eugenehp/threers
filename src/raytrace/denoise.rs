@@ -428,7 +428,12 @@ impl DenoiseExample<'_> {
     pub fn relative_rms(&self, image: &[f32]) -> f32 {
         let mut sum = 0.0f64;
         let mut n = 0usize;
-        for (a, b) in image.chunks_exact(4).zip(self.reference.chunks_exact(4)) {
+        for (a, b) in image
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(self.reference.as_chunks::<4>().0)
+        {
             for k in 0..3 {
                 let d = (a[k] - b[k]) as f64;
                 let r = b[k] as f64;
@@ -679,7 +684,7 @@ mod tests {
     fn alpha_passes_through_untouched() {
         let (w, h) = (8, 8);
         let mut color = vec![0.0f32; w * h * 4];
-        for (i, px) in color.chunks_exact_mut(4).enumerate() {
+        for (i, px) in color.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             px[3] = (i % 2) as f32;
         }
         let albedo = vec![[0.0f32; 3]; w * h];

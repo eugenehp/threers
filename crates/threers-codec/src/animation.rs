@@ -295,7 +295,7 @@ where
             let n = frames.len();
             for (i, mut rgba) in frames.into_iter().enumerate() {
                 if !opts.transparent {
-                    for pixel in rgba.chunks_exact_mut(4) {
+                    for pixel in rgba.as_chunks_mut::<4>().0 {
                         pixel[3] = 255;
                     }
                 }
@@ -440,7 +440,7 @@ mod tests {
 
     fn solid(r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
         let mut frame = vec![0; 8 * 8 * 4];
-        for pixel in frame.chunks_exact_mut(4) {
+        for pixel in frame.as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&[r, g, b, a]);
         }
         frame

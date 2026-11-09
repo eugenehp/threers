@@ -3,7 +3,7 @@
 //! A bracket is drawn as its mirror when it sits at an odd level: `(` as `)`, `<` as `>`,
 //! `⟨` as `⟩`. This is a *rendering* step and not a reordering one — the character does
 //! not change, only the glyph chosen for it — which is why it is the last rule and why it
-//! is here rather than in [`crate::resolve`].
+//! is here rather than in [`super::resolve`].
 //!
 //! The table is generated from `u_charMirror`; see `examples/gen_mirror.rs`.
 

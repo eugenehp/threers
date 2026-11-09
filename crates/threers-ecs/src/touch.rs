@@ -150,10 +150,10 @@ pub fn touch_step(w: &mut World) {
             }
         }
 
-        if let Some(stick) = controls.stick {
-            if !touches.iter().any(|touch| touch.id == stick.touch) {
-                controls.stick = None;
-            }
+        if let Some(stick) = controls.stick
+            && !touches.iter().any(|touch| touch.id == stick.touch)
+        {
+            controls.stick = None;
         }
         if controls.stick.is_none() && controls.axes.is_some() {
             let area = controls.stick_area * controls.screen.0;
@@ -170,12 +170,12 @@ pub fn touch_step(w: &mut World) {
             });
         }
         let (mut x, mut y) = (0.0, 0.0);
-        if let Some(stick) = controls.stick {
-            if let Some(touch) = touches.iter().find(|touch| touch.id == stick.touch) {
-                x = (touch.position.x - stick.origin.x) / controls.stick_radius;
-                // The screen's y runs down; a stick's up is positive.
-                y = (stick.origin.y - touch.position.y) / controls.stick_radius;
-            }
+        if let Some(stick) = controls.stick
+            && let Some(touch) = touches.iter().find(|touch| touch.id == stick.touch)
+        {
+            x = (touch.position.x - stick.origin.x) / controls.stick_radius;
+            // The screen's y runs down; a stick's up is positive.
+            y = (stick.origin.y - touch.position.y) / controls.stick_radius;
         }
         input.set_touch_stick(x, y);
 

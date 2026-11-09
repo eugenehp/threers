@@ -41,7 +41,6 @@ mod half_edge_map;
 mod hierarchy;
 mod hit_side;
 mod intersection_map;
-/// f64 three.js math helpers used to match JS CSG float paths bit-for-bit where needed.
 pub mod js_topology;
 mod operations;
 mod triangle_splitter;
@@ -51,6 +50,29 @@ mod triangle_utils;
 mod tests;
 
 pub use brush::CsgBrush;
+
+/// Triangle–triangle intersection on [`Triangle`](crate::math::Triangle), in
+/// the f64 path the CSG port uses. A trait because `Triangle` lives in
+/// `threers-math`, which knows nothing of CSG.
+pub trait TriangleIntersection {
+    /// Triangle–triangle intersection (including coplanar cases).
+    fn intersects_triangle(&self, other: &crate::math::Triangle) -> bool {
+        self.intersects_triangle_ext(other, true)
+    }
+
+    /// three-mesh-bvh's `ExtendedTriangle.intersectsTriangle`, in f64 as the
+    /// CSG port runs it. The flag is three-mesh-bvh's third argument,
+    /// `suppressLog`, which only silences its coplanar warning; it does not
+    /// change the answer.
+    fn intersects_triangle_ext(&self, other: &crate::math::Triangle, suppress_log: bool) -> bool;
+}
+
+impl TriangleIntersection for crate::math::Triangle {
+    fn intersects_triangle_ext(&self, other: &crate::math::Triangle, _suppress_log: bool) -> bool {
+        use js_topology::JsTriangle;
+        JsTriangle::from_triangle(*self).intersects_triangle_js(JsTriangle::from_triangle(*other))
+    }
+}
 pub use constants::*;
 pub use evaluator::{CsgEvaluator, GroupArrays};
 pub use hierarchy::{evaluate_hierarchy, CsgNode, CsgOperation, CsgOperationGroup};

@@ -969,7 +969,7 @@ pub fn object_bounds(worlds: &[Mat4], positions: &[&[f32]]) -> Option<(V3, V3)> 
         // `computeBoundingBox`.
         let mut lo = [f64::INFINITY; 3];
         let mut hi = [f64::NEG_INFINITY; 3];
-        for p in pos.chunks_exact(3) {
+        for p in pos.as_chunks::<3>().0 {
             for k in 0..3 {
                 lo[k] = lo[k].min(p[k] as f64);
                 hi[k] = hi[k].max(p[k] as f64);

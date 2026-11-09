@@ -381,17 +381,17 @@ fn collide_convex(
     if is_round(a) || is_round(b) {
         return Some(manifold);
     }
-    if let Some(mut points) = clip_faces(a, ia, b, ib, normal, prediction) {
-        if !points.is_empty() {
-            // EPA already computed the minimum translation along this axis, so
-            // no clipped point can honestly be deeper than that. Clamping keeps
-            // a degenerate face from handing the solver an impossible depth.
-            let limit = manifold.points[0].depth + 1e-3;
-            for p in &mut points {
-                p.depth = p.depth.min(limit);
-            }
-            manifold.points = points;
+    if let Some(mut points) = clip_faces(a, ia, b, ib, normal, prediction)
+        && !points.is_empty()
+    {
+        // EPA already computed the minimum translation along this axis, so
+        // no clipped point can honestly be deeper than that. Clamping keeps
+        // a degenerate face from handing the solver an impossible depth.
+        let limit = manifold.points[0].depth + 1e-3;
+        for p in &mut points {
+            p.depth = p.depth.min(limit);
         }
+        manifold.points = points;
     }
     Some(manifold)
 }
@@ -882,14 +882,12 @@ fn collide_trimesh(
             sub_a: 0,
             sub_b: tri_index,
         };
-        if !is_round(shape) {
-            if let Some(points) =
+        if !is_round(shape)
+            && let Some(points) =
                 clip_face_against_polygon(shape, shape_iso, &verts, normal, prediction)
-            {
-                if !points.is_empty() {
-                    manifold.points = points;
-                }
-            }
+            && !points.is_empty()
+        {
+            manifold.points = points;
         }
         out.push(manifold);
     });

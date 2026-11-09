@@ -10,8 +10,6 @@
 //! · `H` error · `E` PNG · `X` EXR · `C`/`L` checkpoint · `[`/`]` exposure
 //! · `=`/`-` sample budget · `F` firefly clamp · `G` glass caustics · `Space` pause.
 
-use std::sync::Arc;
-
 use threers::cameras::Camera;
 use threers::overlay::Overlay;
 use threers::raytrace::{gpu::GpuBackend, Aov, CpuBackend, RaytraceRenderer, RaytraceSettings};
@@ -25,9 +23,7 @@ use threers::{
 use winit::{
     dpi::PhysicalSize,
     event::{ElementState, Event, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent},
-    event_loop::EventLoop,
     keyboard::{KeyCode, PhysicalKey},
-    window::WindowBuilder,
 };
 
 struct InputState {
@@ -142,69 +138,67 @@ fn main() {
 }
 
 async fn run() {
-    let event_loop = EventLoop::new().expect("event loop");
-    let window = Arc::new(
-        WindowBuilder::new()
-            .with_title("threers — live path trace")
-            .with_inner_size(PhysicalSize::new(960, 720))
-            .build(&event_loop)
-            .expect("window"),
-    );
+    let attributes = winit::window::Window::default_attributes()
+        .with_title("threers — live path trace")
+        .with_inner_size(PhysicalSize::new(960, 720));
+    threers::sketch::run_window(attributes, move |window| {
+        // wgpu by default; the native Metal backend with `--features metal` and
+        // `THREERS_BACKEND=metal`. The traced picture goes up as a 2D overlay
+        // over an empty frame, which both backends composite.
+        let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
+        let size = window.inner_size();
+        let mut config = (size.width.max(1), size.height.max(1));
+        let mut overlay = Overlay::new(config.0, config.1);
+        let mut blank = Scene::new();
+        blank.background = Color::new(0.0, 0.0, 0.0);
 
-    // wgpu by default; the native Metal backend with `--features metal` and
-    // `THREERS_BACKEND=metal`. The traced picture goes up as a 2D overlay
-    // over an empty frame, which both backends composite.
-    let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
-    let size = window.inner_size();
-    let mut config = (size.width.max(1), size.height.max(1));
-    let mut overlay = Overlay::new(config.0, config.1);
-    let mut blank = Scene::new();
-    blank.background = Color::new(0.0, 0.0, 0.0);
+        let mut scene = build_scene();
+        let mut camera =
+            PerspectiveCamera::new(42.0, config.0 as f32 / config.1 as f32, 0.1, 100.0);
+        camera.position = Vector3::new(4.5, 2.8, 5.5);
+        camera.look_at(Vector3::new(0.0, 0.6, 0.0));
 
-    let mut scene = build_scene();
-    let mut camera = PerspectiveCamera::new(42.0, config.0 as f32 / config.1 as f32, 0.1, 100.0);
-    camera.position = Vector3::new(4.5, 2.8, 5.5);
-    camera.look_at(Vector3::new(0.0, 0.6, 0.0));
+        let settings = RaytraceSettings::preview()
+            .with_samples(256)
+            .with_denoise(true)
+            .with_adaptive(0.02)
+            .with_sample_redistribution(true);
 
-    let settings = RaytraceSettings::preview()
-        .with_samples(256)
-        .with_denoise(true)
-        .with_adaptive(0.02)
-        .with_sample_redistribution(true);
+        let mut path = if use_gpu() {
+            // A device of its own: the picture comes back as bytes either way,
+            // and the window's may be Metal's.
+            let backend = GpuBackend::headless()
+                .expect("a GPU for the path tracer")
+                .with_samples_per_dispatch(4);
+            let mut r = RaytraceRenderer::with_backend(config.0, config.1, Box::new(backend));
+            r.set_settings(settings);
+            r.prepare(&mut scene, &camera);
+            eprintln!("backend: gpu");
+            r
+        } else {
+            let mut r =
+                RaytraceRenderer::with_backend(config.0, config.1, Box::new(CpuBackend::new()));
+            r.set_settings(settings);
+            r.prepare(&mut scene, &camera);
+            eprintln!("backend: cpu");
+            r
+        };
 
-    let mut path = if use_gpu() {
-        // A device of its own: the picture comes back as bytes either way,
-        // and the window's may be Metal's.
-        let backend = GpuBackend::headless()
-            .expect("a GPU for the path tracer")
-            .with_samples_per_dispatch(4);
-        let mut r = RaytraceRenderer::with_backend(config.0, config.1, Box::new(backend));
-        r.set_settings(settings);
-        r.prepare(&mut scene, &camera);
-        eprintln!("backend: gpu");
-        r
-    } else {
-        let mut r = RaytraceRenderer::with_backend(config.0, config.1, Box::new(CpuBackend::new()));
-        r.set_settings(settings);
-        r.prepare(&mut scene, &camera);
-        eprintln!("backend: cpu");
-        r
-    };
+        let mut controls = OrbitControls::new(&camera);
+        let mut input = InputState::new();
+        let mut title_timer = std::time::Instant::now();
+        let window_for_loop = window.clone();
 
-    let mut controls = OrbitControls::new(&camera);
-    let mut input = InputState::new();
-    let mut title_timer = std::time::Instant::now();
-    let window_for_loop = window.clone();
-
-    event_loop
-        .run(move |event, target| match event {
+        move |event, target| match event {
             Event::WindowEvent { event, window_id } if window_id == window_for_loop.id() => {
                 match event {
                     WindowEvent::CloseRequested => target.exit(),
                     WindowEvent::Resized(new_size) => {
                         view.resize(new_size.width.max(1), new_size.height.max(1));
                         overlay.resize(new_size.width.max(1), new_size.height.max(1));
-                        camera.set_aspect(new_size.width.max(1) as f32 / new_size.height.max(1) as f32);
+                        camera.set_aspect(
+                            new_size.width.max(1) as f32 / new_size.height.max(1) as f32,
+                        );
                         config = path.set_size(new_size.width.max(1), new_size.height.max(1));
                         path.prepare_if_changed(&mut scene, &camera);
                         input.camera_dirty = false;
@@ -237,11 +231,7 @@ async fn run() {
                             panning: input.panning,
                             ..Default::default()
                         };
-                        controls.update(
-                            ev,
-                            &mut camera,
-                            (config.0 as f32, config.1 as f32),
-                        );
+                        controls.update(ev, &mut camera, (config.0 as f32, config.1 as f32));
                         input.camera_dirty = true;
                         // Clear + coarse preview while dragging so the film
                         // matches the new view instead of showing a stale frame.
@@ -297,33 +287,27 @@ async fn run() {
                                 Err(e) => eprintln!("save png failed: {e}"),
                             }
                         }
-                        KeyCode::KeyX => {
-                            match path.save_exr("out/viewport_path_trace_live.exr") {
-                                Ok(()) => eprintln!(
-                                    "wrote viewport_path_trace_live.exr ({} spp)",
-                                    path.samples()
-                                ),
-                                Err(e) => eprintln!("save exr failed: {e}"),
-                            }
-                        }
-                        KeyCode::KeyC => {
-                            match path.save_film("viewport_path_trace_live.rtfc") {
-                                Ok(()) => eprintln!(
-                                    "wrote viewport_path_trace_live.rtfc ({} spp)",
-                                    path.samples()
-                                ),
-                                Err(e) => eprintln!("save checkpoint failed: {e}"),
-                            }
-                        }
-                        KeyCode::KeyL => {
-                            match path.load_film("viewport_path_trace_live.rtfc") {
-                                Ok(()) => eprintln!(
-                                    "loaded viewport_path_trace_live.rtfc ({} spp)",
-                                    path.samples()
-                                ),
-                                Err(e) => eprintln!("load checkpoint failed: {e}"),
-                            }
-                        }
+                        KeyCode::KeyX => match path.save_exr("out/viewport_path_trace_live.exr") {
+                            Ok(()) => eprintln!(
+                                "wrote viewport_path_trace_live.exr ({} spp)",
+                                path.samples()
+                            ),
+                            Err(e) => eprintln!("save exr failed: {e}"),
+                        },
+                        KeyCode::KeyC => match path.save_film("viewport_path_trace_live.rtfc") {
+                            Ok(()) => eprintln!(
+                                "wrote viewport_path_trace_live.rtfc ({} spp)",
+                                path.samples()
+                            ),
+                            Err(e) => eprintln!("save checkpoint failed: {e}"),
+                        },
+                        KeyCode::KeyL => match path.load_film("viewport_path_trace_live.rtfc") {
+                            Ok(()) => eprintln!(
+                                "loaded viewport_path_trace_live.rtfc ({} spp)",
+                                path.samples()
+                            ),
+                            Err(e) => eprintln!("load checkpoint failed: {e}"),
+                        },
                         KeyCode::BracketLeft => {
                             let e = (path.settings().exposure / 1.25).max(0.05);
                             path.set_exposure(e);
@@ -377,14 +361,13 @@ async fn run() {
                     WindowEvent::RedrawRequested => {
                         const MAX_TILES: u32 = 16;
                         const BUDGET_MS: u32 = 14;
-                        if !input.rotating && !input.panning && !input.paused && path.needs_more_samples() {
+                        if !input.rotating
+                            && !input.panning
+                            && !input.paused
+                            && path.needs_more_samples()
+                        {
                             let _ = path.accumulate_interactive(
-                                &mut scene,
-                                &camera,
-                                0,
-                                1,
-                                MAX_TILES,
-                                BUDGET_MS,
+                                &mut scene, &camera, 0, 1, MAX_TILES, BUDGET_MS,
                             );
                         }
 
@@ -409,7 +392,11 @@ async fn run() {
                             let conv = stats.converged_fraction * 100.0;
                             let tiles = stats.unconverged_tile_count;
                             let ms = path.last_tile_ms();
-                            let denoise = if path.settings().denoise { "denoise" } else { "raw" };
+                            let denoise = if path.settings().denoise {
+                                "denoise"
+                            } else {
+                                "raw"
+                            };
                             let adapt = if path.settings().adaptive_threshold > 0.0 {
                                 "adapt"
                             } else {
@@ -455,11 +442,11 @@ async fn run() {
             Event::AboutToWait
                 if ((!input.paused && path.needs_more_samples())
                     || input.rotating
-                    || input.panning)
-                => {
-                    window_for_loop.request_redraw();
-                }
+                    || input.panning) =>
+            {
+                window_for_loop.request_redraw();
+            }
             _ => {}
-        })
-        .expect("event loop");
+        }
+    });
 }

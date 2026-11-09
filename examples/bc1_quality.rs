@@ -15,7 +15,7 @@ use threers::textures::bc1;
 fn psnr(a: &[u8], b: &[u8]) -> f64 {
     let mut se = 0.0f64;
     let mut n = 0.0f64;
-    for (x, y) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+    for (x, y) in a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0) {
         for c in 0..3 {
             let d = x[c] as f64 - y[c] as f64;
             se += d * d;

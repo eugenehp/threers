@@ -177,23 +177,31 @@ fn array(reader: &mut Reader<'_>, kind: u8) -> Result<Property, FbxError> {
     };
     Ok(match kind {
         b'd' => Property::Doubles(
-            data.chunks_exact(8)
-                .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+            data.as_chunks::<8>()
+                .0
+                .iter()
+                .map(|c| f64::from_le_bytes(*c))
                 .collect(),
         ),
         b'f' => Property::Floats(
-            data.chunks_exact(4)
-                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            data.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| f32::from_le_bytes(*c))
                 .collect(),
         ),
         b'l' => Property::Longs(
-            data.chunks_exact(8)
-                .map(|c| i64::from_le_bytes(c.try_into().unwrap()))
+            data.as_chunks::<8>()
+                .0
+                .iter()
+                .map(|c| i64::from_le_bytes(*c))
                 .collect(),
         ),
         b'i' => Property::Ints(
-            data.chunks_exact(4)
-                .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
+            data.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| i32::from_le_bytes(*c))
                 .collect(),
         ),
         _ => Property::Bools(data.iter().map(|&b| b != 0).collect()),

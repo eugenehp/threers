@@ -62,6 +62,7 @@ pub use layout::{LaidOutText, LineBox};
 pub use overlay::CaptionOverlay;
 pub use raster::CaptionPainter;
 
-// The caption data model (tracks, cues, SRT/WebVTT) lives in `threers-codec`,
-// whose muxers write caption tracks; the rendering side stays here.
-pub use threers_codec::captions::*;
+// The caption data model (tracks, cues, SRT/WebVTT) lives in the dependency-free
+// `threers-captions`, which `threers-codec`'s muxers share; the rendering side
+// stays here.
+pub use threers_captions::*;

@@ -26,29 +26,39 @@
 //!
 //! # Feature flags
 //!
-//! The three.js API surface — scene graph, geometry, materials, lights,
-//! cameras, controls, loaders, post-processing, renderer — is unconditional.
-//! Everything below is a self-contained subsystem: turning one off removes its
+//! The core — math, the scene graph, geometry, materials, lights, cameras,
+//! controls, loaders and exporters — is unconditional, and depends on `log`,
+//! `slotmap` and `web-time` and nothing else: no GPU stack, and none of the
+//! other threers crates. Everything below is a self-contained subsystem
+//! behind a feature, the renderer included: turning one off removes its
 //! module and its re-exports and touches nothing else.
+//!
+//! ```toml
+//! # The core alone: scene graph, geometry and loaders, no GPU
+//! threers = { version = "0.0.12", default-features = false }
+//! # The renderer and nothing else
+//! threers = { version = "0.0.12", default-features = false, features = ["render"] }
+//! ```
 //!
 //! ## Leaf features
 //!
 //! | Feature | Default | Role | Extra deps |
 //! |---------|---------|------|------------|
-//! | `captions` | **on** | Subtitles — SRT + WebVTT, on-screen and burned in | — |
-//! | `sketch` | **on** | `sketch()` and the winit-window `WindowRenderer`; off, winit is not built | — |
+//! | `render` | **on** | The wgpu renderer and everything that draws: `Renderer`, headless and windowed rendering, post-processing, marks, volumes, GPU textures | wgpu, bytemuck, pollster |
+//! | `captions` | **on** | Subtitles — SRT + WebVTT, on-screen and burned in | threers-captions |
+//! | `sketch` | **on** | `sketch()` and the winit-window `WindowRenderer` (implies `render`); off, winit is not built | winit |
 //! | `mesh-bvh` | | Accelerated raycast / shapecast | — |
-//! | `raytrace` | | Path tracer: global illumination, area lights, refraction, DoF; CPU + wgpu-compute backends | — |
+//! | `raytrace` | | Path tracer: global illumination, area lights, refraction, DoF; CPU + wgpu-compute backends (implies `render`) | — |
 //! | `bvh-csg` | | Constructive solid geometry (implies `mesh-bvh`) | — |
 //! | `openscad` | | `.scad` front end + `Solid` DSL + exact-CSG kernel (implies `bvh-csg`) | — |
 //! | `manifold` | | Optional Manifold kernel behind OpenSCAD booleans (implies `openscad`) | manifold-rust |
 //! | `planet` | | Planets, moons, starfields, map generation | — |
-//! | `fluid` | | Interactive 2D and 3D fluids on the GPU, as render passes (runs on WebGL2) | — |
+//! | `fluid` | | Interactive 2D and 3D fluids on the GPU, as render passes (runs on WebGL2; implies `render`) | — |
+//! | `softbody` | | Soft bodies that tear and regrow, with a WebGPU compute solver (implies `render`) | threers-softbody |
 //! | `usd` | | Universal Scene Description — `.usda`, `.usdc`, `.usdz`, read and written | — |
-//! | `video` | | Native frame-sequence export via ffmpeg (implies `captions`) | — |
-//! | `native-codec` | | Pure-Rust video encoders, audio decoders and containers (wasm-safe; the `threers-codec` crate) | — |
-//! | `native-decode` | | Pure-Rust H.264, HEVC, VP9 and AV1 decoders, and [`video_player`] for video on meshes, sound included (implies `native-codec`). Decodes on every core, and in hardware where there is some (VideoToolbox, NVDEC, VAAPI, loaded at run time) | — |
-//! | `metal` | | A second renderer on Metal directly, via the Objective-C runtime (macOS/iOS) | — |
+//! | `native-codec` | | Pure-Rust video encoders, audio decoders and containers (wasm-safe) | threers-codec |
+//! | `native-decode` | | Pure-Rust H.264, HEVC, VP9 and AV1 decoders (implies `native-codec`). Decodes on every core, and in hardware where there is some (VideoToolbox, NVDEC, VAAPI, loaded at run time); video on meshes and video export are the `threers-video` crate | threers-codec |
+//! | `metal` | | A second renderer on Metal directly, via the Objective-C runtime (macOS/iOS; implies `render`) | — |
 //! | `visionos` | | CompositorServices frame loop + ARKit world tracking, stereo and reverse-Z (implies `metal`) | — |
 //! | `videotoolbox` | | In-process VideoToolbox encode and decode (macOS) | — |
 //! | `nvidia` | | NVENC encode and NVDEC decode on NVIDIA GPUs (Linux/Windows, driver loaded at run time) | — |
@@ -65,18 +75,18 @@
 //! | `assembly-check` | | Assembly motion checks (body correspondence, axis recovery, swept volume) | — |
 //! | `learned-denoise` | | Trained U-Net denoiser beside À-Trous (implies `raytrace`) | — |
 //! | `learned-denoise-metal`, `learned-denoise-gpu` | | The same network on Metal or wgpu (imply `learned-denoise`) | — |
-//! | `webgl` | | WebGL2 in the browser through wgpu's GL backend, where WebGPU is missing | — |
+//! | `webgl` | | WebGL2 in the browser through wgpu's GL backend, where WebGPU is missing (implies `render`) | — |
 //!
 //! ## Meta bundles
 //!
 //! | Bundle | Enables |
 //! |--------|---------|
 //! | `cad` | `openscad` + `nurbs` + `brep` + `brep-csg` + `parallel` |
-//! | `media` | `video` + `native-codec` + `captions` |
+//! | `media` | `native-decode` + `native-codec` + `gif` + `captions` |
 //! | `gi` | `raytrace` + `learned-denoise` |
 //! | `apple` | `metal` + `videotoolbox` |
 //! | `full` | `cad` + `media` + `gi` + `planet` + `fluid` + `usd` + `rlx` + `rlx-geo` + `assembly-check` + `async` + `step` + `brep-kernel` |
-//! | `wasm-full` | Browser kitchen sink: `captions` + `openscad` + `native-codec` + `nurbs` + `planet` + `raytrace` + `fluid` + `usd` |
+//! | `wasm-full` | Browser kitchen sink: `captions` + `openscad` + `native-codec` + `nurbs` + `planet` + `raytrace` + `fluid` + `usd` + `softbody` |
 //!
 //! ```toml
 //! # CAD stack in one flag
@@ -100,6 +110,8 @@
 //! |--------|------|
 //! | [`prelude`] | One glob import for the types nearly every scene uses; nested modules for controls / animation / … |
 //! | [`core`] | Scene graph, geometry, raycaster |
+//! | [`math`] | Vectors, matrices, colours, bounds, Delaunay, geographic coordinates — the `threers-math` crate |
+//! | `audio` | Audio sources, listeners and positional audio as scene nodes — the `threers-audio` crate (`audio`) |
 //! | [`origami`] | Rigid origami: crease patterns, degree-4 kinematics, folded meshes |
 //! | [`renderer`] | wgpu draw + post-processing; headless offscreen (native) |
 //! | `raytrace` | Path-traced rendering — global illumination, on CPU or GPU (`raytrace`) |
@@ -113,7 +125,6 @@
 //! | `mesh_bvh` | Opt-in BVH (`mesh-bvh` feature) |
 //! | `csg` | Opt-in CSG (`bvh-csg` feature) |
 //! | `nurbs` / `brep` / `step` | CAD surface stack (feature-gated) |
-//! | `video` | Opt-in video export (`video` feature, native) |
 //! | `codec` | Opt-in media codecs (`native-codec` feature) |
 //! | `rlx` | Opt-in RLX bridge (`rlx`, `rlx-geo` features) |
 
@@ -183,11 +194,12 @@ macro_rules! on_metal {
 }
 
 pub mod animation;
-/// Generic checks for assemblies that move: body correspondence across poses,
-/// axis recovery, and swept free volume. Knows nothing about what it inspects.
 #[cfg(feature = "assembly-check")]
 pub mod assembly;
-pub mod audio;
+/// Audio sources, listeners and positional audio: the
+/// [`threers-audio`](https://docs.rs/threers-audio) crate (`audio` feature).
+#[cfg(feature = "audio")]
+pub use threers_audio as audio;
 pub mod cameras;
 #[cfg(feature = "captions")]
 pub mod captions;
@@ -196,51 +208,42 @@ pub mod core;
 pub mod curves;
 pub mod exporters;
 pub mod extras;
-/// Fur by shells: [`FurMaterial`] on any mesh (`fur::fur_object`).
 pub mod fur;
 pub mod fx;
 pub use fur::{FurGroom, FurMaterial};
 pub mod geometries;
 pub mod helpers;
-/// Inverse kinematics: damped least squares joint solving for serial arms,
-/// with position and tool direction as separate residuals rather than a
-/// weighted sum. See [`kinematics`].
 pub mod kinematics;
 pub mod lights;
 pub mod loaders;
+#[cfg(feature = "render")]
 pub mod marks;
 pub mod materials;
 pub mod math;
-/// Rigid origami: degree-4 vertex kinematics, crease-pattern closure, and a
-/// dual walk that folds a consistent assignment off the plane.
 pub mod origami;
-/// Particles — emitters, physical forces and collisions — and the snow and
-/// sand built on them (`particles::presets`, `particles::snow`,
-/// `particles::sand`).
 pub mod particles;
+#[cfg(feature = "render")]
 pub mod postprocessing;
-/// One import for the things nearly every scene uses — see [`prelude`].
 pub mod prelude;
 pub mod renderers;
 pub mod scene;
 pub mod sdf;
+#[cfg(feature = "softbody")]
 pub mod softbody;
 pub mod stats;
 pub mod textures;
 pub mod utils;
+#[cfg(feature = "render")]
 pub mod volume;
-/// WGSL stripped of its comments at compile time ([`wgsl!`]).
 pub mod wgsl;
 
-/// Easing curves — the shape of a transition in time.
 pub mod easing;
 pub mod overlay;
 // A retained UI: CSS-subset styles, flexbox layout, painting, hit-testing.
 // (Its docs are the module's own `//!`; an outer `///` here would make their
 // intra-doc links resolve in this scope, where `Ui` is not.)
+#[cfg(feature = "render")]
 pub mod renderer;
-/// A window, a scene and a loop in one call. Needs the `sketch` feature; native
-/// only, and not tvOS or visionOS, whose windows belong to the system.
 #[cfg(winit_window)]
 pub mod sketch;
 #[cfg(feature = "ui")]
@@ -248,18 +251,21 @@ pub mod ui;
 
 // No outer doc comment: `gpu.rs` carries `//!` docs, and an outer `///` here
 // would make the intra-doc links inside them resolve in this scope.
+#[cfg(feature = "render")]
 pub mod gpu;
 pub mod strict_float;
 /// The `THREE.*` JS shim's bindings (WebRenderer, WebMesh, loaders, ...).
 /// Built with `--cfg threers_no_js_bindings` they are left out: a consumer
 /// driving the Rust API from its own wasm-bindgen crate otherwise ships
 /// ~1,200 exports it never calls (exports are roots, so nothing prunes them).
-#[cfg(all(target_arch = "wasm32", not(threers_no_js_bindings)))]
+#[cfg(all(
+    target_arch = "wasm32",
+    feature = "render",
+    not(threers_no_js_bindings)
+))]
 pub mod wasm;
-/// three-bvh-csg's boolean evaluation for the browser.
 #[cfg(all(target_arch = "wasm32", feature = "bvh-csg"))]
 pub mod wasm_csg;
-/// The trained denoiser in a browser, split so the work can go to web workers.
 #[cfg(all(target_arch = "wasm32", feature = "raytrace"))]
 pub mod wasm_denoise;
 /// Progressive path tracing for the browser.
@@ -271,10 +277,6 @@ pub mod wasm_denoise;
 pub mod wasm_pathtrace;
 
 cfg_metal! {
-    /// A second renderer that talks to Metal directly, with no `metal-rs`, no
-    /// `objc` crate and no C in the build — see [`metal`](crate::metal) for what it
-    /// covers. macOS, iOS, tvOS and visionOS only; the `metal` feature is inert
-    /// elsewhere.
     pub mod metal;
 }
 
@@ -293,14 +295,17 @@ pub use threers_codec::vaapi;
 /// they live in `threers-codec`, and [`codec::hw`] puts both behind one
 /// interface with a software fallback.
 #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
-pub use threers_codec::{videotoolbox, videotoolbox_decode};
+pub use threers_codec::videotoolbox;
+#[cfg(all(
+    feature = "videotoolbox",
+    feature = "native-decode",
+    target_os = "macos"
+))]
+pub use threers_codec::videotoolbox_decode;
 
 #[cfg(feature = "mesh-bvh")]
 pub mod mesh_bvh;
 
-/// A physically-based path tracer beside the rasteriser — global illumination,
-/// area lights, refraction, depth of field. CPU and wgpu-compute backends over
-/// one scene form. Enable the `raytrace` feature.
 #[cfg(feature = "raytrace")]
 pub mod raytrace;
 
@@ -319,34 +324,18 @@ pub mod planet;
 #[cfg(feature = "fluid")]
 pub mod fluid;
 
-/// NURBS curves and surfaces in f64 — derivatives, knot operations, exact conic
-/// and quadric constructors, curvature-adaptive tessellation. Stage 0 of the
-/// B-rep roadmap; see `docs/brep-nurbs-plan.md`.
-///
-/// Distinct from [`curves::NURBSCurve`] / [`curves::NURBSSurface`], which are
-/// the unconditional f32 three.js parity types and convert into these.
 #[cfg(feature = "nurbs")]
 pub mod nurbs;
 
-/// Analytic surface provenance: every triangle knows the surface it was sampled
-/// from, so normals, UVs and re-tessellation derive from the surface rather than
-/// the mesh. Stage 1 of the B-rep roadmap; see `docs/brep-nurbs-plan.md`.
 #[cfg(feature = "brep")]
 pub mod brep;
 
-/// STEP (ISO 10303) AP203/AP214 advanced B-rep import and export. Stage 5 of
-/// the B-rep roadmap; see `docs/brep-nurbs-plan.md`.
 #[cfg(feature = "step")]
 pub mod step;
 
-/// Robust boolean kernel (M1 scaffold) — winding-number classification +
-/// straddle detection. See `docs/openscad-plan.md`.
 #[cfg(feature = "openscad")]
 pub mod exact_csg;
 
-/// The RLX bridge: tensors ↔ geometry and pixels, a compiled-graph runner, and
-/// exact Delaunay/Voronoi. One module, two independent features (`rlx`,
-/// `rlx-geo`) — the renderer itself is unchanged either way.
 #[cfg(any(feature = "rlx", feature = "rlx-geo"))]
 pub mod rlx;
 
@@ -368,6 +357,7 @@ macro_rules! log {
 pub use animation::{
     AnimationAction, AnimationClip, AnimationMixer, Interpolation, KeyframeTrack, TrackTarget,
 };
+#[cfg(feature = "audio")]
 pub use audio::{
     Audio, AudioAnalyser, AudioBackend, AudioListener, DistanceModel, NoopBackend, PositionalAudio,
     SpatialMix,
@@ -456,11 +446,12 @@ pub use math::{
 };
 #[cfg(feature = "nurbs")]
 pub use nurbs::{NurbsCurve, NurbsSurface, TessellationOptions};
+#[cfg(feature = "render")]
 pub use postprocessing::{
     BloomPass, CopyPass, EffectComposer, FilmPass, FxaaPass, GlitchPass, OutlinePass, OutputPass,
     Pass, RenderPass, ShaderPass, SsaoPass, SsrPass, UnrealBloomPass,
 };
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "render", not(target_arch = "wasm32")))]
 pub use renderer::headless::{
     GpuVendor, HeadlessBuilder, HeadlessConfig, HeadlessRenderer, MappedFrame,
 };
@@ -484,9 +475,12 @@ pub use renderer::headless::{
 ///     let _ = threers::Renderer::new(device, queue, wgpu::TextureFormat::Bgra8UnormSrgb, 800, 600);
 /// }
 /// ```
+#[cfg(feature = "render")]
 pub use wgpu;
 
-pub use renderer::{halton, stratified_jitter, RenderTarget, Renderer, ToneMapping};
+pub use math::ToneMapping;
+#[cfg(feature = "render")]
+pub use renderer::{halton, stratified_jitter, RenderBackend, RenderTarget, Renderer};
 pub use renderers::{
     svg_from_rgba, Css2dRenderer, Css3dRenderer, SvgOptions, SvgRenderer, SvgShading,
 };
@@ -497,31 +491,14 @@ pub use textures::{
     TextureWrap,
 };
 pub use utils::png::{decode_png, encode_png, PngImage};
+#[cfg(feature = "render")]
 pub use volume::Data3DTexture;
 
-/// Rendering a sequence: stills, a video, or both from one pass.
-pub mod sequence;
-pub use sequence::{
-    render_sequence, video_available, SequenceError, SequenceOptions, SequenceReport,
-};
-
-/// Time smear: echoes of moving things before and after they pass — an
-/// offline filter over a frame sequence.
 pub mod time_smear;
 pub use time_smear::TimeSmear;
 pub use utils::{
     center as center_geometry, compute_tangents, compute_vertex_normals, merge_geometries,
     scale as scale_geometry,
-};
-
-/// Native video export (frame sequence → ffmpeg). Enable the `video` feature.
-#[cfg(all(feature = "video", not(target_arch = "wasm32")))]
-pub mod video;
-#[cfg(all(feature = "video", not(target_arch = "wasm32")))]
-pub use video::{
-    export_video, export_video_with_progress, format_video_progress, CaptionExport, CaptionMode,
-    VideoCodec, VideoError, VideoExportEvent, VideoExportPhase, VideoExportProgress, VideoExporter,
-    VideoOptions, VideoQuality,
 };
 
 #[cfg(feature = "native-codec")]
@@ -561,9 +538,6 @@ pub use codec::webm::{encode_gray_webm, encode_webm, mux_webm, WebmCodec, WebmFr
 /// bindings, and wasm-compatible. Enable the `native-codec` feature.
 #[cfg(feature = "native-codec")]
 pub use threers_codec as codec;
-// Video on a mesh; the module documents itself.
-#[cfg(any(feature = "video", feature = "native-decode"))]
-pub mod video_player;
 
 #[cfg(feature = "mesh-bvh")]
 pub use mesh_bvh::{
@@ -579,9 +553,9 @@ pub use raytrace::{
 
 #[cfg(feature = "bvh-csg")]
 pub use csg::{
-    evaluate_hierarchy, CsgBrush, CsgEvaluator, CsgNode, CsgOperation, CsgOperationGroup, ADDITION,
-    DIFFERENCE, HOLLOW_INTERSECTION, HOLLOW_SUBTRACTION, INTERSECTION, REVERSE_SUBTRACTION,
-    SUBTRACTION,
+    evaluate_hierarchy, CsgBrush, CsgEvaluator, CsgNode, CsgOperation, CsgOperationGroup,
+    TriangleIntersection, ADDITION, DIFFERENCE, HOLLOW_INTERSECTION, HOLLOW_SUBTRACTION,
+    INTERSECTION, REVERSE_SUBTRACTION, SUBTRACTION,
 };
 
 #[cfg(feature = "openscad")]

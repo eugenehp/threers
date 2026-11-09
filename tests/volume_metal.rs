@@ -8,30 +8,23 @@
 use threers::math::{Quaternion, Vector3};
 use threers::renderer::PixelRect;
 use threers::volume::{plane_to_voxel, Data3DTexture, GpuVolume, SliceParams, SliceRenderer};
+use threers::RenderBackend;
 use threers::{Color, HeadlessRenderer, PerspectiveCamera, Scene};
 
 const SIZE: u32 = 64;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 fn build(metal: bool) -> HeadlessRenderer {
-    // The backend is read from the environment as a renderer is built, and
-    // the tests here run at once: one build at a time.
-    static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
-    // SAFETY: the lock above; nothing else here reads the environment.
-    unsafe {
-        if metal {
-            std::env::set_var("THREERS_BACKEND", "metal");
-        } else {
-            std::env::remove_var("THREERS_BACKEND");
-        }
-    }
     let mut hr = HeadlessRenderer::builder()
+        .backend(if metal {
+            RenderBackend::Metal
+        } else {
+            RenderBackend::Wgpu
+        })
         .size(SIZE, SIZE)
         .color_format(FORMAT)
         .build()
         .expect("headless renderer");
-    unsafe { std::env::remove_var("THREERS_BACKEND") };
     hr.set_msaa(1);
     assert_eq!(hr.is_native_metal(), metal);
     hr
@@ -214,8 +207,10 @@ fn a_shader_material_reads_a_volume_on_either_backend() {
         );
     }
     let differing = frames[0]
-        .chunks_exact(4)
-        .zip(frames[1].chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(frames[1].as_chunks::<4>().0)
         .filter(|(a, b)| a != b)
         .count();
     assert!(

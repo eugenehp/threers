@@ -77,10 +77,8 @@ mod retained {
             let mut painter = OverlayPainter::new(&mut hud.0);
             layer.ui.layout(width as f32, height as f32, &mut painter);
             layer.ui.paint(&mut painter);
-            if clicked {
-                if let Some(node) = layer.ui.hit_test(at.x, at.y) {
-                    w.send(UiClicked(node));
-                }
+            if clicked && let Some(node) = layer.ui.hit_test(at.x, at.y) {
+                w.send(UiClicked(node));
             }
         });
     }

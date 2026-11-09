@@ -35,9 +35,9 @@
 //! holds back only the pictures it reorders, not a fixed window.
 
 use super::{Backend, DecodedFrame, NativeDecoder, Picture};
+use crate::bytes::{Bytes, FramePool};
 use crate::mp4_demux::TrackCodec;
 use std::collections::VecDeque;
-use crate::bytes::{Bytes, FramePool};
 
 /// Frame rate assumed for streams that carry no timing.
 const UNTIMED_FPS: f64 = 30.0;
@@ -162,7 +162,14 @@ pub fn demux(data: impl Into<Bytes>) -> Result<Demuxed, String> {
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        (track.codec, track.config, track.width, track.height, bytes, samples)
+        (
+            track.codec,
+            track.config,
+            track.width,
+            track.height,
+            bytes,
+            samples,
+        )
     };
     Ok(Demuxed {
         codec,
@@ -238,7 +245,9 @@ impl SampleDecoder {
         #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
         if hardware {
             let described = match (codec, config.is_empty(), first) {
-                (TrackCodec::Vp9, true, Some(frame)) => vp9_record(frame, width, height).unwrap_or_default(),
+                (TrackCodec::Vp9, true, Some(frame)) => {
+                    vp9_record(frame, width, height).unwrap_or_default()
+                }
                 _ => config.to_vec(),
             };
             let track = crate::mp4_demux::VideoTrack {
@@ -257,7 +266,11 @@ impl SampleDecoder {
         // NVDEC, then VAAPI: both are loaded at run time and refuse when the
         // machine has no driver.
         #[cfg(any(
-            all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"),
+            all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ),
             all(feature = "vaapi", target_os = "linux")
         ))]
         if hardware {
@@ -269,19 +282,23 @@ impl SampleDecoder {
                 timescale: 90_000,
                 samples: Vec::new(),
             };
-            #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
-            if Backend::Nvdec.available() {
-                if let Ok(mut d) = crate::nvidia::NvdecDecoder::new(&track) {
-                    d.set_pool(pool.clone());
-                    return Ok(Self::Nvdec(Box::new(d)));
-                }
+            #[cfg(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ))]
+            if Backend::Nvdec.available()
+                && let Ok(mut d) = crate::nvidia::NvdecDecoder::new(&track)
+            {
+                d.set_pool(pool.clone());
+                return Ok(Self::Nvdec(Box::new(d)));
             }
             #[cfg(all(feature = "vaapi", target_os = "linux"))]
-            if Backend::Vaapi.available() {
-                if let Ok(mut d) = crate::vaapi::VaapiDecoder::new(&track) {
-                    d.set_pool(pool.clone());
-                    return Ok(Self::Vaapi(Box::new(d)));
-                }
+            if Backend::Vaapi.available()
+                && let Ok(mut d) = crate::vaapi::VaapiDecoder::new(&track)
+            {
+                d.set_pool(pool.clone());
+                return Ok(Self::Vaapi(Box::new(d)));
             }
         }
         let _ = (hardware, first, pool);
@@ -300,7 +317,9 @@ impl SampleDecoder {
     /// nothing later can go out before it has.
     fn earliest_in_flight(&self) -> f64 {
         match self {
-            Self::Threaded { in_flight, .. } => in_flight.values().copied().fold(f64::INFINITY, f64::min),
+            Self::Threaded { in_flight, .. } => {
+                in_flight.values().copied().fold(f64::INFINITY, f64::min)
+            }
             _ => f64::INFINITY,
         }
     }
@@ -337,7 +356,11 @@ impl SampleDecoder {
             Self::Native(_) | Self::Threaded { .. } => Backend::Native,
             #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
             Self::VideoToolbox(_) => Backend::VideoToolbox,
-            #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ))]
             Self::Nvdec(_) => Backend::Nvdec,
             #[cfg(all(feature = "vaapi", target_os = "linux"))]
             Self::Vaapi(_) => Backend::Vaapi,
@@ -346,7 +369,14 @@ impl SampleDecoder {
 
     /// `seconds` is when the sample shows, for a threaded decoder to key
     /// its pictures by.
-    fn push(&mut self, sample: &[u8], pts: i64, dts: i64, duration: i64, seconds: f64) -> Result<(), String> {
+    fn push(
+        &mut self,
+        sample: &[u8],
+        pts: i64,
+        dts: i64,
+        duration: i64,
+        seconds: f64,
+    ) -> Result<(), String> {
         match self {
             Self::Native(d) => d.push(sample, pts, dts, duration),
             Self::Threaded { decoder, in_flight } => {
@@ -359,7 +389,11 @@ impl SampleDecoder {
             }
             #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
             Self::VideoToolbox(d) => d.push(sample, pts, dts, duration),
-            #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ))]
             Self::Nvdec(d) => d.push(sample, pts, dts, duration),
             #[cfg(all(feature = "vaapi", target_os = "linux"))]
             Self::Vaapi(d) => d.push(sample, pts, dts, duration),
@@ -375,7 +409,11 @@ impl SampleDecoder {
             Self::Threaded { .. } => None,
             #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
             Self::VideoToolbox(d) => d.take_packed(pts).map(Picture::Packed),
-            #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ))]
             Self::Nvdec(d) => d.take_packed(pts).map(Picture::Packed),
             #[cfg(all(feature = "vaapi", target_os = "linux"))]
             Self::Vaapi(d) => d.take_picture(pts),
@@ -403,7 +441,20 @@ pub(crate) fn vp9_record(frame: &[u8], width: u32, height: u32) -> Option<Vec<u8
     };
     // Version 1, no flags; profile 0; level; 8 bits, 4:2:0 colocated, video
     // range; primaries, transfer and matrix unspecified (2); no init data.
-    Some(vec![1, 0, 0, 0, 0, level, (8 << 4) | (1 << 1), 2, 2, 2, 0, 0])
+    Some(vec![
+        1,
+        0,
+        0,
+        0,
+        0,
+        level,
+        (8 << 4) | (1 << 1),
+        2,
+        2,
+        2,
+        0,
+        0,
+    ])
 }
 
 /// The timescale handed to a hardware session. Only `pts` round-trips
@@ -458,7 +509,10 @@ impl VideoReader {
         if data.starts_with(&[0, 0, 1]) || data.starts_with(&[0, 0, 0, 1]) {
             let codec = super::sniff_annexb(&data)
                 .ok_or("no H.264 SPS or HEVC VPS in the elementary stream")?;
-            let frames: Vec<_> = super::decode_annexb(codec, &data)?.into_iter().map(Some).collect();
+            let frames: Vec<_> = super::decode_annexb(codec, &data)?
+                .into_iter()
+                .map(Some)
+                .collect();
             let (width, height) = frames
                 .first()
                 .and_then(|f| f.as_ref())
@@ -580,7 +634,9 @@ impl VideoReader {
                 let at = *next;
                 *next += 1;
                 // Taken rather than cloned; `rewind` decodes the stream again.
-                Ok(frames[at].take().map(|f| (at as f64 / UNTIMED_FPS, Picture::Planes(f))))
+                Ok(frames[at]
+                    .take()
+                    .map(|f| (at as f64 / UNTIMED_FPS, Picture::Planes(f))))
             }
             Source::Samples {
                 bytes,
@@ -598,12 +654,11 @@ impl VideoReader {
                 }
                 // The earliest waiting picture can go once nothing still to
                 // decode, or still being reconstructed, shows before it.
-                if let Some((seconds, _)) = waiting.front() {
-                    if (*seconds < earliest_after[*next] || *next == samples.len())
-                        && *seconds <= decoder.earliest_in_flight()
-                    {
-                        return Ok(waiting.pop_front());
-                    }
+                if let Some((seconds, _)) = waiting.front()
+                    && (*seconds < earliest_after[*next] || *next == samples.len())
+                    && *seconds <= decoder.earliest_in_flight()
+                {
+                    return Ok(waiting.pop_front());
                 }
                 if *next == samples.len() {
                     if decoder.wait() {
@@ -613,14 +668,18 @@ impl VideoReader {
                 }
                 let s = samples[*next];
                 *next += 1;
-                let mut pushed = decoder.push(&bytes[s.start..s.end], s.pts, s.dts, s.duration, s.seconds);
+                let mut pushed =
+                    decoder.push(&bytes[s.start..s.end], s.pts, s.dts, s.duration, s.seconds);
                 let mut frame = pushed.as_ref().ok().and_then(|_| decoder.take_frame(s.pts));
                 // A hardware decoder that takes the stream and then gives
                 // nothing for its first picture (NVDEC with VP9 below its
                 // smallest size does) is no use: the native one starts over.
                 if *next == 1 && frame.is_none() && decoder.backend() != Backend::Native {
-                    *decoder = SampleDecoder::open(*codec, config, width, height, false, None, &self.pool)?;
-                    pushed = decoder.push(&bytes[s.start..s.end], s.pts, s.dts, s.duration, s.seconds);
+                    *decoder = SampleDecoder::open(
+                        *codec, config, width, height, false, None, &self.pool,
+                    )?;
+                    pushed =
+                        decoder.push(&bytes[s.start..s.end], s.pts, s.dts, s.duration, s.seconds);
                     frame = pushed.as_ref().ok().and_then(|_| decoder.take_frame(s.pts));
                 }
                 match pushed {
@@ -649,7 +708,10 @@ impl VideoReader {
             } => {
                 if *next > 0 {
                     // The pictures handed out were moved, not copied.
-                    *frames = super::decode_annexb(*codec, data)?.into_iter().map(Some).collect();
+                    *frames = super::decode_annexb(*codec, data)?
+                        .into_iter()
+                        .map(Some)
+                        .collect();
                     *next = 0;
                 }
             }
@@ -664,7 +726,15 @@ impl VideoReader {
                 ..
             } => {
                 let first = samples.first().map(|s| &bytes[s.start..s.end]);
-                *decoder = SampleDecoder::open(*codec, config, self.width, self.height, self.hardware, first, &self.pool)?;
+                *decoder = SampleDecoder::open(
+                    *codec,
+                    config,
+                    self.width,
+                    self.height,
+                    self.hardware,
+                    first,
+                    &self.pool,
+                )?;
                 *next = 0;
                 waiting.clear();
             }
@@ -679,10 +749,19 @@ impl VideoReader {
 fn clip_length(samples: &[Sample]) -> f64 {
     let mut times: Vec<f64> = samples.iter().map(|s| s.seconds).collect();
     times.sort_by(f64::total_cmp);
-    let Some(&last) = times.last() else { return 0.0 };
-    let mut gaps: Vec<f64> = times.windows(2).map(|w| w[1] - w[0]).filter(|g| *g > 0.0).collect();
+    let Some(&last) = times.last() else {
+        return 0.0;
+    };
+    let mut gaps: Vec<f64> = times
+        .windows(2)
+        .map(|w| w[1] - w[0])
+        .filter(|g| *g > 0.0)
+        .collect();
     gaps.sort_by(f64::total_cmp);
-    let frame = gaps.get(gaps.len() / 2).copied().unwrap_or(1.0 / UNTIMED_FPS);
+    let frame = gaps
+        .get(gaps.len() / 2)
+        .copied()
+        .unwrap_or(1.0 / UNTIMED_FPS);
     last + frame
 }
 
@@ -728,7 +807,11 @@ mod tests {
             assert_eq!(d.bytes.as_ptr(), file.as_ptr(), "the file's own bytes");
             let got: Vec<&[u8]> = d.samples.iter().map(|s| &d.bytes[s.start..s.end]).collect();
             assert_eq!(got, packets);
-            assert!((d.samples[2].seconds - 0.08).abs() < 1e-9, "{:?}", d.samples);
+            assert!(
+                (d.samples[2].seconds - 0.08).abs() < 1e-9,
+                "{:?}",
+                d.samples
+            );
         }
     }
 }

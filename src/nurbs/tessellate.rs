@@ -344,7 +344,9 @@ mod tests {
     fn max_radial_error(g: &BufferGeometry, center: V3, radius: f64) -> f64 {
         let pos = g.get_attribute("position").unwrap();
         pos.array
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| {
                 let p = [c[0] as f64, c[1] as f64, c[2] as f64];
                 (v3::dist(p, center) - radius).abs()
@@ -447,7 +449,7 @@ mod tests {
         let nor = &g.get_attribute("normal").unwrap().array;
         assert_eq!(pos.len(), nor.len());
 
-        for (p, n) in pos.chunks_exact(3).zip(nor.chunks_exact(3)) {
+        for (p, n) in pos.as_chunks::<3>().0.iter().zip(nor.as_chunks::<3>().0) {
             let n = [n[0] as f64, n[1] as f64, n[2] as f64];
             assert!((v3::norm(n) - 1.0).abs() < 1e-6, "normal not unit: {n:?}");
             let radial = v3::normalize([p[0] as f64, p[1] as f64, p[2] as f64]).unwrap();
@@ -462,7 +464,7 @@ mod tests {
         let pos = &g.get_attribute("position").unwrap().array;
         let idx = g.index.as_ref().unwrap();
 
-        for tri in idx.chunks_exact(3) {
+        for tri in idx.as_chunks::<3>().0 {
             let p: Vec<V3> = tri
                 .iter()
                 .map(|&i| {
@@ -484,7 +486,7 @@ mod tests {
         let g = tessellate_surface(&s, &TessellationOptions::with_tolerance(1e-2));
         let uv = &g.get_attribute("uv").unwrap().array;
         let (mut lo_u, mut hi_u, mut lo_v, mut hi_v) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
-        for c in uv.chunks_exact(2) {
+        for c in uv.as_chunks::<2>().0 {
             lo_u = lo_u.min(c[0]);
             hi_u = hi_u.max(c[0]);
             lo_v = lo_v.min(c[1]);

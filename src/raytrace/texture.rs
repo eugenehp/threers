@@ -92,12 +92,15 @@ impl CpuTexture {
                 Texels::Hdr(out)
             }
             // Other floats as linear RGBA, one channel splat like `R8Unorm`.
-            f @ (TextureFormat::R16Float | TextureFormat::R32Float | TextureFormat::Rgba32Float) => {
+            f
+            @ (TextureFormat::R16Float | TextureFormat::R32Float | TextureFormat::Rgba32Float) => {
                 let count = (w * h) as usize;
                 let v = f.texels_f32(src).unwrap_or_default();
                 let at = |i: usize| v.get(i).copied().unwrap_or(0.0);
                 let out = if f.channels() == 1 {
-                    (0..count).flat_map(|i| [at(i), at(i), at(i), 1.0]).collect()
+                    (0..count)
+                        .flat_map(|i| [at(i), at(i), at(i), 1.0])
+                        .collect()
                 } else {
                     (0..count * 4).map(at).collect()
                 };
@@ -110,8 +113,8 @@ impl CpuTexture {
             TextureFormat::Bc7RgbaUnormSrgb => return None,
         };
         let has_alpha = match &texels {
-            Texels::Ldr { data, .. } => data.chunks_exact(4).any(|p| p[3] < 255),
-            Texels::Hdr(data) => data.chunks_exact(4).any(|p| p[3] < 1.0),
+            Texels::Ldr { data, .. } => data.as_chunks::<4>().0.iter().any(|p| p[3] < 255),
+            Texels::Hdr(data) => data.as_chunks::<4>().0.iter().any(|p| p[3] < 1.0),
         };
         Some(Self {
             width: w,
@@ -147,7 +150,7 @@ impl CpuTexture {
         if width == 0 || height == 0 || data.len() < want {
             return None;
         }
-        let has_alpha = data.chunks_exact(4).any(|p| p[3] < 1.0);
+        let has_alpha = data.as_chunks::<4>().0.iter().any(|p| p[3] < 1.0);
         Some(Self {
             width,
             height,
@@ -376,7 +379,7 @@ fn unit_lut() -> &'static [f32; 256] {
 /// IEEE-754 binary16 → binary32. Handles subnormals and infinities; NaN
 /// payloads are not preserved, which nothing here depends on.
 pub fn f16_to_f32(bits: u16) -> f32 {
-    crate::renderer::readback::f16_to_f32(bits)
+    crate::math::float::f16_to_f32(bits)
 }
 
 /// Decodes each distinct [`Texture`] once, keyed by `Arc` identity — the same

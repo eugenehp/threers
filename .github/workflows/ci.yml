@@ -22,7 +22,7 @@ jobs:
     name: feature matrix
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -32,6 +32,14 @@ jobs:
       - run: cargo check -p threers-codec --all-targets --features parallel
       - run: cargo check --all-targets
       - run: cargo check --target wasm32-unknown-unknown --features webgl
+      # The core without its subsystems: no GPU, no codecs, no other threers
+      # crate but the math. A feature that leans on something it does not
+      # enable fails here first.
+      - run: cargo check -p threers --no-default-features
+      - run: cargo check -p threers --no-default-features --features render
+      - run: cargo check -p threers --target wasm32-unknown-unknown --no-default-features --features render
+      - run: cargo test -p threers-math -p threers-audio -p threers-captions
+      - run: cargo check -p threers-video --all-targets
 
   # Conformance streams through the skip gate: a suite that loses its inputs
   # fails here rather than reporting ok.
@@ -43,12 +51,12 @@ jobs:
       THREERS_H264_CONFORMANCE: ${{ github.workspace }}/.conformance/h264
       THREERS_HEVC_CONFORMANCE: ${{ github.workspace }}/.conformance/hevc
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install reference tools
         run: sudo apt-get update && sudo apt-get install -y ffmpeg x265 rsync
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: .conformance
           key: conformance-v1
@@ -68,7 +76,7 @@ jobs:
       RUST_TEST_THREADS: 2
       WGPU_BACKEND: vulkan
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install software Vulkan and ffmpeg
@@ -82,14 +90,14 @@ jobs:
     name: WebGL2 in Chrome
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
       - name: Install zsh and the matching test runner
         run: |
           sudo apt-get update && sudo apt-get install -y zsh
@@ -107,7 +115,7 @@ jobs:
       RUST_TEST_THREADS: 2
       WGPU_BACKEND: vulkan
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install window, sound, pad and software Vulkan libraries
@@ -125,15 +133,15 @@ jobs:
     name: JS and Python bindings
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '20'
-      - uses: actions/setup-python@v5
+          node-version: '24'
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Install the matching wasm-bindgen

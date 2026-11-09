@@ -23,10 +23,10 @@ use threers_physics::math::Isometry;
 fn main() {
     let only = std::env::args().nth(1);
     for m in MODELS {
-        if let Some(want) = &only {
-            if m.id != *want {
-                continue;
-            }
+        if let Some(want) = &only
+            && m.id != *want
+        {
+            continue;
         }
         let Some(m) = model(m.id) else { continue };
         match Tour::run(m.source, m.frames, m.fps, m.units_per_metre, m.substeps) {
@@ -58,12 +58,12 @@ fn audit(m: &threers_mechanism_tour::Model, tour: &Tour) {
         "  {:<12} {:>11} {:>11} {:>10} {:>10}",
         "part", "step/frame", "spin/frame", "travelled", "turned"
     );
-    for p in 0..parts {
+    for (p, path) in centroids.iter().enumerate().take(parts) {
         let mut step = 0.0f32;
         let mut spin = 0.0f32;
         let mut travel = 0.0f32;
         for f in 1..tour.frames {
-            let (a, b) = (centroids[p][f - 1], centroids[p][f]);
+            let (a, b) = (path[f - 1], path[f]);
             let d = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt();
             step = step.max(d);
             travel += d;
@@ -167,7 +167,7 @@ fn centroid(tour: &Tour, part: usize, frame: usize) -> [f32; 3] {
     let mut sum = [0.0f32; 3];
     let mut n = 0.0f32;
     for piece in tour.pieces.iter().filter(|p| p.owner == part) {
-        for v in piece.positions.chunks_exact(3) {
+        for v in piece.positions.as_chunks::<3>().0 {
             let p = threers::math::Vector3::new(v[0], v[1], v[2]).apply_matrix4(&m);
             sum = [sum[0] + p.x, sum[1] + p.y, sum[2] + p.z];
             n += 1.0;

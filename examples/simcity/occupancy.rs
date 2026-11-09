@@ -49,7 +49,7 @@ impl Occupancy {
         }
     }
 
-    fn cells(&self, r: Rect4) -> impl Iterator<Item = (i32, i32)> {
+    fn cells(&self, r: Rect4) -> impl Iterator<Item = (i32, i32)> + use<> {
         let c = self.cell;
         let (x0, z0) = ((r[0] / c).floor() as i32, (r[1] / c).floor() as i32);
         let (x1, z1) = ((r[2] / c).floor() as i32, (r[3] / c).floor() as i32);

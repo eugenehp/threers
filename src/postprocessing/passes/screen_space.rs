@@ -1056,10 +1056,10 @@ impl Pass for OutlinePass {
                     0.0,
                 ])
                 .blend(PostFxBlend::AddAlpha);
-            if let Some(tex) = &self.pattern_texture {
-                if let Some(p) = upload::texture_target(ctx.renderer, tex, &mut self.pattern) {
-                    overlay = overlay.noise(PostFxNoise::Color(p.id()));
-                }
+            if let Some(tex) = &self.pattern_texture
+                && let Some(p) = upload::texture_target(ctx.renderer, tex, &mut self.pattern)
+            {
+                overlay = overlay.noise(PostFxNoise::Color(p.id()));
             }
             ctx.fx(overlay, Dest::Target(read));
         }

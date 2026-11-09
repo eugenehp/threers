@@ -94,7 +94,7 @@ impl ColorGrade {
     pub fn apply_in(&self, rgba: &[u8], space: ColorSpace) -> Vec<u8> {
         let linear = matches!(space, ColorSpace::Linear);
         let mut out = Vec::with_capacity(rgba.len());
-        for px in rgba.chunks_exact(4) {
+        for px in rgba.as_chunks::<4>().0 {
             let mut rgb = [0.0f32; 3];
             for (c, v) in rgb.iter_mut().enumerate() {
                 let raw = px[c] as f32 / 255.0;

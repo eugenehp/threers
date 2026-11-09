@@ -58,6 +58,7 @@ impl Scene {
     /// Every visible [`PositionalAudio`](crate::audio::PositionalAudio) as
     /// `listener` hears it, for a playback backend to apply each frame. Uses
     /// the world matrices of the last update.
+    #[cfg(feature = "audio")]
     pub fn audio_mix(
         &self,
         listener: &crate::audio::AudioListener,

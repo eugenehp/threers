@@ -896,7 +896,7 @@ fn placed(geometry: &BufferGeometry, pose: &Isometry) -> BufferGeometry {
     let mut out = geometry.clone();
     if let Some(attr) = geometry.get_attribute("position") {
         let mut array = attr.array.clone();
-        for v in array.chunks_exact_mut(3) {
+        for v in array.as_chunks_mut::<3>().0 {
             let p = pose.transform_point(Vector3::new(v[0], v[1], v[2]));
             v[0] = p.x;
             v[1] = p.y;
@@ -908,7 +908,7 @@ fn placed(geometry: &BufferGeometry, pose: &Isometry) -> BufferGeometry {
     }
     if let Some(attr) = geometry.get_attribute("normal") {
         let mut array = attr.array.clone();
-        for v in array.chunks_exact_mut(3) {
+        for v in array.as_chunks_mut::<3>().0 {
             let n = pose.transform_vector(Vector3::new(v[0], v[1], v[2]));
             v[0] = n.x;
             v[1] = n.y;

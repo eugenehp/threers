@@ -2,7 +2,7 @@
 
 use crate::cameras::PerspectiveCamera;
 use crate::controls::PointerEvent;
-use crate::marks::Origin;
+use crate::math::precision::Origin;
 use crate::math::Vector3;
 
 /// Camera controls for a planet: what [`MapControls`](super::MapControls)
@@ -10,7 +10,7 @@ use crate::math::Vector3;
 ///
 /// The state is a point on the surface (longitude and latitude in degrees,
 /// in the convention of
-/// [`marks::geo::lon_lat_to_globe`](crate::marks::geo::lon_lat_to_globe):
+/// [`marks::geo::lon_lat_to_globe`](crate::math::geo::lon_lat_to_globe):
 /// Y through the north pole, longitude 0 towards +Z), the camera's distance
 /// from it, and a bearing and pitch in that point's own east-north-up frame
 /// — bearing 0 looks north, pitch 0 straight down at the surface.
@@ -214,7 +214,7 @@ impl GlobeControls {
             return None;
         }
         let p = add(oc, scale(dir, s));
-        let ll = crate::marks::geo::globe_to_lon_lat(p, r);
+        let ll = crate::math::geo::globe_to_lon_lat(p, r);
         Some([ll[0], ll[1]])
     }
 
@@ -250,12 +250,12 @@ impl GlobeControls {
                 s.lat = (s.lat + before[1] - now[1]).clamp(-89.9, 89.9);
             }
         };
-        if ev.panning && (ev.dx != 0.0 || ev.dy != 0.0) {
-            if let Some(grabbed) =
+        if ev.panning
+            && (ev.dx != 0.0 || ev.dy != 0.0)
+            && let Some(grabbed) =
                 self.surface_point(camera, cursor.0 - ev.dx, cursor.1 - ev.dy, viewport)
-            {
-                hold(self, grabbed, cursor);
-            }
+        {
+            hold(self, grabbed, cursor);
         }
         if ev.rotating {
             self.bearing += ev.dx / w * std::f32::consts::TAU * self.rotate_speed;
@@ -383,7 +383,7 @@ mod tests {
     /// put it pixels off.
     #[test]
     fn a_camera_metres_off_the_earth_stays_exact_against_its_origin() {
-        let mut g = GlobeControls::new(crate::marks::geo::EARTH_MEAN_RADIUS, -122.4, 37.8, 10.0);
+        let mut g = GlobeControls::new(crate::math::geo::EARTH_MEAN_RADIUS, -122.4, 37.8, 10.0);
         g.pitch = 0.6;
         g.bearing = 1.1;
         let vp = (800u32, 600u32);
@@ -421,7 +421,7 @@ mod tests {
     /// Drags and zooms work as well at the same height.
     #[test]
     fn panning_a_metre_off_the_ground_holds_the_point() {
-        let mut g = GlobeControls::new(crate::marks::geo::EARTH_MEAN_RADIUS, 2.35, 48.85, 5.0);
+        let mut g = GlobeControls::new(crate::math::geo::EARTH_MEAN_RADIUS, 2.35, 48.85, 5.0);
         g.pitch = 0.5;
         let cam = PerspectiveCamera::new(50.0, VP.0 / VP.1, 0.1, 100.0);
         let start = (380.0, 360.0);

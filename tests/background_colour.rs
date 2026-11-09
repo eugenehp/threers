@@ -57,7 +57,7 @@ fn bytes(hex: u32) -> [u8; 3] {
 /// Every pixel within ±1 of `hex`, alpha opaque.
 fn assert_all(img: &[u8], hex: u32, what: &str) {
     let want = bytes(hex);
-    for (i, px) in img.chunks_exact(4).enumerate() {
+    for (i, px) in img.as_chunks::<4>().0.iter().enumerate() {
         let ok = (0..3).all(|c| (px[c] as i32 - want[c] as i32).abs() <= 1) && px[3] == 255;
         assert!(
             ok,
@@ -141,7 +141,9 @@ fn clear_colour_round_trips_whole_and_scissored() {
         r.set_scissor_test(false);
         r.reset_scissor();
         let left: Vec<u8> = img
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(i, _)| (*i as u32 % W) < W / 2)
             .flat_map(|(_, p)| p.to_vec())
@@ -171,7 +173,9 @@ fn scissored_render_background_round_trips() {
             r.set_scissor_test(false);
             r.reset_scissor();
             let right: Vec<u8> = img
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .enumerate()
                 .filter(|(i, _)| (*i as u32 % W) >= W / 2)
                 .flat_map(|(_, p)| p.to_vec())

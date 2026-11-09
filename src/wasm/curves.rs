@@ -211,7 +211,9 @@ impl WebCurve {
     #[wasm_bindgen(js_name = setSpline)]
     pub fn set_spline(&self, points: &[f64]) {
         let points = points
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| Vec2d::new(c[0], c[1]))
             .collect();
         self.node
@@ -248,7 +250,12 @@ impl WebCurve {
     #[wasm_bindgen(js_name = setCatmullRom)]
     pub fn set_catmull_rom(&self, points: &[f64], closed: bool, curve_type: &str, tension: f64) {
         self.node.set_def(CurveDef::CatmullRom3 {
-            points: points.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+            points: points
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|c| [c[0], c[1], c[2]])
+                .collect(),
             closed,
             curve_type: CatmullRomType::parse(curve_type),
             tension,
@@ -473,4 +480,123 @@ pub(crate) fn checked_curve<T>(
     f: impl FnOnce(&ThreeCurve) -> T,
 ) -> Result<T, JsValue> {
     checked(&curve.node, || f(&curve.node))
+}
+
+// ---- curves ----
+// The three.js curve classes are `WebCurve`, in `src/wasm/curves.rs`.
+
+#[wasm_bindgen]
+pub struct WebPath {
+    pub(super) inner: crate::Path,
+}
+#[wasm_bindgen]
+impl WebPath {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> WebPath {
+        WebPath {
+            inner: crate::Path::new(),
+        }
+    }
+    #[wasm_bindgen(js_name = moveTo)]
+    pub fn move_to(&mut self, x: f32, y: f32) {
+        self.inner.move_to(crate::Vector2::new(x, y));
+    }
+    #[wasm_bindgen(js_name = lineTo)]
+    pub fn line_to(&mut self, x: f32, y: f32) {
+        self.inner.line_to(crate::Vector2::new(x, y));
+    }
+
+    #[wasm_bindgen(js_name = quadraticCurveTo)]
+    pub fn quadratic_curve_to(&mut self, cpx: f32, cpy: f32, x: f32, y: f32) {
+        self.inner
+            .quadratic_curve_to(crate::Vector2::new(cpx, cpy), crate::Vector2::new(x, y));
+    }
+
+    #[wasm_bindgen(js_name = bezierCurveTo)]
+    pub fn bezier_curve_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
+        self.inner.bezier_curve_to(
+            crate::Vector2::new(c1x, c1y),
+            crate::Vector2::new(c2x, c2y),
+            crate::Vector2::new(x, y),
+        );
+    }
+
+    pub fn arc(&mut self, cx: f32, cy: f32, radius: f32, start: f32, end: f32, clockwise: bool) {
+        self.inner
+            .arc(crate::Vector2::new(cx, cy), radius, start, end, clockwise);
+    }
+
+    /// Sample the path as a flat polyline — `divisions` points per sub-curve.
+    #[wasm_bindgen(js_name = getPoints)]
+    pub fn get_points(&self, divisions: usize) -> Vec<f32> {
+        self.inner
+            .get_points(divisions.max(1))
+            .into_iter()
+            .flat_map(|p| [p.x, p.y])
+            .collect()
+    }
+
+    /// The path as an SVG `d` string, with its curves intact rather than
+    /// flattened. Note that SVG's y axis points down and these coordinates are
+    /// y-up, so a document usually wants a `scale(1,-1)` around them.
+    #[wasm_bindgen(js_name = toSvgPathData)]
+    pub fn to_svg_path_data(&self, precision: usize) -> String {
+        self.inner.to_svg_path_data(precision)
+    }
+
+    /// Read an SVG `d` string — the inbound half, for turning artwork into
+    /// geometry.
+    #[wasm_bindgen(js_name = fromSvgPathData)]
+    pub fn from_svg_path_data(d: &str) -> Result<WebPath, JsValue> {
+        crate::Path::from_svg_path_data(d)
+            .map(|inner| WebPath { inner })
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+}
+
+#[wasm_bindgen]
+pub struct WebShape {
+    pub(crate) inner: crate::Shape,
+}
+#[wasm_bindgen]
+impl WebShape {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> WebShape {
+        WebShape {
+            inner: crate::Shape::new(),
+        }
+    }
+
+    #[wasm_bindgen(js_name = fromPath)]
+    pub fn from_path(outline: &WebPath) -> WebShape {
+        WebShape {
+            inner: crate::Shape::from_path(
+                crate::Path::from_svg_path_data(&outline.inner.to_svg_path_data(6))
+                    .unwrap_or_default(),
+            ),
+        }
+    }
+
+    #[wasm_bindgen(js_name = addHole)]
+    pub fn add_hole(&mut self, hole: &WebPath) {
+        if let Ok(p) = crate::Path::from_svg_path_data(&hole.inner.to_svg_path_data(6)) {
+            self.inner.add_hole(p);
+        }
+    }
+
+    /// Outline then holes, as one `d` string. Fill it with
+    /// `fill-rule="evenodd"` — see the Rust-side docs for why.
+    #[wasm_bindgen(js_name = toSvgPathData)]
+    pub fn to_svg_path_data(&self, precision: usize) -> String {
+        self.inner.to_svg_path_data(precision)
+    }
+
+    /// Read SVG path data as an outline plus holes: first subpath is the
+    /// outline, the rest are holes.
+    #[wasm_bindgen(js_name = fromSvgPathData)]
+    pub fn from_svg_path_data(d: &str) -> Result<WebShape, JsValue> {
+        crate::Shape::from_svg_path_data(d)
+            .map(|inner| WebShape { inner })
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
 }

@@ -64,7 +64,7 @@ fn crinkled_sphere() -> BufferGeometry {
     let mut geometry = SphereGeometry::new(1.0, 96, 48);
     let mut array = geometry.get_attribute("position").unwrap().array.clone();
     let mut rng = Lcg(0xc0ffee);
-    for v in array.chunks_exact_mut(3) {
+    for v in array.as_chunks_mut::<3>().0 {
         let scale = 1.0 + NOISE * (rng.unit() - 0.5) * 2.0;
         v[0] *= scale;
         v[1] *= scale;
@@ -91,7 +91,7 @@ fn report(name: &str, geometry: &BufferGeometry) {
     let index = geometry.index.as_ref().expect("indexed");
     let mut sum = vec![0.0f32; radii.len()];
     let mut count = vec![0u32; radii.len()];
-    for tri in index.chunks_exact(3) {
+    for tri in index.as_chunks::<3>().0 {
         for (a, b) in [(0, 1), (1, 2), (2, 0)] {
             let (u, v) = (tri[a] as usize, tri[b] as usize);
             sum[u] += radii[v];

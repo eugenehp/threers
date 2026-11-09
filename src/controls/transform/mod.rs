@@ -659,13 +659,13 @@ impl TransformControls {
                 color: def.color,
                 opacity: def.opacity,
             };
-            if self.enabled {
-                if let Some(a) = &axis {
-                    let single = a.chars().any(|c| name.len() == 1 && name.starts_with(c));
-                    if name == a || single {
-                        ms.color = 0xffff00;
-                        ms.opacity = 1.0;
-                    }
+            if self.enabled
+                && let Some(a) = &axis
+            {
+                let single = a.chars().any(|c| name.len() == 1 && name.starts_with(c));
+                if name == a || single {
+                    ms.color = 0xffff00;
+                    ms.opacity = 1.0;
                 }
             }
             self.materials[material] = ms;

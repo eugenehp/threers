@@ -624,7 +624,7 @@ mod tests {
             // One face far brighter than the rest, so the distribution is not
             // uniform and the two strategies genuinely differ.
             let level = if i == 2 { 255 } else { 20 };
-            for p in px.chunks_exact_mut(4) {
+            for p in px.as_chunks_mut::<4>().0 {
                 p[0] = level;
                 p[1] = level;
                 p[2] = level;

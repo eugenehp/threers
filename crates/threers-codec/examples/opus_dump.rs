@@ -2,6 +2,10 @@
 //! `ffmpeg -i IN -f f32le OUT` writes it. usage: opus_dump IN OUT
 fn main() {
     let a: Vec<String> = std::env::args().collect();
+    if a.len() < 3 {
+        eprintln!("usage: opus_dump IN OUT");
+        std::process::exit(2);
+    }
     let data = std::fs::read(&a[1]).expect("read");
     let t = std::time::Instant::now();
     let d = threers_codec::opus::decode_webm(&data).expect("decode");

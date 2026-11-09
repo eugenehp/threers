@@ -62,10 +62,19 @@ pub fn codec_string(track: &Demuxed) -> Option<String> {
             let record = if c.len() >= 7 {
                 c.clone()
             } else {
-                vp9_record(track.samples.first().map(|_| track.sample(0))?, track.width, track.height)?
+                vp9_record(
+                    track.samples.first().map(|_| track.sample(0))?,
+                    track.width,
+                    track.height,
+                )?
             };
             // vpcC: version and flags, profile, level, bit depth (4 bits).
-            Some(format!("vp09.{:02}.{:02}.{:02}", record[4], record[5], record[6] >> 4))
+            Some(format!(
+                "vp09.{:02}.{:02}.{:02}",
+                record[4],
+                record[5],
+                record[6] >> 4
+            ))
         }
     }
 }
@@ -83,7 +92,10 @@ fn hevc_string(c: &[u8]) -> Option<String> {
     let mut s = format!("hvc1.{space}{profile}.{compat:x}.{tier}{level}");
     // The six constraint bytes, trailing zero bytes left off.
     let constraints = &b[5..11];
-    let used = constraints.iter().rposition(|&x| x != 0).map_or(0, |i| i + 1);
+    let used = constraints
+        .iter()
+        .rposition(|&x| x != 0)
+        .map_or(0, |i| i + 1);
     for x in &constraints[..used] {
         s.push_str(&format!(".{x:02x}"));
     }
@@ -95,7 +107,9 @@ fn hevc_string(c: &[u8]) -> Option<String> {
 /// and need it; the `av1C` for AV1 where there is one; nothing for VP9.
 pub fn description(track: &Demuxed) -> Option<&[u8]> {
     match track.codec {
-        TrackCodec::H264 | TrackCodec::Hevc | TrackCodec::Av1 if !track.config.is_empty() => Some(&track.config),
+        TrackCodec::H264 | TrackCodec::Hevc | TrackCodec::Av1 if !track.config.is_empty() => {
+            Some(&track.config)
+        }
         _ => None,
     }
 }
@@ -126,7 +140,10 @@ pub fn is_keyframe(track: &Demuxed, i: usize) -> bool {
 fn nal_types(sample: &[u8], len: usize) -> impl Iterator<Item = u8> + '_ {
     let mut at = 0usize;
     std::iter::from_fn(move || {
-        let size = sample.get(at..at + len)?.iter().fold(0usize, |a, &b| a << 8 | b as usize);
+        let size = sample
+            .get(at..at + len)?
+            .iter()
+            .fold(0usize, |a, &b| a << 8 | b as usize);
         let header = *sample.get(at + len)?;
         at += len + size;
         Some(header)
@@ -136,7 +153,9 @@ fn nal_types(sample: &[u8], len: usize) -> impl Iterator<Item = u8> + '_ {
 /// VP9's uncompressed header: marker, profile, then `show_existing_frame`
 /// and `frame_type` (0 is a key frame).
 fn vp9_key(frame: &[u8]) -> bool {
-    let Some(&b) = frame.first() else { return false };
+    let Some(&b) = frame.first() else {
+        return false;
+    };
     if b >> 6 != 0b10 {
         return false;
     }
@@ -194,7 +213,9 @@ fn av1_key(unit: &[u8]) -> bool {
             1 => return true,
             // OBU_FRAME_HEADER, OBU_FRAME: show_existing_frame, frame_type.
             3 | 6 => {
-                let Some(&b) = payload.first() else { return false };
+                let Some(&b) = payload.first() else {
+                    return false;
+                };
                 return b & 0x80 == 0 && (b >> 5) & 0b11 == 0;
             }
             _ => {}
@@ -249,7 +270,11 @@ mod tests {
         let av1 = track(TrackCodec::Av1, vec![0x81, 0x2d, 0xc0, 0], &[]);
         assert_eq!(codec_string(&av1).unwrap(), "av01.1.13H.10");
         // VP9 from a vpcC, and from a profile 0 key frame without one.
-        let vp9 = track(TrackCodec::Vp9, vec![1, 0, 0, 0, 2, 31, 0xa2, 2, 2, 2, 0, 0], &[]);
+        let vp9 = track(
+            TrackCodec::Vp9,
+            vec![1, 0, 0, 0, 2, 31, 0xa2, 2, 2, 2, 0, 0],
+            &[],
+        );
         assert_eq!(codec_string(&vp9).unwrap(), "vp09.02.31.10");
         let vp9 = track(TrackCodec::Vp9, Vec::new(), &[&[0x82, 0x49, 0x83, 0x42]]);
         assert_eq!(codec_string(&vp9).unwrap(), "vp09.00.41.08");
@@ -264,7 +289,10 @@ mod tests {
         let h264 = track(
             TrackCodec::H264,
             avcc,
-            &[&[0, 0, 0, 2, 0x06, 0x05, 0, 0, 0, 2, 0x65, 0x88], &[0, 0, 0, 2, 0x41, 0x9a]],
+            &[
+                &[0, 0, 0, 2, 0x06, 0x05, 0, 0, 0, 2, 0x65, 0x88],
+                &[0, 0, 0, 2, 0x41, 0x9a],
+            ],
         );
         assert!(is_keyframe(&h264, 0));
         assert!(!is_keyframe(&h264, 1));
@@ -272,12 +300,20 @@ mod tests {
         let mut hvcc = vec![0u8; 23];
         hvcc[21] = 0xff;
         // IDR_W_RADL (19), then TRAIL_R (1).
-        let hevc = track(TrackCodec::Hevc, hvcc, &[&[0, 0, 0, 2, 19 << 1, 1], &[0, 0, 0, 2, 1 << 1, 1]]);
+        let hevc = track(
+            TrackCodec::Hevc,
+            hvcc,
+            &[&[0, 0, 0, 2, 19 << 1, 1], &[0, 0, 0, 2, 1 << 1, 1]],
+        );
         assert!(is_keyframe(&hevc, 0));
         assert!(!is_keyframe(&hevc, 1));
 
         // Profile 0: marker 10, profile 00, show_existing 0, frame_type 0/1.
-        let vp9 = track(TrackCodec::Vp9, Vec::new(), &[&[0b1000_0000], &[0b1000_0100], &[0b1000_1000]]);
+        let vp9 = track(
+            TrackCodec::Vp9,
+            Vec::new(),
+            &[&[0b1000_0000], &[0b1000_0100], &[0b1000_1000]],
+        );
         assert!(is_keyframe(&vp9, 0));
         assert!(!is_keyframe(&vp9, 1), "inter frame");
         assert!(!is_keyframe(&vp9, 2), "show existing frame");
@@ -287,7 +323,10 @@ mod tests {
         let av1 = track(
             TrackCodec::Av1,
             Vec::new(),
-            &[&[0x12, 0x00, 0x0a, 0x01, 0x00], &[0x12, 0x00, 0x32, 0x01, 0b0010_0000]],
+            &[
+                &[0x12, 0x00, 0x0a, 0x01, 0x00],
+                &[0x12, 0x00, 0x32, 0x01, 0b0010_0000],
+            ],
         );
         assert!(is_keyframe(&av1, 0));
         assert!(!is_keyframe(&av1, 1));

@@ -24,7 +24,6 @@ pub mod train;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
-/// Procedural rooms and the hostile hold-out (`generate` feature).
 #[cfg(feature = "generate")]
 pub mod generate;
 

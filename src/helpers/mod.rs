@@ -7,7 +7,10 @@ mod camera_helper;
 mod grid;
 mod light_helpers;
 mod polar_grid;
+// Four views of one scene through the renderer, and their pointer input.
+#[cfg(feature = "render")]
 pub mod quad_view;
+#[cfg(feature = "render")]
 pub mod quad_view_controls;
 pub mod three_lines;
 mod vertex_normals;
@@ -22,7 +25,9 @@ pub use light_helpers::{
     SpotLightHelper,
 };
 pub use polar_grid::PolarGridHelper;
+#[cfg(feature = "render")]
 pub use quad_view::{Pane, PaneSurface, QuadView, ViewSurface, ViewportControl};
+#[cfg(feature = "render")]
 pub use quad_view_controls::{PointerButton, QuadViewControls};
 cfg_metal! {
     pub use quad_view::MetalViewSurface;

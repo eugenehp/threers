@@ -97,7 +97,7 @@ pub struct TtfFont {
     /// True for any script whose letters join — Arabic, Syriac, N'Ko, Mongolian,
     /// Devanagari, Bengali, Gurmukhi — where two glyphs cover the same stroke and a union
     /// darkens the joint. Computed once here from four tables; see
-    /// [`crate::loaders::overlap`] for the rule and where it was read.
+    /// `loaders/overlap.rs` for the rule and where it was read.
     pub composites_run: bool,
 }
 
@@ -994,7 +994,7 @@ fn parse_cmap(bytes: &[u8], cmap_off: usize) -> Option<std::collections::HashMap
     // applying it to any table that has such keys cannot cost anything.
     let symbols: Vec<(u32, u16)> = map
         .iter()
-        .filter(|(&c, _)| (0xF000..=0xF0FF).contains(&c))
+        .filter(|&(&c, _)| (0xF000..=0xF0FF).contains(&c))
         .map(|(&c, &g)| (c - 0xF000, g))
         .collect();
     for (c, g) in symbols {

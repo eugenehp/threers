@@ -187,7 +187,7 @@ fn morph_plane(relative: bool) -> Mesh {
     g.set_attribute("position", BufferAttribute::new(base.to_vec(), 3));
     g.set_index(vec![0, 2, 1, 2, 3, 1]);
     let (mut t0, mut t1) = (Vec::new(), Vec::new());
-    for p in base.chunks_exact(3) {
+    for p in base.as_chunks::<3>().0 {
         if relative {
             t0.extend_from_slice(&[0.0, 0.0, 1.0]);
             t1.extend_from_slice(&[p[0] * 0.5, 0.0, 0.0]);

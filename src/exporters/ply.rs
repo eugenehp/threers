@@ -56,7 +56,12 @@ pub fn write_ply(objects: &[ExportObject], options: &PlyOptions) -> Option<Vec<u
             if options.polygons && g.polygon_counts().is_some() {
                 faces = g.faces().collect();
             } else if let Some(index) = &g.index {
-                faces = index.chunks_exact(3).map(|t| t.to_vec()).collect();
+                faces = index
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|t| t.to_vec())
+                    .collect();
             } else {
                 faces = (0..n as u32 / 3)
                     .map(|t| vec![t * 3, t * 3 + 1, t * 3 + 2])

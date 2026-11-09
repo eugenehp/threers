@@ -4,11 +4,11 @@
  * Browser: open examples/cube.html (after `npm run build` in this crate).
  *
  * Bundler / Node ESM (WebGPU canvas required):
- *   npm i threers
- *   import THREE, { initThreers } from 'threers';
+ *   npm i @threers/threers
+ *   import THREE, { initThreers } from '@threers/threers';
  */
 
-import THREE, { initThreers } from 'threers';
+import THREE, { initThreers } from '@threers/threers';
 
 /** @param {HTMLCanvasElement} canvas */
 export async function runCubeDemo(canvas) {

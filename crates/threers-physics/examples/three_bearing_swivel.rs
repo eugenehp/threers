@@ -1194,10 +1194,9 @@ fn attachment(spec: &MechanismSpec, schedule: &Schedule) {
             .assembly
             .joint_of(*shaft)
             .and_then(|j| mech.world.joint_mut(j))
+            && let JointKind::Revolute { motor, .. } = &mut joint.kind
         {
-            if let JointKind::Revolute { motor, .. } = &mut joint.kind {
-                *motor = Some(Motor::new(0.0, 0.0));
-            }
+            *motor = Some(Motor::new(0.0, 0.0));
         }
     }
     for _ in 0..fps {
@@ -1874,7 +1873,7 @@ fn clip(g: &BufferGeometry, n: [f32; 3], d: f32) -> Option<BufferGeometry> {
 
     let mut out_p: Vec<f32> = Vec::new();
     let mut out_n: Vec<f32> = Vec::new();
-    for tri in indices.chunks_exact(3) {
+    for tri in indices.as_chunks::<3>().0 {
         let v: Vec<([f32; 3], [f32; 3])> = tri.iter().map(|&i| vertex(i as usize)).collect();
         // Sutherland-Hodgman against the single plane: a triangle comes out as
         // nothing, a triangle, or a quad.

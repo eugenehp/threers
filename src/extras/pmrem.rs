@@ -14,7 +14,7 @@ const LOD_MIN: u32 = 4;
 const EXTRA_LOD_SIGMA: [f32; 6] = [0.125, 0.215, 0.35, 0.446, 0.526, 0.582];
 const MAX_BLUR_SAMPLES: u32 = 20;
 
-const PHI: f32 = 1.618_034;
+const PHI: f32 = std::f32::consts::GOLDEN_RATIO;
 const INV_PHI: f32 = 0.618_034;
 
 /// Dodecahedron axis directions used by three.js PMREM blur passes.
@@ -1643,7 +1643,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn gpu_cube_uv_atlas_upload_matches_cpu() {
         use super::super::cube_uv::{atlas_bilinear_uv, sample_cube_uv_env};
-        use crate::renderer::gpu_texture::f16_bits_to_f32;
+        use crate::math::float::f16_to_f32 as f16_bits_to_f32;
         use crate::renderer::gpu_texture::GpuCubeTexture;
 
         let size = 32;

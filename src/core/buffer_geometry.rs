@@ -612,10 +612,11 @@ impl BufferGeometry {
     pub fn faces(&self) -> impl Iterator<Item = Vec<u32>> + '_ {
         let grouped = self.polygon_counts().is_some();
         self.polygon_ranges().flat_map(move |range| {
-            if grouped && range.len() > 1 {
-                if let Some(corners) = self.polygon_loop(range.clone()) {
-                    return vec![corners];
-                }
+            if grouped
+                && range.len() > 1
+                && let Some(corners) = self.polygon_loop(range.clone())
+            {
+                return vec![corners];
             }
             range.map(|t| self.triangle(t).to_vec()).collect()
         })
@@ -736,7 +737,9 @@ impl BufferGeometry {
         }
         Some(
             pos.array
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|c| Vector3::new(c[0], c[1], c[2])),
         )
     }
@@ -813,7 +816,9 @@ impl BufferGeometry {
         }
         let mut at: HashMap<[u32; 3], u32> = HashMap::with_capacity(n);
         let weld: Vec<u32> = p
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| {
                 let next = at.len() as u32;
                 *at.entry([c[0].to_bits(), c[1].to_bits(), c[2].to_bits()])
@@ -827,7 +832,7 @@ impl BufferGeometry {
             let v = v as usize;
             [0, 1, 2].map(|k| p[3 * v + k] as f64 - p[k] as f64)
         };
-        for t in faces.chunks_exact(3) {
+        for t in faces.as_chunks::<3>().0 {
             let w = [
                 weld[t[0] as usize],
                 weld[t[1] as usize],

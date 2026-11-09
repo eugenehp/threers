@@ -26,9 +26,16 @@ use crate::metal::enums::pixel_format;
 use crate::metal::{MetalHeadlessRenderer, SsaoSettings};
 use crate::scene::Scene;
 
-/// Whether `THREERS_BACKEND` asks for the native Metal backend.
-pub(super) fn requested() -> bool {
-    std::env::var("THREERS_BACKEND").is_ok_and(|v| v.eq_ignore_ascii_case("metal"))
+/// Whether a renderer on `backend` draws with the native Metal backend:
+/// asked for by name, or, for `Auto`, by `THREERS_BACKEND=metal`.
+pub(super) fn requested(backend: super::RenderBackend) -> bool {
+    match backend {
+        super::RenderBackend::Metal => true,
+        super::RenderBackend::Wgpu => false,
+        super::RenderBackend::Auto => {
+            std::env::var("THREERS_BACKEND").is_ok_and(|v| v.eq_ignore_ascii_case("metal"))
+        }
+    }
 }
 
 /// Say why this renderer is on wgpu after all — once per reason per process,
@@ -326,7 +333,13 @@ impl MetalPath {
     pub(super) fn blend_overlay(&mut self, rgba: &[u8]) {
         self.fresh();
         let lut = srgb_to_linear_lut();
-        for (dst, src) in self.frame.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
+        for (dst, src) in self
+            .frame
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(rgba.as_chunks::<4>().0)
+        {
             let a = src[3] as f32 / 255.0;
             if a <= 0.0 {
                 continue;

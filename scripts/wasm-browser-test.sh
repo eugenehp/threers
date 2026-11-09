@@ -29,8 +29,11 @@ cache=${BROWSER_CACHE:-${TMPDIR:-/tmp}/threers-browsers}
 
 command -v npx >/dev/null || { echo "npx is needed to fetch the browser" >&2; exit 2 }
 # The runner has to be the version of the `wasm-bindgen` crate in Cargo.lock,
-# or it refuses the wasm. The one on PATH if it is; else one wasm-pack has
-# cached for that version.
+# or it refuses the wasm. The one on PATH if it is; else the repo-local install
+# `use_matching_wasm_bindgen` makes (or finds) in target/tools/; else one
+# wasm-pack has cached for that version.
+. "$root/scripts/wasm-bindgen-cli.sh"
+use_matching_wasm_bindgen "$root"
 want=$(awk '/^name = "wasm-bindgen"$/ {getline; gsub(/version = |"/, ""); print; exit}' "${0:A:h:h}/Cargo.lock")
 runner=""
 if command -v wasm-bindgen-test-runner >/dev/null \

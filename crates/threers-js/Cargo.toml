@@ -1,7 +1,7 @@
 [package]
 name = "threers-js"
 version.workspace = true
-edition = "2021"
+edition = "2024"
 authors = ["Eugene Hauptmann"]
 description = "Published npm / Deno / Node ESM package for threers (THREE.* shim + wasm)"
 license = "MIT"

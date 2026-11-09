@@ -229,7 +229,9 @@ fn tessellate(mb: &mut MeshBuilder, max_edge: f32) {
 
     let mut work: Vec<[V; 3]> = mb
         .idx
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|t| [vert(t[0]), vert(t[1]), vert(t[2])])
         .collect();
     let mut out: Vec<[V; 3]> = Vec::with_capacity(work.len() * 2);
@@ -286,7 +288,7 @@ fn tessellate(mb: &mut MeshBuilder, max_edge: f32) {
 
 #[cfg(feature = "mesh-bvh")]
 fn tri_list(mb: &MeshBuilder, tris: &mut Vec<[Vector3; 3]>, albedo: &mut Vec<[f32; 3]>) {
-    for t in mb.idx.chunks_exact(3) {
+    for t in mb.idx.as_chunks::<3>().0 {
         let p = |i: u32| {
             let i = i as usize;
             Vector3::new(mb.pos[i * 3], mb.pos[i * 3 + 1], mb.pos[i * 3 + 2])

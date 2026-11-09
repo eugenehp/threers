@@ -160,10 +160,10 @@ impl PhysicsBlend {
 
         match self.state {
             BlendState::Animated => {
-                if let Some(body) = world.body_mut(self.body) {
-                    if body.is_kinematic() {
-                        body.set_kinematic_target(animated);
-                    }
+                if let Some(body) = world.body_mut(self.body)
+                    && body.is_kinematic()
+                {
+                    body.set_kinematic_target(animated);
                 }
                 animated
             }

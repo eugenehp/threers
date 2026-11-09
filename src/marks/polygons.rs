@@ -662,11 +662,11 @@ impl Mark for PolygonMarks {
         // Walls (horizontal normals) before roofs, each in its order.
         let ordered: std::borrow::Cow<[u32]> = if self.walls_first {
             let nt: &[f32] = bytemuck::cast_slice(self.normal_top.bytes());
-            let roof = |t: &[u32]| {
+            let roof = |t: &[u32; 3]| {
                 t.iter()
                     .all(|&v| nt.get(v as usize * 4 + 1).is_some_and(|y| y.abs() > 0.5))
             };
-            let tris = || self.index.chunks_exact(3);
+            let tris = || self.index.as_chunks::<3>().0.iter();
 
             let walls = tris().filter(|t| !roof(t));
             let roofs = tris().filter(|t| roof(t));

@@ -1,8 +1,8 @@
 [package]
 name = "threers-softbody"
 version.workspace = true
-edition = "2021"
-rust-version = "1.87"
+edition = "2024"
+rust-version = "1.99"
 license = "MIT"
 authors = ["Eugene Hauptmann"]
 repository = "https://github.com/eugenehp/threers"

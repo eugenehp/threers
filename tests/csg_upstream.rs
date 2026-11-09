@@ -112,7 +112,9 @@ fn parse() -> Vec<Call> {
                 let name = f.next().unwrap();
                 let size: usize = f.next().unwrap().parse().unwrap();
                 let data: Vec<f32> = base64(f.next().unwrap())
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                     .collect();
                 let b = call.as_mut().unwrap().brushes.last_mut().unwrap();
@@ -139,7 +141,7 @@ fn measure(groups: &[Vec<(String, usize, Vec<f32>)>]) -> (usize, f64, f64) {
     let (mut tris, mut area, mut volume) = (0usize, 0.0f64, 0.0f64);
     for group in groups {
         let pos = &group.iter().find(|(n, _, _)| n == "position").unwrap().2;
-        for t in pos.chunks_exact(9) {
+        for t in pos.as_chunks::<9>().0 {
             let p = |i: usize| [t[i] as f64, t[i + 1] as f64, t[i + 2] as f64];
             let (a, b, c) = (p(0), p(3), p(6));
             let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];

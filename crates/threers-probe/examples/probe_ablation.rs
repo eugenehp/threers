@@ -194,12 +194,13 @@ fn run_probe(gpu: &str, ab: &Ablation) -> std::io::Result<Score> {
         if let Some(rest) = line.strip_prefix("ABLATION cornell_probe=") {
             parse_cornell_line(rest, &mut score);
         }
-        if line.contains("all hostile") && line.contains("+nrc") {
-            if let Some(idx) = line.rfind('/') {
-                let tail = &line[idx + 1..];
-                if let Some(end) = tail.find('%') {
-                    score.all_pct = tail[..end].trim().parse().unwrap_or(f32::NAN);
-                }
+        if line.contains("all hostile")
+            && line.contains("+nrc")
+            && let Some(idx) = line.rfind('/')
+        {
+            let tail = &line[idx + 1..];
+            if let Some(end) = tail.find('%') {
+                score.all_pct = tail[..end].trim().parse().unwrap_or(f32::NAN);
             }
         }
     }

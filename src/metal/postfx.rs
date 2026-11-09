@@ -927,11 +927,11 @@ impl PostFxChain {
         // AO first, at full render resolution and before any resolve: it is a
         // lighting term, so everything downstream — bloom especially — should
         // see the darkened image rather than bloom the un-occluded one.
-        if let Some(ao) = self.ssao.as_ref() {
-            if !depth.is_null() {
-                ao.encode(&self.pipelines, cmd, current, depth, format)?;
-                current = ao.texture();
-            }
+        if let Some(ao) = self.ssao.as_ref()
+            && !depth.is_null()
+        {
+            ao.encode(&self.pipelines, cmd, current, depth, format)?;
+            current = ao.texture();
         }
 
         if let Some(ds) = self.downsample.as_ref() {
@@ -1158,7 +1158,7 @@ impl PostFxChain {
         if !needs {
             return Ok(None);
         }
-        let cmd = unsafe { device.command_buffer() };
+        let cmd = device.command_buffer();
         if cmd.is_null() {
             return Err(MetalError::NoCommandQueue);
         }
@@ -1354,7 +1354,7 @@ mod gpu_tests {
         .unwrap();
         let ds = MetalDownsampler::new(&device, 64, 64, 2, format).unwrap();
         let pipelines = PostFxPipelines::new(&device).unwrap();
-        let cmd = unsafe { device.command_buffer() };
+        let cmd = device.command_buffer();
         assert!(!cmd.is_null());
         ds.encode(&pipelines, cmd, src.id(), format).unwrap();
         unsafe {

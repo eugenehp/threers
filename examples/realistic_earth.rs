@@ -277,16 +277,16 @@ fn main() {
             spin(o, 0.42);
         }
         // The Moon is tidally locked, so its spin matches its orbit.
-        if let Some(m) = moon {
-            if let Some(o) = scene.get_mut(m.surface) {
-                o.position = moon_orbit(t);
-                // Tidally locked: one rotation per orbit, which is what keeps
-                // the near side turned toward us. This used to negate the
-                // orbital angle instead, which locks the Moon just as firmly
-                // and to the wrong face — every render showed the far side,
-                // cratered all over and missing every mare.
-                o.quaternion = Quaternion::from_euler_xyz(0.0, tidal_lock_yaw(moon_orbit(t)), 0.0);
-            }
+        if let Some(m) = moon
+            && let Some(o) = scene.get_mut(m.surface)
+        {
+            o.position = moon_orbit(t);
+            // Tidally locked: one rotation per orbit, which is what keeps
+            // the near side turned toward us. This used to negate the
+            // orbital angle instead, which locks the Moon just as firmly
+            // and to the wrong face — every render showed the far side,
+            // cratered all over and missing every mare.
+            o.quaternion = Quaternion::from_euler_xyz(0.0, tidal_lock_yaw(moon_orbit(t)), 0.0);
         }
 
         let rgba = renderer.render_to_rgba_resolved(&mut scene, &camera);

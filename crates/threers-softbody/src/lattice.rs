@@ -137,7 +137,7 @@ impl Lattice {
                 }
             }
         }
-        for t in tets.chunks_exact_mut(4) {
+        for t in tets.as_chunks_mut::<4>().0 {
             if tet_volume(&pos, t) < 0.0 {
                 t.swap(2, 3);
             }

@@ -11,6 +11,10 @@
 #[allow(clippy::manual_checked_ops)]
 fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
+    if a.is_empty() {
+        eprintln!("usage: tex_dump tile.tex [out.png]");
+        std::process::exit(2);
+    }
     let (src, dst) = (
         a[0].clone(),
         a.get(1).cloned().unwrap_or("out/tex_dump.png".into()),
@@ -41,7 +45,7 @@ fn main() {
     let _ = (t_width, t_height);
     let mut peak = 0u8;
     let mut lit = 0usize;
-    for p in rgba.chunks_exact(4) {
+    for p in rgba.as_chunks::<4>().0 {
         let m = p[0].max(p[1]).max(p[2]);
         peak = peak.max(m);
         if m > 40 {
@@ -52,7 +56,7 @@ fn main() {
     // question that matters: how much of it is city and how much is the
     // composite's background, which an emissive map turns into a wash.
     let mut bins = [0usize; 8];
-    for p in rgba.chunks_exact(4) {
+    for p in rgba.as_chunks::<4>().0 {
         let m = p[0].max(p[1]).max(p[2]) as usize;
         bins[(m / 32).min(7)] += 1;
     }
@@ -61,7 +65,7 @@ fn main() {
     // city light is warm, so they part on hue, not only on brightness.
     let (mut br, mut bg, mut bb, mut bn) = (0u64, 0u64, 0u64, 0u64);
     let (mut lr, mut lg, mut lb, mut ln) = (0u64, 0u64, 0u64, 0u64);
-    for p in rgba.chunks_exact(4) {
+    for p in rgba.as_chunks::<4>().0 {
         let m = p[0].max(p[1]).max(p[2]);
         if (64..96).contains(&m) {
             br += p[0] as u64;
@@ -95,7 +99,7 @@ fn main() {
     // three colours plus TRANSPARENT BLACK at index 3. A near-black image is
     // exactly the input that pushes blocks into it, and a decoder that ignores
     // the mode reads back colours the GPU will not show.
-    let zero_a = rgba.chunks_exact(4).filter(|p| p[3] == 0).count();
+    let zero_a = rgba.as_chunks::<4>().0.iter().filter(|p| p[3] == 0).count();
     println!(
         "  alpha 0 on {zero_a} px ({:.3}%)",
         100.0 * zero_a as f64 / (w as f64 * h as f64).max(1.0)

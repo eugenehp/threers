@@ -9,7 +9,6 @@
 //! cargo run --example shader_material
 //! ```
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use threers::cameras::Camera;
@@ -18,11 +17,7 @@ use threers::{
     AmbientLight, BoxGeometry, Color, DirectionalLight, Euler, Mesh, Object3D, PerspectiveCamera,
     Scene, ShaderMaterial, Vector3,
 };
-use winit::{
-    event::{Event, WindowEvent},
-    event_loop::EventLoop,
-    window::WindowBuilder,
-};
+use winit::event::{Event, WindowEvent};
 
 const FRAGMENT: &str = r#"
 @fragment
@@ -48,50 +43,44 @@ fn main() {
 }
 
 async fn run() {
-    let event_loop = EventLoop::new().expect("event loop");
-    let window = Arc::new(
-        WindowBuilder::new()
-            .with_title("threers — shader material")
-            .with_inner_size(winit::dpi::LogicalSize::new(900, 700))
-            .build(&event_loop)
-            .expect("window"),
-    );
+    let attributes = winit::window::Window::default_attributes()
+        .with_title("threers — shader material")
+        .with_inner_size(winit::dpi::LogicalSize::new(900, 700));
+    threers::sketch::run_window(attributes, move |window| {
+        // wgpu by default; the native Metal backend with `--features metal` and
+        // `THREERS_BACKEND=metal` — where the custom WGSL does not run yet, and
+        // the cube draws unlit in its base colour.
+        let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
 
-    // wgpu by default; the native Metal backend with `--features metal` and
-    // `THREERS_BACKEND=metal` — where the custom WGSL does not run yet, and
-    // the cube draws unlit in its base colour.
-    let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
+        let mut scene = Scene::new();
+        scene.background = Color::from_hex(0x101018);
 
-    let mut scene = Scene::new();
-    scene.background = Color::from_hex(0x101018);
+        // A cube with a custom-shader material.
+        let mut data = vec![[0.0f32; 4]; 16];
+        data[0] = [1.0, 0.45, 0.2, 0.0]; // base color
+        let material = ShaderMaterial::new(FRAGMENT)
+            .with_data(data)
+            .with_storage0(vec![8.0]);
+        let cube_id = scene.add(Object3D::mesh(Mesh::new(
+            BoxGeometry::new(1.2, 1.2, 1.2),
+            material.into(),
+        )));
 
-    // A cube with a custom-shader material.
-    let mut data = vec![[0.0f32; 4]; 16];
-    data[0] = [1.0, 0.45, 0.2, 0.0]; // base color
-    let material = ShaderMaterial::new(FRAGMENT)
-        .with_data(data)
-        .with_storage0(vec![8.0]);
-    let cube_id = scene.add(Object3D::mesh(Mesh::new(
-        BoxGeometry::new(1.2, 1.2, 1.2),
-        material.into(),
-    )));
+        scene.add_light(AmbientLight::new(Color::from_hex(0xffffff), 0.3));
+        let mut key = Object3D::light(
+            DirectionalLight::new(Color::from_hex(0xffffff), 1.0)
+                .with_direction(Vector3::new(-0.5, -1.0, -0.4)),
+        );
+        key.position = Vector3::new(3.0, 5.0, 2.0);
+        scene.add(key);
 
-    scene.add_light(AmbientLight::new(Color::from_hex(0xffffff), 0.3));
-    let mut key = Object3D::light(
-        DirectionalLight::new(Color::from_hex(0xffffff), 1.0)
-            .with_direction(Vector3::new(-0.5, -1.0, -0.4)),
-    );
-    key.position = Vector3::new(3.0, 5.0, 2.0);
-    scene.add(key);
+        let mut camera = PerspectiveCamera::new(60.0, view.aspect(), 0.1, 100.0);
+        camera.position = Vector3::new(2.5, 2.0, 3.5);
+        camera.look_at(Vector3::ZERO);
 
-    let mut camera = PerspectiveCamera::new(60.0, view.aspect(), 0.1, 100.0);
-    camera.position = Vector3::new(2.5, 2.0, 3.5);
-    camera.look_at(Vector3::ZERO);
-
-    let start = Instant::now();
-    let win = window.clone();
-    event_loop
-        .run(move |event, target| match event {
+        let start = Instant::now();
+        let win = window.clone();
+        move |event, target| match event {
             Event::WindowEvent { event, window_id } if window_id == win.id() => match event {
                 WindowEvent::CloseRequested => target.exit(),
                 WindowEvent::Resized(s) => {
@@ -109,6 +98,6 @@ async fn run() {
                 _ => {}
             },
             _ => {}
-        })
-        .expect("event loop");
+        }
+    });
 }

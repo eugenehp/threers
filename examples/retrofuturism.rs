@@ -669,14 +669,22 @@ fn render_frame(
 
     let n = behind_rgba.len() / 4;
     let mean: f64 = behind_rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|p| p[0] as f64)
         .sum::<f64>()
         / n as f64;
     println!("    pass1 (no bars): {n} px, mean R = {mean:.2}");
     let mut scene = build_scene(revealed, t, half_w, half_h, Some(view), matcap);
     let out = renderer.render_to_rgba(&mut scene, camera);
-    let mean2: f64 = out.chunks_exact(4).map(|p| p[0] as f64).sum::<f64>() / n as f64;
+    let mean2: f64 = out
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|p| p[0] as f64)
+        .sum::<f64>()
+        / n as f64;
     println!("    pass2 (bars)   : mean R = {mean2:.2}");
     out
 }
@@ -1336,7 +1344,7 @@ fn film_grain(rgba: &mut [u8], opacity: f32) {
 
 fn film_grain_seeded(rgba: &mut [u8], opacity: f32, seed: u32) {
     let mut state: u32 = seed | 1;
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         // xorshift32
         state ^= state << 13;
         state ^= state >> 17;

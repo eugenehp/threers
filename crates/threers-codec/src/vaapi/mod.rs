@@ -162,7 +162,7 @@ unsafe impl Send for Lib {}
 unsafe impl Sync for Lib {}
 
 #[link(name = "dl")]
-extern "C" {
+unsafe extern "C" {
     fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
 }
@@ -181,8 +181,8 @@ impl Lib {
     /// `T` must be the symbol's true signature.
     unsafe fn sym<T: Copy>(&self, name: &str) -> Option<T> {
         let c = CString::new(name).ok()?;
-        let p = dlsym(self.0, c.as_ptr());
-        (!p.is_null()).then(|| std::mem::transmute_copy(&p))
+        let p = unsafe { dlsym(self.0, c.as_ptr()) };
+        (!p.is_null()).then(|| unsafe { std::mem::transmute_copy(&p) })
     }
 }
 
@@ -341,46 +341,50 @@ impl Device {
         let va = self.va;
         match self.readback.take() {
             Some((cached, cw, ch, cf)) if (cw, ch, cf) == (w, h, fourcc) => {
-                if (va.get_image)(
-                    self.dpy,
-                    surface,
-                    0,
-                    0,
-                    w as c_uint,
-                    h as c_uint,
-                    cached.image_id,
-                ) == 0
+                if unsafe {
+                    (va.get_image)(
+                        self.dpy,
+                        surface,
+                        0,
+                        0,
+                        w as c_uint,
+                        h as c_uint,
+                        cached.image_id,
+                    )
+                } == 0
                 {
                     *img = cached;
                     return true;
                 }
-                (va.destroy_image)(self.dpy, cached.image_id);
+                unsafe { (va.destroy_image)(self.dpy, cached.image_id) };
             }
             Some((stale, ..)) => {
-                (va.destroy_image)(self.dpy, stale.image_id);
+                unsafe { (va.destroy_image)(self.dpy, stale.image_id) };
             }
             None => {}
         }
-        let mut fmt: ImageFormat = std::mem::zeroed();
+        let mut fmt: ImageFormat = unsafe { std::mem::zeroed() };
         fmt.fourcc = fourcc;
         fmt.byte_order = 1;
         fmt.bits_per_pixel = if deep { 24 } else { 12 };
-        *img = std::mem::zeroed();
-        if (va.create_image)(self.dpy, &mut fmt, w as c_int, h as c_int, img) != 0 {
+        *img = unsafe { std::mem::zeroed() };
+        if unsafe { (va.create_image)(self.dpy, &mut fmt, w as c_int, h as c_int, img) } != 0 {
             return false;
         }
-        if (va.get_image)(
-            self.dpy,
-            surface,
-            0,
-            0,
-            w as c_uint,
-            h as c_uint,
-            img.image_id,
-        ) != 0
+        if unsafe {
+            (va.get_image)(
+                self.dpy,
+                surface,
+                0,
+                0,
+                w as c_uint,
+                h as c_uint,
+                img.image_id,
+            )
+        } != 0
         {
-            (va.destroy_image)(self.dpy, img.image_id);
-            *img = std::mem::zeroed();
+            unsafe { (va.destroy_image)(self.dpy, img.image_id) };
+            *img = unsafe { std::mem::zeroed() };
             return false;
         }
         true
@@ -444,7 +448,9 @@ impl Device {
                 }
                 let mut uv = pool.take(cw * ch * 2 * bps);
                 for r in 0..ch {
-                    uv.extend_from_slice(&data[uo + (cy + r) * up + cx * 2 * bps..][..cw * 2 * bps]);
+                    uv.extend_from_slice(
+                        &data[uo + (cy + r) * up + cx * 2 * bps..][..cw * 2 * bps],
+                    );
                 }
                 (va.unmap_buffer)(self.dpy, img.buf);
                 if copied {
@@ -484,7 +490,7 @@ impl Device {
                 );
                 if deep {
                     // P010: 10-bit samples in the high bits of little-endian u16s.
-                    for (d, s) in dst.iter_mut().zip(src.chunks_exact(2)) {
+                    for (d, s) in dst.iter_mut().zip(src.as_chunks::<2>().0) {
                         *d = u16::from_le_bytes([s[0], s[1]]) >> 6;
                     }
                 } else {
@@ -497,12 +503,14 @@ impl Device {
                 let src = &data[uo + (cy + r) * up + cx * 2 * bps..][..cw * 2 * bps];
                 let (du, dv) = (&mut u[r * cw..][..cw], &mut v[r * cw..][..cw]);
                 if deep {
-                    for ((a, b), s) in du.iter_mut().zip(dv.iter_mut()).zip(src.chunks_exact(4)) {
+                    for ((a, b), s) in du.iter_mut().zip(dv.iter_mut()).zip(src.as_chunks::<4>().0)
+                    {
                         *a = u16::from_le_bytes([s[0], s[1]]) >> 6;
                         *b = u16::from_le_bytes([s[2], s[3]]) >> 6;
                     }
                 } else {
-                    for ((a, b), s) in du.iter_mut().zip(dv.iter_mut()).zip(src.chunks_exact(2)) {
+                    for ((a, b), s) in du.iter_mut().zip(dv.iter_mut()).zip(src.as_chunks::<2>().0)
+                    {
                         *a = s[0] as u16;
                         *b = s[1] as u16;
                     }
@@ -901,7 +909,8 @@ impl VaapiDecoder {
                     Picture::Planes(f.to_decoded())
                 } else {
                     let mut p = take(&self.outbox)?;
-                    p.color = ColorInfo::from_vui(Some(f.seq.mtrx as u32), f.seq.color_range, p.height);
+                    p.color =
+                        ColorInfo::from_vui(Some(f.seq.mtrx as u32), f.seq.color_range, p.height);
                     Picture::Packed(p)
                 };
                 self.ready.push((pts + i as i64, picture));
@@ -912,7 +921,8 @@ impl VaapiDecoder {
             // A packet (superframe) shows at most one picture.
             for (i, f) in d.decode(sample)?.into_iter().enumerate() {
                 d.accel_read(&f)?;
-                self.ready.push((pts + i as i64, Picture::Packed(take(&self.outbox)?)));
+                self.ready
+                    .push((pts + i as i64, Picture::Packed(take(&self.outbox)?)));
             }
             return Ok(());
         }
@@ -934,7 +944,8 @@ impl VaapiDecoder {
             return Err(e);
         }
         for i in 0..shown {
-            self.ready.push((pts + i as i64, Picture::Packed(take(&self.outbox)?)));
+            self.ready
+                .push((pts + i as i64, Picture::Packed(take(&self.outbox)?)));
         }
         Ok(())
     }

@@ -84,19 +84,19 @@ fn main() {
             // The demo stacks a cloud shell over the surface. `ease_poles` blurs
             // along longitude, which near a pole smears features *around* it — so
             // if anything here is going to look like a vortex, it is this.
-            if name == "clouds" {
-                if let Some(c) = maps.clouds.clone() {
-                    let mut cm = StandardMaterial::new(Color::WHITE);
-                    cm.roughness = 1.0;
-                    cm.map = Some(c);
-                    cm.opacity = 0.999;
-                    let mut shell = Object3D::mesh(Mesh::new(
-                        SphereGeometry::new(1.006, 512, 256),
-                        Material::Standard(cm),
-                    ));
-                    shell.name = "clouds".into();
-                    scene.add(shell);
-                }
+            if name == "clouds"
+                && let Some(c) = maps.clouds.clone()
+            {
+                let mut cm = StandardMaterial::new(Color::WHITE);
+                cm.roughness = 1.0;
+                cm.map = Some(c);
+                cm.opacity = 0.999;
+                let mut shell = Object3D::mesh(Mesh::new(
+                    SphereGeometry::new(1.006, 512, 256),
+                    Material::Standard(cm),
+                ));
+                shell.name = "clouds".into();
+                scene.add(shell);
             }
 
             let fov: f32 = flag("--fov").and_then(|v| v.parse().ok()).unwrap_or(14.0);

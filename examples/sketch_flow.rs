@@ -86,10 +86,10 @@ fn main() {
             let mut frames = 0u64;
             move |f: &mut Frame| {
                 frames += 1;
-                if let Some(limit) = frame_limit {
-                    if frames >= limit {
-                        f.exit = true;
-                    }
+                if let Some(limit) = frame_limit
+                    && frames >= limit
+                {
+                    f.exit = true;
                 }
                 // The pointer tilts the field, so the sketch answers the mouse.
                 let tilt = f.pointer_ndc.x * 0.8;

@@ -599,26 +599,26 @@ fn property_tracks(
 
     // `visibility` is a token — `inherited` or `invisible` — so what is
     // animated is which of the two, not a number.
-    if let Some(value) = prim.value("visibility") {
-        if let Some(samples) = value.samples() {
-            let times: Vec<f32> = samples.iter().map(|(t, _)| (t / rate) as f32).collect();
-            let values: Vec<f32> = samples
-                .iter()
-                .map(|(_, v)| {
-                    if v.as_str() == Some("invisible") {
-                        0.0
-                    } else {
-                        1.0
-                    }
-                })
-                .collect();
-            out.push(KeyframeTrack::scalar(
-                object,
-                TrackTarget::Visibility,
-                times,
-                values,
-            ));
-        }
+    if let Some(value) = prim.value("visibility")
+        && let Some(samples) = value.samples()
+    {
+        let times: Vec<f32> = samples.iter().map(|(t, _)| (t / rate) as f32).collect();
+        let values: Vec<f32> = samples
+            .iter()
+            .map(|(_, v)| {
+                if v.as_str() == Some("invisible") {
+                    0.0
+                } else {
+                    1.0
+                }
+            })
+            .collect();
+        out.push(KeyframeTrack::scalar(
+            object,
+            TrackTarget::Visibility,
+            times,
+            values,
+        ));
     }
 
     if schemas::is_light(&prim.type_name) {
@@ -635,15 +635,13 @@ fn property_tracks(
 
     // A mesh's colour is animated on the shader that its material binds, which
     // is a different prim in a different part of the tree.
-    if prim.type_name == "Mesh" || schemas::is_gprim(&prim.type_name) {
-        if let Some(shader) = shade::bound_material_path(layer, path)
+    if (prim.type_name == "Mesh" || schemas::is_gprim(&prim.type_name))
+        && let Some(shader) = shade::bound_material_path(layer, path)
             .and_then(|p| layer.prim_at(&p))
             .and_then(|material| shade::surface_shader(material, layer))
-        {
-            if let Some(value) = shader.value("inputs:diffuseColor") {
-                colour(&mut out, value);
-            }
-        }
+        && let Some(value) = shader.value("inputs:diffuseColor")
+    {
+        colour(&mut out, value);
     }
     out
 }
@@ -891,8 +889,8 @@ fn build(
     let id = arena.insert(object);
     // Blend-shape weights are driven by the skeleton's animation, and the
     // tracks point at the mesh rather than at a joint.
-    if !morph_order.is_empty() {
-        if let Some(anim) = source
+    if !morph_order.is_empty()
+        && let Some(anim) = source
             .children
             .iter()
             .find(|c| c.type_name == "SkelAnimation")
@@ -903,15 +901,14 @@ fn build(
                     .and_then(|path| context.source_layer.prim_at(path))
             })
             .or_else(|| skel::bound_animation(source, context.source_layer))
-        {
-            let tracks = skel::blend_shape_tracks(anim, &morph_order, id, context.rate);
-            if !tracks.is_empty() {
-                context.clips.push(AnimationClip::new(
-                    format!("{}-blend", prim.name),
-                    0.0,
-                    tracks,
-                ));
-            }
+    {
+        let tracks = skel::blend_shape_tracks(anim, &morph_order, id, context.rate);
+        if !tracks.is_empty() {
+            context.clips.push(AnimationClip::new(
+                format!("{}-blend", prim.name),
+                0.0,
+                tracks,
+            ));
         }
     }
     // A camera is not a node kind, so it is recorded against the node that
@@ -931,19 +928,19 @@ fn build(
     // Animated vertices, which become morph targets rather than a mesh a
     // frame. Only where the prim has no blend shapes of its own: the two would
     // be indexing the same weights.
-    if morph_order.is_empty() {
-        if let Some((morphs, weights)) = vertex_animation(source, id, context.rate) {
-            // Onto the geometry, so the renderers play it.
-            if let Some(ObjectKind::Mesh(mesh)) = arena.get_mut(id).map(|o| &mut o.kind) {
-                let geometry = std::sync::Arc::make_mut(&mut mesh.geometry);
-                if let Some(influences) = attach_morphs(prim, geometry, &morphs) {
-                    mesh.update_morph_targets();
-                    mesh.morph_influences = influences;
-                }
+    if morph_order.is_empty()
+        && let Some((morphs, weights)) = vertex_animation(source, id, context.rate)
+    {
+        // Onto the geometry, so the renderers play it.
+        if let Some(ObjectKind::Mesh(mesh)) = arena.get_mut(id).map(|o| &mut o.kind) {
+            let geometry = std::sync::Arc::make_mut(&mut mesh.geometry);
+            if let Some(influences) = attach_morphs(prim, geometry, &morphs) {
+                mesh.update_morph_targets();
+                mesh.morph_influences = influences;
             }
-            context.morphs.push((prim.name.clone(), morphs));
-            tracks.extend(weights);
         }
+        context.morphs.push((prim.name.clone(), morphs));
+        tracks.extend(weights);
     }
 
     if !tracks.is_empty() {
@@ -1101,14 +1098,15 @@ fn op_matrix(name: &str, value: &UsdValue) -> Option<Matrix4> {
             Vector3::new(1.0, 1.0, 1.0),
         )),
         "transform" if n.len() >= 16 => {
-            // USD matrices are row-major and pre-multiplied; this crate's are
-            // column-major, so the sixteen numbers transpose on the way in.
+            // USD writes a matrix row by row, for row vectors (`p * M`): the
+            // basis vectors are its first three rows and the translation its
+            // last. This crate's matrices act on column vectors and are stored
+            // column by column — the transpose of USD's, stored the other way
+            // round — so the same sixteen numbers in the same order are already
+            // right. Transposing them put the translation in the projective row,
+            // where `decompose` drops it, and turned every rotation backwards.
             let mut m = [0.0f32; 16];
-            for row in 0..4 {
-                for col in 0..4 {
-                    m[col * 4 + row] = n[row * 4 + col];
-                }
-            }
+            m.copy_from_slice(&n[..16]);
             Some(Matrix4 { elements: m })
         }
         _ => None,
@@ -1225,7 +1223,12 @@ pub fn mesh_geometry_at(prim: &UsdPrim, level: usize) -> Option<BufferGeometry> 
     if level > 0 && subdiv::wanted(prim) {
         let refined = subdiv::subdivide(
             subdiv::Cage {
-                positions: points.chunks_exact(3).map(|p| [p[0], p[1], p[2]]).collect(),
+                positions: points
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|p| [p[0], p[1], p[2]])
+                    .collect(),
                 counts: counts.clone(),
                 indices: indices.clone(),
             },
@@ -1899,6 +1902,38 @@ def Xform "A"
         assert_eq!(
             midway.arena.get(midway.roots[0]).unwrap().position,
             Vector3::new(8.0, 0.0, 0.0)
+        );
+    }
+
+    /// `xformOp:transform` is a row-vector matrix with the translation in its
+    /// last row. Read transposed, a part offset by a matrix — a laptop's lid
+    /// moved back to its hinge — lost the offset and sat at its parent's
+    /// origin, and every matrix rotation turned the wrong way.
+    #[test]
+    fn a_matrix_op_keeps_its_translation_and_turns_the_right_way() {
+        // A quarter turn about +z (x goes to y, written as USD's first row),
+        // then a move to (1, 2, 3).
+        let layer = parse(
+            r#"#usda 1.0
+def Xform "A"
+{
+    matrix4d xformOp:transform = ( (0, 1, 0, 0), (-1, 0, 0, 0), (0, 0, 1, 0), (1, 2, 3, 1) )
+    uniform token[] xformOpOrder = ["xformOp:transform"]
+}
+"#,
+        )
+        .unwrap();
+        let scene = to_scene(&layer);
+        let a = scene.arena.get(scene.roots[0]).unwrap();
+        assert!(
+            (a.position - Vector3::new(1.0, 2.0, 3.0)).length() < 1e-5,
+            "{:?}",
+            a.position
+        );
+        let x = a.quaternion * Vector3::new(1.0, 0.0, 0.0);
+        assert!(
+            (x - Vector3::new(0.0, 1.0, 0.0)).length() < 1e-5,
+            "x went to {x:?}"
         );
     }
 

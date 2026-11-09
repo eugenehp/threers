@@ -448,10 +448,10 @@ impl Document {
         let Some(def) = def(&self.root, "buffers", i) else {
             return Err(GltfError::msg(format!("buffer {i} does not exist")));
         };
-        if let Some(t) = string(def, "type") {
-            if t != "arraybuffer" {
-                return Err(GltfError::msg(format!("{t} buffer type is not supported.")));
-            }
+        if let Some(t) = string(def, "type")
+            && t != "arraybuffer"
+        {
+            return Err(GltfError::msg(format!("{t} buffer type is not supported.")));
         }
         Err(GltfError::MissingField("external buffer not supplied"))
     }

@@ -527,7 +527,8 @@ pub(super) fn parse_svg(src: &str) -> Shape {
             "polygon" | "polyline" => {
                 if let Some(pts) = attr(tag, "points") {
                     let c = coords(&pts);
-                    let ring: Vec<[f32; 2]> = c.chunks_exact(2).map(|p| [p[0], -p[1]]).collect();
+                    let ring: Vec<[f32; 2]> =
+                        c.as_chunks::<2>().0.iter().map(|p| [p[0], -p[1]]).collect();
                     if ring.len() >= 3 {
                         rings.push(ring);
                     }

@@ -567,10 +567,10 @@ impl HevcDecoder {
                 l
             }
         };
-        if let Some(p) = self.dpb.first() {
-            if p.size != (sps.width as usize, sps.height as usize) {
-                self.dpb.clear();
-            }
+        if let Some(p) = self.dpb.first()
+            && p.size != (sps.width as usize, sps.height as usize)
+        {
+            self.dpb.clear();
         }
         let irap = (16..=23).contains(&nal_type);
         let idr = nal_type == 19 || nal_type == 20;
@@ -813,10 +813,10 @@ impl HevcDecoder {
             return;
         }
         if let Some(accel) = self.accel.as_mut() {
-            if std::mem::take(&mut self.accel_started) {
-                if let Err(e) = accel.end_picture() {
-                    self.accel_error.get_or_insert(e);
-                }
+            if std::mem::take(&mut self.accel_started)
+                && let Err(e) = accel.end_picture()
+            {
+                self.accel_error.get_or_insert(e);
             }
         } else {
             filters::deblock(&mut cur.pic, &cur.sps, &cur.pps);

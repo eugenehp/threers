@@ -101,7 +101,7 @@ fn lazy_initialization_preserves_rendered_pixels_and_material_states() {
                         assert_eq!(rgba.len(), (size * size * 4) as usize);
                         let first = &rgba[..4];
                         assert!(
-                            rgba.chunks_exact(4).any(|pixel| pixel != first),
+                            rgba.as_chunks::<4>().0.iter().any(|pixel| pixel != first),
                             "blank fixture {name}"
                         );
                         images.push(rgba.clone());

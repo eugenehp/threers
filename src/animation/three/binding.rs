@@ -171,10 +171,10 @@ pub fn parse_track_name(track_name: &str) -> Result<ParsedPath, ParseError> {
             break;
         }
     }
-    if found.is_none() {
-        if let Some(t) = match_tail(rest) {
-            found = Some((None, t));
-        }
+    if found.is_none()
+        && let Some(t) = match_tail(rest)
+    {
+        found = Some((None, t));
     }
     let (node_name, (object_name, object_index, (property_name, property_index))) =
         found.ok_or_else(err)?;
@@ -186,14 +186,14 @@ pub fn parse_track_name(track_name: &str) -> Result<ParsedPath, ParseError> {
         property_name,
         property_index,
     };
-    if let Some(node) = results.node_name.clone() {
-        if let Some(last_dot) = node.rfind('.') {
-            let object_name = &node[last_dot + 1..];
-            // Object names must be checked against an allowlist.
-            if SUPPORTED_OBJECT_NAMES.contains(&object_name) {
-                results.object_name = Some(object_name.to_string());
-                results.node_name = Some(node[..last_dot].to_string());
-            }
+    if let Some(node) = results.node_name.clone()
+        && let Some(last_dot) = node.rfind('.')
+    {
+        let object_name = &node[last_dot + 1..];
+        // Object names must be checked against an allowlist.
+        if SUPPORTED_OBJECT_NAMES.contains(&object_name) {
+            results.object_name = Some(object_name.to_string());
+            results.node_name = Some(node[..last_dot].to_string());
         }
     }
     if results.property_name.is_empty() {
@@ -277,10 +277,10 @@ pub fn find_node<T: NodeTree>(tree: &T, root: &T::Id, node_name: Option<&str>) -
         return Some(root.clone());
     }
     // search into skeleton bones.
-    if let Some(bones) = tree.skeleton_bones(root) {
-        if let Some(b) = bones.into_iter().find(|b| tree.name_is(b, name)) {
-            return Some(b);
-        }
+    if let Some(bones) = tree.skeleton_bones(root)
+        && let Some(b) = bones.into_iter().find(|b| tree.name_is(b, name))
+    {
+        return Some(b);
     }
     // search into node subtree.
     fn search<T: NodeTree>(tree: &T, children: Vec<T::Id>, name: &str) -> Option<T::Id> {

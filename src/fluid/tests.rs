@@ -658,7 +658,9 @@ fn the_dye_can_be_a_material_map() {
     // black. What proves the dye arrived is *hue*: several pixels whose
     // channels disagree strongly, which no flat fill can produce.
     let saturated = rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| {
             let (hi, lo) = (p[0].max(p[1]).max(p[2]), p[0].min(p[1]).min(p[2]));
             hi > 40 && hi - lo > 40
@@ -727,7 +729,9 @@ fn the_fluid_can_be_a_pass_in_the_composer() {
 
     let pixels = readback::texture_bytes(&gpu.device, &gpu.queue, &out.color_texture);
     let coloured = pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| {
             let (hi, lo) = (p[0].max(p[1]).max(p[2]), p[0].min(p[1]).min(p[2]));
             hi > 40 && hi - lo > 30

@@ -1152,11 +1152,11 @@ mod tests {
         let mut rng = Rng::new(97, 31);
         let mut sum = Vector3::ZERO;
         for _ in 0..n {
-            if let Some(s) = bsdf.sample(wo, &mut rng) {
-                if s.pdf > 0.0 {
-                    let cos = s.direction.dot(bsdf.normal()).abs();
-                    sum = sum + s.value * (cos / s.pdf);
-                }
+            if let Some(s) = bsdf.sample(wo, &mut rng)
+                && s.pdf > 0.0
+            {
+                let cos = s.direction.dot(bsdf.normal()).abs();
+                sum = sum + s.value * (cos / s.pdf);
             }
         }
         sum * (1.0 / n as f32)

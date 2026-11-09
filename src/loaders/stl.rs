@@ -84,10 +84,11 @@ impl StlLoader {
 
     /// Auto-detect ASCII vs binary based on the header.
     pub fn parse(bytes: &[u8]) -> BufferGeometry {
-        if bytes.len() >= 5 && &bytes[0..5] == b"solid" {
-            if let Ok(s) = std::str::from_utf8(bytes) {
-                return Self::parse_ascii(s);
-            }
+        if bytes.len() >= 5
+            && &bytes[0..5] == b"solid"
+            && let Ok(s) = std::str::from_utf8(bytes)
+        {
+            return Self::parse_ascii(s);
         }
         Self::parse_binary(bytes)
     }

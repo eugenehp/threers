@@ -40,7 +40,7 @@ impl ExtrudeGeometry {
         // consumes it, and it is not worth cfg-ing the arithmetic itself.
         #[cfg_attr(not(feature = "brep"), allow(unused_variables))]
         let cap_triangles = tris.len() / 3;
-        for tri in tris.chunks_exact(3) {
+        for tri in tris.as_chunks::<3>().0 {
             indices.extend_from_slice(&[tri[0], tri[2], tri[1]]);
             let off = n as u32;
             indices.extend_from_slice(&[off + tri[0], off + tri[1], off + tri[2]]);
@@ -200,7 +200,12 @@ impl ExtrudeBuffers {
 /// stores it.
 pub(crate) fn non_indexed_vertex_normals(positions: &[f32]) -> Vec<f32> {
     let mut normals = vec![0.0f32; positions.len()];
-    for (tri, out) in positions.chunks_exact(9).zip(normals.chunks_exact_mut(9)) {
+    for (tri, out) in positions
+        .as_chunks::<9>()
+        .0
+        .iter()
+        .zip(normals.as_chunks_mut::<9>().0)
+    {
         let p = |k: usize| {
             [
                 tri[k * 3] as f64,
@@ -222,7 +227,7 @@ pub(crate) fn non_indexed_vertex_normals(positions: &[f32]) -> Vec<f32> {
             out[v * 3 + 2] = n[2] as f32;
         }
     }
-    for n in normals.chunks_exact_mut(3) {
+    for n in normals.as_chunks_mut::<3>().0 {
         let (x, y, z) = (n[0] as f64, n[1] as f64, n[2] as f64);
         let l = (x * x + y * y + z * z).sqrt();
         let inv = 1.0 / if l == 0.0 { 1.0 } else { l };

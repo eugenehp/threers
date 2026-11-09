@@ -525,7 +525,11 @@ mod tests {
 
     fn triangles(geom: &BufferGeometry) -> Vec<[u32; 3]> {
         let idx = geom.index.as_ref().expect("indexed");
-        idx.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect()
+        idx.as_chunks::<3>()
+            .0
+            .iter()
+            .map(|t| [t[0], t[1], t[2]])
+            .collect()
     }
 
     #[test]

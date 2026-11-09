@@ -264,7 +264,7 @@ fn d_a_camera_on_the_pole_axis_still_renders() {
         return;
     };
     let map = latitude_stripes(512, 256, 8);
-    let lit = |img: &[u8]| img.chunks_exact(4).filter(|p| p[0] > 8).count();
+    let lit = |img: &[u8]| img.as_chunks::<4>().0.iter().filter(|p| p[0] > 8).count();
 
     // Just off the axis: the ordinary case, and the baseline to compare with.
     let m = BasicMaterial {

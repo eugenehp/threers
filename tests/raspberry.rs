@@ -113,7 +113,7 @@ fn every_skin_vertex_names_a_drupelet_that_exists() {
 
     let n = drups.len() as f32;
     let mut seen = vec![false; drups.len()];
-    for v in col.array.chunks_exact(4) {
+    for v in col.array.as_chunks::<4>().0 {
         for (k, c) in v.iter().take(3).enumerate() {
             assert!(
                 (0.0..=1.0).contains(c),
@@ -177,7 +177,7 @@ fn no_hair_is_drawn_thinner_than_a_pixel() {
 
     let g = build_fuzz(&drups, &sh, &lights, &args, &camera);
     let col = g.attributes.get("color").expect("fuzz colour");
-    let alphas: Vec<f32> = col.array.chunks_exact(4).map(|v| v[3]).collect();
+    let alphas: Vec<f32> = col.array.as_chunks::<4>().0.iter().map(|v| v[3]).collect();
     assert!(!alphas.is_empty(), "no hairs were built at all");
     for a in &alphas {
         assert!(
@@ -535,7 +535,7 @@ fn predicted_halo(
         })
         .collect();
 
-    for tri in index.chunks_exact(3) {
+    for tri in index.as_chunks::<3>().0 {
         let v = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
         let p = v.map(project);
         let area =

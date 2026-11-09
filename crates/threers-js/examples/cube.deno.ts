@@ -6,11 +6,11 @@
  *
  * Or from the registry (after publish):
  *   deno run --allow-read --allow-net examples/cube.deno.ts
- *   with import from "npm:threers"
+ *   with import from "npm:@threers/threers"
  */
 
 import THREE, { initThreers } from "../dist/mini/threejs-shim.js";
-// Published: import THREE, { initThreers } from "npm:threers";
+// Published: import THREE, { initThreers } from "npm:@threers/threers";
 
 const html = `<!DOCTYPE html>
 <html><body style="margin:0;background:#101010">

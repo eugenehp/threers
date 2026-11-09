@@ -1047,13 +1047,13 @@ impl H264Decoder {
         let max = sps.max_num_ref_frames.max(1) as usize;
         let n_ref = self.dpb.iter().filter(|p| p.is_ref()).count();
         let n_short = self.dpb.iter().filter(|p| p.short != 0).count();
-        if n_ref >= max && n_short > 0 {
-            if let Some(i) = (0..self.dpb.len())
+        if n_ref >= max
+            && n_short > 0
+            && let Some(i) = (0..self.dpb.len())
                 .filter(|&i| self.dpb[i].short != 0)
                 .min_by_key(|&i| self.dpb[i].frame_num_wrap)
-            {
-                self.dpb[i].short = 0;
-            }
+        {
+            self.dpb[i].short = 0;
         }
     }
 
@@ -1230,10 +1230,10 @@ impl H264Decoder {
         if jobs {
             self.dpb[cur.store].slot = slot.clone();
         } else if accel {
-            if std::mem::take(&mut self.accel_started) {
-                if let Err(e) = self.accel.as_mut().unwrap().end_picture() {
-                    self.accel_error.get_or_insert(e);
-                }
+            if std::mem::take(&mut self.accel_started)
+                && let Err(e) = self.accel.as_mut().unwrap().end_picture()
+            {
+                self.accel_error.get_or_insert(e);
             }
         } else if cur.mbaff {
             deblock::deblock_mbaff(
@@ -1362,10 +1362,11 @@ impl H264Decoder {
     ) {
         let mut deps: Vec<Arc<Slot<RefData>>> = Vec::new();
         for entry in cur.work.iter().flat_map(|w| w.refs.iter().flatten()) {
-            if let Some(dep) = dpb.get(entry.dpb).and_then(|p| p.slot.clone()) {
-                if !Arc::ptr_eq(&dep, &slot) && !deps.iter().any(|d| Arc::ptr_eq(d, &dep)) {
-                    deps.push(dep);
-                }
+            if let Some(dep) = dpb.get(entry.dpb).and_then(|p| p.slot.clone())
+                && !Arc::ptr_eq(&dep, &slot)
+                && !deps.iter().any(|d| Arc::ptr_eq(d, &dep))
+            {
+                deps.push(dep);
             }
         }
         let t = self.threads.as_mut().unwrap();

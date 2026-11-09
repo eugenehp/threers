@@ -152,7 +152,7 @@ mod tests {
             );
             let half = length * 0.5;
             let (mut min_y, mut max_y) = (f32::MAX, f32::MIN);
-            for p in pos.chunks_exact(3) {
+            for p in pos.as_chunks::<3>().0 {
                 min_y = min_y.min(p[1]);
                 max_y = max_y.max(p[1]);
                 // Every vertex lies on the capsule: distance `radius` from the
@@ -189,7 +189,7 @@ mod tests {
             })
             .collect();
         let mut edges: HashMap<(usize, usize), usize> = HashMap::new();
-        for t in g.index.as_deref().unwrap().chunks_exact(3) {
+        for t in g.index.as_deref().unwrap().as_chunks::<3>().0 {
             let w = [0, 1, 2].map(|k| welded[t[k] as usize]);
             if w[0] == w[1] || w[1] == w[2] || w[0] == w[2] {
                 continue; // a pole cell's zero-area triangle
@@ -199,7 +199,7 @@ mod tests {
                 *edges.entry((a.min(b), a.max(b))).or_default() += 1;
             }
         }
-        let open: Vec<_> = edges.iter().filter(|(_, &n)| n != 2).collect();
+        let open: Vec<_> = edges.iter().filter(|&(_, &n)| n != 2).collect();
         assert!(
             open.is_empty(),
             "{} edges not shared by exactly two triangles",

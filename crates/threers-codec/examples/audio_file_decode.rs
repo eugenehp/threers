@@ -4,6 +4,10 @@
 //!   audio_file_decode IN --compare REF.f32
 fn main() {
     let a: Vec<String> = std::env::args().collect();
+    if a.len() < 3 {
+        eprintln!("usage: audio_file_decode IN OUT.f32 | audio_file_decode IN --compare REF.f32");
+        std::process::exit(2);
+    }
     let data = std::fs::read(&a[1]).expect("read");
     let t = std::time::Instant::now();
     let p = threers_codec::audio_file::read(&data).unwrap_or_else(|e| {
@@ -25,8 +29,10 @@ fn main() {
     if a.get(2).map(String::as_str) == Some("--compare") {
         let r = std::fs::read(&a[3]).expect("reference");
         let r: Vec<f32> = r
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
             .collect();
         let m = inter.len().min(r.len());
         let diff = (0..m)

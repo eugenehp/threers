@@ -639,10 +639,10 @@ impl Starfield {
 
     /// Add the sky to `scene`.
     pub fn add_to(&self, scene: &mut Scene) -> ObjectId {
-        if let Some(faces) = &self.faces {
-            if faces.len() == 6 {
-                return self.add_cube(scene, faces);
-            }
+        if let Some(faces) = &self.faces
+            && faces.len() == 6
+        {
+            return self.add_cube(scene, faces);
         }
         let mut m = BasicMaterial::new(Color::new(self.intensity, self.intensity, self.intensity));
         m.map = Some(self.texture.clone());

@@ -210,10 +210,10 @@ impl SeedGraph {
                         [0, 1, 2].map(|i| a[i] - shift[i]),
                         [0, 1, 2].map(|i| b[i] - shift[i]),
                     );
-                    if let Some(k) = key(a, b) {
-                        if classes.insert(k) {
-                            tile_edges.push([a, b]);
-                        }
+                    if let Some(k) = key(a, b)
+                        && classes.insert(k)
+                    {
+                        tile_edges.push([a, b]);
                     }
                 }
             }

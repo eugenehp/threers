@@ -169,14 +169,14 @@ fn lines_filled_in_after_their_first_frame() {
     let _ = r.render_to_rgba(&mut scene, &camera());
     let idb = scene.add(Object3D::line_segments(LineSegments::new(empty, mat)));
     let fill = |scene: &mut Scene, id, index: Vec<u32>| {
-        if let Some(o) = scene.arena.get_mut(id) {
-            if let threers::ObjectKind::LineSegments(l) = &mut o.kind {
-                let g = std::sync::Arc::make_mut(&mut l.geometry);
-                g.set_attribute("position", BufferAttribute::new(pos.clone(), 3));
-                g.bump_version();
-                g.set_index(index);
-                g.bump_version();
-            }
+        if let Some(o) = scene.arena.get_mut(id)
+            && let threers::ObjectKind::LineSegments(l) = &mut o.kind
+        {
+            let g = std::sync::Arc::make_mut(&mut l.geometry);
+            g.set_attribute("position", BufferAttribute::new(pos.clone(), 3));
+            g.bump_version();
+            g.set_index(index);
+            g.bump_version();
         }
     };
     let half = n / 2;

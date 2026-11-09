@@ -336,7 +336,7 @@ fn watertight(pts: &[[f32; 3]]) -> bool {
     };
     type PointKey = (i64, i64, i64);
     let mut edges: HashMap<(PointKey, PointKey), i32> = HashMap::new();
-    for t in pts.chunks_exact(3) {
+    for t in pts.as_chunks::<3>().0 {
         for k in 0..3 {
             let (mut a, mut b) = (key(t[k]), key(t[(k + 1) % 3]));
             if a > b {

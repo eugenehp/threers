@@ -21,8 +21,8 @@ use crate::core::{BufferGeometry, ObjectKind};
 use crate::curves::{segments_to_path_data, PathSegment};
 use crate::lights::Light;
 use crate::materials::Material;
+use crate::math::ToneMapping;
 use crate::math::{Color, Matrix4, Vector2, Vector3};
-use crate::renderer::ToneMapping;
 use crate::scene::Scene;
 use crate::utils::format_svg_number as fmt;
 use std::sync::Arc;
@@ -310,10 +310,10 @@ impl SvgRenderer {
         path: impl AsRef<std::path::Path>,
     ) -> std::io::Result<()> {
         let path = path.as_ref();
-        if let Some(dir) = path.parent() {
-            if !dir.as_os_str().is_empty() {
-                std::fs::create_dir_all(dir)?;
-            }
+        if let Some(dir) = path.parent()
+            && !dir.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(dir)?;
         }
         std::fs::write(path, self.render_to_string(scene, camera))
     }
@@ -552,10 +552,9 @@ fn collect_draws(scene: &Scene, cam_layers: crate::core::Layers) -> Vec<Draw> {
                 topology: Topology::Points,
                 span: full_span(&p.geometry),
             }),
-            ObjectKind::Group
-            | ObjectKind::Light(_)
-            | ObjectKind::Sprite(_)
-            | ObjectKind::Audio(_) => {}
+            ObjectKind::Group | ObjectKind::Light(_) | ObjectKind::Sprite(_) => {}
+            #[cfg(feature = "audio")]
+            ObjectKind::Audio(_) => {}
         }
     });
     draws
@@ -1378,12 +1377,14 @@ fn tinted(c: Color, tint: Option<Color>) -> [f32; 3] {
 /// facets still show, but their shading follows the surface rather than the
 /// mesh.
 fn face_normal(verts: &[Vtx], t: &[usize; 3], normals: Option<&[Vector3]>) -> Vector3 {
-    if let Some(ns) = normals {
-        if t[0] < ns.len() && t[1] < ns.len() && t[2] < ns.len() {
-            let sum = ns[t[0]] + ns[t[1]] + ns[t[2]];
-            if sum.length_sq() > 1e-12 {
-                return sum.normalize();
-            }
+    if let Some(ns) = normals
+        && t[0] < ns.len()
+        && t[1] < ns.len()
+        && t[2] < ns.len()
+    {
+        let sum = ns[t[0]] + ns[t[1]] + ns[t[2]];
+        if sum.length_sq() > 1e-12 {
+            return sum.normalize();
         }
     }
     let e1 = verts[t[1]].world - verts[t[0]].world;
@@ -1497,7 +1498,9 @@ fn world_normals(geometry: &BufferGeometry, model: &Matrix4) -> Option<Vec<Vecto
     let inv = model.invert();
     Some(
         attr.array
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| transform_normal(&inv, Vector3::new(c[0], c[1], c[2])))
             .collect(),
     )
@@ -2182,7 +2185,7 @@ mod tests {
                 .filter(|t| !t.is_empty())
                 .filter_map(|t| t.parse().ok())
                 .collect();
-            let poly: Vec<[f32; 2]> = n.chunks_exact(2).map(|c| [c[0], c[1]]).collect();
+            let poly: Vec<[f32; 2]> = n.as_chunks::<2>().0.iter().map(|c| [c[0], c[1]]).collect();
             if poly.len() >= 3 && contains(&poly, x, y) {
                 top = Some(fill.to_string());
             }
@@ -2523,7 +2526,7 @@ mod tests {
                 .split(|c: char| c.is_ascii_alphabetic() || c == ' ')
                 .filter_map(|t| t.parse().ok())
                 .collect();
-            for xy in nums.chunks_exact(2) {
+            for xy in nums.as_chunks::<2>().0 {
                 best = best.max(xy[0]);
             }
         }
@@ -2539,7 +2542,9 @@ mod tests {
             let mut g = PlaneGeometry::new(2.0, 2.0);
             let base = g.get_attribute("position").unwrap().array.clone();
             let wide: Vec<f32> = base
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .flat_map(|p| [p[0] * 1.5, p[1], p[2]])
                 .collect();
             g.set_morph_attribute("position", vec![crate::core::BufferAttribute::new(wide, 3)]);

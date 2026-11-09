@@ -6,7 +6,7 @@
 //! [`Animator::step`] once a frame, and read [`Animator::get`] while building. A key that has never been set
 //! reads as its resting value, so nothing needs registering.
 //!
-//! Each move is a tween along an [`Easing`](crate::easing::Easing) over a duration: retargeting in the middle
+//! Each move is a tween along an [`crate::easing::Easing`] over a duration: retargeting in the middle
 //! of a move starts from wherever the value is, so a hover that ends early eases back from where it got to.
 //!
 //! ```
@@ -63,7 +63,12 @@ pub struct Animator<K: Eq + Hash> {
 impl<K: Eq + Hash + Clone> Animator<K> {
     /// An animator whose moves take `duration` seconds along `easing`, with 0 as the resting value.
     pub fn new(duration: f32, easing: Easing) -> Self {
-        Self { tracks: HashMap::new(), duration: duration.max(1e-4), easing, rest: 0.0 }
+        Self {
+            tracks: HashMap::new(),
+            duration: duration.max(1e-4),
+            easing,
+            rest: 0.0,
+        }
     }
 
     /// Sets what an unset key reads as (default 0).
@@ -91,16 +96,37 @@ impl<K: Eq + Hash + Clone> Animator<K> {
     /// Like [`set`](Self::set), with its own duration and easing.
     pub fn set_over(&mut self, key: K, target: f32, duration: f32, easing: Easing) {
         let rest = self.rest;
-        let track = self.tracks.entry(key).or_insert(Track { from: rest, to: rest, progress: 1.0, duration, easing });
+        let track = self.tracks.entry(key).or_insert(Track {
+            from: rest,
+            to: rest,
+            progress: 1.0,
+            duration,
+            easing,
+        });
         if track.to == target {
             return;
         }
-        *track = Track { from: track.value(), to: target, progress: 0.0, duration: duration.max(1e-4), easing };
+        *track = Track {
+            from: track.value(),
+            to: target,
+            progress: 0.0,
+            duration: duration.max(1e-4),
+            easing,
+        };
     }
 
     /// Puts `key` at `value` at once, with no move.
     pub fn jump(&mut self, key: K, value: f32) {
-        self.tracks.insert(key, Track { from: value, to: value, progress: 1.0, duration: self.duration, easing: self.easing });
+        self.tracks.insert(
+            key,
+            Track {
+                from: value,
+                to: value,
+                progress: 1.0,
+                duration: self.duration,
+                easing: self.easing,
+            },
+        );
     }
 
     /// Moves every track on by `dt` seconds. Tracks that have arrived and rest where unset keys do are

@@ -2024,7 +2024,7 @@ fn metal_reads_tangents_as_wgpu_does() {
             // tangents that disagree with it show whether they are read.
             let normals = g.get_attribute("normal").expect("normals").array.clone();
             let mut t = g.get_attribute("tangent").expect("tangents").clone();
-            for (i, tv) in t.array.chunks_exact_mut(4).enumerate() {
+            for (i, tv) in t.array.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let n = Vector3::new(normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]);
                 let r = n.cross(Vector3::new(tv[0], tv[1], tv[2]));
                 tv[..3].copy_from_slice(&[r.x, r.y, r.z]);

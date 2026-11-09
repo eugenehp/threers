@@ -8,15 +8,13 @@
 use crate::app::{App, Exit, MainCamera};
 use crate::hud::Hud;
 use crate::input::{Input, Key, MouseButton};
-use std::sync::Arc;
 use std::time::Instant;
 use threers::cameras::PerspectiveCamera;
 use threers::math::Vector2;
 use threers::renderer::{WindowBackend, WindowRenderer};
 use winit::event::{DeviceEvent, ElementState, Event, MouseScrollDelta, TouchPhase, WindowEvent};
-use winit::event_loop::EventLoop;
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{CursorGrabMode, WindowBuilder};
+use winit::window::CursorGrabMode;
 
 /// Window settings. Everything has a default worth starting from.
 #[derive(Debug, Clone)]
@@ -115,48 +113,42 @@ fn set_pointer_lock(window: &winit::window::Window, lock: bool) -> bool {
 ///
 /// If the window or a GPU for it cannot be had.
 pub fn run(mut app: App, options: WindowOptions) {
-    let event_loop = EventLoop::new().expect("event loop");
-    let window = Arc::new(
-        WindowBuilder::new()
-            .with_title(options.title.clone())
-            .with_inner_size(winit::dpi::LogicalSize::new(options.width, options.height))
-            .build(&event_loop)
-            .expect("window"),
-    );
+    let attributes = winit::window::Window::default_attributes()
+        .with_title(options.title.clone())
+        .with_inner_size(winit::dpi::LogicalSize::new(options.width, options.height));
+    threers::sketch::run_window(attributes, move |window| {
+        let mut view = match WindowRenderer::with_backend(window.clone(), options.backend) {
+            Ok(view) => view,
+            Err(error) => panic!("no {:?} renderer for the window: {error}", options.backend),
+        };
+        view.set_msaa(options.msaa);
+        view.set_pixel_ratio(window.scale_factor() as f32);
 
-    let mut view = match WindowRenderer::with_backend(window.clone(), options.backend) {
-        Ok(view) => view,
-        Err(error) => panic!("no {:?} renderer for the window: {error}", options.backend),
-    };
-    view.set_msaa(options.msaa);
-    view.set_pixel_ratio(window.scale_factor() as f32);
-
-    if app.world.get_resource::<MainCamera>().is_none() {
-        let camera = PerspectiveCamera::new(50.0, view.aspect(), 0.1, 1000.0);
-        app.world.insert_resource(MainCamera(camera));
-    }
-
-    if app.world.get_resource::<Hud>().is_none() {
-        let (width, height) = view.size();
-        app.world.insert_resource(Hud::new(width, height));
-    }
-
-    #[cfg(feature = "gamepad")]
-    let mut gamepads = match crate::gamepad::Gamepads::new() {
-        Ok(gamepads) => Some(gamepads),
-        Err(error) => {
-            eprintln!("no gamepads: {error}");
-            None
+        if app.world.get_resource::<MainCamera>().is_none() {
+            let camera = PerspectiveCamera::new(50.0, view.aspect(), 0.1, 1000.0);
+            app.world.insert_resource(MainCamera(camera));
         }
-    };
-    #[cfg(feature = "gamepad")]
-    let mut focused = window.has_focus();
 
-    let mut last = Instant::now();
-    let mut locked = false;
-    let win = window.clone();
-    event_loop
-        .run(move |event, target| {
+        if app.world.get_resource::<Hud>().is_none() {
+            let (width, height) = view.size();
+            app.world.insert_resource(Hud::new(width, height));
+        }
+
+        #[cfg(feature = "gamepad")]
+        let mut gamepads = match crate::gamepad::Gamepads::new() {
+            Ok(gamepads) => Some(gamepads),
+            Err(error) => {
+                eprintln!("no gamepads: {error}");
+                None
+            }
+        };
+        #[cfg(feature = "gamepad")]
+        let mut focused = window.has_focus();
+
+        let mut last = Instant::now();
+        let mut locked = false;
+        let win = window.clone();
+        move |event, target| {
             let (event, window_id) = match event {
                 Event::WindowEvent { event, window_id } => (event, window_id),
                 // Motion with no position, which is the point of a locked pointer.
@@ -197,14 +189,13 @@ pub fn run(mut app: App, options: WindowOptions) {
                     if let PhysicalKey::Code(code) = event.physical_key {
                         apply_key(input, code, event.state == ElementState::Pressed);
                     }
-                    if event.state == ElementState::Pressed {
-                        if let Some(text) = event
+                    if event.state == ElementState::Pressed
+                        && let Some(text) = event
                             .text
                             .as_ref()
                             .filter(|t| !t.chars().any(char::is_control))
-                        {
-                            input.type_text(text);
-                        }
+                    {
+                        input.type_text(text);
                     }
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
@@ -262,6 +253,6 @@ pub fn run(mut app: App, options: WindowOptions) {
                 }
                 _ => {}
             }
-        })
-        .expect("event loop");
+        }
+    });
 }

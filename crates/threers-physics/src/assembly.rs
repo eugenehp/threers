@@ -2194,10 +2194,10 @@ impl Assembly {
             let t = (motion.elapsed / motion.duration).clamp(0.0, 1.0);
             let value = from + (motion.to - from) * motion.easing.apply(t);
 
-            if let Some(joint) = world.joint_mut(joint_id) {
-                if let Some(servo) = &mut joint.servo {
-                    servo.target = rest + sign * value;
-                }
+            if let Some(joint) = world.joint_mut(joint_id)
+                && let Some(servo) = &mut joint.servo
+            {
+                servo.target = rest + sign * value;
             }
             // A body asleep on its stop will not notice a new target, so both
             // ends are woken whenever one is asked to move.
@@ -2283,10 +2283,10 @@ impl Assembly {
             return;
         };
         for part in [mate.a.part, mate.b.part] {
-            if let Some(body) = self.body_of(part) {
-                if let Some(b) = world.body_mut(body) {
-                    b.wake_up();
-                }
+            if let Some(body) = self.body_of(part)
+                && let Some(b) = world.body_mut(body)
+            {
+                b.wake_up();
             }
         }
     }
@@ -2306,12 +2306,11 @@ impl Assembly {
         self.motions[index].clear();
         self.fit_drive(index, world);
         let (sign, rest) = (self.sign(index), self.rest[index]);
-        if let Some(joint_id) = self.joint_of(mate) {
-            if let Some(joint) = world.joint_mut(joint_id) {
-                if let Some(servo) = &mut joint.servo {
-                    servo.target = rest + sign * target;
-                }
-            }
+        if let Some(joint_id) = self.joint_of(mate)
+            && let Some(joint) = world.joint_mut(joint_id)
+            && let Some(servo) = &mut joint.servo
+        {
+            servo.target = rest + sign * target;
         }
         self.wake(index, world);
     }
@@ -2413,12 +2412,12 @@ fn fit_colliders(geometry: &BufferGeometry, physics: &PartPhysics) -> Vec<Collid
             .density(physics.density)
     };
 
-    if physics.decompose {
-        if let Some(mesh) = crate::trimesh::TriMesh::from_geometry(geometry) {
-            let config = crate::decompose::DecompositionConfig::default();
-            if let Some(shape) = crate::decompose::decompose_to_shape(&mesh, &config) {
-                return vec![base(shape, Isometry::IDENTITY)];
-            }
+    if physics.decompose
+        && let Some(mesh) = crate::trimesh::TriMesh::from_geometry(geometry)
+    {
+        let config = crate::decompose::DecompositionConfig::default();
+        if let Some(shape) = crate::decompose::decompose_to_shape(&mesh, &config) {
+            return vec![base(shape, Isometry::IDENTITY)];
         }
     }
 

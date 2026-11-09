@@ -27,7 +27,7 @@ use threers::renderer::{LayerGpu, LayerRenderer};
 use threers::scene::Scene;
 
 #[link(name = "objc", kind = "dylib")]
-extern "C" {
+unsafe extern "C" {
     fn objc_getClass(name: *const c_char) -> *mut c_void;
     fn sel_registerName(name: *const c_char) -> *const c_void;
     fn objc_msgSend();
@@ -38,7 +38,7 @@ extern "C" {
 }
 
 #[link(name = "QuartzCore", kind = "framework")]
-extern "C" {}
+unsafe extern "C" {}
 
 /// A retained `+[class layer]`, released on drop. Held as an address so it
 /// can be handed to the thread that draws it.
@@ -83,7 +83,7 @@ impl Drop for Layer {
 /// Under the pool check, name this thread as one that runs threers code (see
 /// `tests/metal_threads.rs`: Metal's own GCD threads report too).
 fn track() {
-    extern "C" {
+    unsafe extern "C" {
         fn pthread_self() -> usize;
     }
     if std::env::var_os("THREERS_POOL_CHECK").is_some() {

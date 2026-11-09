@@ -2,8 +2,8 @@
  * THREE.* drop-in — same imports as three.js, swap the package name.
  *
  * Browser / Deno / Node ESM with WebGPU:
- *   npm i threers
- *   import THREE, { initThreers } from 'threers';
+ *   npm i @threers/threers
+ *   import THREE, { initThreers } from '@threers/threers';
  *
  * Run the live demo: see ../threers-js/examples/cube.html
  *
@@ -11,7 +11,7 @@
  * already uses three.js and change only the import line.
  */
 
-import THREE, { initThreers } from 'threers';
+import THREE, { initThreers } from '@threers/threers';
 
 await initThreers();
 

@@ -160,10 +160,10 @@ impl SnowCover {
         if self.drawn_version == self.field.version {
             return;
         }
-        if let Some(object) = scene.get_mut(id) {
-            if let ObjectKind::Mesh(mesh) = &mut object.kind {
-                mesh.geometry = std::sync::Arc::new(self.mesh());
-            }
+        if let Some(object) = scene.get_mut(id)
+            && let ObjectKind::Mesh(mesh) = &mut object.kind
+        {
+            mesh.geometry = std::sync::Arc::new(self.mesh());
         }
         self.drawn_version = self.field.version;
     }

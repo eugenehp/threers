@@ -1,9 +1,9 @@
 [package]
 name = "threers-animation"
 version.workspace = true
-edition = "2021"
+edition = "2024"
 # Matches `threers`, which this depends on.
-rust-version = "1.87"
+rust-version = "1.99"
 authors = ["Eugene Hauptmann"]
 description = "Tweens, springs, timelines and cinematic camera animation for threers — fly, orbit, paths, shake and shot lists, plus blending an animated pose into a simulated one"
 license = "MIT"

@@ -481,28 +481,28 @@ pub(crate) fn intersect(a: MTLScissorRect, b: MTLScissorRect) -> Option<MTLSciss
 /// `encoder` is a live render command encoder whose attachments match the
 /// formats `pipeline` was built for.
 pub(crate) unsafe fn encode_fill(encoder: Id, pipeline: Id, rect: PixelRect, color: MTLClearColor) {
-    let _: () = msg1(encoder, sel!("setScissorRect:"), scissor_rect(rect));
-    let _: () = msg1(encoder, sel!("setRenderPipelineState:"), pipeline);
+    let _: () = unsafe { msg1(encoder, sel!("setScissorRect:"), scissor_rect(rect)) };
+    let _: () = unsafe { msg1(encoder, sel!("setRenderPipelineState:"), pipeline) };
     let c = [
         color.red as f32,
         color.green as f32,
         color.blue as f32,
         color.alpha as f32,
     ];
-    let _: () = msg3(
+    let _: () = unsafe { msg3(
         encoder,
         sel!("setFragmentBytes:length:atIndex:"),
         c.as_ptr() as *const std::ffi::c_void,
         std::mem::size_of_val(&c) as NSUInteger,
         0usize,
-    );
-    let _: () = msg3(
+    ) };
+    let _: () = unsafe { msg3(
         encoder,
         sel!("drawPrimitives:vertexStart:vertexCount:"),
         primitive::TRIANGLE,
         0usize,
         3usize,
-    );
+    ) };
 }
 
 impl MetalRenderer {

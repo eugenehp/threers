@@ -414,7 +414,9 @@ mod tests {
             .get_attribute("position")
             .unwrap()
             .array
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| [c[0], c[1], c[2]])
             .collect();
         let has = |q: [f32; 3]| p.iter().any(|v| (0..3).all(|i| (v[i] - q[i]).abs() < 1e-5));
@@ -442,12 +444,17 @@ mod tests {
         let p = &g.get_attribute("position").unwrap().array;
         for c in [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]] {
             assert!(
-                p.chunks_exact(3).any(|v| v[0] == c[0] && v[1] == c[1]),
+                p.as_chunks::<3>()
+                    .0
+                    .iter()
+                    .any(|v| v[0] == c[0] && v[1] == c[1]),
                 "corner {c:?} moved"
             );
         }
         assert!(p
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .all(|v| v[0].abs() <= 1.0 && v[1].abs() <= 1.0 && v[2] == 0.0));
         // Each outline edge (used by one quad) lies on a side of the square.
         let edges = g.polygon_edges();

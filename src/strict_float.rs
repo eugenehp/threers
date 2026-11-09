@@ -50,7 +50,7 @@ mod imp {
     type NewLibrary = unsafe extern "C" fn(Id, Sel, Id, Id, *mut Id) -> Id;
 
     #[link(name = "objc", kind = "dylib")]
-    extern "C" {
+    unsafe extern "C" {
         fn sel_registerName(name: *const c_char) -> Sel;
         fn object_getClass(obj: Id) -> Id;
         fn class_getInstanceMethod(cls: Id, sel: Sel) -> *mut c_void;
@@ -61,7 +61,7 @@ mod imp {
     }
 
     #[link(name = "Metal", kind = "framework")]
-    extern "C" {
+    unsafe extern "C" {
         fn MTLCreateSystemDefaultDevice() -> Id;
     }
 
@@ -83,37 +83,41 @@ mod imp {
         options: Id,
         error: *mut Id,
     ) -> Id {
-        let original: NewLibrary = std::mem::transmute(ORIGINAL.load(Ordering::Acquire));
+        let original: NewLibrary = unsafe { std::mem::transmute(ORIGINAL.load(Ordering::Acquire)) };
         let send_id: unsafe extern "C" fn(Id, Sel) -> Id =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            unsafe { std::mem::transmute(objc_msgSend as unsafe extern "C" fn()) };
         let utf8: unsafe extern "C" fn(Id, Sel) -> *const c_char =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            unsafe { std::mem::transmute(objc_msgSend as unsafe extern "C" fn()) };
         let from_utf8: unsafe extern "C" fn(Id, Sel, *const c_char) -> Id =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            unsafe { std::mem::transmute(objc_msgSend as unsafe extern "C" fn()) };
         let set_u64: unsafe extern "C" fn(Id, Sel, u64) =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            unsafe { std::mem::transmute(objc_msgSend as unsafe extern "C" fn()) };
         let responds: unsafe extern "C" fn(Id, Sel, Sel) -> i8 =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            unsafe { std::mem::transmute(objc_msgSend as unsafe extern "C" fn()) };
 
-        let text = utf8(source, sel(c"UTF8String"));
+        let text = unsafe { utf8(source, sel(c"UTF8String")) };
         let strict = if text.is_null() {
             source
         } else {
             let mut s = String::from(PRAGMAS);
-            s.push_str(&CStr::from_ptr(text).to_string_lossy());
+            s.push_str(&unsafe { CStr::from_ptr(text) }.to_string_lossy());
             s.push('\0');
             // Autoreleased; the caller's pool holds it for the call.
-            from_utf8(
-                objc_getClass(c"NSString".as_ptr()),
-                sel(c"stringWithUTF8String:"),
-                s.as_ptr().cast(),
-            )
+            unsafe {
+                from_utf8(
+                    objc_getClass(c"NSString".as_ptr()),
+                    sel(c"stringWithUTF8String:"),
+                    s.as_ptr().cast(),
+                )
+            }
         };
         let options = if options.is_null() {
-            send_id(
-                send_id(objc_getClass(c"MTLCompileOptions".as_ptr()), sel(c"new")),
-                sel(c"autorelease"),
-            )
+            unsafe {
+                send_id(
+                    send_id(objc_getClass(c"MTLCompileOptions".as_ptr()), sel(c"new")),
+                    sel(c"autorelease"),
+                )
+            }
         } else {
             options
         };
@@ -122,25 +126,28 @@ mod imp {
             (c"setMathMode:", 0u64),
             (c"setMathFloatingPointFunctions:", 1),
         ] {
-            if responds(options, sel(c"respondsToSelector:"), sel(setter)) != 0 {
-                set_u64(options, sel(setter), value);
+            if unsafe { responds(options, sel(c"respondsToSelector:"), sel(setter)) } != 0 {
+                unsafe { set_u64(options, sel(setter), value) };
             }
         }
-        if responds(
-            options,
-            sel(c"respondsToSelector:"),
-            sel(c"setFastMathEnabled:"),
-        ) != 0
+        if unsafe {
+            responds(
+                options,
+                sel(c"respondsToSelector:"),
+                sel(c"setFastMathEnabled:"),
+            )
+        } != 0
         {
             let set_bool: unsafe extern "C" fn(Id, Sel, i8) =
-                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                unsafe { std::mem::transmute(objc_msgSend as unsafe extern "C" fn()) };
             // Deprecated in favour of mathMode, which it would override when
             // set after it: only where mathMode is missing.
-            if responds(options, sel(c"respondsToSelector:"), sel(c"setMathMode:")) == 0 {
-                set_bool(options, sel(c"setFastMathEnabled:"), 0);
+            if unsafe { responds(options, sel(c"respondsToSelector:"), sel(c"setMathMode:")) } == 0
+            {
+                unsafe { set_bool(options, sel(c"setFastMathEnabled:"), 0) };
             }
         }
-        original(this, cmd, strict, options, error)
+        unsafe { original(this, cmd, strict, options, error) }
     }
 
     pub fn enable() -> bool {

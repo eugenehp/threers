@@ -204,11 +204,11 @@ impl CameraAnimator {
             if self.shake.is_active() {
                 self.shake.update(dt);
             }
-            if self.follow_enabled {
-                if let Some(f) = &mut self.follow {
-                    f.set_goal(self.pose);
-                    self.pose = f.update(dt);
-                }
+            if self.follow_enabled
+                && let Some(f) = &mut self.follow
+            {
+                f.set_goal(self.pose);
+                self.pose = f.update(dt);
             }
         }
         // Identity when shake is inactive — bit-stable, no look-at rebuild.

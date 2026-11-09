@@ -311,8 +311,10 @@ impl Args {
             }
             i += 2;
         }
-        assert!(!a.input.is_empty(), "--input is required");
-        assert!(a.width > 0 && a.height > 0, "--size WxH is required");
+        if a.input.is_empty() || a.width == 0 || a.height == 0 {
+            eprintln!("usage: codec_bench --input FRAMES.rgb --size WxH [options]");
+            std::process::exit(2);
+        }
         a
     }
 }

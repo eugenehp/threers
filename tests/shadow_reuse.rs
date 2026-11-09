@@ -217,10 +217,10 @@ fn custom_shader_casters_reuse_until_their_inputs_change() {
     }
     assert_eq!(updates(&mut hr), first, "unchanged inputs reuse the maps");
 
-    if let ObjectKind::Mesh(m) = &mut scene.get_mut(cube).unwrap().kind {
-        if let Material::Shader(s) = Arc::make_mut(&mut m.material) {
-            s.data[0][0] = 1.0;
-        }
+    if let ObjectKind::Mesh(m) = &mut scene.get_mut(cube).unwrap().kind
+        && let Material::Shader(s) = Arc::make_mut(&mut m.material)
+    {
+        s.data[0][0] = 1.0;
     }
     hr.render(&mut scene, &camera(1.0));
     assert_eq!(updates(&mut hr), first + 1, "new uniform data redraws them");

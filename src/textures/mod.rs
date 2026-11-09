@@ -2,9 +2,7 @@
 //! sampler/format metadata. The renderer uploads them on demand and caches the
 //! resulting `wgpu::Texture` by `Arc` pointer identity.
 
-/// BC1 encoding and decoding — see [`bc1`].
 pub mod bc1;
-/// A container for compressed textures and their mip chains — see [`blob`].
 pub mod blob;
 mod cube_texture;
 mod data_texture;
@@ -15,7 +13,9 @@ mod texture;
 pub use cube_texture::{CubeMapping, CubeTexture, CubeUvAtlas};
 pub use data_texture::DataTexture;
 pub use depth_texture::DepthTexture;
-pub use stream::{Samples, StreamFrame, TextureStream, VideoTexture, YuvCoefficients, YuvFrame, YuvMatrix};
 #[cfg(target_arch = "wasm32")]
 pub use stream::BrowserImage;
+pub use stream::{
+    Samples, StreamFrame, TextureStream, VideoTexture, YuvCoefficients, YuvFrame, YuvMatrix,
+};
 pub use texture::{pack_rgba16f, Texture, TextureFilter, TextureFormat, TextureWrap};

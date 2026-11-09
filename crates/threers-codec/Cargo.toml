@@ -1,8 +1,8 @@
 [package]
 name = "threers-codec"
 version.workspace = true
-edition = "2021"
-rust-version = "1.87"
+edition = "2024"
+rust-version = "1.99"
 license = "MIT"
 authors = ["Eugene Hauptmann"]
 repository = "https://github.com/eugenehp/threers"
@@ -35,6 +35,7 @@ nvidia = ["decode"]
 vaapi = ["decode"]
 
 [dependencies]
+threers-captions = { path = "../threers-captions", version = "0.0.12" }
 rayon = { version = "1.10", optional = true }
 
 [package.metadata.docs.rs]

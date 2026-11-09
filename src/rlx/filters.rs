@@ -199,7 +199,12 @@ impl ConvFilter {
         let input = padded_frame(rgba, self.width, self.height, self.space);
         let out = self.runner.run(&[("frame", &input)]).remove(0);
         let (mut bytes, _, _) = tensor_to_frame(&out, Layout::Nchw, self.space)?;
-        for (dst, src) in bytes.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
+        for (dst, src) in bytes
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(rgba.as_chunks::<4>().0)
+        {
             dst[3] = src[3];
         }
         Ok(bytes)
@@ -378,7 +383,7 @@ mod tests {
         let frame = vec![128u8; 6 * 5 * 4];
         let mut filter = ConvFilter::new(6, 5, Kernel3x3::BOX_BLUR, preferred_device());
         let out = filter.apply(&frame).unwrap();
-        for (i, px) in out.chunks_exact(4).enumerate() {
+        for (i, px) in out.as_chunks::<4>().0.iter().enumerate() {
             assert!(
                 (px[0] as i32 - 128).abs() <= 1,
                 "pixel {i} came back {}",
@@ -404,12 +409,12 @@ mod tests {
     #[test]
     fn alpha_is_carried_through_not_convolved() {
         let mut frame = edge_frame(8, 4);
-        for (i, px) in frame.chunks_exact_mut(4).enumerate() {
+        for (i, px) in frame.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             px[3] = (i * 7 % 256) as u8;
         }
         let mut filter = ConvFilter::new(8, 4, Kernel3x3::SHARPEN, preferred_device());
         let out = filter.apply(&frame).unwrap();
-        for (a, b) in out.chunks_exact(4).zip(frame.chunks_exact(4)) {
+        for (a, b) in out.as_chunks::<4>().0.iter().zip(frame.as_chunks::<4>().0) {
             assert_eq!(a[3], b[3]);
         }
     }

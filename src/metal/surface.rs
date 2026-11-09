@@ -16,7 +16,7 @@ use super::resources::new_texture_2d;
 // rustc pass `-framework QuartzCore` to the linker, which is what registers the
 // class with the Objective-C runtime.
 #[link(name = "QuartzCore", kind = "framework")]
-extern "C" {}
+unsafe extern "C" {}
 
 /// A `CAMetalLayer` attached to a view, plus the depth (and MSAA) attachments
 /// that go with it.
@@ -58,14 +58,14 @@ impl MetalSurface {
         require_main_thread("MetalSurface::from_ns_view")?;
         let cls = metal_layer_class()?;
         // `+layer` is autoreleased; retain it for as long as the surface lives.
-        let layer = Owned::retain(msg0(cls, sel!("layer")))
+        let layer = unsafe { Owned::retain(msg0(cls, sel!("layer"))) }
             .ok_or_else(|| MetalError::Allocation("CAMetalLayer".into()))?;
-        let surface = Self::build(device, layer, width, height, sample_count)?;
+        let surface = unsafe { Self::build(device, layer, width, height, sample_count) }?;
 
         let view = ns_view as Id;
         if !view.is_null() {
-            let _: () = msg1(view, sel!("setWantsLayer:"), YES);
-            let _: () = msg1(view, sel!("setLayer:"), surface.layer.id());
+            let _: () = unsafe { msg1(view, sel!("setWantsLayer:"), YES) };
+            let _: () = unsafe { msg1(view, sel!("setLayer:"), surface.layer.id()) };
         }
         Ok(surface)
     }
@@ -102,8 +102,8 @@ impl MetalSurface {
         if ui_view.is_null() {
             return Err(MetalError::Unsupported("from_ui_view with a null view".into()));
         }
-        let layer: Id = msg0(ui_view as Id, sel!("layer"));
-        Self::from_layer(device, layer.cast(), width, height, sample_count)
+        let layer: Id = unsafe { msg0(ui_view as Id, sel!("layer")) };
+        unsafe { Self::from_layer(device, layer.cast(), width, height, sample_count) }
     }
 
     /// Adopt a `CAMetalLayer` the app already has — a `UIView` or `NSView`
@@ -132,7 +132,7 @@ impl MetalSurface {
         let is_metal: Bool = if layer.is_null() {
             0
         } else {
-            msg1(layer, sel!("isKindOfClass:"), cls)
+            unsafe { msg1(layer, sel!("isKindOfClass:"), cls) }
         };
         if is_metal == 0 {
             return Err(MetalError::Unsupported(
@@ -141,8 +141,8 @@ impl MetalSurface {
                     .into(),
             ));
         }
-        let layer = Owned::retain(layer).ok_or_else(|| MetalError::Allocation("CAMetalLayer".into()))?;
-        Self::build(device, layer, width, height, sample_count)
+        let layer = unsafe { Owned::retain(layer) }.ok_or_else(|| MetalError::Allocation("CAMetalLayer".into()))?;
+        unsafe { Self::build(device, layer, width, height, sample_count) }
     }
 
     /// Configure `layer` for this device and allocate the attachments.
@@ -156,9 +156,9 @@ impl MetalSurface {
         // BGRA is the layer's native order; sRGB so the shader can keep writing
         // linear values exactly as it does offscreen.
         let color_format = pixel_format::BGRA8_UNORM_SRGB;
-        let _: () = msg1(layer.id(), sel!("setDevice:"), device.device_id());
-        let _: () = msg1(layer.id(), sel!("setPixelFormat:"), color_format);
-        let _: () = msg1(layer.id(), sel!("setFramebufferOnly:"), YES);
+        let _: () = unsafe { msg1(layer.id(), sel!("setDevice:"), device.device_id()) };
+        let _: () = unsafe { msg1(layer.id(), sel!("setPixelFormat:"), color_format) };
+        let _: () = unsafe { msg1(layer.id(), sel!("setFramebufferOnly:"), YES) };
 
         let mut surface = Self {
             device: device.clone(),

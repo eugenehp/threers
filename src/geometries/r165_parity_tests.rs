@@ -29,7 +29,11 @@ fn nums(v: &Value, key: &str) -> Vec<f64> {
 }
 
 fn triples(v: &[f64]) -> Vec<[f64; 3]> {
-    v.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect()
+    v.as_chunks::<3>()
+        .0
+        .iter()
+        .map(|c| [c[0], c[1], c[2]])
+        .collect()
 }
 
 /// Rebuild a fixture's source geometry (attributes, index, groups).
@@ -45,7 +49,7 @@ fn source(v: &Value) -> BufferGeometry {
         g.set_index(nums(v, "index").iter().map(|&x| x as u32).collect());
     }
     if v.get("groups").is_some() {
-        for c in nums(v, "groups").chunks_exact(3) {
+        for c in nums(v, "groups").as_chunks::<3>().0 {
             g.add_group(c[0] as u32, c[1] as u32, c[2] as u32);
         }
     }
@@ -153,7 +157,9 @@ fn lathe_matches_r165() {
     for key in ["lathe", "lathe_clamped"] {
         let c = f.get(key).unwrap();
         let pts: Vec<[f64; 2]> = nums(c, "points")
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| [p[0], p[1]])
             .collect();
         let seg = c.get("segments").unwrap().as_number().unwrap() as usize;

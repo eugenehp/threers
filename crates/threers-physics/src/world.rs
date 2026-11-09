@@ -853,10 +853,12 @@ impl World {
             if let Some(step) = step {
                 body.drive_to_kinematic_target(step);
             }
-            if let Some(a) = model.get(index) {
-                if *a != Vector3::ZERO && body.is_dynamic() && !body.is_sleeping() {
-                    body.linear_velocity = body.linear_velocity + *a * (dt * body.gravity_scale);
-                }
+            if let Some(a) = model.get(index)
+                && *a != Vector3::ZERO
+                && body.is_dynamic()
+                && !body.is_sleeping()
+            {
+                body.linear_velocity = body.linear_velocity + *a * (dt * body.gravity_scale);
             }
             if body.integrate_velocity(dt, gravity) {
                 non_finite += 1;

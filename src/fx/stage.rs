@@ -414,10 +414,10 @@ impl Stage {
 }
 
 fn set_material(scene: &mut Scene, id: ObjectId, material: Material) {
-    if let Some(obj) = scene.get_mut(id) {
-        if let ObjectKind::Mesh(mesh) = &mut obj.kind {
-            mesh.material = Arc::new(material);
-        }
+    if let Some(obj) = scene.get_mut(id)
+        && let ObjectKind::Mesh(mesh) = &mut obj.kind
+    {
+        mesh.material = Arc::new(material);
     }
 }
 

@@ -159,12 +159,11 @@ impl Spawned<'_> {
     /// [`Video::muted`](crate::video::Video::muted) instead.
     #[cfg(feature = "video")]
     pub fn video(self, player: crate::video::VideoPlayer) -> Self {
-        if let Some(node) = self.world.scene.get_mut(self.id) {
-            if let ObjectKind::Mesh(mesh) = &mut node.kind {
-                if let Some(slot) = std::sync::Arc::make_mut(&mut mesh.material).map_slot_mut("map") {
-                    *slot = Some(player.texture());
-                }
-            }
+        if let Some(node) = self.world.scene.get_mut(self.id)
+            && let ObjectKind::Mesh(mesh) = &mut node.kind
+            && let Some(slot) = std::sync::Arc::make_mut(&mut mesh.material).map_slot_mut("map")
+        {
+            *slot = Some(player.texture());
         }
         self.world.insert(self.id, crate::video::Video::new(player));
         self

@@ -305,7 +305,9 @@ fn legacy_clip(parser: &GltfParser, clip: &GltfClip) -> AnimationClip {
         let track = match t.path.as_str() {
             "translation" | "scale" => {
                 let vs = vertices(3)
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .map(|c| Vector3::new(c[0], c[1], c[2]))
                     .collect();
                 let target = if t.path == "scale" {
@@ -317,7 +319,9 @@ fn legacy_clip(parser: &GltfParser, clip: &GltfClip) -> AnimationClip {
             }
             "rotation" => {
                 let vs = vertices(4)
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| Quaternion::new(c[0], c[1], c[2], c[3]))
                     .collect();
                 Some(KeyframeTrack::quaternion(

@@ -3,6 +3,11 @@
 //! ```sh
 //! GPU=1 cargo run --release -p threers-probe --example probe_web_export --features generate,metal
 //! ```
+//!
+//! Run it from the repository root, after training the hops weights it ships
+//! (`GPU=1 ARCH=hops cargo run --release -p threers-probe --example probe
+//! --features generate,metal`, which writes `out/probe_hops.bin` and
+//! `out/nrc_hops.bin`).
 
 use std::path::PathBuf;
 
@@ -12,6 +17,16 @@ use threers_probe::generate;
 use threers_probe::pack::{self, PlaneExtras};
 
 fn main() {
+    // Check for the trained weights before spending a render on the planes.
+    for weights in ["out/probe_hops.bin", "out/nrc_hops.bin"] {
+        if !std::path::Path::new(weights).exists() {
+            eprintln!(
+                "{weights} is missing. Run this from the repository root, after training with\n  \
+                 GPU=1 ARCH=hops cargo run --release -p threers-probe --example probe --features generate,metal"
+            );
+            std::process::exit(2);
+        }
+    }
     let frame = 64u32;
     let probe_spp = 8;
     let probe_bounces = 3;
@@ -196,10 +211,10 @@ fn render_pair(
 }
 
 fn make_renderer(width: u32, height: u32) -> threers::raytrace::RaytraceRenderer {
-    if std::env::var("GPU").ok().as_deref() == Some("1") {
-        if let Ok(b) = threers::raytrace::gpu::GpuBackend::headless() {
-            return threers::raytrace::RaytraceRenderer::with_backend(width, height, Box::new(b));
-        }
+    if std::env::var("GPU").ok().as_deref() == Some("1")
+        && let Ok(b) = threers::raytrace::gpu::GpuBackend::headless()
+    {
+        return threers::raytrace::RaytraceRenderer::with_backend(width, height, Box::new(b));
     }
     threers::raytrace::RaytraceRenderer::new(width, height)
 }

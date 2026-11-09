@@ -31,7 +31,12 @@ type TriData = (Vec<[f32; 3]>, Option<Vec<[f32; 3]>>, Vec<u32>);
 
 fn tri_data(g: &BufferGeometry) -> Option<TriData> {
     let pos = &g.get_attribute("position")?.array;
-    let verts: Vec<[f32; 3]> = pos.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+    let verts: Vec<[f32; 3]> = pos
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|c| [c[0], c[1], c[2]])
+        .collect();
     if verts.len() < 3 {
         return None;
     }
@@ -39,7 +44,9 @@ fn tri_data(g: &BufferGeometry) -> Option<TriData> {
         .get_attribute("normal")
         .map(|a| {
             a.array
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|c| [c[0], c[1], c[2]])
                 .collect::<Vec<_>>()
         })
@@ -153,7 +160,7 @@ pub fn geometry_to_3mf(g: &BufferGeometry) -> Vec<u8> {
         ));
     }
     model.push_str("</vertices><triangles>");
-    for t in indices.chunks_exact(3) {
+    for t in indices.as_chunks::<3>().0 {
         model.push_str(&format!(
             "<triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>",
             t[0], t[1], t[2]

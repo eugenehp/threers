@@ -30,29 +30,27 @@ use threers::gpu::GpuContext;
 
 use winit::{
     event::{ElementState, Event, MouseButton, Touch, TouchPhase, WindowEvent},
-    event_loop::EventLoop,
+    event_loop::ActiveEventLoop,
     keyboard::{Key, NamedKey},
-    window::WindowBuilder,
 };
 
 /// The mouse's pointer id. Touches use their own, which winit hands out as
 /// `u64`s, so negative ids cannot collide with them.
 const MOUSE: i32 = -1;
 
+/// What the window's events go to, whichever backend draws.
+type Handler = Box<dyn FnMut(Event<()>, &ActiveEventLoop)>;
+
 fn main() {
     env_logger::init();
-    pollster::block_on(run());
+    let attributes = winit::window::Window::default_attributes()
+        .with_title("threers — fluid")
+        .with_inner_size(winit::dpi::LogicalSize::new(1100, 700));
+    threers::sketch::run_window(attributes, start);
 }
 
-async fn run() {
-    let event_loop = EventLoop::new().expect("event loop");
-    let window = Arc::new(
-        WindowBuilder::new()
-            .with_title("threers — fluid")
-            .with_inner_size(winit::dpi::LogicalSize::new(1100, 700))
-            .build(&event_loop)
-            .expect("window"),
-    );
+/// The fluid for a window that has just opened, and the handler that drives it.
+fn start(window: Arc<winit::window::Window>) -> Handler {
     // A window opens on a fluid that is already moving; an empty black
     // canvas reads as a failure to start.
     let config = FluidConfig {
@@ -65,10 +63,10 @@ async fn run() {
     #[cfg(all(feature = "metal", target_os = "macos"))]
     if std::env::var("THREERS_BACKEND").is_ok_and(|b| b.eq_ignore_ascii_case("metal")) {
         let canvas = metal::Canvas::new(&window, config);
-        return run_loop(event_loop, window, canvas);
+        return Box::new(handler(window, canvas));
     }
-    let canvas = WgpuCanvas::new(window.clone(), config).await;
-    run_loop(event_loop, window, canvas);
+    let canvas = pollster::block_on(WgpuCanvas::new(window.clone(), config));
+    Box::new(handler(window, canvas))
 }
 
 /// A fluid in the window, on one backend or the other.
@@ -251,76 +249,71 @@ mod metal {
         fn frame(&mut self, dt: f32) {
             self.fluid.update(&self.device, dt);
             // `None`: every drawable is in flight; skip the frame.
-            if let Some(frame) = self.surface.next_frame() {
-                if let Err(e) = self.fluid.present(&self.device, &frame) {
-                    log::error!("present: {e}");
-                }
+            if let Some(frame) = self.surface.next_frame()
+                && let Err(e) = self.fluid.present(&self.device, &frame)
+            {
+                log::error!("present: {e}");
             }
         }
     }
 }
 
-fn run_loop(
-    event_loop: EventLoop<()>,
+fn handler(
     window: Arc<winit::window::Window>,
     mut canvas: impl Canvas + 'static,
-) {
+) -> impl FnMut(Event<()>, &ActiveEventLoop) + 'static {
     let mut cursor = (0.0f32, 0.0f32);
     let mut last = std::time::Instant::now();
-    event_loop
-        .run(move |event, target| match event {
-            Event::WindowEvent { event, window_id } if window_id == window.id() => match event {
-                WindowEvent::CloseRequested => target.exit(),
-                WindowEvent::Resized(size) => canvas.resize(size.width, size.height),
-                WindowEvent::CursorMoved { position, .. } => {
-                    cursor = (position.x as f32, position.y as f32);
-                    canvas.pointer_move(MOUSE, cursor.0, cursor.1);
-                }
-                WindowEvent::MouseInput {
-                    state,
-                    button: MouseButton::Left,
-                    ..
-                } => match state {
-                    ElementState::Pressed => canvas.pointer_down(MOUSE, cursor.0, cursor.1),
-                    ElementState::Released => canvas.pointer_up(MOUSE),
-                },
-                WindowEvent::Touch(Touch {
-                    id,
-                    phase,
-                    location,
-                    ..
-                }) => {
-                    // Touch ids are arbitrary `u64`s; narrowing keeps them
-                    // distinct from each other and from the mouse's -1.
-                    let id = (id as i32).abs().max(1);
-                    let (x, y) = (location.x as f32, location.y as f32);
-                    match phase {
-                        TouchPhase::Started => canvas.pointer_down(id, x, y),
-                        TouchPhase::Moved => canvas.pointer_move(id, x, y),
-                        TouchPhase::Ended | TouchPhase::Cancelled => canvas.pointer_up(id),
-                    }
-                }
-                WindowEvent::KeyboardInput { event, .. }
-                    if event.state == ElementState::Pressed =>
-                {
-                    canvas.key(&event.logical_key);
-                }
-                WindowEvent::RedrawRequested => {
-                    let now = std::time::Instant::now();
-                    // Clamped the way the original clamps it: a frame that
-                    // took a quarter of a second — a drag of the window, a
-                    // shader compile — must not advance the fluid a quarter
-                    // of a second, or it jumps.
-                    let dt = (now - last).as_secs_f32().min(1.0 / 60.0);
-                    last = now;
-                    canvas.frame(dt);
-                    window.request_redraw();
-                }
-                _ => {}
+    move |event, target| match event {
+        Event::WindowEvent { event, window_id } if window_id == window.id() => match event {
+            WindowEvent::CloseRequested => target.exit(),
+            WindowEvent::Resized(size) => canvas.resize(size.width, size.height),
+            WindowEvent::CursorMoved { position, .. } => {
+                cursor = (position.x as f32, position.y as f32);
+                canvas.pointer_move(MOUSE, cursor.0, cursor.1);
+            }
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } => match state {
+                ElementState::Pressed => canvas.pointer_down(MOUSE, cursor.0, cursor.1),
+                ElementState::Released => canvas.pointer_up(MOUSE),
             },
+            WindowEvent::Touch(Touch {
+                id,
+                phase,
+                location,
+                ..
+            }) => {
+                // Touch ids are arbitrary `u64`s; narrowing keeps them
+                // distinct from each other and from the mouse's -1.
+                let id = (id as i32).abs().max(1);
+                let (x, y) = (location.x as f32, location.y as f32);
+                match phase {
+                    TouchPhase::Started => canvas.pointer_down(id, x, y),
+                    TouchPhase::Moved => canvas.pointer_move(id, x, y),
+                    TouchPhase::Ended | TouchPhase::Cancelled => canvas.pointer_up(id),
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                canvas.key(&event.logical_key);
+            }
+            WindowEvent::RedrawRequested => {
+                let now = std::time::Instant::now();
+                // Clamped the way the original clamps it: a frame that
+                // took a quarter of a second — a drag of the window, a
+                // shader compile — must not advance the fluid a quarter
+                // of a second, or it jumps.
+                let dt = (now - last).as_secs_f32().min(1.0 / 60.0);
+                last = now;
+                canvas.frame(dt);
+                window.request_redraw();
+            }
             _ => {}
-        })
-        .expect("event loop");
+        },
+        _ => {}
+    }
 }
 
 /// What the grids came out as and what they cost — worth printing, because a

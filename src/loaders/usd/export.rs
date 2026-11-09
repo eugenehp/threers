@@ -122,7 +122,7 @@ pub fn mesh_prim(g: &BufferGeometry, name: &str) -> UsdPrim {
     if vertices > 0 {
         let mut lo = [f32::INFINITY; 3];
         let mut hi = [f32::NEG_INFINITY; 3];
-        for p in positions.chunks_exact(3) {
+        for p in positions.as_chunks::<3>().0 {
             for a in 0..3 {
                 lo[a] = lo[a].min(p[a]);
                 hi[a] = hi[a].max(p[a]);
@@ -249,7 +249,9 @@ fn unflipped(texture: &Texture, count: usize) -> Option<Vec<u8>> {
         // Half float down to 8 bits. Anything above 1.0 clamps, which is a
         // real loss and only reachable for a map holding an HDR image.
         TextureFormat::Rgba16Float => texture.data.get(..count * 8).map(|d| {
-            d.chunks_exact(2)
+            d.as_chunks::<2>()
+                .0
+                .iter()
                 .map(|h| {
                     let bits = u16::from_le_bytes([h[0], h[1]]);
                     let value = half_bits_to_f32(bits);
@@ -259,9 +261,19 @@ fn unflipped(texture: &Texture, count: usize) -> Option<Vec<u8>> {
         }),
         // The other floats likewise, one channel as grey.
         f @ (TextureFormat::R16Float | TextureFormat::R32Float | TextureFormat::Rgba32Float) => {
-            let v = f.texels_f32(texture.data.get(..f.data_len(texture.width, texture.height))?)?;
+            let v = f.texels_f32(
+                texture
+                    .data
+                    .get(..f.data_len(texture.width, texture.height))?,
+            )?;
             let byte = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
-            Some(if f.channels() == 1 { v.iter().flat_map(|x| [byte(*x), byte(*x), byte(*x), 255]).collect() } else { v.iter().map(|x| byte(*x)).collect() })
+            Some(if f.channels() == 1 {
+                v.iter()
+                    .flat_map(|x| [byte(*x), byte(*x), byte(*x), 255])
+                    .collect()
+            } else {
+                v.iter().map(|x| byte(*x)).collect()
+            })
         }
         _ => None,
     }
@@ -1341,7 +1353,7 @@ fn object_prim_at(
                     let faces: Vec<u32> = face_of
                         .iter()
                         .enumerate()
-                        .filter(|(_, &t)| (lo..hi).contains(&(t * 3)))
+                        .filter(|&(_, &t)| (lo..hi).contains(&(t * 3)))
                         .map(|(f, _)| f as u32)
                         .collect();
                     if faces.is_empty() {

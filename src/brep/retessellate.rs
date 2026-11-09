@@ -220,10 +220,9 @@ fn patch_grid(
         let verts = triangle_vertices(geometry, tri)?;
         if let (Some(face), Some((cu, cv))) =
             (triangle_normal(&verts), surface.invert(centroid(&verts)))
+            && let Some(sn) = surface.normal(cu, cv)
         {
-            if let Some(sn) = surface.normal(cu, cv) {
-                flip_votes += if v3::dot(face, sn) < 0.0 { -1 } else { 1 };
-            }
+            flip_votes += if v3::dot(face, sn) < 0.0 { -1 } else { 1 };
         }
         for p in verts {
             let Some((u, v)) = surface.invert(p) else {
@@ -494,7 +493,7 @@ fn degenerate(a: V3, b: V3, c: V3) -> bool {
 /// for an orientable mesh means closed.
 fn count_boundary_edges(indices: &[u32]) -> usize {
     let mut counts: HashMap<(u32, u32), usize> = HashMap::new();
-    for t in indices.chunks_exact(3) {
+    for t in indices.as_chunks::<3>().0 {
         for k in 0..3 {
             let (a, b) = (t[k], t[(k + 1) % 3]);
             *counts.entry((a.min(b), a.max(b))).or_insert(0) += 1;
@@ -566,10 +565,9 @@ fn emit_planar_patch(
             };
             if let (Some(face), Some((cu, cv))) =
                 (triangle_normal(&v), surface.invert(centroid(&v)))
+                && let Some(sn) = surface.normal(cu, cv)
             {
-                if let Some(sn) = surface.normal(cu, cv) {
-                    votes += if v3::dot(face, sn) < 0.0 { -1 } else { 1 };
-                }
+                votes += if v3::dot(face, sn) < 0.0 { -1 } else { 1 };
             }
         }
         votes < 0
@@ -599,7 +597,7 @@ fn emit_planar_patch(
         })
         .collect();
 
-    for t in tris.chunks_exact(3) {
+    for t in tris.as_chunks::<3>().0 {
         let (a, b, c) = (ids[t[0] as usize], ids[t[1] as usize], ids[t[2] as usize]);
         let pos = |k: u32| {
             let o = k as usize * 3;
@@ -645,7 +643,9 @@ mod tests {
         g.get_attribute("position")
             .unwrap()
             .array
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| {
                 let p = [c[0] as f64, c[1] as f64, c[2] as f64];
                 (v3::norm(p) - radius).abs()
@@ -684,7 +684,7 @@ mod tests {
         let pos = &g.get_attribute("position").unwrap().array;
         let idx = g.index.as_ref().unwrap();
         let mut worst = 0.0f64;
-        for t in idx.chunks_exact(3) {
+        for t in idx.as_chunks::<3>().0 {
             let p: Vec<V3> = t
                 .iter()
                 .map(|&i| {
@@ -754,7 +754,13 @@ mod tests {
         assert_eq!(report.patches, 3);
 
         let mut worst = 0.0f64;
-        for c in out.get_attribute("position").unwrap().array.chunks_exact(3) {
+        for c in out
+            .get_attribute("position")
+            .unwrap()
+            .array
+            .as_chunks::<3>()
+            .0
+        {
             worst = worst.max(((c[0] as f64).powi(2) + (c[2] as f64).powi(2)).sqrt());
         }
         assert!(
@@ -778,7 +784,13 @@ mod tests {
         let (out, report) = retessellate(&g, 1e-3).unwrap();
         assert_eq!(report.patches, 2);
 
-        for c in out.get_attribute("position").unwrap().array.chunks_exact(3) {
+        for c in out
+            .get_attribute("position")
+            .unwrap()
+            .array
+            .as_chunks::<3>()
+            .0
+        {
             let r = ((c[0] as f64).powi(2) + (c[2] as f64).powi(2)).sqrt();
             assert!(r <= 2.0 + 1e-4, "radius {r}");
         }
@@ -818,7 +830,7 @@ mod tests {
 
         // The result is the same box.
         let pos = &out.get_attribute("position").unwrap().array;
-        for c in pos.chunks_exact(3) {
+        for c in pos.as_chunks::<3>().0 {
             assert!((c[0].abs() - 1.0).abs() < 1e-5 || c[0].abs() < 1.0 + 1e-5);
             assert!(c[1].abs() <= 1.5 + 1e-5 && c[2].abs() <= 2.0 + 1e-5);
         }
@@ -854,7 +866,9 @@ mod tests {
             .index
             .as_ref()
             .unwrap()
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|t| [t[0], t[2], t[1]])
             .collect();
         g.set_index(flipped);
@@ -867,7 +881,7 @@ mod tests {
         let idx = out.index.as_ref().unwrap();
         let mut inward = 0usize;
         let mut total = 0usize;
-        for t in idx.chunks_exact(3) {
+        for t in idx.as_chunks::<3>().0 {
             let p: Vec<V3> = t
                 .iter()
                 .map(|&i| {

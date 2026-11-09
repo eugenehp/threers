@@ -26,8 +26,7 @@ use threers::{
 
 use winit::{
     event::{Event, WindowEvent},
-    event_loop::EventLoop,
-    window::WindowBuilder,
+    event_loop::ActiveEventLoop,
 };
 
 struct ParityRng { state: u32 }
@@ -82,18 +81,14 @@ fn bake_glitch_disp(w: u32, h: u32, seed: f32, height: &[f32], dt: u32) -> Vec<f
 
 fn main() {
     env_logger::init();
-    pollster::block_on(run());
+    let attributes = winit::window::Window::default_attributes()
+        .with_title("threers — glitch")
+        .with_inner_size(winit::dpi::LogicalSize::new(800, 600));
+    threers::sketch::run_window(attributes, |window| pollster::block_on(setup(window)));
 }
 
-async fn run() {
-    let event_loop = EventLoop::new().expect("event loop");
-    let window = Arc::new(
-        WindowBuilder::new()
-            .with_title("threers — glitch")
-            .with_inner_size(winit::dpi::LogicalSize::new(800, 600))
-            .build(&event_loop)
-            .expect("window"),
-    );
+/// The scene for a window that has just opened, and the handler that draws it.
+async fn setup(window: Arc<winit::window::Window>) -> impl FnMut(Event<()>, &ActiveEventLoop) {
 
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::PRIMARY,
@@ -187,8 +182,7 @@ async fn run() {
     scene.update_world();
     let window_for_loop = window.clone();
 
-    event_loop
-        .run(move |event, target| {
+    move |event, target| {
             match event {
                 Event::WindowEvent { event, window_id } if window_id == window_for_loop.id() => {
                     match event {
@@ -235,6 +229,5 @@ async fn run() {
                 Event::AboutToWait => window_for_loop.request_redraw(),
                 _ => {}
             }
-        })
-        .expect("event loop");
+        }
 }

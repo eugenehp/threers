@@ -23,7 +23,9 @@ fn volume(body: &Body, tolerance: f64) -> f64 {
         let o = i as usize * 3;
         [pos[o] as f64, pos[o + 1] as f64, pos[o + 2] as f64]
     };
-    idx.chunks_exact(3)
+    idx.as_chunks::<3>()
+        .0
+        .iter()
         .map(|t| {
             let (a, b, c) = (v(t[0]), v(t[1]), v(t[2]));
             (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])

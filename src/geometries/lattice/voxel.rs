@@ -623,7 +623,7 @@ fn place_face(
     let mut geom = proto.clone();
     if let Some(pos) = geom.get_attribute("position") {
         let mut out = pos.array.clone();
-        for v in out.chunks_exact_mut(3) {
+        for v in out.as_chunks_mut::<3>().0 {
             let local = Vector3::new(v[0], v[1], v[2]);
             let w = shift + u_hat * local.x + v_hat * local.y + n_in * local.z;
             v[0] = w.x;
@@ -634,7 +634,7 @@ fn place_face(
     }
     if let Some(nor) = geom.get_attribute("normal") {
         let mut out = nor.array.clone();
-        for v in out.chunks_exact_mut(3) {
+        for v in out.as_chunks_mut::<3>().0 {
             let local = Vector3::new(v[0], v[1], v[2]);
             let w = (u_hat * local.x + v_hat * local.y + n_in * local.z).normalize();
             v[0] = w.x;
@@ -717,7 +717,7 @@ fn tint_geometry(geom: &mut BufferGeometry, rgb: [f32; 3]) {
     let pos = geom.get_attribute("position").expect("position");
     let n = pos.array.len() / 3;
     let mut colors = vec![0.0f32; n * 3];
-    for (i, chunk) in colors.chunks_exact_mut(3).enumerate() {
+    for (i, chunk) in colors.as_chunks_mut::<3>().0.iter_mut().enumerate() {
         let _ = i;
         chunk.copy_from_slice(&rgb);
     }
@@ -727,7 +727,7 @@ fn tint_geometry(geom: &mut BufferGeometry, rgb: [f32; 3]) {
 fn translate_geometry(geom: &mut BufferGeometry, t: Vector3) {
     if let Some(pos) = geom.get_attribute("position") {
         let mut out = pos.array.clone();
-        for v in out.chunks_exact_mut(3) {
+        for v in out.as_chunks_mut::<3>().0 {
             v[0] += t.x;
             v[1] += t.y;
             v[2] += t.z;
@@ -861,7 +861,7 @@ fn geometry_to_stl_bytes(g: &BufferGeometry) -> Vec<u8> {
     let vert = |i: usize| [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]];
     let mut tris: Vec<[[f32; 3]; 3]> = Vec::new();
     if let Some(idx) = &g.index {
-        for t in idx.chunks_exact(3) {
+        for t in idx.as_chunks::<3>().0 {
             tris.push([
                 vert(t[0] as usize),
                 vert(t[1] as usize),
@@ -908,7 +908,7 @@ fn geometry_to_obj_text(g: &BufferGeometry) -> String {
         None => return String::new(),
     };
     let mut s = String::from("# threers cuboct part\no part\n");
-    for c in pos.chunks_exact(3) {
+    for c in pos.as_chunks::<3>().0 {
         s.push_str(&format!("v {} {} {}\n", c[0], c[1], c[2]));
     }
     // A face per polygon the geometry remembers, triangles otherwise.

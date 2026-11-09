@@ -137,12 +137,11 @@ pub fn dev_step(w: &mut World) {
     if show
         && w.resource::<Input>()
             .was_pressed(crate::input::MouseButton::Left)
+        && let Some(id) = pick(w)
     {
-        if let Some(id) = pick(w) {
-            let state = w.resource_mut::<DevState>();
-            state.selected = Some(id);
-            state.field = 0;
-        }
+        let state = w.resource_mut::<DevState>();
+        state.selected = Some(id);
+        state.field = 0;
     }
     if let (Some(id), true) = (selected, lower || raise) {
         nudge(w, id, if raise { 1.0 } else { -1.0 });

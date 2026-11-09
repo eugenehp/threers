@@ -85,7 +85,9 @@ fn from_manifold(m: &Manifold) -> BufferGeometry {
     };
     let tris: Vec<[super::V3; 3]> = mesh
         .tri_verts
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|t| [vert(t[0]), vert(t[1]), vert(t[2])])
         .collect();
     super::build_geometry(&tris)

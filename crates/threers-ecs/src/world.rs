@@ -330,10 +330,11 @@ impl World {
         unsafe {
             let state = Q::state(world);
             let mut visit = |id: Entity| {
-                if self.is_alive(id) && Q::matches(&state, id) {
-                    if let Some(item) = Q::fetch(&state, id) {
-                        f(item);
-                    }
+                if self.is_alive(id)
+                    && Q::matches(&state, id)
+                    && let Some(item) = Q::fetch(&state, id)
+                {
+                    f(item);
                 }
             };
             match Q::candidates(&state) {
@@ -752,8 +753,8 @@ impl World {
 /// and `Q` has passed its claim check. Each item is dropped before the next
 /// fetch, because the bound on `f` stops it escaping, so no two are ever live.
 pub(crate) unsafe fn each_raw<Q: Term>(world: *mut World, f: impl for<'a> FnMut(Q::Item<'a>)) {
-    let state = Q::state(world);
-    each_with_state::<Q>(world, &state, f, true)
+    let state = unsafe { Q::state(world) };
+    unsafe { each_with_state::<Q>(world, &state, f, true) }
 }
 
 /// As [`each_raw`], with the views already taken. Without `scratch` it lists a
@@ -769,30 +770,30 @@ pub(crate) unsafe fn each_with_state<Q: Term>(
     mut f: impl for<'a> FnMut(Q::Item<'a>),
     scratch: bool,
 ) {
-    let arena = addr_of!((*world).scene.arena);
+    let arena = unsafe { addr_of!((*world).scene.arena) };
     let mut visit = |id: Entity| {
-        if (*arena).nodes.contains_key(id) && Q::matches(state, id) {
-            if let Some(item) = Q::fetch(state, id) {
-                f(item);
-            }
+        if unsafe { (*arena).nodes.contains_key(id) && Q::matches(state, id) }
+            && let Some(item) = unsafe { Q::fetch(state, id) }
+        {
+            f(item);
         }
     };
     match Q::candidates(state) {
         Some(ids) => {
             for index in 0..ids.len() {
-                visit((&*ids)[index]);
+                unsafe { visit((&*ids)[index]) };
             }
         }
         None if scratch => {
-            let scratch = addr_of_mut!((*world).scratch);
-            let mut ids = std::mem::take(&mut *scratch);
+            let scratch = unsafe { addr_of_mut!((*world).scratch) };
+            let mut ids = unsafe { std::mem::take(&mut *scratch) };
             ids.clear();
-            ids.extend((*arena).nodes.keys());
+            unsafe { ids.extend((*arena).nodes.keys()) };
             ids.iter().copied().for_each(&mut visit);
-            *scratch = ids;
+            unsafe { *scratch = ids };
         }
         None => {
-            let ids: Vec<Entity> = (*arena).nodes.keys().collect();
+            let ids: Vec<Entity> = unsafe { (*arena).nodes.keys().collect() };
             ids.into_iter().for_each(&mut visit);
         }
     }
@@ -810,13 +811,13 @@ pub(crate) unsafe fn each_with_state<Q: Term>(
 /// `world` is valid and nothing else borrows this resource.
 #[track_caller]
 pub(crate) unsafe fn resource_ptr<R: 'static>(world: *mut World) -> *mut R {
-    let table = &mut *std::ptr::addr_of_mut!((*world).resources);
+    let table = unsafe { &mut *std::ptr::addr_of_mut!((*world).resources) };
     match table
         .get_mut(&TypeId::of::<R>())
         .and_then(|b| b.downcast_mut::<R>())
     {
         Some(r) => r,
-        None => missing_resource(type_name::<R>(), &*world),
+        None => missing_resource(type_name::<R>(), unsafe { &*world }),
     }
 }
 
@@ -830,7 +831,7 @@ pub(crate) unsafe fn event_queue_ptr<T: 'static>(
     world: *mut World,
     create: bool,
 ) -> *mut EventQueue<T> {
-    let table = &mut *std::ptr::addr_of_mut!((*world).events);
+    let table = unsafe { &mut *std::ptr::addr_of_mut!((*world).events) };
     if create {
         table
             .entry(TypeId::of::<T>())

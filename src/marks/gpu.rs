@@ -132,7 +132,7 @@ impl Buffer {
     /// # Safety
     /// `buffer` is a live `MTLBuffer` at least `size` bytes long.
     pub unsafe fn from_metal(buffer: crate::metal::objc::Id, size: u64) -> Self {
-        let obj = crate::metal::objc::Owned::retain(buffer).expect("a Metal buffer");
+        let obj = unsafe { crate::metal::objc::Owned::retain(buffer) }.expect("a Metal buffer");
         Self::Metal(m::MBuffer { obj, size })
     }
 }
@@ -149,7 +149,7 @@ impl TextureView {
         width: u32,
         height: u32,
     ) -> Self {
-        let obj = crate::metal::objc::Owned::retain(texture).expect("a Metal texture");
+        let obj = unsafe { crate::metal::objc::Owned::retain(texture) }.expect("a Metal texture");
         Self::Metal(m::MTexture {
             obj,
             format,
@@ -1154,10 +1154,10 @@ impl super::MarkTarget<'static> {
         };
         let (w, h) = (pass.width, pass.height);
         Self {
-            color: TextureView::from_metal(pass.color, format, w, h),
+            color: unsafe { TextureView::from_metal(pass.color, format, w, h) },
             resolve: (!pass.resolve.is_null())
-                .then(|| TextureView::from_metal(pass.resolve, format, w, h)),
-            depth: (!pass.depth.is_null()).then(|| {
+                .then(|| unsafe { TextureView::from_metal(pass.resolve, format, w, h) }),
+            depth: (!pass.depth.is_null()).then(|| unsafe {
                 TextureView::from_metal(pass.depth, wgpu::TextureFormat::Depth32Float, w, h)
             }),
             format,

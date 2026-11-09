@@ -74,10 +74,12 @@ impl SliceDec<'_> {
         let col = self.col?;
         let log2 = self.sps.log2_ctb;
         let (xbr, ybr) = (xpb + w, ypb + h);
-        if (ypb >> log2) == (ybr >> log2) && ybr < self.pic.height && xbr < self.pic.width {
-            if let Some(mv) = self.col_mv(col, (xbr >> 4) << 4, (ybr >> 4) << 4, lx, ref_idx) {
-                return Some(mv);
-            }
+        if (ypb >> log2) == (ybr >> log2)
+            && ybr < self.pic.height
+            && xbr < self.pic.width
+            && let Some(mv) = self.col_mv(col, (xbr >> 4) << 4, (ybr >> 4) << 4, lx, ref_idx)
+        {
+            return Some(mv);
         }
         let (xc, yc) = (xpb + (w >> 1), ypb + (h >> 1));
         self.col_mv(col, (xc >> 4) << 4, (yc >> 4) << 4, lx, ref_idx)
@@ -318,15 +320,16 @@ impl SliceDec<'_> {
         if let Some(a) = mv_a {
             list.push(a);
         }
-        if let Some(b) = mv_b {
-            if mv_a != Some(b) {
-                list.push(b);
-            }
+        if let Some(b) = mv_b
+            && mv_a != Some(b)
+        {
+            list.push(b);
         }
-        if list.len() < 2 && mvp_flag >= list.len() {
-            if let Some(c) = self.tmvp(xpb, ypb, w, h, lx, ref_idx) {
-                list.push(c);
-            }
+        if list.len() < 2
+            && mvp_flag >= list.len()
+            && let Some(c) = self.tmvp(xpb, ypb, w, h, lx, ref_idx)
+        {
+            list.push(c);
         }
         while list.len() < 2 {
             list.push([0, 0]);

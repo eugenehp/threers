@@ -35,29 +35,20 @@ use crate::{
     CylinderGeometry, SphereGeometry, ADDITION, INTERSECTION, SUBTRACTION,
 };
 
-/// OpenSCAD language front end (`.scad` → [`Solid`]).
 pub mod scad;
 
-/// A Rust DSL (`scad!` macro + fluent builders) for authoring [`Solid`] trees.
 pub mod dsl;
 
-/// Mesh exporters — OBJ / OFF / 3MF / glTF-GLB (counterpart to `scad::import`).
 pub mod export;
 
-/// FreeCAD `.FCStd` mesh document import and export (`Mesh::Feature` + `MeshKernel.bms`).
 pub mod freecad;
 
-/// Orthographic technical-drawing projection (silhouette + creases, hidden-line
-/// removal) — the drawing counterpart to [`crate::openscad::export`].
 pub mod schematic;
 
-/// Animating a model over `$t` and rendering it to images or video.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod animate;
 pub mod frame;
 
-/// Parts and joints declared in the model itself — the input `threers-physics`
-/// turns into a simulated mechanism.
 pub mod mechanism;
 
 pub use mechanism::{ContinuumSpec, MechanismSpec, TendonSpec};
@@ -169,14 +160,14 @@ pub fn polyhedron(points: &[[f32; 3]], faces: &[Vec<u32>]) -> Solid {
     // Auto-orient: if the signed volume is negative the faces are inward-wound,
     // so flip every triangle to make the solid outward-facing.
     let mut vol = 0.0f64;
-    for t in positions.chunks_exact(9) {
+    for t in positions.as_chunks::<9>().0 {
         let f = |i: usize| t[i] as f64;
         vol += f(0) * (f(4) * f(8) - f(5) * f(7))
             + f(1) * (f(5) * f(6) - f(3) * f(8))
             + f(2) * (f(3) * f(7) - f(4) * f(6));
     }
     if vol < 0.0 {
-        for t in positions.chunks_exact_mut(9) {
+        for t in positions.as_chunks_mut::<9>().0 {
             for k in 0..3 {
                 t.swap(3 + k, 6 + k);
             }
@@ -278,7 +269,7 @@ fn extrude_polygon(outline: &[[f32; 2]], height: f32) -> BufferGeometry {
         positions.extend_from_slice(&[p.x, p.y, height]);
         normals.extend_from_slice(&[0.0, 0.0, 1.0]);
     }
-    for t in cap.chunks_exact(3) {
+    for t in cap.as_chunks::<3>().0 {
         indices.extend_from_slice(&[t[0], t[2], t[1]]); // bottom reversed → -Z
         let off = n as u32;
         indices.extend_from_slice(&[off + t[0], off + t[1], off + t[2]]); // top → +Z
@@ -963,7 +954,7 @@ pub fn geometry_bounds(g: &BufferGeometry) -> ([f32; 3], [f32; 3]) {
     let mut lo = [f32::INFINITY; 3];
     let mut hi = [f32::NEG_INFINITY; 3];
     if let Some(a) = g.get_attribute("position") {
-        for v in a.array.chunks_exact(3) {
+        for v in a.array.as_chunks::<3>().0 {
             for k in 0..3 {
                 lo[k] = lo[k].min(v[k]);
                 hi[k] = hi[k].max(v[k]);
@@ -995,7 +986,7 @@ pub fn set_origin(g: &mut BufferGeometry, o: Origin) {
         Origin::CenterOnFloor => [-(lo[0] + hi[0]) / 2.0, -(lo[1] + hi[1]) / 2.0, -lo[2]],
     };
     if let Some(a) = g.attributes.get_mut("position") {
-        for v in a.array.chunks_exact_mut(3) {
+        for v in a.array.as_chunks_mut::<3>().0 {
             for k in 0..3 {
                 v[k] += d[k];
             }
@@ -1185,7 +1176,7 @@ fn geom_bounds(g: &BufferGeometry) -> Option<([f32; 3], [f32; 3])> {
         return None;
     }
     let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
-    for v in pos.array.chunks_exact(3) {
+    for v in pos.array.as_chunks::<3>().0 {
         for k in 0..3 {
             lo[k] = lo[k].min(v[k]);
             hi[k] = hi[k].max(v[k]);
@@ -1430,7 +1421,7 @@ pub(crate) fn bake_matrix(geom: &mut BufferGeometry, m: &Matrix4) {
     let moved_table = geom.surface_table().and_then(|t| t.transform(m));
 
     if let Some(attr) = geom.attributes.get_mut("position") {
-        for v in attr.array.chunks_exact_mut(3) {
+        for v in attr.array.as_chunks_mut::<3>().0 {
             let p = Vector3::new(v[0], v[1], v[2]).apply_matrix4(m);
             v[0] = p.x;
             v[1] = p.y;
@@ -1456,12 +1447,12 @@ pub(crate) fn bake_matrix(geom: &mut BufferGeometry, m: &Matrix4) {
 
 fn reverse_winding(geom: &mut BufferGeometry) {
     if let Some(idx) = geom.index.as_mut() {
-        for t in idx.chunks_exact_mut(3) {
+        for t in idx.as_chunks_mut::<3>().0 {
             t.swap(0, 2);
         }
     } else if let Some(attr) = geom.attributes.get_mut("position") {
         // Non-indexed soup: swap the first and third vertex (3 floats each).
-        for tri in attr.array.chunks_exact_mut(9) {
+        for tri in attr.array.as_chunks_mut::<9>().0 {
             for k in 0..3 {
                 tri.swap(k, 6 + k);
             }
@@ -1683,7 +1674,7 @@ mod tests {
         let mut vol = 0.0;
         let mut tri = |a: Vector3, b: Vector3, c: Vector3| vol += a.dot(b.cross(c));
         if let Some(idx) = &g.index {
-            for t in idx.chunks_exact(3) {
+            for t in idx.as_chunks::<3>().0 {
                 tri(read(t[0]), read(t[1]), read(t[2]));
             }
         } else {
@@ -1798,7 +1789,7 @@ mod exact_integration {
         };
         let mut s = 0.0;
         if let Some(idx) = &g.index {
-            for t in idx.chunks_exact(3) {
+            for t in idx.as_chunks::<3>().0 {
                 s += tri(v(t[0] as usize), v(t[1] as usize), v(t[2] as usize));
             }
         } else {

@@ -118,7 +118,7 @@ unsafe impl<Q: Term> SystemParam for Query<'_, Q> {
     unsafe fn fetch<'w>(world: *mut World) -> Query<'w, Q> {
         Query {
             world,
-            state: Q::state(world),
+            state: unsafe { Q::state(world) },
             _borrow: PhantomData,
         }
     }
@@ -140,7 +140,7 @@ unsafe impl<R: 'static> SystemParam for Res<'_, R> {
         access.read::<Res<'static, R>>();
     }
     unsafe fn fetch<'w>(world: *mut World) -> Res<'w, R> {
-        Res(&*crate::world::resource_ptr::<R>(world))
+        Res(unsafe { &*crate::world::resource_ptr::<R>(world) })
     }
 }
 
@@ -166,7 +166,7 @@ unsafe impl<R: 'static> SystemParam for ResMut<'_, R> {
         access.write::<Res<'static, R>>();
     }
     unsafe fn fetch<'w>(world: *mut World) -> ResMut<'w, R> {
-        ResMut(&mut *crate::world::resource_ptr::<R>(world))
+        ResMut(unsafe { &mut *crate::world::resource_ptr::<R>(world) })
     }
 }
 
@@ -200,9 +200,9 @@ unsafe impl<T: 'static> SystemParam for EventReader<'_, T> {
         access.write::<EventQueue<T>>();
     }
     unsafe fn fetch<'w>(world: *mut World) -> EventReader<'w, T> {
-        let reader = *std::ptr::addr_of!((*world).reader);
+        let reader = unsafe { *std::ptr::addr_of!((*world).reader) };
         EventReader {
-            queue: crate::world::event_queue_ptr::<T>(world, false).as_mut(),
+            queue: unsafe { crate::world::event_queue_ptr::<T>(world, false).as_mut() },
             reader,
         }
     }
@@ -224,7 +224,7 @@ unsafe impl<T: 'static> SystemParam for EventWriter<'_, T> {
         access.write::<EventQueue<T>>();
     }
     unsafe fn fetch<'w>(world: *mut World) -> EventWriter<'w, T> {
-        EventWriter(&mut *crate::world::event_queue_ptr::<T>(world, true))
+        EventWriter(unsafe { &mut *crate::world::event_queue_ptr::<T>(world, true) })
     }
 }
 
@@ -232,7 +232,7 @@ unsafe impl SystemParam for Commands {
     type Item<'w> = Commands;
     fn access(_: &mut Access) {}
     unsafe fn fetch<'w>(world: *mut World) -> Self::Item<'w> {
-        (*std::ptr::addr_of!((*world).commands)).clone()
+        unsafe { (*std::ptr::addr_of!((*world).commands)).clone() }
     }
 }
 

@@ -346,10 +346,10 @@ impl DomAccessibility {
     /// Moves the page's focus to `node`'s element, so assistive technology
     /// follows focus the app moved itself (a Tab handled on the canvas).
     pub fn focus(&self, node: NodeId) {
-        if let Some(m) = self.elements.get(&node) {
-            if let Some(h) = m.element.dyn_ref::<HtmlElement>() {
-                let _ = h.focus();
-            }
+        if let Some(m) = self.elements.get(&node)
+            && let Some(h) = m.element.dyn_ref::<HtmlElement>()
+        {
+            let _ = h.focus();
         }
     }
 

@@ -210,7 +210,9 @@ pub fn apply_bind_transform(prim: &UsdPrim, geometry: &mut BufferGeometry) {
     };
     let moved: Vec<f32> = position
         .array
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .flat_map(|p| {
             // Column-major, as this crate stores matrices — which is the same
             // memory layout USD's row-vector convention produces, so the
@@ -426,7 +428,9 @@ pub fn animation(
                 TrackTarget::Position,
                 times.iter().map(|t| (t / rate) as f32).collect(),
                 values
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .map(|v| Vector3::new(v[0], v[1], v[2]))
                     .collect(),
             ));
@@ -439,7 +443,9 @@ pub fn animation(
                 times.iter().map(|t| (t / rate) as f32).collect(),
                 values
                     // USD writes the real part first; this one takes it last.
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|q| Quaternion::new(q[1], q[2], q[3], q[0]))
                     .collect(),
             ));
@@ -450,7 +456,9 @@ pub fn animation(
                 TrackTarget::Scale,
                 times.iter().map(|t| (t / rate) as f32).collect(),
                 values
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .map(|v| Vector3::new(v[0], v[1], v[2]))
                     .collect(),
             ));
@@ -514,7 +522,9 @@ fn matrices(value: Option<&UsdValue>) -> Vec<Matrix4> {
     };
     let numbers = value.flat_f32();
     numbers
-        .chunks_exact(16)
+        .as_chunks::<16>()
+        .0
+        .iter()
         .map(|m| {
             let mut out = Matrix4::identity();
             out.elements.copy_from_slice(m);

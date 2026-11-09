@@ -770,10 +770,10 @@ fn write_property_spec(w: &mut Writer, property: &UsdProperty, prim_path: &str) 
         if let Some(rep) = path_list_op(w, &property.value) {
             members.push(w.field("connectionPaths", rep) as i32);
         }
-    } else if !matches!(property.value, UsdValue::None) {
-        if let Some(rep) = value_rep(w, "default", &property.value, &property.type_name) {
-            members.push(w.field("default", rep) as i32);
-        }
+    } else if !matches!(property.value, UsdValue::None)
+        && let Some(rep) = value_rep(w, "default", &property.value, &property.type_name)
+    {
+        members.push(w.field("default", rep) as i32);
     }
     for (key, value) in &property.metadata {
         if key.is_empty() {

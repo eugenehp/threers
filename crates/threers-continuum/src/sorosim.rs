@@ -307,7 +307,7 @@ impl Statics {
             .map(|l| l.split(',').map(str::trim).collect())
             .collect();
         let mut shapes = Vec::with_capacity(rows.len() / 6);
-        for group in rows.chunks_exact(6) {
+        for group in rows.as_chunks::<6>().0 {
             // Six rows per shape: the three Euler rows carry the *moment* of a
             // wrench and the three position rows carry its *force*, alongside
             // the angles and positions they are named for.

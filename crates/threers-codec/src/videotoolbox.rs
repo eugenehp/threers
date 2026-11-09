@@ -74,7 +74,7 @@ impl CMTime {
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn CFRelease(cf: CFTypeRef);
     fn CFStringCreateWithBytes(
         alloc: CFAllocatorRef,
@@ -99,7 +99,7 @@ extern "C" {
 }
 
 #[link(name = "CoreVideo", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn CVPixelBufferCreate(
         alloc: CFAllocatorRef,
         width: usize,
@@ -115,7 +115,7 @@ extern "C" {
 }
 
 #[link(name = "CoreMedia", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn CMSampleBufferGetDataBuffer(sbuf: CMSampleBufferRef) -> CMBlockBufferRef;
     fn CMBlockBufferGetDataLength(bbuf: CMBlockBufferRef) -> usize;
     fn CMBlockBufferCopyDataBytes(
@@ -144,7 +144,7 @@ type VTCompressionOutputCallback = extern "C" fn(
 );
 
 #[link(name = "VideoToolbox", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn VTCompressionSessionCreate(
         alloc: CFAllocatorRef,
         width: i32,
@@ -773,10 +773,10 @@ impl VideoToolboxEncoder {
             }
         }
         self.n += 1;
-        if let Ok(g) = self.sink.lock() {
-            if let Some(e) = &g.err {
-                return Err(e.clone());
-            }
+        if let Ok(g) = self.sink.lock()
+            && let Some(e) = &g.err
+        {
+            return Err(e.clone());
         }
         Ok(())
     }

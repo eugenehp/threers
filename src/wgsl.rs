@@ -106,7 +106,7 @@ const fn run(s: &[u8], out: &mut [u8], write: bool) -> usize {
 
 /// A constant WGSL source — a literal, `include_str!`, `concat!` of those, or
 /// any other constant `&str` expression — as a `&'static str` without its
-/// comments, stripped at compile time (see [`wgsl`](crate::wgsl)).
+/// comments, stripped at compile time (see [`wgsl!`](crate::wgsl!)).
 ///
 /// ```
 /// const SHADER: &str = threers::wgsl!(

@@ -24,7 +24,7 @@
 //! The device comes from [`GpuContext::headless`](crate::gpu::GpuContext),
 //! with no display handle: right for Vulkan, Metal and DX12, which are what
 //! desktop GPUs get. GL on Wayland needs one; open a
-//! [`GpuContext`](crate::gpu::GpuContext) yourself and use
+//! [`crate::gpu::GpuContext`] yourself and use
 //! [`SurfaceGpu::from_context`].
 
 use std::sync::{Arc, RwLock};

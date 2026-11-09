@@ -493,7 +493,7 @@ impl RaytraceRenderer {
             return rgba;
         }
         let err = self.film.resolve_error();
-        for (px, e) in rgba.chunks_exact_mut(4).zip(err.iter()) {
+        for (px, e) in rgba.as_chunks_mut::<4>().0.iter_mut().zip(err.iter()) {
             let t = if !e.is_finite() {
                 1.0
             } else {
@@ -700,11 +700,11 @@ impl RaytraceRenderer {
             let d = probe_focus_distance(flat, &rt_camera).unwrap_or_else(|| flat.scale());
             rt_camera = rt_camera.with_focus_distance(d);
         }
-        if self.settings.motion_blur_shutter > 0.0 {
-            if let Some(prev) = self.prev_camera.as_ref() {
-                rt_camera =
-                    rt_camera.with_motion_previous(prev.clone(), self.settings.motion_blur_shutter);
-            }
+        if self.settings.motion_blur_shutter > 0.0
+            && let Some(prev) = self.prev_camera.as_ref()
+        {
+            rt_camera =
+                rt_camera.with_motion_previous(prev.clone(), self.settings.motion_blur_shutter);
         }
         rt_camera
     }
@@ -1042,15 +1042,14 @@ impl RaytraceRenderer {
                 want
             };
             let samples = self.film.samples();
-            if opts.autosave_every > 0 {
-                if let Some(path) = opts.autosave_path.as_ref() {
-                    if samples >= last_saved + opts.autosave_every {
-                        if let Err(e) = self.save_film(path) {
-                            eprintln!("raytrace: autosave failed ({e})");
-                        }
-                        last_saved = samples;
-                    }
+            if opts.autosave_every > 0
+                && let Some(path) = opts.autosave_path.as_ref()
+                && samples >= last_saved + opts.autosave_every
+            {
+                if let Err(e) = self.save_film(path) {
+                    eprintln!("raytrace: autosave failed ({e})");
                 }
+                last_saved = samples;
             }
             // Empty tile worklist or spent budget both count as finished.
             let last = !self.needs_more_samples() || (use_tiles && traced == 0);
@@ -1937,7 +1936,7 @@ mod tests {
             let rgba = r.render_to_rgba(&mut scene, &cam);
             assert_eq!(rgba.len(), 16 * 16 * 4);
             assert!(
-                rgba.chunks_exact(4).any(|p| p[0] != rgba[0]),
+                rgba.as_chunks::<4>().0.iter().any(|p| p[0] != rgba[0]),
                 "{aov:?} produced a constant image"
             );
         }

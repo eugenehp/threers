@@ -51,7 +51,7 @@ pub fn edge_report(geom: &BufferGeometry) -> EdgeReport {
     };
     // Each undirected edge: (uses a→b, uses b→a) with a < b.
     let mut edges: HashMap<(u32, u32), (u32, u32)> = HashMap::with_capacity(index.len());
-    for t in index.chunks_exact(3) {
+    for t in index.as_chunks::<3>().0 {
         for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
             let entry = edges.entry((a.min(b), a.max(b))).or_default();
             if a < b {
@@ -104,7 +104,7 @@ pub fn triangle_quality(geom: &BufferGeometry) -> TriangleQuality {
     };
     let mut angles = Vec::with_capacity(index.len() / 3);
     let mut needles = 0;
-    for t in index.chunks_exact(3) {
+    for t in index.as_chunks::<3>().0 {
         let (a, b, c) = (at(t[0]), at(t[1]), at(t[2]));
         let edges = [(b - a).length(), (c - b).length(), (a - c).length()];
         let longest = edges[0].max(edges[1]).max(edges[2]);
@@ -180,7 +180,7 @@ pub fn split_pieces(geom: &BufferGeometry) -> Vec<Piece> {
         }
         v
     }
-    for t in index.chunks_exact(3) {
+    for t in index.as_chunks::<3>().0 {
         for (a, b) in [(t[0], t[1]), (t[1], t[2])] {
             let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
             if ra != rb {
@@ -194,7 +194,7 @@ pub fn split_pieces(geom: &BufferGeometry) -> Vec<Piece> {
     };
     let mut slot: HashMap<u32, usize> = HashMap::new();
     let mut pieces: Vec<(Vec<usize>, f64, f64, Vector3)> = Vec::new();
-    for (n, t) in index.chunks_exact(3).enumerate() {
+    for (n, t) in index.as_chunks::<3>().0.iter().enumerate() {
         let r = root(&mut parent, t[0]);
         let k = *slot.entry(r).or_insert_with(|| {
             // Volumes are summed about a point of the piece itself, so a small
@@ -320,7 +320,7 @@ pub fn remove_loose_pieces(
     let mut kept_triangles: Vec<usize> = pieces
         .iter()
         .zip(&keep)
-        .filter(|(_, &k)| k)
+        .filter(|&(_, &k)| k)
         .flat_map(|(p, _)| p.triangles.iter().copied())
         .collect();
     kept_triangles.sort_unstable();
@@ -337,6 +337,9 @@ fn vertex_of(piece: &Piece, index: &[u32], p: &[f32]) -> Vector3 {
 /// The ray is skewed off the axes so it does not run along a lattice's grid
 /// planes and graze edges.
 fn inside(piece: &Piece, index: &[u32], p: &[f32], q: Vector3) -> bool {
+    // An arbitrary direction, unlikely to line up with any face; its first
+    // component only happens to be close to Euler's gamma.
+    #[allow(clippy::approx_constant)]
     let dir = Vector3::new(0.577_215_7, 0.316_227_8, 0.752_355).normalize();
     let at = |i: u32| {
         let i = i as usize * 3;
@@ -455,7 +458,9 @@ pub fn print_report(
         Vector3::new(p[i], p[i + 1], p[i + 2])
     };
     let heights: Vec<f32> = p
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|c| Vector3::new(c[0], c[1], c[2]).dot(up))
         .collect();
     let (low, high) = heights
@@ -479,7 +484,7 @@ pub fn print_report(
     };
     let mut support: Vec<[Vector3; 3]> = Vec::new();
     let limit = overhang_limit.to_radians();
-    for t in index.chunks_exact(3) {
+    for t in index.as_chunks::<3>().0 {
         let (a, b, c) = (at(t[0]), at(t[1]), at(t[2]));
         let n = (b - a).cross(c - a);
         let area2 = n.length();
@@ -583,7 +588,7 @@ mod tests {
             0, 2, 4, 2, 1, 4, 1, 3, 4, 3, 0, 4, 2, 0, 5, 1, 2, 5, 3, 1, 5, 0, 3, 5,
         ];
         if inside_out {
-            for t in index.chunks_exact_mut(3) {
+            for t in index.as_chunks_mut::<3>().0 {
                 t.swap(1, 2);
             }
         }

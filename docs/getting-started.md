@@ -48,7 +48,7 @@ flags in one go — see the feature table in the crate docs.
 
 # Native (desktop)
 
-Requires Rust 1.87+ (wgpu 30's minimum), a working wgpu backend (Metal/Vulkan/DX12), and dev dependencies from `Cargo.toml`.
+Requires Rust 1.99+ (the crates are on edition 2024), a working wgpu backend (Metal/Vulkan/DX12), and dev dependencies from `Cargo.toml`.
 
 ```bash
 cargo run --example cube          # spinning PBR cube

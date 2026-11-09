@@ -409,10 +409,10 @@ impl Path {
                 out.curve_path.add(c);
             }
             out.current = end;
-            if let Some(start) = close_to {
-                if (end - start).length() > GAP {
-                    out.line_to(start);
-                }
+            if let Some(start) = close_to
+                && (end - start).length() > GAP
+            {
+                out.line_to(start);
             }
         }
         Ok(out)
@@ -622,10 +622,10 @@ impl<'a> Parser<'a> {
     }
 
     fn finish_subpath(&mut self) {
-        if let Some(path) = self.open.take() {
-            if !path.curve_path.curves.is_empty() {
-                self.out.push(path);
-            }
+        if let Some(path) = self.open.take()
+            && !path.curve_path.curves.is_empty()
+        {
+            self.out.push(path);
         }
     }
 

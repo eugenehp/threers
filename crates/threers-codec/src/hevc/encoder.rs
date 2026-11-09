@@ -89,7 +89,7 @@ impl Yuv420Frame {
         // Look before allocating. Fully-opaque input is the common case and its
         // alpha plane is discarded at the end anyway — at 8K that would be a
         // 33 MB allocation, filled and freed, for every frame.
-        let any_transparent = rgba.chunks_exact(4).any(|px| px[ai] != 255);
+        let any_transparent = rgba.as_chunks::<4>().0.iter().any(|px| px[ai] != 255);
         let mut a = if any_transparent {
             vec![0u8; w * h]
         } else {
@@ -277,7 +277,9 @@ mod tests {
         let (w, h) = (6u32, 4u32);
         let rgba: Vec<u8> = (0..w * h * 4).map(|i| (i * 37 % 251) as u8).collect();
         let bgra: Vec<u8> = rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|p| [p[2], p[1], p[0], p[3]])
             .collect();
         let (a, b) = (

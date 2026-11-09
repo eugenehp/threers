@@ -128,10 +128,10 @@ impl ObjLoader {
             }
         }
 
-        if let Some(last) = runs.last_mut() {
-            if last.2 < 0 {
-                last.2 = out_idx.len() as i64 - last.1;
-            }
+        if let Some(last) = runs.last_mut()
+            && last.2 < 0
+        {
+            last.2 = out_idx.len() as i64 - last.1;
         }
         if runs.len() > 1 {
             runs.retain(|r| r.2 > 0);

@@ -805,7 +805,9 @@ impl RaytraceScene {
                     }
                     collected.push((geom, Matrix4::identity(), s.material.clone(), None));
                 }
-                ObjectKind::Group | ObjectKind::Audio(_) => {}
+                ObjectKind::Group => {}
+                #[cfg(feature = "audio")]
+                ObjectKind::Audio(_) => {}
             }
         });
 
@@ -1943,7 +1945,7 @@ mod tests {
         let mut faces: [Vec<u8>; 6] = Default::default();
         for (i, f) in faces.iter_mut().enumerate() {
             let mut px = vec![0u8; (size * size * 4) as usize];
-            for p in px.chunks_exact_mut(4) {
+            for p in px.as_chunks_mut::<4>().0 {
                 p[0] = (i * 40) as u8;
                 p[1] = (i * 40) as u8;
                 p[2] = (i * 40) as u8;
@@ -2108,7 +2110,7 @@ mod tests {
         let bright = 500.0f32;
         let faces: [Vec<f32>; 6] = std::array::from_fn(|_| {
             let mut f = vec![0.0f32; (size * size * 4) as usize];
-            for p in f.chunks_exact_mut(4) {
+            for p in f.as_chunks_mut::<4>().0 {
                 p[0] = bright;
                 p[1] = bright;
                 p[2] = bright;
@@ -2320,7 +2322,9 @@ mod tests {
         let mut g = crate::geometries::PlaneGeometry::new(2.0, 2.0);
         let base = g.get_attribute("position").unwrap().array.clone();
         let wide: Vec<f32> = base
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|p| [p[0] * 1.5, p[1], p[2]])
             .collect();
         g.set_morph_attribute("position", vec![crate::core::BufferAttribute::new(wide, 3)]);

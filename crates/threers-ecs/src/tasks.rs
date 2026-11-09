@@ -386,10 +386,10 @@ impl World {
                 }
             };
             let visit = |id: Entity| {
-                if Q::matches(state.get(), id) {
-                    if let Some(item) = Q::fetch(state.get(), id) {
-                        f(item);
-                    }
+                if Q::matches(state.get(), id)
+                    && let Some(item) = Q::fetch(state.get(), id)
+                {
+                    f(item);
                 }
             };
             #[cfg(all(

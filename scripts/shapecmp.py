@@ -13,7 +13,7 @@ positions. And its default-on feature set is larger than this shaper's, so the f
 this does not apply are switched off below — otherwise the run measures the feature list
 rather than the reading.
 """
-import subprocess, sys, glob
+import subprocess, glob
 from fontTools.ttLib import TTFont
 texts = ["office affluent fjord flat fifty efficient shuffle waffle",
          "The 1:30 train; 10-20 x 3, Hamburgefonstiv!",

@@ -25,13 +25,21 @@ impl BufferAttribute {
     /// f64 and then narrowed — what keeps far-away geometry precise. Place
     /// the mesh at `origin` to put it back.
     pub fn from_f64_relative(array: &[f64], item_size: usize, origin: &[f64]) -> Self {
-        Self::new(crate::math::float::f64_relative_to_f32(array, item_size, origin), item_size)
+        Self::new(
+            crate::math::float::f64_relative_to_f32(array, item_size, origin),
+            item_size,
+        )
     }
 
     /// Binary16 components (raw bits, as a `Float16Array` or a half-float
     /// buffer holds them), widened exactly.
     pub fn from_f16_bits(bits: &[u16], item_size: usize) -> Self {
-        Self::new(bits.iter().map(|b| crate::math::float::f16_to_f32(*b)).collect(), item_size)
+        Self::new(
+            bits.iter()
+                .map(|b| crate::math::float::f16_to_f32(*b))
+                .collect(),
+            item_size,
+        )
     }
 
     pub fn count(&self) -> usize {
@@ -46,7 +54,10 @@ impl BufferAttribute {
     /// The components rounded to binary16 bits (to nearest, ties to even),
     /// for a half-float vertex buffer or export.
     pub fn to_f16_bits(&self) -> Vec<u16> {
-        self.array.iter().map(|v| crate::math::float::f32_to_f16(*v)).collect()
+        self.array
+            .iter()
+            .map(|v| crate::math::float::f32_to_f16(*v))
+            .collect()
     }
 }
 
@@ -59,7 +70,10 @@ mod tests {
         let far = [1_000_000.123_456, 2_000_000.654_321, 3.0];
         let plain = BufferAttribute::from_f64(&far, 3);
         let rel = BufferAttribute::from_f64_relative(&far, 3, &[1_000_000.0, 2_000_000.0, 0.0]);
-        assert!((plain.array[0] as f64 - far[0]).abs() > 1e-3, "f32 cannot hold it directly");
+        assert!(
+            (plain.array[0] as f64 - far[0]).abs() > 1e-3,
+            "f32 cannot hold it directly"
+        );
         assert!((rel.array[0] as f64 + 1_000_000.0 - far[0]).abs() < 1e-6);
         assert!((rel.array[1] as f64 + 2_000_000.0 - far[1]).abs() < 1e-6);
         let half = BufferAttribute::from_f16_bits(&[0x3c00, 0xc000, 0x7bff], 1);

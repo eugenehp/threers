@@ -93,8 +93,10 @@ fn square(background: Color) -> (Scene, crate::core::ObjectId) {
 }
 
 fn differ(a: &[u8], b: &[u8]) -> usize {
-    a.chunks_exact(4)
-        .zip(b.chunks_exact(4))
+    a.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
         .filter(|(x, y)| {
             x.iter()
                 .zip(y.iter())
@@ -349,7 +351,9 @@ fn ssao_outputs_each_draw_their_buffer() {
         .zip(["Default", "SSAO", "Blur", "Depth", "Normal"])
     {
         let distinct: std::collections::HashSet<[u8; 4]> = a
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| [p[0], p[1], p[2], p[3]])
             .collect();
         assert!(
@@ -616,7 +620,9 @@ fn smaa_lut_and_transition_do_what_they_say() {
     let plain = r.frame(&mut scene, &front(), vec![Box::new(ShaderPass::copy())]);
     let smaa = r.frame(&mut scene, &front(), vec![Box::new(SmaaPass::new(W, H))]);
     let grey = |b: &[u8]| {
-        b.chunks_exact(4)
+        b.as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[0] > 20 && p[0] < 235)
             .count()
     };

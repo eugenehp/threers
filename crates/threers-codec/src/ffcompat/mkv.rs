@@ -112,7 +112,7 @@ fn parse_with(data: &[u8], mkv: Mkv) -> Result<(MovVideo, VideoTrack, Option<Vec
     let pts: Vec<i64> = frames
         .iter()
         .zip(&shows)
-        .filter(|(_, &s)| s)
+        .filter(|&(_, &s)| s)
         .map(|(f, _)| f.pts)
         .collect();
     let shown: Vec<usize> = (0..frames.len()).filter(|&i| shows[i]).collect();

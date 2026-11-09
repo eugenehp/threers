@@ -1,13 +1,13 @@
 //! Screen-space ambient occlusion on a live surface.
 //!
-//! [`Ssao`](crate::renderer::ssao::Ssao) produces an occlusion factor from depth, but only the headless
+//! [`Ssao`] produces an occlusion factor from depth, but only the headless
 //! path composites it (into the readback, through `RgbPack`). A canvas has no
 //! readback, so this does the same job for one:
 //!
 //! 1. the scene is drawn into a *presenting* [`RenderTarget`] — tone-mapped
 //!    and encoded exactly as the surface would be — with
 //!    [`Renderer::render_to`],
-//! 2. [`Ssao`](crate::renderer::ssao::Ssao) reads that target's depth into a half-resolution factor,
+//! 2. [`Ssao`] reads that target's depth into a half-resolution factor,
 //! 3. a fullscreen pass blurs it, maps it through a soft response, multiplies
 //!    the colour by it in linear light and writes the surface.
 //!
@@ -564,7 +564,9 @@ mod tests {
             .flat_map(|row| {
                 let start = (row * bytes_per_row) as usize;
                 data[start..start + (W * 4) as usize]
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| c[0])
                     .collect::<Vec<_>>()
             })

@@ -102,6 +102,7 @@ pub struct ShaderMaterial {
     /// `marks_gpu`), they bind on wgpu and the native Metal backend alike, as
     /// [`volumes`](Self::volumes) do; a view from the other backend reads as
     /// an empty slot. Slots you leave empty read as opaque white.
+    #[cfg(feature = "render")]
     pub textures: Vec<crate::marks::gpu::TextureView>,
     /// The same four slots from [`Texture`](crate::Texture)s the renderer
     /// uploads and caches itself, as it does a standard material's maps:
@@ -128,6 +129,7 @@ pub struct ShaderMaterial {
     /// the layout, so the slots are left out there and a shader that reads
     /// `u_vol0` does not compile. See
     /// [`supports_shader_material_volumes`](crate::renderer::caps::supports_shader_material_volumes).
+    #[cfg(feature = "render")]
     pub volumes: Vec<crate::marks::gpu::TextureView>,
     /// Draw this material in the screen-space pass, with the opaque scene
     /// available as `ss_color_tex` / `ss_depth_tex` at `@group(3)`.
@@ -219,8 +221,10 @@ impl Default for ShaderMaterial {
             storage0: Vec::new(),
             storage1: Vec::new(),
             storage2: Vec::new(),
+            #[cfg(feature = "render")]
             textures: Vec::new(),
             maps: Vec::new(),
+            #[cfg(feature = "render")]
             volumes: Vec::new(),
             screen_space: false,
             opacity: 1.0,
@@ -259,9 +263,15 @@ impl ShaderMaterial {
 
     /// As [`from_shared`](Self::from_shared), returning a translation error.
     pub fn try_from_shared(shader: &super::SharedShader) -> Result<Self, String> {
+        // The Metal fragment only matters to the Metal backend, which needs
+        // `render`; without it there is nothing to translate for.
+        #[cfg(feature = "render")]
+        let msl = Some(shader.msl()?);
+        #[cfg(not(feature = "render"))]
+        let msl = None;
         Ok(Self {
             fragment: shader.wgsl()?,
-            msl: Some(shader.msl()?),
+            msl,
             ..Default::default()
         })
     }
@@ -313,6 +323,22 @@ impl ShaderMaterial {
     /// );
     /// assert!(m.validate(true).is_ok());
     /// ```
+    /// The module the renderer builds from this material, single-sampled —
+    /// the text [`validate`](Self::validate) checks, with the preamble, the
+    /// bindings and the user's code in one string. `storage_buffers` as for
+    /// `validate`: `false` is the WebGL2 shape.
+    #[cfg(feature = "render")]
+    pub fn module_source(&self, storage_buffers: bool) -> String {
+        crate::renderer::custom_shader_module_source(
+            &self.fragment,
+            self.vertex.as_deref(),
+            storage_buffers,
+            false,
+            1,
+        )
+    }
+
+    #[cfg(feature = "render")]
     pub fn validate(&self, storage_buffers: bool) -> Result<(), String> {
         // As drawn single-sampled, and multisampled — where the module gains
         // `@builtin(sample_mask)` on a backend with storage buffers.
@@ -353,6 +379,7 @@ impl ShaderMaterial {
         self
     }
     /// Attach user textures (`u_tex0`..`u_tex3`). At most four are used.
+    #[cfg(feature = "render")]
     pub fn with_textures<T: Into<crate::marks::gpu::TextureView>>(
         mut self,
         t: impl IntoIterator<Item = T>,

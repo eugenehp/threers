@@ -19,7 +19,13 @@ fn clip() -> Vec<u8> {
 
 /// The red channel of the picture on show.
 fn red(app: &App, screen: Entity) -> u8 {
-    app.world.get::<Video>(screen).unwrap().player.video_texture().stream().read(|rgba, _| rgba[0])
+    app.world
+        .get::<Video>(screen)
+        .unwrap()
+        .player
+        .video_texture()
+        .stream()
+        .read(|rgba, _| rgba[0])
 }
 
 #[test]
@@ -29,14 +35,21 @@ fn a_video_follows_game_time() {
     let texture = player.texture();
     let screen = app
         .world
-        .mesh(PlaneGeometry::new(1.0, 1.0), BasicMaterial::new(Color::WHITE))
+        .mesh(
+            PlaneGeometry::new(1.0, 1.0),
+            BasicMaterial::new(Color::WHITE),
+        )
         .video(player)
         .id();
 
     // The mesh shows the video's texture.
     let node = app.world.node(screen).unwrap();
-    let ObjectKind::Mesh(mesh) = &node.kind else { panic!("a mesh") };
-    let Material::Basic(material) = &*mesh.material else { panic!("basic") };
+    let ObjectKind::Mesh(mesh) = &node.kind else {
+        panic!("a mesh")
+    };
+    let Material::Basic(material) = &*mesh.material else {
+        panic!("basic")
+    };
     assert!(Arc::ptr_eq(material.map.as_ref().unwrap(), &texture));
     assert!(red(&app, screen) > 150, "red first");
 
@@ -47,7 +60,10 @@ fn a_video_follows_game_time() {
 
     app.world.resource_mut::<Time>().paused = false;
     app.frame(0.1);
-    assert!(red(&app, screen) < 80, "green once a tenth of game time has passed");
+    assert!(
+        red(&app, screen) < 80,
+        "green once a tenth of game time has passed"
+    );
 }
 
 /// The soundtrack plays with the picture, from where the picture is.
@@ -55,14 +71,21 @@ fn a_video_follows_game_time() {
 #[test]
 fn a_video_plays_its_sound_in_step() {
     use threers_ecs::audio::{AudioOut, AudioPlugin};
-    let file = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/support/video/tone.mp4")).unwrap();
+    let file = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/support/video/tone.mp4"
+    ))
+    .unwrap();
     let mut app = App::new();
     app.plugin(AudioPlugin::Offline);
     let mut player = VideoPlayer::open_inline(file.clone()).unwrap();
     let track = player.soundtrack().unwrap().buffer.clone().unwrap();
     let screen = app
         .world
-        .mesh(PlaneGeometry::new(1.0, 1.0), BasicMaterial::new(Color::WHITE))
+        .mesh(
+            PlaneGeometry::new(1.0, 1.0),
+            BasicMaterial::new(Color::WHITE),
+        )
         .video(player)
         .id();
     app.frame(0.0);
@@ -81,7 +104,11 @@ fn a_video_plays_its_sound_in_step() {
         let want = track[44_100 + i] * gain;
         assert!((got - want).abs() < 1e-4, "sample {i}: {got} vs {want}");
     }
-    assert_eq!(app.world.resource::<AudioOut>().offline_voices(), Some(1), "the old voice stopped");
+    assert_eq!(
+        app.world.resource::<AudioOut>().offline_voices(),
+        Some(1),
+        "the old voice stopped"
+    );
 
     // Paused, the sound stops; playing again, it comes back.
     app.world.get_mut::<Video>(screen).unwrap().player.pause();
@@ -97,9 +124,13 @@ fn a_video_plays_its_sound_in_step() {
     assert_eq!(app.world.resource::<AudioOut>().offline_voices(), Some(0));
     let quiet = app
         .world
-        .mesh(PlaneGeometry::new(1.0, 1.0), BasicMaterial::new(Color::WHITE))
+        .mesh(
+            PlaneGeometry::new(1.0, 1.0),
+            BasicMaterial::new(Color::WHITE),
+        )
         .id();
-    app.world.insert(quiet, Video::muted(VideoPlayer::open_inline(file).unwrap()));
+    app.world
+        .insert(quiet, Video::muted(VideoPlayer::open_inline(file).unwrap()));
     app.frame(0.1);
     assert!(!app.world.get::<Video>(quiet).unwrap().is_sounding());
 }

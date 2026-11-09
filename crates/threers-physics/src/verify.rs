@@ -8,7 +8,7 @@
 //!
 //! This runs the mechanism and then asks the geometry what it did. The axis
 //! comes back out of the moving triangles by
-//! [`recover_screw`](threers::assembly::recover_screw), with nothing consulted
+//! [`recover_screw`], with nothing consulted
 //! but the vertices, and is compared against the declaration. Two accounts of
 //! one fact, checked against each other.
 //!

@@ -116,8 +116,10 @@ fn cloud_shadow_strength_zero_is_a_no_op() {
         m.cloud_shadow = 0.0;
     });
     let differing = bare
-        .chunks_exact(4)
-        .zip(off.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(off.as_chunks::<4>().0)
         .filter(|(a, b)| a[0].abs_diff(b[0]) > 2)
         .count();
     assert_eq!(differing, 0, "a zero-strength deck should cast nothing");
@@ -243,8 +245,10 @@ fn no_occluder_is_a_no_op() {
     let a = eclipsed(&mut r, None);
     let b = eclipsed(&mut r, Some(([0.0, 0.0, 12.0], 0.0)));
     let differing = a
-        .chunks_exact(4)
-        .zip(b.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
         .filter(|(p, q)| p[0].abs_diff(q[0]) > 2)
         .count();
     assert_eq!(differing, 0, "a zero-radius occluder should block nothing");
@@ -351,7 +355,12 @@ fn a_cloud_deck_scatters_forward() {
         c.position = Vector3::new(0.0, 0.0, 3.4);
         c.look_at(Vector3::ZERO);
         let img = r.render_to_rgba(&mut scene, &c);
-        img.chunks_exact(4).map(|p| p[0] as f64).sum::<f64>() / (W * H) as f64
+        img.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[0] as f64)
+            .sum::<f64>()
+            / (W * H) as f64
     };
 
     // sun_z = -1 puts the sun beyond the globe, so light scattering forward
@@ -421,7 +430,7 @@ fn ozone_keeps_the_grazing_limb_blue() {
         let mut scene = air_scene(|m| m.ozone = ozone);
         let img = r.render_to_rgba(&mut scene, &c);
         let (mut red, mut blue) = (0.0f64, 0.0f64);
-        for px in img.chunks_exact(4) {
+        for px in img.as_chunks::<4>().0 {
             red += px[0] as f64;
             blue += px[2] as f64;
         }
@@ -513,7 +522,9 @@ fn the_aurora_rings_both_poles() {
         c.position = Vector3::new(0.0, y, 2.2);
         c.look_at(Vector3::ZERO);
         let img = r.render_to_rgba(&mut scene, &c);
-        img.chunks_exact(4)
+        img.as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| (p[1] as f64 - p[2] as f64).max(0.0))
             .sum()
     };
@@ -548,7 +559,7 @@ fn the_aurora_is_green_dominated() {
         let img = r.render_to_rgba(&mut scene, &c);
         // Against the no-aurora baseline, so the air's own blue does not count.
         let (mut green, mut red) = (0.0f64, 0.0f64);
-        for px in img.chunks_exact(4) {
+        for px in img.as_chunks::<4>().0 {
             green += (px[1] as f64 - px[2] as f64).max(0.0);
             red += (px[0] as f64 - px[2] as f64).max(0.0);
         }

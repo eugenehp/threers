@@ -378,10 +378,10 @@ impl Buckets {
         let mut weight = 0.0f64;
         let mut found_at: Option<isize> = None;
         for ring in 0..=reach {
-            if let Some(first) = found_at {
-                if ring > first + 1 {
-                    break;
-                }
+            if let Some(first) = found_at
+                && ring > first + 1
+            {
+                break;
             }
             let mut any = false;
             for dk in -ring..=ring {

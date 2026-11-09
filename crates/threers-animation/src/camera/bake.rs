@@ -52,12 +52,11 @@ impl OrbitRecorder {
         if !time.is_finite() {
             return;
         }
-        if let Some(last) = self.samples.last() {
-            if time - last.time < self.min_interval
-                && (pose.eye() - last.pose.eye()).length() < self.min_eye_delta
-            {
-                return;
-            }
+        if let Some(last) = self.samples.last()
+            && time - last.time < self.min_interval
+            && (pose.eye() - last.pose.eye()).length() < self.min_eye_delta
+        {
+            return;
         }
         self.samples.push(OrbitSample { time, pose });
     }

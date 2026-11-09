@@ -1,0 +1,20 @@
+[package]
+name = "threers-audio"
+version.workspace = true
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+authors = ["Eugene Hauptmann"]
+repository = "https://github.com/eugenehp/threers"
+homepage = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-audio"
+readme = "README.md"
+description = "Audio for threers scenes: three.js's Audio, AudioListener, PositionalAudio and AudioAnalyser as data, with distance models and spatial mixing; playback is left to the host"
+keywords = ["audio", "spatial-audio", "threejs", "3d", "graphics"]
+categories = ["multimedia::audio", "game-development", "wasm"]
+
+[lib]
+bench = false
+
+[dependencies]
+threers-math = { path = "../threers-math", version = "0.0.12" }

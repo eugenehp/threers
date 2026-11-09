@@ -330,7 +330,7 @@ impl Ktx2 {
         if matches!(self.vk_format, 44 | 50) {
             // BGRA in the file, RGBA in the texture.
             for level in &mut data {
-                for px in level.chunks_exact_mut(4) {
+                for px in level.as_chunks_mut::<4>().0 {
                     px.swap(0, 2);
                 }
             }
@@ -501,7 +501,7 @@ mod tests {
         assert_eq!(swizzled.format, TextureFormat::Rgba8Unorm);
         let (a, b) = (&original.data[..], &swizzled.data[..]);
         assert_eq!(a.len(), b.len());
-        for (p, q) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+        for (p, q) in a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0) {
             assert_eq!([p[2], p[1], p[0], p[3]], [q[0], q[1], q[2], q[3]]);
         }
     }

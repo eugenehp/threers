@@ -405,7 +405,7 @@ pub(super) fn exr_reorder(input: &[u8]) -> Vec<u8> {
 /// IEEE 754 half-precision → single-precision conversion.
 /// The crate's one f16 → f32, for the same reason as its inverse below.
 fn f16_to_f32(h: u16) -> f32 {
-    crate::renderer::gpu_texture::f16_bits_to_f32(h)
+    crate::math::float::f16_to_f32(h)
 }
 
 #[cfg(test)]
@@ -532,7 +532,11 @@ mod tests {
         // transforms back in the wrong order still decompresses and still
         // fills the buffer — with noise.
         assert!(
-            tex.data.chunks_exact(4).all(|p| p == [255, 128, 0, 255]),
+            tex.data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [255, 128, 0, 255]),
             "ZIP payload decoded to the wrong values: {:?}",
             &tex.data[..8]
         );
@@ -545,7 +549,12 @@ mod tests {
                 .unwrap_or_else(|e| panic!("compression {compression} failed: {e:?}"));
             assert_eq!((tex.width, tex.height), (4, 8));
             assert_eq!(tex.data.len(), 4 * 8 * 4);
-            assert!(tex.data.chunks_exact(4).all(|p| p == [255, 128, 0, 255]));
+            assert!(tex
+                .data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [255, 128, 0, 255]));
         }
     }
 
@@ -575,7 +584,7 @@ mod tests {
 /// copies of this is how one of them spent a long time silently discarding
 /// every HDR value above 2.0 while the other was fine.
 fn f32_to_f16(v: f32) -> u16 {
-    crate::renderer::gpu_texture::f32_to_f16_bits(v)
+    crate::math::float::f32_to_f16(v)
 }
 
 #[cfg(test)]

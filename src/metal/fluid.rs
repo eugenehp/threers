@@ -1181,10 +1181,10 @@ mod gpu_tests {
         )
         .unwrap();
         let cmd = fluid.command_buffer(device);
-        let u = (Params {
+        let u = Params {
             value: 1.0,
             ..Default::default()
-        });
+        };
         encode(cmd, &pipeline, target.id(), |enc| bind(enc, u, &[src])).unwrap();
         commit(cmd);
 
@@ -1202,7 +1202,9 @@ mod gpu_tests {
     }
 
     fn brightest(rgba: &[u8]) -> u8 {
-        rgba.chunks_exact(4)
+        rgba.as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| p[0].max(p[1]).max(p[2]))
             .max()
             .unwrap_or(0)
@@ -1358,7 +1360,9 @@ mod gpu_tests {
             }
         }
         let lit = from_wgpu
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[0] > 10 || p[1] > 10 || p[2] > 10)
             .count();
         eprintln!(
@@ -1570,11 +1574,14 @@ mod gpu_tests {
         let mut fluid = MetalFluid::new(&device, 64, 64, config).unwrap();
         let rgba = fluid.capture_rgba(&device).unwrap();
         assert!(
-            rgba.chunks_exact(4).all(|p| p[3] == 255),
+            rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
             "the picture is not opaque"
         );
         assert!(
-            rgba.chunks_exact(4).all(|p| p[0] > 0 && p[2] > p[0]),
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| p[0] > 0 && p[2] > p[0]),
             "the background colour is not in the picture"
         );
     }

@@ -29,7 +29,7 @@ impl TextGeometry {
             let base_vert = (positions.len() / 3) as u32;
             if let Some(p) = glyph_geom.get_attribute("position") {
                 // Translate every position by (x_offset, 0, 0).
-                for chunk in p.array.chunks_exact(3) {
+                for chunk in p.array.as_chunks::<3>().0 {
                     positions.extend_from_slice(&[chunk[0] + x_offset, chunk[1], chunk[2]]);
                 }
             }

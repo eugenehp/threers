@@ -15,7 +15,9 @@ mod tests {
     /// Signed volume enclosed by a triangle soup.
     fn volume(g: &BufferGeometry) -> f64 {
         let p = &g.get_attribute("position").unwrap().array;
-        p.chunks_exact(9)
+        p.as_chunks::<9>()
+            .0
+            .iter()
             .map(|t| {
                 let (a, b, c) = (
                     [t[0] as f64, t[1] as f64, t[2] as f64],

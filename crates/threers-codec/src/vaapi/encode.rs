@@ -366,7 +366,7 @@ impl VaapiEncoder {
             for y in 0..h {
                 let src = &rgba[y * w * 4..][..w * 4];
                 let dst = &mut data[yo + y * yp..][..w];
-                for (d, px) in dst.iter_mut().zip(src.chunks_exact(4)) {
+                for (d, px) in dst.iter_mut().zip(src.as_chunks::<4>().0) {
                     let (r, g, b) = (px[0] as i32, px[1] as i32, px[2] as i32);
                     *d = (((yr * r + yg * g + yb * b + 128) >> 8) + 16).clamp(0, 255) as u8;
                 }
@@ -377,10 +377,10 @@ impl VaapiEncoder {
                     &rgba[(2 * cy + 1) * w * 4..][..w * 4],
                 );
                 let dst = &mut data[uo + cy * up..][..w];
-                for (cx, d) in dst.chunks_exact_mut(2).enumerate() {
+                for (cx, d) in dst.as_chunks_mut::<2>().0.iter_mut().enumerate() {
                     let mut s = [0i32; 3];
                     for row in [r0, r1] {
-                        for px in row[cx * 8..cx * 8 + 8].chunks_exact(4) {
+                        for px in row[cx * 8..cx * 8 + 8].as_chunks::<4>().0 {
                             s[0] += px[0] as i32;
                             s[1] += px[1] as i32;
                             s[2] += px[2] as i32;

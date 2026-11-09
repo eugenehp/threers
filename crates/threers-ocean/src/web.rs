@@ -109,7 +109,11 @@ pub async fn start(
             apply_limit_buckets: false,
         })
         .await
-        .map_err(|e| JsValue::from_str(&format!("no WebGPU adapter (does this browser support WebGPU?): {e}")))?;
+        .map_err(|e| {
+            JsValue::from_str(&format!(
+                "no WebGPU adapter (does this browser support WebGPU?): {e}"
+            ))
+        })?;
 
     // The browser's own defaults, not `downlevel_defaults`: this demo wants
     // storage textures and a handful of storage buffers per stage, and WebGPU's
@@ -201,11 +205,23 @@ impl Ocean {
         let (w, p) = (&s.world, &s.world.preset);
         let presets: Vec<String> = preset::all()
             .iter()
-            .map(|p| format!("{{\"name\":{},\"blurb\":{}}}", json_str(p.name), json_str(p.blurb)))
+            .map(|p| {
+                format!(
+                    "{{\"name\":{},\"blurb\":{}}}",
+                    json_str(p.name),
+                    json_str(p.blurb)
+                )
+            })
             .collect();
         let qualities: Vec<String> = QUALITY_LEVELS
             .iter()
-            .map(|q| format!("{{\"name\":{},\"cascade\":{}}}", json_str(q.name), q.cascade_n))
+            .map(|q| {
+                format!(
+                    "{{\"name\":{},\"cascade\":{}}}",
+                    json_str(q.name),
+                    q.cascade_n
+                )
+            })
             .collect();
         format!(
             "{{\"preset\":{},\"quality\":{},\"cascade\":{},\"maxScale\":{},\
@@ -240,7 +256,9 @@ impl Ocean {
     /// Switch to a named preset (its own sky, wind and look), at the current
     /// quality tier and max scale. Unknown names are ignored.
     pub fn load_preset(&self, name: &str) {
-        let Some(p) = preset::all().into_iter().find(|p| p.name == name) else { return };
+        let Some(p) = preset::all().into_iter().find(|p| p.name == name) else {
+            return;
+        };
         let (q, cas) = {
             let w = &self.app.borrow().world;
             (w.quality, w.cas.with_resolution(w.quality.cascade_n))
@@ -251,7 +269,9 @@ impl Ocean {
     /// Change the quality tier (mesh density and its cascade lattice), keeping
     /// the sea, sky and look as they are. Unknown names are ignored.
     pub fn set_quality(&self, name: &str) {
-        let Some(q) = QUALITY_LEVELS.iter().find(|q| q.name == name).copied() else { return };
+        let Some(q) = QUALITY_LEVELS.iter().find(|q| q.name == name).copied() else {
+            return;
+        };
         let (p, cas) = {
             let w = &self.app.borrow().world;
             (w.preset, w.cas.with_resolution(q.cascade_n))
@@ -286,12 +306,27 @@ impl Ocean {
 
     /// Sun (degrees) and atmosphere, as three.js `Sky` takes them.
     #[allow(clippy::too_many_arguments)]
-    pub fn set_sky(&self, elevation: f32, azimuth: f32, turbidity: f32, rayleigh: f32, mie: f32, mie_g: f32, clouds: f32) {
-        self.app.borrow_mut().world.set_sky(elevation, azimuth, turbidity, rayleigh, mie, mie_g, clouds);
+    pub fn set_sky(
+        &self,
+        elevation: f32,
+        azimuth: f32,
+        turbidity: f32,
+        rayleigh: f32,
+        mie: f32,
+        mie_g: f32,
+        clouds: f32,
+    ) {
+        self.app
+            .borrow_mut()
+            .world
+            .set_sky(elevation, azimuth, turbidity, rayleigh, mie, mie_g, clouds);
     }
 
     pub fn set_look(&self, exposure: f32, choppiness: f32, foam: f32) {
-        self.app.borrow_mut().world.set_look(exposure, choppiness, foam);
+        self.app
+            .borrow_mut()
+            .world
+            .set_look(exposure, choppiness, foam);
     }
 
     pub fn fps(&self) -> f64 {
@@ -314,7 +349,13 @@ impl Ocean {
     fn rebuild(&self, preset: Preset, quality: Quality, cas: crate::ocean_fft::Cascades) {
         let mut s = self.app.borrow_mut();
         let aspect = s.config.width as f32 / s.config.height as f32;
-        let App { world, gpu, renderer, waves, .. } = &mut *s;
+        let App {
+            world,
+            gpu,
+            renderer,
+            waves,
+            ..
+        } = &mut *s;
         *waves = world.reconfigure(gpu, gpu, renderer, &preset, &quality, cas);
         // The world keeps the aspect it was first built with; the canvas may
         // have been resized since.
@@ -455,7 +496,9 @@ fn start_frames(canvas: web_sys::HtmlCanvasElement, app: Rc<RefCell<App>>) {
             }
 
             let t = ((now() - s.t0) / 1000.0) as f32;
-            let App { world, gpu, waves, .. } = &mut *s;
+            let App {
+                world, gpu, waves, ..
+            } = &mut *s;
             world.update(t, gpu, gpu, waves);
 
             if let wgpu::CurrentSurfaceTexture::Success(frame)
@@ -465,7 +508,10 @@ fn start_frames(canvas: web_sys::HtmlCanvasElement, app: Rc<RefCell<App>>) {
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
                 let App {
-                    renderer, world, queue, ..
+                    renderer,
+                    world,
+                    queue,
+                    ..
                 } = &mut *s;
                 renderer.render(&mut world.scene, &world.camera, &view, false);
                 queue.present(frame);

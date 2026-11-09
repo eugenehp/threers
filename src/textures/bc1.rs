@@ -469,7 +469,7 @@ mod tests {
     fn rmse(a: &[u8], b: &[u8]) -> f64 {
         let mut s = 0.0;
         let mut n = 0.0;
-        for (x, y) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+        for (x, y) in a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0) {
             for c in 0..3 {
                 let d = x[c] as f64 - y[c] as f64;
                 s += d * d;
@@ -492,7 +492,7 @@ mod tests {
                 .collect();
             let enc = encode(&px, 4, 4);
             let dec = decode(&enc, 4, 4);
-            for p in dec.chunks_exact(4) {
+            for p in dec.as_chunks::<4>().0 {
                 assert_eq!(p[3], 255, "flat {colour:?} decoded transparent");
                 // 565 quantisation is the only error allowed here.
                 for c in 0..3 {
@@ -521,7 +521,7 @@ mod tests {
         }
         let dec = decode(&encode(&px, 4, 4), 4, 4);
         assert!(rmse(&px, &dec) < 3.0, "edge rmse {}", rmse(&px, &dec));
-        for p in dec.chunks_exact(4) {
+        for p in dec.as_chunks::<4>().0 {
             assert_eq!(p[3], 255);
         }
     }
@@ -547,7 +547,7 @@ mod tests {
         // channel, which for this ramp are colours the block does not contain.
         let mut lo = [255f32; 3];
         let mut hi = [0f32; 3];
-        for p in px.chunks_exact(4) {
+        for p in px.as_chunks::<4>().0 {
             for c in 0..3 {
                 lo[c] = lo[c].min(p[c] as f32);
                 hi[c] = hi[c].max(p[c] as f32);
@@ -557,7 +557,7 @@ mod tests {
         let (w0, w1) = if w0 > w1 { (w0, w1) } else { (w1, w0) };
         let pal = palette(w0, w1);
         let mut boxed = Vec::new();
-        for p in px.chunks_exact(4) {
+        for p in px.as_chunks::<4>().0 {
             let c = [p[0] as f32, p[1] as f32, p[2] as f32];
             let best = pal
                 .iter()

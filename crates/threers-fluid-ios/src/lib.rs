@@ -42,7 +42,12 @@
 // A `CAMetalLayer` exists only on Apple's platforms, and so does
 // `GpuContext::from_metal_layer`. Elsewhere the crate is empty, so the
 // workspace still builds there.
-#![cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+#![cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "visionos"
+))]
 
 use std::ffi::c_void;
 
@@ -108,7 +113,7 @@ const SUGGESTED_BUDGET_MB: u32 = 192;
 /// `layer` must be a live `CAMetalLayer` that outlives the returned handle —
 /// the view owns it, so keep the view alive. `width` and `height` are in
 /// *pixels*, so multiply the view's bounds by the screen's `nativeScale`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn threers_fluid_create(
     layer: *mut c_void,
     width: u32,
@@ -244,7 +249,7 @@ pub enum Key {
 ///
 /// `handle` must have come from [`threers_fluid_create`] and not yet been
 /// destroyed. Null is fine.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn threers_fluid_set(handle: *mut Fluid, key: u32, a: f32, b: f32, c: f32) {
     let Some(f) = (unsafe { handle.as_mut() }) else {
         return;
@@ -312,7 +317,7 @@ pub unsafe extern "C" fn threers_fluid_set(handle: *mut Fluid, key: u32, a: f32,
 /// # Safety
 ///
 /// As [`threers_fluid_resize`].
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn threers_fluid_frame(handle: *mut Fluid, dt: f32) -> bool {
     let Some(f) = (unsafe { handle.as_mut() }) else {
         return false;
@@ -364,7 +369,7 @@ pub unsafe extern "C" fn threers_fluid_frame(handle: *mut Fluid, dt: f32) -> boo
 /// # Safety
 ///
 /// As [`threers_fluid_resize`]; `out` must be writable.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn threers_fluid_info(handle: *mut Fluid, out: *mut FluidInfo) {
     let (Some(f), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
         return;
@@ -387,7 +392,7 @@ pub unsafe extern "C" fn threers_fluid_info(handle: *mut Fluid, out: *mut FluidI
 ///
 /// `handle` must have come from [`threers_fluid_create`] and must not be used
 /// again. Passing null is fine.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn threers_fluid_destroy(handle: *mut Fluid) {
     if !handle.is_null() {
         drop(unsafe { Box::from_raw(handle) });

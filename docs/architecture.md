@@ -87,7 +87,8 @@ CHANGELOG.md         Release history
 |------|---------|
 | Native check | `cargo build` |
 | With CSG | `cargo build --features bvh-csg` |
-| Video + codecs | `cargo build --features "video,native-codec"` |
+| Codecs | `cargo build --features native-codec` |
+| Video export and video on meshes | `cargo build -p threers-video` |
 | CSG unit/parity tests | `cargo test --features bvh-csg --lib csg` |
 | Codec crate (all suites) | `cargo test -p threers-codec --all-features --release` |
 | GIF codec tests | `cargo test -p threers-codec --lib gif --test gif` |
@@ -99,7 +100,8 @@ CHANGELOG.md         Release history
 | Shared GPU utilities | `cargo test --lib -- gpu:: renderer::fullscreen renderer::readback renderer::colorspace` |
 | Fluid in a browser | `FEATURES=fluid,webgl TEST=fluid_webgl scripts/wasm-browser-test.sh` |
 | RLX bridge tests | `cargo test --features "rlx,rlx-geo" --lib rlx:: --test rlx_bridge` |
-| No default features | `cargo build --no-default-features` (drops `captions`) |
+| The core alone | `cargo build --no-default-features` (no GPU, no other threers crate: `log`, `slotmap` and `web-time` only) |
+| The renderer alone | `cargo build --no-default-features --features render` |
 | Wasm release | `wasm-pack build --target web --out-dir web/pkg && bash web/post-build.sh` |
 | Feature wasm | `BVH_CSG=1` / `MESH_BVH=1` / `NATIVE_CODEC=1 web/build.sh` |
 | Physics tests | `cargo test -p threers-physics -p threers-animation` |
@@ -108,7 +110,7 @@ CHANGELOG.md         Release history
 | Parity scenes | `cd tests/parity && node generate-scenes.js` |
 | Rust scene snippets (parity UI Rust tab) | `cd tests/parity && node generate-rust-scenes.js` |
 | Regenerate shim types | `node web/scripts/generate-shim-types.mjs` (also runs in post-build) |
-| Docs | `cargo doc --features "video,native-codec" --open` |
+| Docs | `cargo doc --features native-codec --open` |
 | Release versions | `./scripts/release-versions.sh` |
 | Release build/pack | `./scripts/release-all.sh pack` — npm mini+full, node, PyPI wheel |
 | Release publish | `PUBLISH=1 ./scripts/release-all.sh publish` — see [docs/releasing.md](releasing.md) |

@@ -1347,3 +1347,6 @@ pub fn get_keyframe_order(times: Vec<f64>) -> Vec<u32> {
         .map(|i| i as u32)
         .collect()
 }
+
+// ---- animation ----
+// three.js's animation system is in `animation.rs`.

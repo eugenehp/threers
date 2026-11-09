@@ -75,20 +75,70 @@ pub fn programme_for(base: Vector3) -> Vec<Move> {
     let bin = bin_for(base);
     let home = base + Vector3::new(0.75, COLUMN + 0.55, 0.0);
     vec![
-        Move { name: "home",         target: home,                                  frames: 60,  grip: None },
-        Move { name: "approach",     target: base + Vector3::new(0.95, 0.36, 0.0),  frames: 90,  grip: None },
+        Move {
+            name: "home",
+            target: home,
+            frames: 60,
+            grip: None,
+        },
+        Move {
+            name: "approach",
+            target: base + Vector3::new(0.95, 0.36, 0.0),
+            frames: 90,
+            grip: None,
+        },
         // Down until the tool rests on the part's top face, not through it: the
         // ball is 0.05 and the cube's top is at 0.10, so 0.155 is contact. Any
         // lower shoves the part away before the gripper can take hold — which is
         // exactly what a real cell would do.
-        Move { name: "descend",      target: base + Vector3::new(0.95, 0.155, 0.0), frames: 60,  grip: None },
-        Move { name: "grip",         target: base + Vector3::new(0.95, 0.155, 0.0), frames: 25,  grip: Some(true) },
-        Move { name: "lift",         target: base + Vector3::new(0.85, 0.55, 0.0),  frames: 70,  grip: None },
-        Move { name: "traverse",     target: base + Vector3::new(0.20, 0.60, 0.60), frames: 110, grip: None },
-        Move { name: "over the bin", target: bin + Vector3::new(0.0, 0.42, 0.0),    frames: 90,  grip: None },
-        Move { name: "release",      target: bin + Vector3::new(0.0, 0.42, 0.0),    frames: 25,  grip: Some(false) },
-        Move { name: "retreat",      target: base + Vector3::new(0.1, 0.85, 0.5),   frames: 70,  grip: None },
-        Move { name: "home",         target: home,                                  frames: 90,  grip: None },
+        Move {
+            name: "descend",
+            target: base + Vector3::new(0.95, 0.155, 0.0),
+            frames: 60,
+            grip: None,
+        },
+        Move {
+            name: "grip",
+            target: base + Vector3::new(0.95, 0.155, 0.0),
+            frames: 25,
+            grip: Some(true),
+        },
+        Move {
+            name: "lift",
+            target: base + Vector3::new(0.85, 0.55, 0.0),
+            frames: 70,
+            grip: None,
+        },
+        Move {
+            name: "traverse",
+            target: base + Vector3::new(0.20, 0.60, 0.60),
+            frames: 110,
+            grip: None,
+        },
+        Move {
+            name: "over the bin",
+            target: bin + Vector3::new(0.0, 0.42, 0.0),
+            frames: 90,
+            grip: None,
+        },
+        Move {
+            name: "release",
+            target: bin + Vector3::new(0.0, 0.42, 0.0),
+            frames: 25,
+            grip: Some(false),
+        },
+        Move {
+            name: "retreat",
+            target: base + Vector3::new(0.1, 0.85, 0.5),
+            frames: 70,
+            grip: None,
+        },
+        Move {
+            name: "home",
+            target: home,
+            frames: 90,
+            grip: None,
+        },
     ]
 }
 
@@ -153,11 +203,7 @@ pub fn record(mode: Mode, arms: usize, stiffness: f32) -> Recording {
     let floor = world.add_body(
         RigidBody::fixed()
             .shape(Shape::cuboid(2.0, 0.05, floor_depth * 0.5 + 0.6))
-            .translation(Vector3::new(
-                0.0,
-                -0.05,
-                PITCH * (arms as f32 - 1.0) * 0.5,
-            ))
+            .translation(Vector3::new(0.0, -0.05, PITCH * (arms as f32 - 1.0) * 0.5))
             .friction(0.8),
     );
     tracked.push(floor);

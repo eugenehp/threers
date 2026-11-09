@@ -428,10 +428,10 @@ impl ParticleEffect {
             let toward = light_direction(scene).map_or(Vector3::new(0.0, 1.0, 0.0), |d| d * -1.0);
             super::volume::depths(&self.system, toward)
         });
-        if let Some(object) = scene.get_mut(self.object) {
-            if let ObjectKind::InstancedMesh(mesh) = &mut object.kind {
-                write_instances_lit(&self.system, mesh, eye, depths.as_deref());
-            }
+        if let Some(object) = scene.get_mut(self.object)
+            && let ObjectKind::InstancedMesh(mesh) = &mut object.kind
+        {
+            write_instances_lit(&self.system, mesh, eye, depths.as_deref());
         }
         if let Some(caster) = self.caster {
             let toward = sun_direction(scene).map_or(Vector3::new(0.0, 1.0, 0.0), |d| d * -1.0);
@@ -441,7 +441,7 @@ impl ParticleEffect {
                 let to_local = o.matrix_world.invert();
                 if let Some(pos) = g.get_attribute("position") {
                     let mut a = pos.clone();
-                    for v in a.array.chunks_exact_mut(3) {
+                    for v in a.array.as_chunks_mut::<3>().0 {
                         let q = Vector3::new(v[0], v[1], v[2]).apply_matrix4(&to_local);
                         v.copy_from_slice(&[q.x, q.y, q.z]);
                     }
@@ -466,15 +466,15 @@ pub(crate) fn sun_direction(scene: &Scene) -> Option<Vector3> {
         if found.is_some() {
             return;
         }
-        if let ObjectKind::Light(crate::lights::Light::Directional(l)) = &o.kind {
-            if l.cast_shadow {
-                let p = o.world_position();
-                found = Some(if p.length_sq() > 1e-8 {
-                    (p * -1.0).normalize()
-                } else {
-                    l.direction.normalize()
-                });
-            }
+        if let ObjectKind::Light(crate::lights::Light::Directional(l)) = &o.kind
+            && l.cast_shadow
+        {
+            let p = o.world_position();
+            found = Some(if p.length_sq() > 1e-8 {
+                (p * -1.0).normalize()
+            } else {
+                l.direction.normalize()
+            });
         }
     });
     found

@@ -162,10 +162,10 @@ impl BufferGeometry {
     pub(crate) fn derived(&self) -> Arc<Derived> {
         let stamp = Stamp::of(self);
         let lock = &self.derived.slot;
-        if let Some(d) = lock.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            if d.stamp == stamp {
-                return d.clone();
-            }
+        if let Some(d) = lock.read().unwrap_or_else(|e| e.into_inner()).as_ref()
+            && d.stamp == stamp
+        {
+            return d.clone();
         }
         let fresh = Arc::new(Derived::compute(self));
         *lock.write().unwrap_or_else(|e| e.into_inner()) = Some(fresh.clone());

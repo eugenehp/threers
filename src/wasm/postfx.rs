@@ -489,7 +489,9 @@ impl WebPass {
     #[wasm_bindgen(js_name = setLut)]
     pub fn set_lut(&self, size: u32, rgba: Option<Vec<f32>>) -> bool {
         let texels = rgba.map(|d| {
-            d.chunks_exact(4)
+            d.as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| [c[0], c[1], c[2], c[3]])
                 .collect()
         });
@@ -764,10 +766,10 @@ impl WebEffectComposer {
         // What `WebRenderer::render` does before drawing a scene: a cube
         // render target used as an environment has to be known by id.
         for scene in scenes.iter() {
-            if let Some(id) = scene.environment_cube_rt {
-                if let Some(t) = ACTIVE_CUBE_TARGETS.with(|m| m.borrow().get(&id).cloned()) {
-                    renderer.renderer.register_cube_render_target(id, &t);
-                }
+            if let Some(id) = scene.environment_cube_rt
+                && let Some(t) = ACTIVE_CUBE_TARGETS.with(|m| m.borrow().get(&id).cloned())
+            {
+                renderer.renderer.register_cube_render_target(id, &t);
             }
         }
         if let Some((id, rt)) = &self.user_target {
@@ -825,3 +827,7 @@ impl WebEffectComposer {
         renderer.renderer.queue_arc().present(frame);
     }
 }
+
+// ---- post-processing ----
+// `WebEffectComposer`, `WebPass` and the shared random stream: see
+// `wasm/postfx.rs`.

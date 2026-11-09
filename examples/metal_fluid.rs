@@ -103,11 +103,11 @@ fn main() {
     };
     for _ in 0..frames {
         fluid.update(&device, DT);
-        if let Some(t) = &screen {
-            if let Err(e) = fluid.render(&device, t.color_texture(), FORMAT, (width, height)) {
-                eprintln!("render failed: {e}");
-                return;
-            }
+        if let Some(t) = &screen
+            && let Err(e) = fluid.render(&device, t.color_texture(), FORMAT, (width, height))
+        {
+            eprintln!("render failed: {e}");
+            return;
         }
     }
     if show_fps {

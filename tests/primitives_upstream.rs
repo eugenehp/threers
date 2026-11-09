@@ -49,7 +49,9 @@ fn base64(s: &str) -> Vec<u8> {
 
 fn words(s: &str) -> Vec<u32> {
     base64(s)
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }

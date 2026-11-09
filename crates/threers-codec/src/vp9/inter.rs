@@ -2182,26 +2182,52 @@ impl<'a> ResidualInterEnc<'a> {
         }
 
         // Compound: fixed=ALTREF + var∈{LAST, GOLDEN}.
-        if self.ref_mode == RefMode::Compound {
-            if let Some(alt) = self.altref {
-                let try_comp = |var_recon: &Reconstruction, var_ref: i8| {
-                    let (n0, near0) = self.ref_mvs(mi_row, mi_col, bw_px, bh_px, var_ref);
-                    let (n1, near1) = self.ref_mvs(mi_row, mi_col, bw_px, bh_px, ALTREF_FRAME);
-                    let s0 = search_mv(
+        if self.ref_mode == RefMode::Compound
+            && let Some(alt) = self.altref
+        {
+            let try_comp = |var_recon: &Reconstruction, var_ref: i8| {
+                let (n0, near0) = self.ref_mvs(mi_row, mi_col, bw_px, bh_px, var_ref);
+                let (n1, near1) = self.ref_mvs(mi_row, mi_col, bw_px, bh_px, ALTREF_FRAME);
+                let s0 = search_mv(
+                    &self.src.y,
+                    w,
+                    &var_recon.y,
+                    w,
+                    w,
+                    h,
+                    px,
+                    py,
+                    bw,
+                    bh,
+                    DEFAULT_RANGE_PEL,
+                );
+                let s1 = search_mv(
+                    &self.src.y,
+                    w,
+                    &alt.y,
+                    w,
+                    w,
+                    h,
+                    px,
+                    py,
+                    bw,
+                    bh,
+                    DEFAULT_RANGE_PEL,
+                );
+                // Independent searches are not jointly optimal — score the
+                // standard mode candidates (incl. colocated ZEROMV).
+                let cands = [
+                    (Mv::default(), Mv::default(), ZEROMV),
+                    (n0, n1, NEARESTMV),
+                    (near0, near1, NEARMV),
+                    (s0, s1, NEWMV),
+                ];
+                let mut best_c = None;
+                for &(mv0, mv1, mode) in &cands {
+                    let sad = sad_compound(
                         &self.src.y,
                         w,
                         &var_recon.y,
-                        w,
-                        w,
-                        h,
-                        px,
-                        py,
-                        bw,
-                        bh,
-                        DEFAULT_RANGE_PEL,
-                    );
-                    let s1 = search_mv(
-                        &self.src.y,
                         w,
                         &alt.y,
                         w,
@@ -2211,80 +2237,78 @@ impl<'a> ResidualInterEnc<'a> {
                         py,
                         bw,
                         bh,
-                        DEFAULT_RANGE_PEL,
+                        mv0,
+                        mv1,
                     );
-                    // Independent searches are not jointly optimal — score the
-                    // standard mode candidates (incl. colocated ZEROMV).
-                    let cands = [
-                        (Mv::default(), Mv::default(), ZEROMV),
-                        (n0, n1, NEARESTMV),
-                        (near0, near1, NEARMV),
-                        (s0, s1, NEWMV),
-                    ];
-                    let mut best_c = None;
-                    for &(mv0, mv1, mode) in &cands {
-                        let sad = sad_compound(
-                            &self.src.y,
-                            w,
-                            &var_recon.y,
-                            w,
-                            &alt.y,
-                            w,
-                            w,
-                            h,
-                            px,
-                            py,
-                            bw,
-                            bh,
-                            mv0,
-                            mv1,
-                        );
-                        let pick = InterPick {
-                            mv: mv0,
-                            mv1,
-                            mode,
-                            ref_frame: var_ref,
-                            second_ref: ALTREF_FRAME,
-                        };
-                        match best_c {
-                            None => best_c = Some((pick, sad)),
-                            Some((_, s)) if sad < s => best_c = Some((pick, sad)),
-                            _ => {}
-                        }
-                    }
-                    best_c.unwrap()
-                };
-                let mut best_c = try_comp(self.reference, LAST_FRAME);
-                if let Some(golden) = self.golden {
-                    let gold_c = try_comp(golden, GOLDEN_FRAME);
-                    if gold_c.1 < best_c.1 {
-                        best_c = gold_c;
+                    let pick = InterPick {
+                        mv: mv0,
+                        mv1,
+                        mode,
+                        ref_frame: var_ref,
+                        second_ref: ALTREF_FRAME,
+                    };
+                    match best_c {
+                        None => best_c = Some((pick, sad)),
+                        Some((_, s)) if sad < s => best_c = Some((pick, sad)),
+                        _ => {}
                     }
                 }
-                return best_c.0;
+                best_c.unwrap()
+            };
+            let mut best_c = try_comp(self.reference, LAST_FRAME);
+            if let Some(golden) = self.golden {
+                let gold_c = try_comp(golden, GOLDEN_FRAME);
+                if gold_c.1 < best_c.1 {
+                    best_c = gold_c;
+                }
             }
+            return best_c.0;
         }
         // SELECT: also try compound when it strictly beats single.
-        if self.ref_mode == RefMode::Select {
-            if let Some(alt) = self.altref {
-                let try_comp = |var_recon: &Reconstruction, var_ref: i8| {
-                    let (n0, near0) = self.ref_mvs(mi_row, mi_col, bw_px, bh_px, var_ref);
-                    let (n1, near1) = self.ref_mvs(mi_row, mi_col, bw_px, bh_px, ALTREF_FRAME);
-                    let s0 = search_mv(
+        if self.ref_mode == RefMode::Select
+            && let Some(alt) = self.altref
+        {
+            let try_comp = |var_recon: &Reconstruction, var_ref: i8| {
+                let (n0, near0) = self.ref_mvs(mi_row, mi_col, bw_px, bh_px, var_ref);
+                let (n1, near1) = self.ref_mvs(mi_row, mi_col, bw_px, bh_px, ALTREF_FRAME);
+                let s0 = search_mv(
+                    &self.src.y,
+                    w,
+                    &var_recon.y,
+                    w,
+                    w,
+                    h,
+                    px,
+                    py,
+                    bw,
+                    bh,
+                    DEFAULT_RANGE_PEL,
+                );
+                let s1 = search_mv(
+                    &self.src.y,
+                    w,
+                    &alt.y,
+                    w,
+                    w,
+                    h,
+                    px,
+                    py,
+                    bw,
+                    bh,
+                    DEFAULT_RANGE_PEL,
+                );
+                let cands = [
+                    (Mv::default(), Mv::default(), ZEROMV),
+                    (n0, n1, NEARESTMV),
+                    (near0, near1, NEARMV),
+                    (s0, s1, NEWMV),
+                ];
+                let mut best_c = None;
+                for &(mv0, mv1, mode) in &cands {
+                    let sad = sad_compound(
                         &self.src.y,
                         w,
                         &var_recon.y,
-                        w,
-                        w,
-                        h,
-                        px,
-                        py,
-                        bw,
-                        bh,
-                        DEFAULT_RANGE_PEL,
-                    );
-                    let s1 = search_mv(
-                        &self.src.y,
                         w,
                         &alt.y,
                         w,
@@ -2294,56 +2318,32 @@ impl<'a> ResidualInterEnc<'a> {
                         py,
                         bw,
                         bh,
-                        DEFAULT_RANGE_PEL,
+                        mv0,
+                        mv1,
                     );
-                    let cands = [
-                        (Mv::default(), Mv::default(), ZEROMV),
-                        (n0, n1, NEARESTMV),
-                        (near0, near1, NEARMV),
-                        (s0, s1, NEWMV),
-                    ];
-                    let mut best_c = None;
-                    for &(mv0, mv1, mode) in &cands {
-                        let sad = sad_compound(
-                            &self.src.y,
-                            w,
-                            &var_recon.y,
-                            w,
-                            &alt.y,
-                            w,
-                            w,
-                            h,
-                            px,
-                            py,
-                            bw,
-                            bh,
-                            mv0,
-                            mv1,
-                        );
-                        let pick = InterPick {
-                            mv: mv0,
-                            mv1,
-                            mode,
-                            ref_frame: var_ref,
-                            second_ref: ALTREF_FRAME,
-                        };
-                        match best_c {
-                            None => best_c = Some((pick, sad)),
-                            Some((_, s)) if sad < s => best_c = Some((pick, sad)),
-                            _ => {}
-                        }
+                    let pick = InterPick {
+                        mv: mv0,
+                        mv1,
+                        mode,
+                        ref_frame: var_ref,
+                        second_ref: ALTREF_FRAME,
+                    };
+                    match best_c {
+                        None => best_c = Some((pick, sad)),
+                        Some((_, s)) if sad < s => best_c = Some((pick, sad)),
+                        _ => {}
                     }
-                    best_c.unwrap()
-                };
-                let last_c = try_comp(self.reference, LAST_FRAME);
-                if last_c.1 < best.as_ref().unwrap().1 {
-                    best = Some(last_c);
                 }
-                if let Some(golden) = self.golden {
-                    let gold_c = try_comp(golden, GOLDEN_FRAME);
-                    if gold_c.1 < best.as_ref().unwrap().1 {
-                        best = Some(gold_c);
-                    }
+                best_c.unwrap()
+            };
+            let last_c = try_comp(self.reference, LAST_FRAME);
+            if last_c.1 < best.as_ref().unwrap().1 {
+                best = Some(last_c);
+            }
+            if let Some(golden) = self.golden {
+                let gold_c = try_comp(golden, GOLDEN_FRAME);
+                if gold_c.1 < best.as_ref().unwrap().1 {
+                    best = Some(gold_c);
                 }
             }
         }

@@ -95,13 +95,13 @@ impl MarkerCameraBind {
         let mut prev_idx = None;
         let mut switch_time = 0.0;
         for m in &self.markers {
-            if m.time <= time {
-                if let Some(i) = m.camera {
-                    if Some(i) != prev_idx {
-                        switch_time = m.time;
-                    }
-                    prev_idx = Some(i);
+            if m.time <= time
+                && let Some(i) = m.camera
+            {
+                if Some(i) != prev_idx {
+                    switch_time = m.time;
                 }
+                prev_idx = Some(i);
             }
         }
         let Some(prev) = prev_idx else {

@@ -268,16 +268,16 @@ impl AnimationClip {
                 let mut times = Vec::new();
                 let mut values = Vec::new();
                 utils::flatten_json(keys, &mut times, &mut values, prop);
-                if !times.is_empty() {
-                    if let Ok(t) = KeyframeTrack::new(
+                if !times.is_empty()
+                    && let Ok(t) = KeyframeTrack::new(
                         ty,
                         format!("{bone}{suffix}"),
                         times.iter().map(|&t| t as f32).collect(),
                         TrackValues::Numeric(values.iter().map(|&v| v as f32).collect()),
                         None,
-                    ) {
-                        tracks.push(t);
-                    }
+                    )
+                {
+                    tracks.push(t);
                 }
             };
             add(ValueType::Vector, ".position", "pos");

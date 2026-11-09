@@ -350,8 +350,10 @@ mod tests {
 
     #[test]
     fn a_file_store_ignores_the_key() {
+        // Not `threers-store-{pid}`: the directory-store test lists that one,
+        // and the two run in parallel.
         let path = std::env::temp_dir().join(format!(
-            "threers-store-{}/nested/cache.bin",
+            "threers-file-store-{}/nested/cache.bin",
             std::process::id()
         ));
         let store = FileStore(path.clone());

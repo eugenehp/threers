@@ -94,7 +94,9 @@ pub fn from_geometry(geometry: &crate::core::BufferGeometry) -> Vec<Tri> {
     let count = pos.array.len() / 3;
     match &geometry.index {
         Some(index) => index
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .filter(|t| t.iter().all(|&i| (i as usize) < count))
             .map(|t| {
                 [

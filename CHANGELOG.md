@@ -7,9 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.0.12] — 2026-11-07
+## [0.0.12] — 2026-11-10
+
+### Breaking
+
+- **npm: `@threers/threers`.** The ESM package is `@threers/threers`
+  (`import … from '@threers/threers'`, `npm:@threers/threers` in Deno): npm
+  will not take the bare `threers` name, as too close to `three`.
+
+- **winit 0.30.** `WindowRenderer` takes a winit 0.30 `Window`, so an app
+  that opens its own window moves to 0.30 with it. `sketch()` and every
+  windowed example create their window in `resumed`, as 0.30 asks, through
+  the new `threers::sketch::run_window`. `HeadlessConfig` has a new `backend`
+  field, so a struct literal of it needs `..Default::default()`.
+
+- **Rust 1.99 and edition 2024.** Every crate is on edition 2024 and
+  declares `rust-version = "1.99"` (it was 1.87). Code moved with it:
+  `unsafe extern` blocks, `unsafe` bodies in `unsafe fn`s, let-chains where
+  nested `if let`s were, and `as_chunks` in place of `chunks_exact` with a
+  constant size. Drop order of temporaries in a block's last expression
+  follows 2024 (earlier); the 43 places that changed release locks and GPU
+  objects in a different order, and none depends on it — on Metal, a frame's
+  drawable is now released inside its autorelease pool, as it should be.
+  `rustfmt.toml` keeps the 2021 style edition, so formatting does not churn.
+
+- **The core stands on its own.** `threers` with `default-features = false`
+  is math, the scene graph, geometry, materials, lights, cameras, controls,
+  loaders and exporters, and depends on `threers-math`, `log`, `slotmap` and
+  `web-time` alone: on native, a handful of crates in the build where there
+  were 104, with no GPU stack. Everything else is a feature:
+  - `render` (on by default): the wgpu renderer and all that draws — the
+    `Renderer`, headless and windowed rendering, post-processing, marks,
+    volumes, GPU textures, `threers::wgpu`. `sketch`, `fluid`, `metal`,
+    `raytrace`, `softbody` and `webgl` imply it.
+  - `audio` (on by default): `threers::audio` and the `ObjectKind::Audio`
+    scene node, from the new `threers-audio` crate.
+  - `softbody` (new, off by default): `threers::softbody` and the
+    `threers-softbody` dependency, which every build used to compile.
+  - The codecs (`threers-codec`) are built only with `native-codec`,
+    `native-decode`, `gif` or a hardware decoder, rather than always.
+    `native-decode` is now the decoders alone.
+
+  A default build keeps everything it had except `softbody` and video, below.
+  Without `render`, `ShaderMaterial` has no `textures`, `volumes`,
+  `with_textures` or `validate` (they hold or compile GPU resources),
+  `SharedShader::msl` is absent, `Solver::Gpu` for lattices runs on the CPU,
+  and `ScadRender` keeps its settings and `build_scene` but not its
+  rendering. `utils::contrast` needs `captions`.
+- **Video is its own crate, `threers-video`**, on top of `threers`: video
+  export (`export_video`, `VideoExporter`, `VideoOptions`, …), image and video
+  sequences (`render_sequence`) and `VideoPlayer` move there, with the
+  examples and tests that use them. The `video` feature is gone. OpenSCAD
+  animations export through its `ScadVideo` trait; the browser binding is
+  `threers_video::wasm::WebVideoPlayer`. `threers-ecs`'s `video` feature uses it.
+- `Triangle::intersects_triangle` is the `TriangleIntersection` trait
+  (`bvh-csg`, in the prelude), since `Triangle` now lives in `threers-math`.
+- The `mini` browser build is `--no-default-features --features render,audio`,
+  and no longer includes `SoftBody` (the `full` build does, through `wasm-full`).
 
 ### Added
+
+- `threers::sketch::run_window(attributes, init)`: one window and its winit
+  0.30 event loop. `init` gets the window once it exists and returns the
+  event handler, which sees the same `Event`s a 0.29 `EventLoop::run`
+  closure did, so such a loop moves over without being rewritten.
+- `RenderBackend` (`Auto`, `Wgpu`, `Metal`) and `HeadlessBuilder::backend`,
+  to choose the backend in code rather than through `THREERS_BACKEND`; a
+  test beside others has to, since the environment is shared between them.
+  `WindowBackend` is the same type.
+- `ShaderMaterial::module_source`, the assembled module `validate` checks.
+- `threers_ecs::testing::TestGame::render_on`, rendering on a named backend.
+
+- `threers-math`: `threers::math` as a crate with no dependencies. `threers`
+  re-exports all of it, so `threers::math::*` paths are unchanged.
+- `threers-audio`: three.js's `Audio`, `AudioListener`, `PositionalAudio` and
+  `AudioAnalyser`, on `threers-math`; `threers::audio` re-exports it.
+- `threers-captions`, a new crate with no dependencies: the caption data model
+  (tracks, cues, style, SubRip and WebVTT, legibility) and WCAG contrast, moved
+  out of `threers-codec` so that captions no longer need the codecs.
+  `threers_codec::captions` and `threers_codec::contrast` re-export it.
+- `threers-video`, as above.
+- `threers::math::{ToneMapping, geo, precision, srgb}`: tone mapping,
+  geographic coordinates, the f64 origin and sRGB conversion moved out of the
+  renderer, marks and utils, which re-export them where they were.
 
 - Video on meshes, at 1080p, 4K and 8K. `video_player::VideoPlayer`
   (`native-decode` or `video`) decodes MP4/MOV, WebM/Matroska and IVF into a
@@ -142,11 +222,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AudioBackend::set_spatial_mix` applies them; it does nothing by default.
 - `scripts/test-no-skips.py` fails a test run on any skip or empty test target,
   and `scripts/browser-smoke.sh` runs the WebGL2 and WebGPU suites together.
+- Release scripts: `release-versions.sh bump X.Y.Z` moves every version root,
+  lockfile, install snippet and the CHANGELOG together; `release-all.sh verify`
+  runs the release checklist's local checks and prints a pass/fail table;
+  `scripts/wasm-bindgen-cli.sh` installs the CLI matching `Cargo.lock`; npm
+  uploads skip versions already up, so a release that stopped halfway can be
+  rerun; and a local publish refuses to put `threers-node` up before all of
+  its platform packages.
+- The release workflow publishes from a manual run with `publish` ticked, and
+  fails instead of carrying on when a platform package is missing or will not
+  publish. Both workflows are on Node 24 and the current action majors.
 - A `ci` workflow runs a feature matrix, the codec conformance suites through
   the skip gate, the native tests on software Vulkan and WebGL2 in Chrome on
   every push and pull request.
 
 ### Changed
+
+- `unsafe` is narrower everywhere: the bodies of `unsafe fn`s no longer sit
+  in one `unsafe {}` each, but every unsafe call and dereference has a block
+  of its own, so the compiler checks the rest. `metal::objc::nsstring` and
+  `MetalDevice::command_buffer` are safe functions: nothing about calling
+  them can go wrong, and using what they return is `unsafe` already.
+- Nothing sets environment variables any more: the Metal and ECS tests name
+  their backend with `RenderBackend`, the fur test reads `module_source`, and
+  `threers-probe`'s room-chroma test passes its setting in. Writing the
+  environment while other test threads read it was a data race.
+- `examples/denoise_parity` decodes its f32s instead of reinterpreting a
+  byte buffer that promised no alignment for them, and `threers-ecs`'s audio
+  callback lends its mix buffer instead of rebuilding a slice from a raw
+  pointer.
+- The renderer (`renderer/renderer.rs`, 15k lines), the Metal renderer and
+  the wasm bindings are split into submodules by area; no API changes.
+
+- Dependencies: rlx 0.2.19, wasm-bindgen 0.2.130, pollster 1, web-time 1,
+  criterion 0.8, pyo3 0.30, symphonia 0.6, cpal 0.18, manifold-rust 0.19, winit 0.30,
+  napi 3 and `@napi-rs/cli` 3 (the Node package's `napi` config now uses
+  `binaryName`, `packageName` and `targets`), and patch releases elsewhere.
+- `env_logger` is a dev-dependency: only the examples used it.
 
 - `winit` is now optional, behind a new default `sketch` feature. It gates
   `sketch()` and the winit-window `renderer::WindowRenderer`; with
@@ -231,6 +343,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The wgpu renderer kept the GPU copy of every texture it had ever drawn, so
+  a scene making new textures (a texture per frame, a thumbnail strip) grew
+  by a texture's worth each time. Textures nothing has drawn for
+  `renderer::DEFAULT_CACHE_RETENTION` (120) frames are now released;
+  `Renderer::set_cache_retention` changes the window, and `u64::MAX` keeps
+  the old behaviour. Textures uploaded with `preload_texture` stay until
+  `clear_texture_cache`, since their handles have no pixels to re-upload.
+- The PLY loader leaked a few small strings for every file it parsed.
+- 41 broken intra-doc links across the published crates, many from code
+  moving between crates and modules in this release. The pool's guide, which
+  sat on a private module, is now on `MetalRenderPool` where docs.rs shows
+  it, and the documentation builds with no warnings.
 - Drawn vehicle wheels (`Vehicle::wheel_transform`) spun backwards, and
   wobbled about a tilted axis on any heading but the one the car started on.
 - Builds with `metal` or `raytrace` failed to compile after `ObjectKind::Audio`

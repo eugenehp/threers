@@ -134,6 +134,7 @@ impl SharedShader {
 
     /// The fragment for the Metal backend: [`wgsl`](Self::wgsl) translated
     /// as any WGSL `ShaderMaterial` is, so the two cannot drift apart.
+    #[cfg(feature = "render")]
     pub fn msl(&self) -> Result<String, String> {
         wgsl_material_to_msl(&self.wgsl()?, None)
     }
@@ -1009,6 +1010,7 @@ impl Item {
 /// field to the fragment.
 // Only the native Metal backend calls this; other targets still build it.
 #[allow(dead_code)]
+#[cfg(feature = "render")]
 pub(crate) fn wgsl_material_to_msl(fragment: &str, vertex: Option<&str>) -> Result<String, String> {
     let module = match vertex {
         Some(v) => format!("{v}\n{fragment}"),
@@ -1124,6 +1126,7 @@ pub(crate) fn wgsl_material_to_msl(fragment: &str, vertex: Option<&str>) -> Resu
 }
 
 /// wgpu's names for what a WGSL fragment reads, over Metal's structs.
+#[cfg(feature = "render")]
 const WGSL_COMPAT_PRELUDE: &str = "
 // ---- threers: a WGSL ShaderMaterial on Metal ----
 struct WgslFrame {
@@ -1331,6 +1334,7 @@ static inline VsOut threers_vsout(FIn fin, constant Frame &f, constant Draw &d) 
 }
 ";
 
+#[cfg(feature = "render")]
 const WGSL_COMPAT_OPEN: &str = "
 struct ThreersWgsl {
     constant Frame *frame_m_;
@@ -1492,6 +1496,7 @@ struct ThreersWgsl {
     float4 morph_color(float4 c, uint vid) const { return c; }
 ";
 
+#[cfg(feature = "render")]
 const WGSL_COMPAT_ENTRY: &str = "
 fragment float4 fs_custom(FIn fin [[stage_in]],
                           bool front_facing [[front_facing]],
@@ -1533,6 +1538,7 @@ fragment float4 fs_custom(FIn fin [[stage_in]],
 }
 ";
 
+#[cfg(feature = "render")]
 const WGSL_COMPAT_VERTEX_ENTRY: &str = "
 vertex WgslVaryings vs_custom_entry(uint vid [[vertex_id]],
                                     uint iid [[instance_id]],
@@ -1583,6 +1589,7 @@ vertex WgslVaryings vs_custom_entry(uint vid [[vertex_id]],
 }
 ";
 
+#[cfg(feature = "render")]
 const WGSL_COMPAT_VARYINGS_ENTRY: &str = "
 fragment float4 fs_custom(WgslVaryings w [[stage_in]],
                           bool front_facing [[front_facing]],
@@ -1638,6 +1645,7 @@ fragment float4 fs_custom(WgslVaryings w [[stage_in]],
 
 /// Every top-level `const` of wgpu's shader preamble, as MSL — the `MAT_*`
 /// kinds and `FLAG_*` bits a WGSL material tests — translated once.
+#[cfg(feature = "render")]
 fn preamble_constants() -> &'static str {
     static CONSTS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     CONSTS.get_or_init(|| {
@@ -1661,6 +1669,7 @@ fn preamble_constants() -> &'static str {
 
 /// Names the Metal environment provides itself, which the preamble's WGSL
 /// versions (texture reads, bindings) must not replace.
+#[cfg(feature = "render")]
 const PROVIDED: [&str; 22] = [
     "sample_env_cube",
     "sample_env_cube_unrotated",
@@ -1687,6 +1696,7 @@ const PROVIDED: [&str; 22] = [
 ];
 
 /// The preamble's functions, by name, parsed once.
+#[cfg(feature = "render")]
 fn preamble_functions() -> &'static std::collections::HashMap<String, Item> {
     static FNS: std::sync::OnceLock<std::collections::HashMap<String, Item>> =
         std::sync::OnceLock::new();
@@ -1716,12 +1726,11 @@ fn preamble_functions() -> &'static std::collections::HashMap<String, Item> {
                 }
             }
             let Some(end) = end else { break };
-            if let Ok(mut items) = parse_items(&tail[..end]) {
-                if let Some(Item::Fn(f)) = items.pop() {
-                    if !PROVIDED.contains(&f.name.as_str()) {
-                        map.insert(f.name.clone(), Item::Fn(f));
-                    }
-                }
+            if let Ok(mut items) = parse_items(&tail[..end])
+                && let Some(Item::Fn(f)) = items.pop()
+                && !PROVIDED.contains(&f.name.as_str())
+            {
+                map.insert(f.name.clone(), Item::Fn(f));
             }
             rest = &tail[end..];
         }
@@ -1730,6 +1739,7 @@ fn preamble_functions() -> &'static std::collections::HashMap<String, Item> {
 }
 
 /// The preamble functions `items` reaches, callees before callers.
+#[cfg(feature = "render")]
 fn preamble_functions_used(items: &[Item]) -> Vec<&'static Item> {
     let preamble = preamble_functions();
     let defined: std::collections::HashSet<&str> = items
@@ -1779,12 +1789,14 @@ fn preamble_functions_used(items: &[Item]) -> Vec<&'static Item> {
 }
 
 /// wgpu's struct names where Metal's differ, inside the shader's namespace.
+#[cfg(feature = "render")]
 const WGSL_COMPAT_ALIASES: &str = "
 typedef WgslFrame FrameUniforms;
 typedef WgslMesh MeshUniforms;
 ";
 
 /// The output helpers the fragment entries share.
+#[cfg(feature = "render")]
 const OUTPUT_HELPERS: &str = "
 /// What a fragment returns, as the attachment should store it: standing in
 /// for a `Unorm` target (`view_info.y` bit 1), the value is the stored byte,
@@ -1808,6 +1820,7 @@ static inline float4 threers_encoded_blend(float4 src, float4 dst, bool additive
 /// `fs_custom` plus `fs_custom_eb` and `fs_custom_eb_add`: the same entry
 /// reading the destination and blending in encoded values itself, for a
 /// blended draw into an sRGB target (the pipeline turns hardware blending off).
+#[cfg(feature = "render")]
 fn with_encoded_variants(entry: &str) -> String {
     let variant = |name: &str, additive: bool| -> String {
         let mut e = entry.replacen(

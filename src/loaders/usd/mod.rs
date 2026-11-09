@@ -180,10 +180,10 @@ impl UsdLoader {
     /// them in [`UsdScene::textures`] instead.
     pub fn parse(bytes: &[u8]) -> Result<UsdScene, UsdError> {
         let mut scene = scene::to_scene(&Self::parse_layer(bytes)?);
-        if sniff(bytes) == Some(UsdFormat::Usdz) {
-            if let Ok(archive) = usdz::read(bytes) {
-                scene::attach_textures(&mut scene, &archive);
-            }
+        if sniff(bytes) == Some(UsdFormat::Usdz)
+            && let Ok(archive) = usdz::read(bytes)
+        {
+            scene::attach_textures(&mut scene, &archive);
         }
         Ok(scene)
     }

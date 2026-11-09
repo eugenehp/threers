@@ -169,10 +169,11 @@ pub(crate) fn add_countryside(
                     continue;
                 }
                 // Never over the water.
-                if let Some((w0, w1)) = water {
-                    if cx > w0 - cell && cx < w1 + cell {
-                        continue;
-                    }
+                if let Some((w0, w1)) = water
+                    && cx > w0 - cell
+                    && cx < w1 + cell
+                {
+                    continue;
                 }
                 // Nor over anything the infrastructure pass has already taken.
                 // It runs first precisely so it gets first refusal on ground:

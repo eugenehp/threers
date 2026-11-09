@@ -10,7 +10,7 @@
 //! On macOS, built with `--features metal` and run with
 //! `THREERS_BACKEND=metal`, the same sketch draws on the native Metal backend
 //! — overlay and quad view included — through
-//! [`WindowRenderer`](crate::renderer::WindowRenderer).
+//! [`WindowRenderer`].
 //!
 //! ```no_run
 //! use threers::prelude::*;
@@ -59,7 +59,7 @@
 //! # Four views
 //!
 //! [`SketchOptions::quad_view`](crate::sketch::SketchOptions::quad_view) draws
-//! every frame through a [`QuadView`](crate::helpers::QuadView) — top, front
+//! every frame through a [`QuadView`] — top, front
 //! and side orthographic panes plus the sketch's perspective camera. `setup`
 //! and `draw` get it as `quad_view`, to frame the scene or maximise a pane:
 //!
@@ -82,7 +82,7 @@
 //! ```
 //!
 //! The mouse drives it through
-//! [`QuadViewControls`](crate::helpers::QuadViewControls): left-drag in the
+//! [`QuadViewControls`]: left-drag in the
 //! perspective pane orbits the camera and right/middle-drag pans it, any drag
 //! in an orthographic pane pans all three together, the wheel zooms (one scale
 //! for the three orthographic panes, about the cursor), and a double-click
@@ -107,6 +107,117 @@ use crate::math::{Color, Vector2};
 use crate::overlay::Overlay;
 use crate::renderer::WindowRenderer;
 use crate::{PerspectiveCamera, Scene};
+
+/// One window and its event loop, the winit 0.30 way: the window is made in
+/// `resumed`, through the running loop, and `init` turns it into the event
+/// handler. That handler sees the same [`winit::event::Event`]s a 0.29
+/// `EventLoop::run` closure did — `WindowEvent`, `AboutToWait`, `NewEvents`
+/// and the rest — so a loop written in that shape moves over unchanged.
+///
+/// Blocks until the loop exits.
+///
+/// ```no_run
+/// use threers::sketch::run_window;
+/// use winit::event::{Event, WindowEvent};
+///
+/// let attributes = winit::window::Window::default_attributes().with_title("demo");
+/// run_window(attributes, |window| {
+///     move |event, target| match event {
+///         Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => target.exit(),
+///         Event::AboutToWait => window.request_redraw(),
+///         _ => {}
+///     }
+/// });
+/// ```
+pub fn run_window<I, H>(attributes: winit::window::WindowAttributes, init: I)
+where
+    I: FnOnce(Arc<winit::window::Window>) -> H,
+    H: FnMut(winit::event::Event<()>, &winit::event_loop::ActiveEventLoop),
+{
+    use winit::application::ApplicationHandler;
+    use winit::event::{DeviceEvent, DeviceId, Event, StartCause, WindowEvent};
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::window::WindowId;
+
+    struct App<I, H> {
+        attributes: Option<winit::window::WindowAttributes>,
+        init: Option<I>,
+        handler: Option<H>,
+    }
+
+    impl<I, H> App<I, H>
+    where
+        H: FnMut(Event<()>, &ActiveEventLoop),
+    {
+        fn send(&mut self, event: Event<()>, target: &ActiveEventLoop) {
+            if let Some(handler) = self.handler.as_mut() {
+                handler(event, target);
+            }
+        }
+    }
+
+    impl<I, H> ApplicationHandler for App<I, H>
+    where
+        I: FnOnce(Arc<winit::window::Window>) -> H,
+        H: FnMut(Event<()>, &ActiveEventLoop),
+    {
+        fn new_events(&mut self, target: &ActiveEventLoop, cause: StartCause) {
+            self.send(Event::NewEvents(cause), target);
+        }
+
+        fn resumed(&mut self, target: &ActiveEventLoop) {
+            if let (Some(attributes), Some(init)) = (self.attributes.take(), self.init.take()) {
+                let window = Arc::new(target.create_window(attributes).expect("window"));
+                self.handler = Some(init(window));
+            }
+            self.send(Event::Resumed, target);
+        }
+
+        fn window_event(
+            &mut self,
+            target: &ActiveEventLoop,
+            window_id: WindowId,
+            event: WindowEvent,
+        ) {
+            self.send(Event::WindowEvent { window_id, event }, target);
+        }
+
+        fn device_event(
+            &mut self,
+            target: &ActiveEventLoop,
+            device_id: DeviceId,
+            event: DeviceEvent,
+        ) {
+            self.send(Event::DeviceEvent { device_id, event }, target);
+        }
+
+        fn about_to_wait(&mut self, target: &ActiveEventLoop) {
+            self.send(Event::AboutToWait, target);
+        }
+
+        fn suspended(&mut self, target: &ActiveEventLoop) {
+            self.send(Event::Suspended, target);
+        }
+
+        fn exiting(&mut self, target: &ActiveEventLoop) {
+            self.send(Event::LoopExiting, target);
+        }
+
+        fn memory_warning(&mut self, target: &ActiveEventLoop) {
+            self.send(Event::MemoryWarning, target);
+        }
+    }
+
+    let mut app = App {
+        attributes: Some(attributes),
+        init: Some(init),
+        handler: None,
+    };
+    EventLoop::new()
+        .expect("event loop")
+        .run_app(&mut app)
+        .expect("event loop");
+}
 
 /// Window and renderer settings. Everything has a default worth starting from.
 #[derive(Debug, Clone)]
@@ -276,61 +387,53 @@ where
     D: FnMut(&mut Frame) + 'static,
 {
     use winit::event::{ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent};
-    use winit::event_loop::EventLoop;
-    use winit::window::WindowBuilder;
 
-    let event_loop = EventLoop::new().expect("event loop");
-    let window = Arc::new(
-        WindowBuilder::new()
-            .with_title(options.title.clone())
-            .with_inner_size(winit::dpi::LogicalSize::new(options.width, options.height))
-            .build(&event_loop)
-            .expect("window"),
-    );
+    let attributes = winit::window::Window::default_attributes()
+        .with_title(options.title.clone())
+        .with_inner_size(winit::dpi::LogicalSize::new(options.width, options.height));
+    run_window(attributes, move |window| {
+        // wgpu, or the native Metal backend with `--features metal` and
+        // `THREERS_BACKEND=metal`.
+        let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
+        view.set_msaa(options.msaa);
+        // Viewport and scissor rectangles — the quad view's panes — are logical
+        // pixels, like the window size asked for; this maps them to the surface.
+        view.set_pixel_ratio(window.scale_factor() as f32);
+        let mut quad_view = options.quad_view.clone();
 
-    // wgpu, or the native Metal backend with `--features metal` and
-    // `THREERS_BACKEND=metal`.
-    let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
-    view.set_msaa(options.msaa);
-    // Viewport and scissor rectangles — the quad view's panes — are logical
-    // pixels, like the window size asked for; this maps them to the surface.
-    view.set_pixel_ratio(window.scale_factor() as f32);
-    let mut quad_view = options.quad_view.clone();
+        let mut scene = Scene::new();
+        scene.background = options.background;
+        let mut camera = PerspectiveCamera::new(options.fov, view.aspect(), 0.1, 1000.0);
 
-    let mut scene = Scene::new();
-    scene.background = options.background;
-    let mut camera = PerspectiveCamera::new(options.fov, view.aspect(), 0.1, 1000.0);
-
-    let mut overlay = Overlay::new(view.size().0, view.size().1);
-    let mut draw = {
-        let mut s = Setup {
-            scene: &mut scene,
-            camera: &mut camera,
-            overlay: &mut overlay,
-            quad_view: quad_view.as_mut(),
-            scale_factor: window.scale_factor() as f32,
-            width: view.size().0,
-            height: view.size().1,
+        let mut overlay = Overlay::new(view.size().0, view.size().1);
+        let mut draw = {
+            let mut s = Setup {
+                scene: &mut scene,
+                camera: &mut camera,
+                overlay: &mut overlay,
+                quad_view: quad_view.as_mut(),
+                scale_factor: window.scale_factor() as f32,
+                width: view.size().0,
+                height: view.size().1,
+            };
+            setup(&mut s)
         };
-        setup(&mut s)
-    };
 
-    let start = Instant::now();
-    let mut last = start;
-    let mut frame_index: u64 = 0;
-    let mut pointer = Vector2::new(0.0, 0.0);
-    let mut pointer_down = false;
-    let mut pointer_inside = false;
-    let mut cursor_visible = true;
-    let win = window.clone();
-    // Mouse → quad view, after `setup` has placed the camera.
-    let mut quad_controls =
-        (options.quad_controls && quad_view.is_some()).then(|| QuadViewControls::new(&camera));
-    // The last left press, for telling a double-click (winit reports none).
-    let mut last_click: Option<(Instant, Vector2)> = None;
+        let start = Instant::now();
+        let mut last = start;
+        let mut frame_index: u64 = 0;
+        let mut pointer = Vector2::new(0.0, 0.0);
+        let mut pointer_down = false;
+        let mut pointer_inside = false;
+        let mut cursor_visible = true;
+        let win = window.clone();
+        // Mouse → quad view, after `setup` has placed the camera.
+        let mut quad_controls =
+            (options.quad_controls && quad_view.is_some()).then(|| QuadViewControls::new(&camera));
+        // The last left press, for telling a double-click (winit reports none).
+        let mut last_click: Option<(Instant, Vector2)> = None;
 
-    event_loop
-        .run(move |event, target| {
+        move |event, target| {
             let Event::WindowEvent { event, window_id } = event else {
                 return;
             };
@@ -462,6 +565,6 @@ where
                 }
                 _ => {}
             }
-        })
-        .expect("event loop");
+        }
+    });
 }

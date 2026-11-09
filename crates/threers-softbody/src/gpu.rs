@@ -136,7 +136,11 @@ struct Pipes {
 }
 
 fn vec4s(a: &[f32]) -> Vec<[f32; 4]> {
-    a.chunks_exact(3).map(|p| [p[0], p[1], p[2], 0.0]).collect()
+    a.as_chunks::<3>()
+        .0
+        .iter()
+        .map(|p| [p[0], p[1], p[2], 0.0])
+        .collect()
 }
 
 impl GpuSolver {

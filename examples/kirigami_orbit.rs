@@ -7,8 +7,6 @@
 //! cargo run --release --example kirigami_orbit
 //! ```
 
-use std::sync::Arc;
-
 use threers::cameras::Camera;
 use threers::renderer::WindowRenderer;
 use threers::{
@@ -20,9 +18,7 @@ use threers::{
 use winit::{
     dpi::PhysicalPosition,
     event::{ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent},
-    event_loop::EventLoop,
     keyboard::{Key, NamedKey},
-    window::WindowBuilder,
 };
 
 const NX: usize = 5;
@@ -62,36 +58,30 @@ fn main() {
 }
 
 async fn run() {
-    let event_loop = EventLoop::new().expect("event loop");
-    let window = Arc::new(
-        WindowBuilder::new()
-            .with_title("threers — kirigami (1–9 / space)")
-            .with_inner_size(winit::dpi::LogicalSize::new(1100, 800))
-            .build(&event_loop)
-            .expect("window"),
-    );
+    let attributes = winit::window::Window::default_attributes()
+        .with_title("threers — kirigami (1–9 / space)")
+        .with_inner_size(winit::dpi::LogicalSize::new(1100, 800));
+    threers::sketch::run_window(attributes, move |window| {
+        // wgpu by default; the native Metal backend with `--features metal` and
+        // `THREERS_BACKEND=metal`.
+        let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
 
-    // wgpu by default; the native Metal backend with `--features metal` and
-    // `THREERS_BACKEND=metal`.
-    let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
+        let mut variant: u32 = 0;
+        let mut scene = build_scene(variant);
+        let mut camera = PerspectiveCamera::new(35.0, view.aspect(), 1.0, 4000.0);
+        camera.position = Vector3::new(0.0, 90.0, 420.0);
+        camera.look_at(Vector3::ZERO);
+        let mut controls = OrbitControls::new(&camera);
+        controls.max_distance = 5000.0;
+        controls.min_distance = 40.0;
+        let mut input = InputState {
+            rotating: false,
+            panning: false,
+            last: None,
+        };
+        let win = window.clone();
 
-    let mut variant: u32 = 0;
-    let mut scene = build_scene(variant);
-    let mut camera = PerspectiveCamera::new(35.0, view.aspect(), 1.0, 4000.0);
-    camera.position = Vector3::new(0.0, 90.0, 420.0);
-    camera.look_at(Vector3::ZERO);
-    let mut controls = OrbitControls::new(&camera);
-    controls.max_distance = 5000.0;
-    controls.min_distance = 40.0;
-    let mut input = InputState {
-        rotating: false,
-        panning: false,
-        last: None,
-    };
-    let win = window.clone();
-
-    event_loop
-        .run(move |event, target| match event {
+        move |event, target| match event {
             Event::WindowEvent { event, window_id } if window_id == win.id() => match event {
                 WindowEvent::CloseRequested => target.exit(),
                 WindowEvent::Resized(s) => {
@@ -192,8 +182,8 @@ async fn run() {
                 _ => {}
             },
             _ => {}
-        })
-        .expect("event loop");
+        }
+    });
 }
 
 fn build_scene(variant: u32) -> Scene {

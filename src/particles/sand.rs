@@ -216,10 +216,10 @@ impl SandBed {
     pub fn restyle(&self, scene: &mut Scene) {
         let Some(id) = self.object else { return };
         let material = self.object().kind;
-        if let (Some(object), ObjectKind::Mesh(fresh)) = (scene.get_mut(id), material) {
-            if let ObjectKind::Mesh(mesh) = &mut object.kind {
-                mesh.material = fresh.material;
-            }
+        if let (Some(object), ObjectKind::Mesh(fresh)) = (scene.get_mut(id), material)
+            && let ObjectKind::Mesh(mesh) = &mut object.kind
+        {
+            mesh.material = fresh.material;
         }
     }
 
@@ -231,12 +231,11 @@ impl SandBed {
         }
         self.time += dt;
         let Some(id) = self.object else { return };
-        if let Some(object) = scene.get_mut(id) {
-            if let ObjectKind::Mesh(mesh) = &mut object.kind {
-                if let Some(m) = super::surface::with_time(&mesh.material, self.time) {
-                    mesh.material = std::sync::Arc::new(m);
-                }
-            }
+        if let Some(object) = scene.get_mut(id)
+            && let ObjectKind::Mesh(mesh) = &mut object.kind
+            && let Some(m) = super::surface::with_time(&mesh.material, self.time)
+        {
+            mesh.material = std::sync::Arc::new(m);
         }
     }
 
@@ -246,10 +245,10 @@ impl SandBed {
         if self.drawn_version == self.field.version {
             return;
         }
-        if let Some(object) = scene.get_mut(id) {
-            if let ObjectKind::Mesh(mesh) = &mut object.kind {
-                mesh.geometry = std::sync::Arc::new(self.field.mesh());
-            }
+        if let Some(object) = scene.get_mut(id)
+            && let ObjectKind::Mesh(mesh) = &mut object.kind
+        {
+            mesh.geometry = std::sync::Arc::new(self.field.mesh());
         }
         self.drawn_version = self.field.version;
     }

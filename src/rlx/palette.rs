@@ -151,7 +151,9 @@ impl Palette {
             }
         }
         let colors = centroids
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .zip(used)
             .filter(|(_, used)| *used)
             .map(|(c, _)| Self::to_linear([c[0], c[1], c[2]], options.color_space))
@@ -184,7 +186,7 @@ impl Palette {
     pub fn posterize(&self, rgba: &[u8], device: Device) -> Result<Vec<u8>, TensorError> {
         let assignment = self.assign(rgba, device)?;
         let mut out = Vec::with_capacity(rgba.len());
-        for (px, index) in rgba.chunks_exact(4).zip(assignment) {
+        for (px, index) in rgba.as_chunks::<4>().0.iter().zip(assignment) {
             let c = self
                 .colors
                 .get(index as usize)
@@ -260,7 +262,7 @@ fn assignment_runner(pixels: usize, codes: usize, device: Device) -> GraphRunner
 fn all_pixels(rgba: &[u8], space: ColorSpace) -> Tensor {
     let linear = matches!(space, ColorSpace::Linear);
     let mut data = Vec::with_capacity(rgba.len() / 4 * 3);
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         for &channel in &px[..3] {
             let v = channel as f32 / 255.0;
             data.push(if linear { super::srgb_to_linear(v) } else { v });
@@ -490,7 +492,7 @@ mod tests {
                 ]
             })
             .collect();
-        for px in posterized.chunks_exact(4) {
+        for px in posterized.as_chunks::<4>().0 {
             assert!(
                 swatches.iter().any(|s| s
                     .iter()

@@ -39,7 +39,7 @@ const SIZE: u32 = 48;
 /// command buffer finishing drops its resources there — and those reports are
 /// Apple's, not this backend's. The check counts only threads named here.
 fn track() {
-    extern "C" {
+    unsafe extern "C" {
         fn pthread_self() -> usize;
     }
     if std::env::var_os("THREERS_POOL_CHECK").is_some() {
@@ -153,7 +153,7 @@ impl Rig {
 fn reference(device: &MetalDevice) -> Vec<u8> {
     let rgba = Rig::new(device).draw(&mut scene());
     // Not a blank frame: the background, the lit floor and the cube all show.
-    let distinct: std::collections::HashSet<_> = rgba.chunks_exact(4).collect();
+    let distinct: std::collections::HashSet<_> = rgba.as_chunks::<4>().0.iter().collect();
     assert!(distinct.len() > 20, "reference frame is nearly flat");
     rgba
 }

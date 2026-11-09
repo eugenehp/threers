@@ -50,31 +50,34 @@ compiled pipelines between runs, see [Embedding in a desktop app](embedding.md).
 
 ## Video export
 
+Video export is the [`threers-video`](../crates/threers-video) crate, on top of `threers`.
+
 ```bash
-cargo run --release --example headless_video --features video   # H.264 demo
+cargo run --release -p threers-video --example headless_video   # H.264 demo
 ```
 
 Per-format examples (optional `--out PATH`):
 
-| Example | Features | Output |
+| Example | Run with | Output |
 |---------|----------|--------|
-| `export_h264` | `video` | `.mp4` (native H.264 with `native-codec`; else ffmpeg `libx264`) |
-| `export_hevc` | `video` | `.mp4` (libx265) |
-| `export_hevc_vt` | `video` | `.mp4` (hevc_videotoolbox) |
-| `export_vp9` | `video` | `.webm` opaque |
-| `export_vp9_alpha` | `video` | `.webm` + alpha |
-| `export_gif` | `video,native-codec` | `.gif` (no ffmpeg) |
-| `export_apng` | `video,native-codec` | animated PNG |
-| `export_webm_native` | `native-codec` | `.webm` pure-Rust VP9 |
+| `export_h264` | `-p threers-video` | `.mp4` (native H.264; ffmpeg `libx264` where asked) |
+| `export_hevc` | `-p threers-video` | `.mp4` (libx265) |
+| `export_hevc_vt` | `-p threers-video` | `.mp4` (hevc_videotoolbox) |
+| `export_vp9` | `-p threers-video` | `.webm` opaque |
+| `export_vp9_alpha` | `-p threers-video` | `.webm` + alpha |
+| `export_gif` | `-p threers-video` | `.gif` (no ffmpeg) |
+| `export_apng` | `-p threers-video` | animated PNG |
+| `export_webm_native` | `--features native-codec` | `.webm` pure-Rust VP9, from `threers` alone |
 
 ```bash
-cargo run --release --example export_gif --features "video,native-codec"
-cargo run --release --example export_vp9 --features video -- --out /tmp/cube.webm
+cargo run --release -p threers-video --example export_gif
+cargo run --release -p threers-video --example export_vp9 -- --out /tmp/cube.webm
 ```
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.12", features = ["video"] }
-use threers::{export_video, HeadlessRenderer, VideoCodec, VideoOptions};
+// Cargo.toml: threers = "0.0.12", threers-video = "0.0.12"
+use threers::HeadlessRenderer;
+use threers_video::{export_video, VideoCodec, VideoOptions};
 
 let mut hr = HeadlessRenderer::builder().size(1280, 720).build().unwrap();
 let opts = VideoOptions::new("out.mp4").fps(30).codec(VideoCodec::H264);
@@ -84,7 +87,7 @@ let opts = VideoOptions::new("out.mp4").fps(30).codec(VideoCodec::H264);
 GIF / APNG without spawning ffmpeg:
 
 ```rust
-// features = ["video", "native-codec"]
+// threers-video, as above
 let opts = VideoOptions::new("out.gif")
     .fps(12)
     .codec(VideoCodec::Gif)

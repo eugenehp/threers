@@ -68,7 +68,7 @@ impl WebScene {
     pub fn set_mesh_groups(&mut self, handle: &WebObjectHandle, flat: Vec<u32>) {
         edit_geometry(self, handle, |g| {
             g.clear_groups();
-            for c in flat.chunks_exact(3) {
+            for c in flat.as_chunks::<3>().0 {
                 g.add_group(c[0], c[1], c[2]);
             }
         });

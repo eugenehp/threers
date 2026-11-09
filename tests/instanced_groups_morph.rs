@@ -76,7 +76,9 @@ fn shader_materials_draw_morph_targets() {
         let mut g = PlaneGeometry::new(0.8, 0.8);
         let base = g.get_attribute("position").unwrap().array.clone();
         let t: Vec<f32> = base
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|p| [p[0] * 2.0, p[1] + 0.5, p[2]])
             .collect();
         g.set_morph_attribute("position", vec![BufferAttribute::new(t, 3)]);

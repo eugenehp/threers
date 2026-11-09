@@ -81,10 +81,12 @@ const READS_FRAMEBUFFER: bool = !cfg!(target_abi = "sim");
 /// fixed-function blending is off. Where the device cannot read the
 /// framebuffer the pipeline falls back to the hardware blend, in linear light.
 pub fn render_pipeline(device: &MetalDevice, key: PipelineKey) -> Result<Owned, MetalError> {
-    if (key.blend || key.additive) && pixel_format::is_srgb(key.color_format) && READS_FRAMEBUFFER {
-        if let Ok(p) = build_render_pipeline(device, key, true, None) {
-            return Ok(p);
-        }
+    if (key.blend || key.additive)
+        && pixel_format::is_srgb(key.color_format)
+        && READS_FRAMEBUFFER
+        && let Ok(p) = build_render_pipeline(device, key, true, None)
+    {
+        return Ok(p);
     }
     build_render_pipeline(device, key, false, None)
 }
@@ -100,10 +102,12 @@ pub(crate) fn custom_render_pipeline(
     // Blended into an 8-bit sRGB target, blend the encodings as wgpu does
     // (`fs_custom_eb`, `fs_custom_eb_add`); the hardware blend where the
     // device cannot read the framebuffer.
-    if (key.blend || key.additive) && pixel_format::is_srgb(key.color_format) && READS_FRAMEBUFFER {
-        if let Ok(p) = build_render_pipeline(device, key, true, Some(library)) {
-            return Ok(p);
-        }
+    if (key.blend || key.additive)
+        && pixel_format::is_srgb(key.color_format)
+        && READS_FRAMEBUFFER
+        && let Ok(p) = build_render_pipeline(device, key, true, Some(library))
+    {
+        return Ok(p);
     }
     build_render_pipeline(device, key, false, Some(library))
 }
@@ -938,8 +942,14 @@ pub fn upload_ltc(device: &MetalDevice) -> Result<Owned, MetalError> {
     };
     for (slice, table) in [LTC_1, LTC_2].into_iter().enumerate() {
         let half: Vec<u16> = table
-            .chunks_exact(4)
-            .map(|c| crate::renderer::gpu_texture::f32_to_f16_bits(f32::from_le_bytes([c[0], c[1], c[2], c[3]])))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| {
+                crate::renderer::gpu_texture::f32_to_f16_bits(f32::from_le_bytes([
+                    c[0], c[1], c[2], c[3],
+                ]))
+            })
             .collect();
         unsafe {
             let _: () = msg6(

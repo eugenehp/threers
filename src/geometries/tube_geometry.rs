@@ -161,7 +161,9 @@ mod tests {
         let pos = positions(g);
         let mut ids: HashMap<[i64; 3], usize> = HashMap::new();
         let welded: Vec<usize> = pos
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|p| {
                 let n = ids.len();
                 *ids.entry([0, 1, 2].map(|k| (p[k] * 1e4).round() as i64))
@@ -169,7 +171,7 @@ mod tests {
             })
             .collect();
         let mut edges: HashMap<(usize, usize), usize> = HashMap::new();
-        for t in g.index.as_deref().unwrap().chunks_exact(3) {
+        for t in g.index.as_deref().unwrap().as_chunks::<3>().0 {
             let w = [0, 1, 2].map(|k| welded[t[k] as usize]);
             for k in 0..3 {
                 let (a, b) = (w[k], w[(k + 1) % 3]);

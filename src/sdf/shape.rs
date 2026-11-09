@@ -447,7 +447,7 @@ mod tests {
         }
         // Closed: every edge in exactly two triangles, once each way.
         let mut edges = std::collections::HashMap::new();
-        for t in m.index.chunks_exact(3) {
+        for t in m.index.as_chunks::<3>().0 {
             for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
                 *edges.entry((a, b)).or_insert(0) += 1;
             }
@@ -459,7 +459,9 @@ mod tests {
         // Outward: the signed volume is the ball's.
         let vol: f32 = m
             .index
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|t| {
                 m.position[t[0] as usize]
                     .dot(m.position[t[1] as usize].cross(m.position[t[2] as usize]))

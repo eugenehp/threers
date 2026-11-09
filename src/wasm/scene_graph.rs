@@ -365,10 +365,9 @@ impl WebScene {
                 });
                 *ls = line_of(g, ls.material.clone(), mode);
             }
-            ObjectKind::Group
-            | ObjectKind::Light(_)
-            | ObjectKind::Sprite(_)
-            | ObjectKind::Audio(_) => {}
+            ObjectKind::Group | ObjectKind::Light(_) | ObjectKind::Sprite(_) => {}
+            #[cfg(feature = "audio")]
+            ObjectKind::Audio(_) => {}
         }
     }
 
@@ -387,7 +386,9 @@ impl WebScene {
             ObjectKind::Points(x) => x.material = m,
             ObjectKind::LineSegments(x) => x.material = m,
             ObjectKind::Sprite(x) => x.material = m,
-            ObjectKind::Group | ObjectKind::Light(_) | ObjectKind::Audio(_) => {}
+            ObjectKind::Group | ObjectKind::Light(_) => {}
+            #[cfg(feature = "audio")]
+            ObjectKind::Audio(_) => {}
         }
     }
 
@@ -426,7 +427,9 @@ impl WebScene {
             self.inner.get_mut(node.id).map(|o| &mut o.kind)
         {
             im.transforms = matrices
-                .chunks_exact(16)
+                .as_chunks::<16>()
+                .0
+                .iter()
                 .map(|c| matrix(c).unwrap_or_else(Matrix4::identity))
                 .collect();
         }
@@ -439,7 +442,9 @@ impl WebScene {
             self.inner.get_mut(node.id).map(|o| &mut o.kind)
         {
             im.colors = rgb
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|c| crate::math::Color::new(c[0], c[1], c[2]))
                 .collect();
         }
@@ -547,6 +552,7 @@ impl WebScene {
             ObjectKind::Sprite(_) => "sprite",
             ObjectKind::InstancedMesh(_) => "instanced",
             ObjectKind::SkinnedMesh(_) => "skinned",
+            #[cfg(feature = "audio")]
             ObjectKind::Audio(_) => "audio",
         };
         set("kind", JsValue::from_str(kind));
@@ -784,7 +790,7 @@ impl WebGeometry {
     pub fn set_geometry_groups(&mut self, flat: Vec<u32>) {
         let g = Arc::make_mut(&mut self.inner);
         g.clear_groups();
-        for c in flat.chunks_exact(3) {
+        for c in flat.as_chunks::<3>().0 {
             g.add_group(c[0], c[1], c[2]);
         }
     }

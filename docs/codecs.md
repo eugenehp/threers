@@ -112,10 +112,10 @@ Speed on one thread is Rust written so the compiler vectorises the hot loops. On
 
 ## Video on a mesh
 
-`VideoPlayer` (`native-decode` or `video`) decodes a file and shows it in a texture, for any material slot: a TV screen's `emissive_map`, a cube's `map`, a billboard in a game level. It plays 1080p, 4K and 8K.
+`VideoPlayer`, in the [`threers-video`](../crates/threers-video) crate, decodes a file and shows it in a texture, for any material slot: a TV screen's `emissive_map`, a cube's `map`, a billboard in a game level. It plays 1080p, 4K and 8K.
 
 ```rust
-use threers::video_player::VideoPlayer;
+use threers_video::VideoPlayer;
 use threers::{Color, Mesh, Object3D, PlaneGeometry, StandardMaterial};
 
 let mut player = VideoPlayer::open(std::fs::read("clip.mp4").unwrap()).unwrap();
@@ -179,4 +179,4 @@ The soundtrack (AAC in MP4/MOV, Opus in WebM/Matroska) decodes on a thread of it
 
 The wgpu and Metal renderers give a streamed texture one GPU texture, made once, and put each new frame into it. The material, the texture's identity and every bind group around it stay the same. Changing pixels through `Texture::replace_rgba_bytes` builds a new GPU texture each time and is meant for occasional updates.
 
-`examples/video_texture.rs` plays a clip on a screen and a spinning cube; `--features native-decode,videotoolbox` for hardware decoding, `--seconds N` to print the frame rate and how many video frames were shown. Without a file, it makes its own clip with the H.264 encoder. `tests/video_texture.rs` checks the reader, the player's timing, looping and jumps, the soundtrack in both containers, that both renderers show the codec's own colours, and that VideoToolbox matches the native decoder; `src/renderer/yuv.rs` checks the GPU conversion against the CPU's across depths, subsamplings, matrices and ranges.
+`crates/threers-video/examples/video_texture.rs` plays a clip on a screen and a spinning cube (`cargo run -p threers-video --example video_texture`); `--features videotoolbox` for hardware decoding, `--seconds N` to print the frame rate and how many video frames were shown. Without a file, it makes its own clip with the H.264 encoder. `tests/video_texture.rs` checks the reader, the player's timing, looping and jumps, the soundtrack in both containers, that both renderers show the codec's own colours, and that VideoToolbox matches the native decoder; `src/renderer/yuv.rs` checks the GPU conversion against the CPU's across depths, subsamplings, matrices and ranges.

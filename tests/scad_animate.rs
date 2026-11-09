@@ -366,11 +366,22 @@ fn rendering_produces_frames_with_the_model_in_them() {
     assert_eq!(frames.len(), 3);
     for (i, rgba) in frames.iter().enumerate() {
         assert_eq!(rgba.len(), (w * h * 4) as usize);
-        let lit = rgba.chunks_exact(4).filter(|px| px[0] > 20).count();
+        let lit = rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|px| px[0] > 20)
+            .count();
         assert!(lit > 100, "frame {i} looks empty ({lit} lit pixels)");
     }
     // The model grows, so later frames cover more of a fixed-fit view.
-    let lit = |rgba: &Vec<u8>| rgba.chunks_exact(4).filter(|px| px[0] > 20).count();
+    let lit = |rgba: &Vec<u8>| {
+        rgba.as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|px| px[0] > 20)
+            .count()
+    };
     assert!(lit(&frames[2]) > lit(&frames[0]), "the cube should grow");
 }
 
@@ -414,29 +425,6 @@ fn png_and_sequence_export_write_readable_files() {
     for p in &paths {
         assert!(threers::decode_png(&std::fs::read(p).unwrap()).is_ok());
     }
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[cfg(all(feature = "video", feature = "gif"))]
-#[test]
-fn video_export_picks_the_codec_from_the_extension() {
-    if !gpu_available() {
-        eprintln!("skipping: no GPU adapter");
-        return;
-    }
-    let dir = std::env::temp_dir().join(format!("threers-scad-vid-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-
-    let mut a = ScadAnimation::from_source(GROWING).frames(4).fps(8);
-    let out = dir.join("anim.gif");
-    ScadRender::new(120, 80)
-        .export_video(&mut a, &out)
-        .expect("gif export");
-    let bytes = std::fs::read(&out).unwrap();
-    assert_eq!(&bytes[..3], b"GIF");
-    let (_, frames) = threers::decode_gif(&bytes).expect("decode");
-    assert_eq!(frames.len(), 4);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -592,7 +580,12 @@ fn palettes_change_what_actually_gets_rendered() {
 
     // Cornfield's background is near-white, midnight's near-black.
     let mean = |rgba: &Vec<u8>| {
-        rgba.chunks_exact(4).map(|p| p[0] as u64).sum::<u64>() / (rgba.len() / 4) as u64
+        rgba.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[0] as u64)
+            .sum::<u64>()
+            / (rgba.len() / 4) as u64
     };
     assert!(mean(&cornfield) > mean(&midnight));
 }
@@ -784,33 +777,6 @@ fn constants_are_seeded_without_making_the_model_animated() {
     assert_eq!(overridden.frame(0).unwrap().bounds().unwrap().1[2], 1.0);
 }
 
-#[cfg(all(feature = "video", feature = "gif"))]
-#[test]
-fn the_encoded_video_uses_the_adjusted_frame_rate() {
-    if !gpu_available() {
-        eprintln!("skipping: no GPU adapter");
-        return;
-    }
-    let dir = std::env::temp_dir().join(format!("threers-scad-speed-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-
-    // 8 frames at 8 fps, played at 2× → 16 fps → a half-second loop.
-    let mut a = ScadAnimation::from_source(GROWING)
-        .frames(8)
-        .fps(8)
-        .speed(2.0);
-    assert_eq!(a.frame_rate(), 16);
-    let out = dir.join("fast.gif");
-    ScadRender::new(96, 72).export_video(&mut a, &out).unwrap();
-
-    let (_, frames) = threers::decode_gif(&std::fs::read(&out).unwrap()).unwrap();
-    assert_eq!(frames.len(), 8);
-    // GIF delays are centiseconds: 16 fps ≈ 6 cs, not the 12 cs of 8 fps.
-    assert!(frames[0].delay_num <= 7, "delay {} cs", frames[0].delay_num);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 // ---------------------------------------------------------------------------
 // Lighting
 // ---------------------------------------------------------------------------
@@ -838,7 +804,9 @@ fn exposure(lighting: ScadLighting) -> Exposure {
         .render_frames(&mut model)
         .unwrap();
     let mut lit: Vec<u8> = frames[0]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|px| px[0] > 4 || px[1] > 4 || px[2] > 4)
         .map(|px| px[0].max(px[1]).max(px[2]))
         .collect();
@@ -927,7 +895,7 @@ fn the_studio_key_follows_the_camera() {
 
     let brightest: Vec<u8> = frames
         .iter()
-        .map(|f| f.chunks_exact(4).map(|px| px[0]).max().unwrap())
+        .map(|f| f.as_chunks::<4>().0.iter().map(|px| px[0]).max().unwrap())
         .collect();
     let lo = *brightest.iter().min().unwrap();
     let hi = *brightest.iter().max().unwrap();
@@ -985,8 +953,14 @@ fn shadows_darken_the_model_and_can_be_turned_off() {
     assert_ne!(with, without, "shadows must change the image");
 
     // The shadowed render is darker overall — it removes light, never adds it.
-    let mean =
-        |f: &Vec<u8>| f.chunks_exact(4).map(|p| p[0] as u64).sum::<u64>() / (f.len() / 4) as u64;
+    let mean = |f: &Vec<u8>| {
+        f.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[0] as u64)
+            .sum::<u64>()
+            / (f.len() / 4) as u64
+    };
     assert!(
         mean(&with) < mean(&without),
         "{} vs {}",
@@ -1020,7 +994,12 @@ fn a_custom_rig_uses_only_the_lights_it_is_given() {
         .unwrap()
         .remove(0);
 
-    let lit: Vec<&[u8]> = frame.chunks_exact(4).filter(|px| px[0] > 20).collect();
+    let lit: Vec<&[u8; 4]> = frame
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|px| px[0] > 20)
+        .collect();
     assert!(!lit.is_empty(), "the lamp lit nothing");
     for px in lit {
         assert!(

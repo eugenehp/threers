@@ -574,7 +574,7 @@ mod tests {
             let pos = &g.get_attribute("position").unwrap().array;
             let nor = &g.get_attribute("normal").unwrap().array;
             let mut worst = 0.0f64;
-            for (p, n) in pos.chunks_exact(3).zip(nor.chunks_exact(3)) {
+            for (p, n) in pos.as_chunks::<3>().0.iter().zip(nor.as_chunks::<3>().0) {
                 let pv = [p[0] as f64, p[1] as f64, p[2] as f64];
                 let nv = [n[0] as f64, n[1] as f64, n[2] as f64];
                 let (Some(r), Some(nn)) = (v3::normalize(pv), v3::normalize(nv)) else {
@@ -613,7 +613,9 @@ mod tests {
             .index
             .as_ref()
             .unwrap()
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|t| [t[0], t[2], t[1]])
             .collect();
         let table = g.surface_table().unwrap().clone();
@@ -624,13 +626,13 @@ mod tests {
         let pos = &g.get_attribute("position").unwrap().array;
         let nor = &g.get_attribute("normal").unwrap().array;
         let mut inward = 0;
-        for (p, n) in pos.chunks_exact(3).zip(nor.chunks_exact(3)) {
+        for (p, n) in pos.as_chunks::<3>().0.iter().zip(nor.as_chunks::<3>().0) {
             let pv = [p[0] as f64, p[1] as f64, p[2] as f64];
             let nv = [n[0] as f64, n[1] as f64, n[2] as f64];
-            if let (Some(r), Some(nn)) = (v3::normalize(pv), v3::normalize(nv)) {
-                if v3::dot(r, nn) < -0.5 {
-                    inward += 1;
-                }
+            if let (Some(r), Some(nn)) = (v3::normalize(pv), v3::normalize(nv))
+                && v3::dot(r, nn) < -0.5
+            {
+                inward += 1;
             }
         }
         assert!(inward > 0, "reversed winding produced no inward normals");
@@ -686,7 +688,13 @@ mod tests {
         // Every vertex is still exactly on the sphere, and the table still says so.
         let t = g.surface_table().unwrap();
         assert!(t.max_deviation(&g) < 1e-4, "the split moved geometry");
-        for c in g.get_attribute("position").unwrap().array.chunks_exact(3) {
+        for c in g
+            .get_attribute("position")
+            .unwrap()
+            .array
+            .as_chunks::<3>()
+            .0
+        {
             let r = ((c[0] as f64).powi(2) + (c[1] as f64).powi(2) + (c[2] as f64).powi(2)).sqrt();
             assert!((r - 2.0).abs() < 1e-5, "radius {r}");
         }
@@ -705,7 +713,7 @@ mod tests {
         let mut map: HashMap<[i64; 3], u32> = HashMap::new();
         let mut remap: Vec<u32> = Vec::new();
         let mut kept: Vec<f32> = Vec::new();
-        for c in pos.chunks_exact(3) {
+        for c in pos.as_chunks::<3>().0 {
             let key = [
                 (c[0] as f64 * 1e6).round() as i64,
                 (c[1] as f64 * 1e6).round() as i64,
@@ -862,7 +870,9 @@ mod tests {
             .get_attribute("position")
             .unwrap()
             .array
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| [c[0], c[1], c[2]])
             .collect();
         let tris_before = crate::brep::triangle_count(&g);
@@ -874,7 +884,9 @@ mod tests {
             .get_attribute("position")
             .unwrap()
             .array
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| [c[0], c[1], c[2]])
             .collect();
         assert_eq!(

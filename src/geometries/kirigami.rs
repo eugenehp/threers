@@ -597,17 +597,17 @@ impl KirigamiNet {
     pub fn crease_geometry(&self) -> BufferGeometry {
         let mut positions = Vec::new();
         for c in &self.creases {
-            if let (Some(a), Some(b)) = (self.panels.get(c.a), self.panels.get(c.b)) {
-                if let Some((p0, p1)) = shared_edge_2d(&a.verts, &b.verts) {
-                    positions.extend_from_slice(&[
-                        p0[0] as f32,
-                        p0[1] as f32,
-                        0.05,
-                        p1[0] as f32,
-                        p1[1] as f32,
-                        0.05,
-                    ]);
-                }
+            if let (Some(a), Some(b)) = (self.panels.get(c.a), self.panels.get(c.b))
+                && let Some((p0, p1)) = shared_edge_2d(&a.verts, &b.verts)
+            {
+                positions.extend_from_slice(&[
+                    p0[0] as f32,
+                    p0[1] as f32,
+                    0.05,
+                    p1[0] as f32,
+                    p1[1] as f32,
+                    0.05,
+                ]);
             }
         }
         let mut geom = BufferGeometry::new();
@@ -1381,7 +1381,7 @@ fn faces_to_geometry_tinted(
     // Every face (and prism side) went through `emit_quad`: one quad, as two
     // consecutive triangles over base..base+4.
     let mut polygons = super::polygons::CellPolygons::new();
-    for quad in indices.chunks_exact(6) {
+    for quad in indices.as_chunks::<6>().0 {
         polygons.quad(&positions, [quad[0], quad[1], quad[2], quad[5]]);
     }
     geom.set_attribute("position", BufferAttribute::new(positions, 3));
@@ -1508,10 +1508,10 @@ fn develop_strip(mesh: &KirigamiMesh, i: usize) -> KirigamiNet {
         ) {
             chain.push(f);
         }
-        if j + 1 < mesh.ny {
-            if let Some(f) = mesh.face(KirigamiFaceKind::Inclined, i, j) {
-                chain.push(f);
-            }
+        if j + 1 < mesh.ny
+            && let Some(f) = mesh.face(KirigamiFaceKind::Inclined, i, j)
+        {
+            chain.push(f);
         }
     }
     if chain.is_empty() {
@@ -1697,21 +1697,21 @@ fn net_to_svg(net: &KirigamiNet) -> String {
     }
 
     for c in &net.creases {
-        if let (Some(a), Some(b)) = (net.panels.get(c.a), net.panels.get(c.b)) {
-            if let Some((p0, p1)) = shared_edge_2d(&a.verts, &b.verts) {
-                let class = match c.kind {
-                    KirigamiCreaseKind::Mountain => "m",
-                    KirigamiCreaseKind::Valley => "v",
-                    KirigamiCreaseKind::Boundary => "m",
-                };
-                out.push_str(&format!(
-                    "  <line class=\"{class}\" x1=\"{:.3}\" y1=\"{:.3}\" x2=\"{:.3}\" y2=\"{:.3}\"/>\n",
-                    sx(p0[0]),
-                    sy(p0[1]),
-                    sx(p1[0]),
-                    sy(p1[1])
-                ));
-            }
+        if let (Some(a), Some(b)) = (net.panels.get(c.a), net.panels.get(c.b))
+            && let Some((p0, p1)) = shared_edge_2d(&a.verts, &b.verts)
+        {
+            let class = match c.kind {
+                KirigamiCreaseKind::Mountain => "m",
+                KirigamiCreaseKind::Valley => "v",
+                KirigamiCreaseKind::Boundary => "m",
+            };
+            out.push_str(&format!(
+                "  <line class=\"{class}\" x1=\"{:.3}\" y1=\"{:.3}\" x2=\"{:.3}\" y2=\"{:.3}\"/>\n",
+                sx(p0[0]),
+                sy(p0[1]),
+                sx(p1[0]),
+                sy(p1[1])
+            ));
         }
     }
 

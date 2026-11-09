@@ -160,7 +160,7 @@ fn metal_matches_wgpu() {
         .unwrap();
     }
     let (mut sum, mut big) = (0.0f64, 0usize);
-    for (a, b) in m.chunks_exact(4).zip(w.chunks_exact(4)) {
+    for (a, b) in m.as_chunks::<4>().0.iter().zip(w.as_chunks::<4>().0) {
         let d = (0..3)
             .map(|c| (a[c] as i32 - b[c] as i32).abs())
             .max()

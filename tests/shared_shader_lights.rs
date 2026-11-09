@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 use threers::lights::{DirectionalLight, HemisphereLight, Light, PointLight};
+use threers::RenderBackend;
 use threers::{
     BoxGeometry, Color, HeadlessRenderer, Material, Mesh, Object3D, PerspectiveCamera,
     PlaneGeometry, Scene, ShaderMaterial, StandardMaterial, Texture, TextureFormat, Vector3,
@@ -15,19 +16,15 @@ const W: u32 = 128;
 const H: u32 = 96;
 
 fn build(metal: bool) -> HeadlessRenderer {
-    // SAFETY: one test in this file; nothing else reads the environment.
-    unsafe {
-        if metal {
-            std::env::set_var("THREERS_BACKEND", "metal");
-        } else {
-            std::env::remove_var("THREERS_BACKEND");
-        }
-    }
     let mut hr = HeadlessRenderer::builder()
+        .backend(if metal {
+            RenderBackend::Metal
+        } else {
+            RenderBackend::Wgpu
+        })
         .size(W, H)
         .build()
         .expect("headless renderer");
-    unsafe { std::env::remove_var("THREERS_BACKEND") };
     hr.set_msaa(1);
     assert_eq!(hr.is_native_metal(), metal);
     hr
@@ -136,8 +133,10 @@ fn diff(a: &[u8], b: &[u8]) -> (f64, u8) {
 
 /// Pixels at least `by` darker (red channel) in `b` than in `a`.
 fn darker(a: &[u8], b: &[u8], by: u8) -> usize {
-    a.chunks_exact(4)
-        .zip(b.chunks_exact(4))
+    a.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
         .filter(|(p, q)| p[0] > q[0].saturating_add(by))
         .count()
 }

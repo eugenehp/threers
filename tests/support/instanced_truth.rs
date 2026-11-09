@@ -53,7 +53,7 @@ fn strip(groups: bool) -> BufferGeometry {
     }
     let base = g.get_attribute("position").unwrap().array.clone();
     let (mut t0, mut t1) = (Vec::new(), Vec::new());
-    for p in base.chunks_exact(3) {
+    for p in base.as_chunks::<3>().0 {
         t0.extend_from_slice(&[p[0], p[1] * 2.0, p[2]]);
         t1.extend_from_slice(&[p[0], p[1] + 0.12, p[2]]);
     }

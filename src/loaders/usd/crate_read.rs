@@ -204,7 +204,7 @@ pub fn half_to_f32_for_test(bits: u16) -> f32 {
 
 /// Half-precision, which USD uses for compact colour and normal data.
 fn half_to_f32(bits: u16) -> f32 {
-    crate::renderer::readback::f16_to_f32(bits)
+    crate::math::float::f16_to_f32(bits)
 }
 
 struct Crate<'a> {

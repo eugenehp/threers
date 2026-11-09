@@ -20,7 +20,7 @@ impl ArrowHelper {
         let head = length as f64 * 0.2;
         let g = three_lines::arrow(&world, length as f64, head, head * 0.2);
         let mut lines = g.lines;
-        for t in g.mesh.chunks_exact(9) {
+        for t in g.mesh.as_chunks::<9>().0 {
             for (a, b) in [(0, 1), (1, 2), (2, 0)] {
                 lines.extend_from_slice(&t[a * 3..a * 3 + 3]);
                 lines.extend_from_slice(&t[b * 3..b * 3 + 3]);

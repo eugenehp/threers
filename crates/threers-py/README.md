@@ -32,7 +32,7 @@ open("out.png", "wb").write(png)
 ```
 
 For the **full THREE.* API** (browser / npm), use the JavaScript package:
-`import THREE from 'threers'`. Example: [`../threers-js/examples/cube.html`](../threers-js/examples/cube.html).
+`import THREE from '@threers/threers'`. Example: [`../threers-js/examples/cube.html`](../threers-js/examples/cube.html).
 
 ```bash
 python examples/cube.py cube.png

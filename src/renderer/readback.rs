@@ -146,7 +146,9 @@ pub fn texture_bytes(
 /// 4 for `Rgba16Float`.
 pub fn as_f32(bytes: &[u8]) -> Vec<f32> {
     bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]])))
         .collect()
 }
@@ -166,7 +168,9 @@ pub fn texture_channel_f32(
     if texture.format() == wgpu::TextureFormat::Rg11b10Ufloat {
         assert!(channel < 3, "channel {channel} of a 3-channel format");
         return bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|t| {
                 let word = u32::from_le_bytes([t[0], t[1], t[2], t[3]]);
                 packed_float_to_f32(word, channel)

@@ -5,9 +5,9 @@ code you already know; only the import line changes.
 
 | Runtime | Package | Example | Run |
 |---------|---------|---------|-----|
-| Browser | `threers` (npm) | [cube.html](../threers-js/examples/cube.html) | `cd crates/threers-js && npm run build && python3 -m http.server -d . 8765` → `/examples/cube.html` |
-| npm / bundler | `threers` | [cube.mjs](../threers-js/examples/cube.mjs) | `import THREE from 'threers'` |
-| Deno | `npm:threers` | [cube.deno.ts](../threers-js/examples/cube.deno.ts) | `deno run examples/cube.deno.ts` |
+| Browser | `@threers/threers` (npm) | [cube.html](../threers-js/examples/cube.html) | `cd crates/threers-js && npm run build && python3 -m http.server -d . 8765` → `/examples/cube.html` |
+| npm / bundler | `@threers/threers` | [cube.mjs](../threers-js/examples/cube.mjs) | `import THREE from '@threers/threers'` |
+| Deno | `npm:@threers/threers` | [cube.deno.ts](../threers-js/examples/cube.deno.ts) | `deno run examples/cube.deno.ts` |
 | Node headless PNG | `threers-node` | [cube_headless.mjs](../threers-node/examples/cube_headless.mjs) | `node examples/cube_headless.mjs` |
 | Python headless PNG | `threers` (PyPI) | [cube.py](../threers-py/examples/cube.py) | `python examples/cube.py` |
 
@@ -16,7 +16,7 @@ code you already know; only the import line changes.
 ```js
 // was:
 // import * as THREE from 'three';
-import THREE, { initThreers } from 'threers';
+import THREE, { initThreers } from '@threers/threers';
 
 await initThreers();
 

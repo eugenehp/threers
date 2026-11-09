@@ -534,24 +534,23 @@ fn lzw_decode(data: &[u8], min_code_size: u8, expected: usize) -> Result<Vec<u8>
         // Once the required pixels are complete, the encoder writes EOI
         // without adding another dictionary entry. Avoid a spurious width
         // bump at exactly that boundary.
-        if output.len() < expected {
-            if let Some(previous_entry) = previous.as_ref() {
-                if next_code < 4096 {
-                    let mut new_entry = previous_entry.clone();
-                    new_entry.push(entry[0]);
-                    if dictionary.len() != next_code as usize {
-                        return Err(GifError::BadLzw);
-                    }
-                    dictionary.push(new_entry);
-                    next_code += 1;
-                    // The decoder reconstructs an encoder dictionary entry one
-                    // emitted code later. Grow as soon as the reconstructed
-                    // `next_code` reaches the encoder's width boundary, before
-                    // reading the following code.
-                    if next_code == (1 << code_size) && code_size < 12 {
-                        code_size += 1;
-                    }
-                }
+        if output.len() < expected
+            && let Some(previous_entry) = previous.as_ref()
+            && next_code < 4096
+        {
+            let mut new_entry = previous_entry.clone();
+            new_entry.push(entry[0]);
+            if dictionary.len() != next_code as usize {
+                return Err(GifError::BadLzw);
+            }
+            dictionary.push(new_entry);
+            next_code += 1;
+            // The decoder reconstructs an encoder dictionary entry one
+            // emitted code later. Grow as soon as the reconstructed
+            // `next_code` reaches the encoder's width boundary, before
+            // reading the following code.
+            if next_code == (1 << code_size) && code_size < 12 {
+                code_size += 1;
             }
         }
         previous = Some(entry);
@@ -647,7 +646,9 @@ impl<'a> Reader<'a> {
     fn palette(&mut self, length: usize) -> Result<Vec<[u8; 3]>, GifError> {
         let bytes = self.take(length.checked_mul(3).ok_or(GifError::Overflow)?)?;
         Ok(bytes
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|rgb| [rgb[0], rgb[1], rgb[2]])
             .collect())
     }
@@ -714,7 +715,12 @@ mod tests {
         encoder.add_frame(&pixels, 1, 100);
         let (_, frames) = decode_gif(&encoder.finish()).unwrap();
         assert_eq!(frames[0].rgba.len(), pixels.len());
-        assert!(frames[0].rgba.chunks_exact(4).all(|pixel| pixel[3] == 255));
+        assert!(frames[0]
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| pixel[3] == 255));
     }
 
     #[test]

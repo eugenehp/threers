@@ -683,10 +683,10 @@ pub fn parse(data: &[u8]) -> Result<MovVideo> {
     for b in &all {
         if b.0 == "/moov/trak" {
             traks.push(Vec::new());
-        } else if b.0.starts_with("/moov/trak/") {
-            if let Some(t) = traks.last_mut() {
-                t.push(b.clone());
-            }
+        } else if b.0.starts_with("/moov/trak/")
+            && let Some(t) = traks.last_mut()
+        {
+            t.push(b.clone());
         }
     }
     let n_streams = traks.len();

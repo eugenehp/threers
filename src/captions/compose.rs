@@ -159,11 +159,9 @@ pub fn compose(text: &[char]) -> Vec<(char, usize)> {
             // A starter after a starter is blocked only if a mark intervened, which is
             // how Hangul and `U+09C7 + U+09BE` compose at all.
             let blocked = if k == 0 { blocker != 0 } else { blocker >= k };
-            if !blocked {
-                if let Some(joined) = compose_pair(result[s].0, c) {
-                    result[s].0 = joined;
-                    continue;
-                }
+            if !blocked && let Some(joined) = compose_pair(result[s].0, c) {
+                result[s].0 = joined;
+                continue;
             }
         }
         if k == 0 {

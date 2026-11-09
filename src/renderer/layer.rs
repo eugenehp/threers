@@ -164,7 +164,7 @@ impl Drop for Pool {
 }
 
 #[link(name = "objc", kind = "dylib")]
-extern "C" {
+unsafe extern "C" {
     fn objc_autoreleasePoolPush() -> *mut c_void;
     fn objc_autoreleasePoolPop(pool: *mut c_void);
 }
@@ -179,7 +179,7 @@ fn is_metal_layer(layer: *mut c_void) -> bool {
         _private: [u8; 0],
     }
     #[link(name = "objc", kind = "dylib")]
-    extern "C" {
+    unsafe extern "C" {
         fn objc_getClass(name: *const c_char) -> *mut Object;
         fn sel_registerName(name: *const c_char) -> *const c_void;
         fn objc_msgSend();
@@ -217,9 +217,9 @@ impl LayerRenderer {
                 .into());
         }
         let (width, height) = (width.max(1), height.max(1));
-        let surface = gpu
+        let surface = unsafe { gpu
             .instance
-            .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(layer))
+            .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(layer)) }
             .map_err(|e| format!("layer surface: {e:?}"))?;
         let caps = surface.get_capabilities(&gpu.adapter);
         let format = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);

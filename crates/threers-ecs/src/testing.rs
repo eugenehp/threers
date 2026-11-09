@@ -114,7 +114,12 @@ mod pixels {
 
     /// Lay straight-alpha `top` over `picture`, as a host's compositor does.
     fn over(picture: &mut [u8], top: &[u8]) {
-        for (under, above) in picture.chunks_exact_mut(4).zip(top.chunks_exact(4)) {
+        for (under, above) in picture
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(top.as_chunks::<4>().0)
+        {
             let alpha = above[3] as u32;
             for channel in 0..3 {
                 let mixed = under[channel] as u32 * (255 - alpha) + above[channel] as u32 * alpha;
@@ -141,7 +146,12 @@ mod pixels {
             dir.join(format!("{stem}.diff.png")),
         );
         let mut diff = Vec::with_capacity(expected.len());
-        for (a, e) in actual.chunks_exact(4).zip(expected.chunks_exact(4)) {
+        for (a, e) in actual
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(expected.as_chunks::<4>().0)
+        {
             let change = (0..3).map(|c| a[c].abs_diff(e[c])).max().unwrap_or(0);
             if change > 2 {
                 let strength = 128 + (change as u32 * 127 / 255) as u8;
@@ -164,17 +174,30 @@ mod pixels {
         ///
         /// If there is no [`MainCamera`] or no GPU.
         pub fn render(&mut self, width: u32, height: u32) -> Vec<u8> {
+            self.render_on(width, height, threers::RenderBackend::Auto)
+        }
+
+        /// As [`render`](Self::render), on the backend named — for a test
+        /// comparing two, which cannot switch `THREERS_BACKEND` safely while
+        /// other tests run beside it.
+        pub fn render_on(
+            &mut self,
+            width: u32,
+            height: u32,
+            backend: threers::RenderBackend,
+        ) -> Vec<u8> {
             let mut renderer = HeadlessRenderer::builder()
                 .size(width, height)
+                .backend(backend)
                 .build()
                 .expect("a GPU to render with");
             let mut rgba = self.app.world.with_resource::<MainCamera, _>(|w, camera| {
                 renderer.render_to_rgba(&mut w.scene, &camera.0)
             });
-            if let Some(hud) = self.app.world.get_resource::<Hud>() {
-                if hud.size() == (width, height) {
-                    over(&mut rgba, hud.pixels());
-                }
+            if let Some(hud) = self.app.world.get_resource::<Hud>()
+                && hud.size() == (width, height)
+            {
+                over(&mut rgba, hud.pixels());
             }
             rgba
         }

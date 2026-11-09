@@ -52,8 +52,8 @@ pub(crate) fn next_owner() -> u64 {
 pub type SharedCollision = Arc<Mutex<CollisionIndex>>;
 
 /// Which of a label layer's labels showed at its last placement, for
-/// another layer to follow ([`TextLabels::publish_visibility`]
-/// (super::TextLabels::publish_visibility),
+/// another layer to follow
+/// ([`TextLabels::publish_visibility`](super::TextLabels::publish_visibility),
 /// [`SpriteMarks::follow`](super::SpriteMarks::follow)).
 pub type SharedVisibility = Arc<Mutex<Vec<bool>>>;
 

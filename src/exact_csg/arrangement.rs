@@ -90,10 +90,10 @@ pub fn intersection_segments(a: &BufferGeometry, b: &BufferGeometry) -> Vec<(V3,
             if !aabb_overlap(&ba, bb) {
                 continue;
             }
-            if let Some(seg) = tri_tri_segment(ai, bj) {
-                if dot(sub(seg.1, seg.0), sub(seg.1, seg.0)) > 1e-18 {
-                    segs.push(seg);
-                }
+            if let Some(seg) = tri_tri_segment(ai, bj)
+                && dot(sub(seg.1, seg.0), sub(seg.1, seg.0)) > 1e-18
+            {
+                segs.push(seg);
             }
         }
     }

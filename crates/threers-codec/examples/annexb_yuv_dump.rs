@@ -9,6 +9,10 @@ use threers_codec::mp4_demux::TrackCodec;
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
+    if a.len() < 4 {
+        eprintln!("usage: annexb_yuv_dump h264|hevc IN OUT.yuv");
+        std::process::exit(2);
+    }
     let codec = if a[1] == "hevc" {
         TrackCodec::Hevc
     } else {

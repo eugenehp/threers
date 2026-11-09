@@ -38,7 +38,6 @@ import math
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import time
@@ -433,7 +432,6 @@ def arms(clip):
                    "-pix_fmt", "yuv420p"]))
 
     # --- VideoToolbox (hardware) ---
-    px = clip["w"] * clip["h"] * clip["fps"]
     for mbps in (4, 10, 25):
         bitrate = f"{mbps}M"
         a.append((f"h264_vt {bitrate}", "ffmpeg",

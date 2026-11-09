@@ -1,7 +1,8 @@
 //! What a query costs per row, on the paths games use most.
 #![recursion_limit = "512"]
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 use threers::prelude::*;
 use threers_ecs::prelude::*;
 

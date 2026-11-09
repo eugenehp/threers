@@ -129,7 +129,7 @@ impl CompositionGuide {
                 },
             ],
             Self::Golden => {
-                let g = 1.0 / 1.618_034;
+                let g = 1.0 / std::f32::consts::GOLDEN_RATIO;
                 let og = 1.0 - g;
                 vec![
                     GuideLine {

@@ -225,13 +225,12 @@ mod tests {
         let mut ok = false;
         for mode in [VertexMode::A, VertexMode::B] {
             let assign = Assignment::uniform(n, mode);
-            if let Some(drive) = sheet.drive_hinge(&assign) {
-                if sheet.propagate(&assign, drive, 0.35).is_some()
-                    && sheet.fold(&assign, drive, 0.35).is_some()
-                {
-                    ok = true;
-                    break;
-                }
+            if let Some(drive) = sheet.drive_hinge(&assign)
+                && sheet.propagate(&assign, drive, 0.35).is_some()
+                && sheet.fold(&assign, drive, 0.35).is_some()
+            {
+                ok = true;
+                break;
             }
         }
         if !ok {

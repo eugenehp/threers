@@ -9,6 +9,10 @@ use std::collections::BTreeSet;
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
+    if a.len() < 3 {
+        eprintln!("usage: video_rgb_pipe IN OUT.rgb");
+        std::process::exit(2);
+    }
     let r = threers_codec::ffcompat::reader::VideoReader::open(std::fs::read(&a[1]).expect("read"))
         .unwrap_or_else(|e| {
             println!("ERROR {e}");

@@ -3,23 +3,19 @@
 
 mod buffer_geometry_utils;
 
-/// Dependency-free PNG encode/decode (and the DEFLATE codec underneath).
 pub mod png;
 
-/// Data-parallel helpers (rayon behind the `parallel` feature, sequential otherwise).
 pub mod parallel;
 
-/// sRGB byte <-> linear light, for anything that adds or averages colour.
+#[cfg(feature = "captions")]
 pub mod contrast;
-pub mod srgb;
+pub use threers_math::srgb;
 
 mod svg_number;
 pub use svg_number::format_svg_number;
 
 pub use buffer_geometry_utils::*;
 
-/// Closed-ness, triangle quality and connected pieces of a mesh.
 pub mod mesh_check;
 
-/// Quadric edge-collapse simplification that keeps closed meshes closed.
 pub mod simplify;

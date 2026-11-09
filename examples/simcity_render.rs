@@ -98,7 +98,7 @@ fn shoot(
     // nothing at all. Queue, then drain whatever is waiting.
     let to_rgba = |rgb: Vec<u8>| {
         let mut out = Vec::with_capacity(rgb.len() / 3 * 4);
-        for px in rgb.chunks_exact(3) {
+        for px in rgb.as_chunks::<3>().0 {
             out.extend_from_slice(&[px[0], px[1], px[2], 255]);
         }
         out
@@ -332,12 +332,12 @@ fn main() {
     }
     // Stand in front of one pedestrian. Hunting for a good vantage by hand is
     // how you end up inside a building.
-    if let Some(n) = arg("--follow").and_then(|v| v.parse::<usize>().ok()) {
-        if let Some((pos, facing)) = city.mover_pose(Gait::Walk, n) {
-            let side = Vector3::new(-facing.z, 0.0, facing.x);
-            camera.position = pos + facing * 3.1 + side * 1.5 + Vector3::new(0.0, 1.55, 0.0);
-            camera.look_at(pos + Vector3::new(0.0, 0.95, 0.0));
-        }
+    if let Some(n) = arg("--follow").and_then(|v| v.parse::<usize>().ok())
+        && let Some((pos, facing)) = city.mover_pose(Gait::Walk, n)
+    {
+        let side = Vector3::new(-facing.z, 0.0, facing.x);
+        camera.position = pos + facing * 3.1 + side * 1.5 + Vector3::new(0.0, 1.55, 0.0);
+        camera.look_at(pos + Vector3::new(0.0, 0.95, 0.0));
     }
     // Independent of `--eye`, so any preset can be zoomed into.
     if let Some(fov) = arg("--fov").and_then(|v| v.parse::<f32>().ok()) {

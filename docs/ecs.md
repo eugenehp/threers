@@ -178,7 +178,7 @@ A test can play the game by its keys and look at it: `tests/race.rs` drives a wh
 | Thumbs on a phone | `TouchControls::new().stick("turn", "forward").button(..)`, read through the same actions |
 | Work longer than a frame | `Tasks::spawn` natively, `Jobs` for the same job on threads or Web Workers |
 | Hundreds of still meshes | mark them `Static` and call `World::bake_static`: one draw per material |
-| A screen showing a video | feature `video`: `w.mesh(..).video(VideoPlayer::open(bytes)?)`. It plays on game time, so a paused game pauses it. With `audio` and an `AudioPlugin` its soundtrack plays in step, through seeks, loops and pauses; insert `Video::muted(player)` for none |
+| A screen showing a video | feature `video` (`threers-video`): `w.mesh(..).video(VideoPlayer::open(bytes)?)`. It plays on game time, so a paused game pauses it. With `audio` and an `AudioPlugin` its soundtrack plays in step, through seeks, loops and pauses; insert `Video::muted(player)` for none |
 | An overlay that takes a key | `Input::consume(key)`: nothing later this frame sees it pressed, as the console does with Escape |
 | Know which systems broke | `Failures` and `SystemFailed` events, with `App::catch_panics(true)` |
 

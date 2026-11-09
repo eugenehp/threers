@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use crate::core::Layers;
-use crate::renderer::ToneMapping;
+use crate::math::ToneMapping;
 
 /// What a camera ray that hits nothing returns.
 ///

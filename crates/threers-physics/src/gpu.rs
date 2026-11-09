@@ -415,7 +415,9 @@ impl GpuBroadPhase {
             self.overflowed = found > self.pair_capacity;
             let written = found.min(self.pair_capacity);
             let raw: &[u32] = bytemuck::cast_slice(&view[8..8 + written * 8]);
-            raw.chunks_exact(2)
+            raw.as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| (c[0], c[1]))
                 .collect::<Vec<_>>()
         };

@@ -89,8 +89,8 @@ impl Dataset {
              {inputs}+{outputs} planes need {want}"
         );
         let mut data = Vec::with_capacity(want);
-        for chunk in bytes[24..].chunks_exact(4) {
-            data.push(f32::from_le_bytes(chunk.try_into()?));
+        for chunk in bytes[24..].as_chunks::<4>().0 {
+            data.push(f32::from_le_bytes(*chunk));
         }
         Self::new(tile, inputs, outputs, data)
     }

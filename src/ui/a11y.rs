@@ -321,11 +321,9 @@ impl Ui {
             if s.hidden {
                 return;
             }
-            if !top {
-                if let Some(l) = &s.label {
-                    out.push(l.clone());
-                    return;
-                }
+            if !top && let Some(l) = &s.label {
+                out.push(l.clone());
+                return;
             }
         }
         if let NodeKind::Text(t) = &node.kind {

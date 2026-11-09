@@ -28,7 +28,7 @@
 //! **Accumulate on the device.** The film lives in a storage buffer. Full-frame
 //! traces read back immediately; tile/region traces defer readback until
 //! [`GpuBackend::sync_film`](crate::raytrace::gpu::GpuBackend::sync_film) (called automatically from
-//! [`RaytraceRenderer::resolve_rgba`] and friends).
+//! [`RaytraceRenderer::resolve_rgba`](super::RaytraceRenderer::resolve_rgba) and friends).
 //!
 //! **One pixel per invocation, 8×8 workgroups.** No atomics: the only thread
 //! that writes a pixel's accumulator is the one that owns it. 8×8 keeps
@@ -2143,7 +2143,7 @@ mod tests {
     fn mean_channel(hdr: &[f32], c: usize) -> f32 {
         let mut sum = 0.0f64;
         let mut n = 0usize;
-        for px in hdr.chunks_exact(4) {
+        for px in hdr.as_chunks::<4>().0 {
             sum += px[c] as f64;
             n += 1;
         }
@@ -2244,7 +2244,7 @@ mod tests {
         // And the two must agree on the structure, not just the average: the
         // per-pixel difference has to be small where the image is smooth.
         let mut worst = 0.0f32;
-        for (a, b) in g.chunks_exact(4).zip(c.chunks_exact(4)) {
+        for (a, b) in g.as_chunks::<4>().0.iter().zip(c.as_chunks::<4>().0) {
             worst = worst.max((a[0] - b[0]).abs());
         }
         assert!(worst < 0.6, "worst per-pixel red difference {worst}");
@@ -2492,7 +2492,7 @@ mod tests {
         }
         // The checker has to survive: a constant image would mean the atlas
         // returned one texel, or white.
-        let reds: Vec<f32> = gh.chunks_exact(4).map(|p| p[0]).collect();
+        let reds: Vec<f32> = gh.as_chunks::<4>().0.iter().map(|p| p[0]).collect();
         let spread = reds.iter().cloned().fold(0.0f32, f32::max)
             - reds.iter().cloned().fold(f32::MAX, f32::min);
         assert!(
@@ -2521,7 +2521,7 @@ mod tests {
         ];
         for (f, tint) in faces.iter_mut().zip(tints) {
             let mut px = vec![255u8; (size * size * 4) as usize];
-            for p in px.chunks_exact_mut(4) {
+            for p in px.as_chunks_mut::<4>().0 {
                 p[0] = tint[0];
                 p[1] = tint[1];
                 p[2] = tint[2];
@@ -2841,7 +2841,7 @@ mod tests {
 
             let (gh, ch) = (g.resolve_hdr(), c.resolve_hdr());
             let mut worst = 0.0f32;
-            for (a, b) in gh.chunks_exact(4).zip(ch.chunks_exact(4)) {
+            for (a, b) in gh.as_chunks::<4>().0.iter().zip(ch.as_chunks::<4>().0) {
                 for k in 0..3 {
                     worst = worst.max((a[k] - b[k]).abs());
                 }
@@ -2972,7 +2972,7 @@ mod tests {
             let tile_means = |v: &[f32], channel: usize| {
                 let mut tiles = [[0.0f64; 4]; 4];
                 let mut counts = [[0u32; 4]; 4];
-                for (p, px) in v.chunks_exact(4).enumerate() {
+                for (p, px) in v.as_chunks::<4>().0.iter().enumerate() {
                     let (x, y) = (p % 40, p / 40);
                     let (tx, ty) = (x * 4 / 40, y * 4 / 40);
                     tiles[ty][tx] += px[channel] as f64;
@@ -3039,7 +3039,12 @@ mod tests {
         let mut sse = 0.0f64;
         let mut mean = 0.0f64;
         let mut n = 0usize;
-        for (a, b) in quick.chunks_exact(4).zip(reference.chunks_exact(4)) {
+        for (a, b) in quick
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(reference.as_chunks::<4>().0)
+        {
             for k in 0..3 {
                 let d = (a[k] - b[k]) as f64;
                 sse += d * d;
@@ -3134,7 +3139,10 @@ mod tests {
         assert_eq!(r.backend_name(), "gpu");
         let rgba = r.render_to_rgba(&mut scene, &cam);
         assert_eq!(rgba.len(), 32 * 32 * 4);
-        assert!(rgba.chunks_exact(4).any(|p| p[0] > 8), "image is black");
+        assert!(
+            rgba.as_chunks::<4>().0.iter().any(|p| p[0] > 8),
+            "image is black"
+        );
     }
 
     /// Reproducibility on the GPU: batching must not change which random

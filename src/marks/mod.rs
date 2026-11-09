@@ -72,7 +72,8 @@ mod picking;
 mod points;
 mod polygon_mesh;
 mod polygons;
-pub mod precision;
+/// Double precision on the GPU; lives in [`crate::math`], since it needs no GPU.
+pub use crate::math::precision;
 mod segments;
 pub(crate) mod shader;
 mod shapes;
@@ -592,9 +593,11 @@ pub struct MarkStyle {
     /// shapes, which are real geometry.
     pub depth_lift: f32,
     /// A constant depth bias in units of the minimum resolvable depth
-    /// difference (GL's `polygonOffset` units; negative is nearer), for
-    /// marks that emulate SwiftShader's depth (custom kinds reading
-    /// `layer.shadow.y`); deck.gl gives each layer `-100 × its index`.
+    /// difference (GL's `polygonOffset` units; negative is nearer): the
+    /// GPU's for the built-in kinds (in SwiftShader's depth planes under
+    /// [`MarkView::swiftshader_depth`]), `layer.shadow.y` for custom kinds;
+    /// deck.gl gives each layer `-100 × its index`. Not for lines, which
+    /// SwiftShader gives no bias of their own.
     pub depth_bias_units: f32,
     /// Draw order among layers lying in the same plane: a higher order wins
     /// the depth test over a lower one at the same depth, so water, land
@@ -1220,6 +1223,10 @@ struct PipelineKey {
     patterned: bool,
     /// Fills and images pulled towards the camera ([`MarkStyle::ground_bias`]).
     bias: bool,
+    /// [`MarkStyle::depth_bias_units`] as the GPU's constant depth bias, for
+    /// the built-in kinds drawn with the GPU's depth (custom kinds read it
+    /// from `layer.shadow.y`).
+    bias_units: i32,
     /// Drawn into a shadow map: the light's depth, packed (`fs_shadow`).
     shadow: bool,
     /// Line primitives ([`Mark::line_list`]).
@@ -1956,6 +1963,14 @@ impl MarkRenderer {
                 ..Default::default()
             },
             depth_stencil: depth_state(key.depth).map(|mut d| {
+                // deck.gl's polygon offset (`-100` units a layer), nearer
+                // towards larger depth when depth is reversed.
+                let reversed = matches!(key.depth, DepthKey::Test { reversed: true, .. });
+                d.bias.constant = if reversed {
+                    -key.bias_units
+                } else {
+                    key.bias_units
+                };
                 if key.bias {
                     // Pull fills towards the camera, so one lying on a ground
                     // mesh at the same height wins instead of fighting it —
@@ -1966,7 +1981,7 @@ impl MarkRenderer {
                         1
                     };
                     d.bias = wgpu::DepthBiasState {
-                        constant: -2 * toward,
+                        constant: d.bias.constant - 2 * toward,
                         slope_scale: -(toward as f32),
                         clamp: 0.0,
                     };
@@ -2122,6 +2137,11 @@ impl MarkRenderer {
             pick,
             patterned: !pick && mark.patterned(),
             bias: s.ground_bias && matches!(mark.kind(), MarkKind::Polygon | MarkKind::Image),
+            bias_units: if matches!(mark.kind(), MarkKind::Custom(_)) {
+                0
+            } else {
+                s.depth_bias_units.round() as i32
+            },
             shadow: false,
             lines: mark.line_list(),
             cull: match (s.cull_back && !mark.line_list(), flipped) {

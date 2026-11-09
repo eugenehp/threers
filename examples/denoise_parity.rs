@@ -30,6 +30,16 @@ fn main() {
     let weights = arg("--weights").unwrap_or_else(|| "out/fixed.bin".into());
     let val = arg("--val").unwrap_or_else(|| "out/real2_testset.bin".into());
     let limit: usize = arg("--tiles").and_then(|s| s.parse().ok()).unwrap_or(32);
+    for (flag, path) in [("--weights", &weights), ("--val", &val)] {
+        if !std::path::Path::new(path).exists() {
+            eprintln!(
+                "{path} not found. This compares a trained checkpoint with its test set, and \
+                 neither ships with the repository: pass {flag} PATH.\n\
+                 usage: denoise_parity --weights CHECKPOINT --val TESTSET [--tiles N]"
+            );
+            std::process::exit(2);
+        }
+    }
 
     let net = match Denoiser::open(&weights) {
         Ok(n) => n,
@@ -52,9 +62,14 @@ fn main() {
     let outs = u32_at(20);
     let plane = tile * tile;
     let per = (ins + outs) * plane;
-    let floats: &[f32] = unsafe {
-        std::slice::from_raw_parts(raw[24..].as_ptr() as *const f32, (raw.len() - 24) / 4)
-    };
+    // Decoded, not reinterpreted: a `Vec<u8>` promises no alignment for f32,
+    // and the file is little-endian whatever the machine is.
+    let floats: Vec<f32> = raw[24..]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_le_bytes(*b))
+        .collect();
     assert_eq!(
         ins, IN_CHANNELS,
         "this build reads {IN_CHANNELS} input planes"
@@ -63,7 +78,9 @@ fn main() {
 
     let reference: Option<Vec<f32>> = arg("--reference").map(|p| {
         let b = std::fs::read(p).expect("read reference");
-        b.chunks_exact(4)
+        b.as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect()
     });

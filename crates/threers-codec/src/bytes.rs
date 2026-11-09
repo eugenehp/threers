@@ -162,7 +162,14 @@ mod mmap {
     const MADV_SEQUENTIAL: i32 = 2;
 
     unsafe extern "C" {
-        fn mmap(addr: *mut c_void, len: usize, prot: i32, flags: i32, fd: i32, offset: i64) -> *mut c_void;
+        fn mmap(
+            addr: *mut c_void,
+            len: usize,
+            prot: i32,
+            flags: i32,
+            fd: i32,
+            offset: i64,
+        ) -> *mut c_void;
         fn munmap(addr: *mut c_void, len: usize) -> i32;
         fn madvise(addr: *mut c_void, len: usize, advice: i32) -> i32;
     }
@@ -184,8 +191,18 @@ mod mmap {
             if len == 0 {
                 return Ok(None);
             }
-            let len = usize::try_from(len).map_err(|_| std::io::Error::other("file too large to map"))?;
-            let ptr = unsafe { mmap(std::ptr::null_mut(), len, PROT_READ, MAP_PRIVATE, file.as_raw_fd(), 0) };
+            let len =
+                usize::try_from(len).map_err(|_| std::io::Error::other("file too large to map"))?;
+            let ptr = unsafe {
+                mmap(
+                    std::ptr::null_mut(),
+                    len,
+                    PROT_READ,
+                    MAP_PRIVATE,
+                    file.as_raw_fd(),
+                    0,
+                )
+            };
             if ptr as isize == -1 {
                 return Err(std::io::Error::last_os_error());
             }
@@ -223,10 +240,16 @@ mod tests {
         assert_eq!(&mapped[..], &data[..]);
         let shared = mapped.clone();
         drop(mapped);
-        assert_eq!(shared[99_999], data[99_999], "a clone keeps the mapping alive");
+        assert_eq!(
+            shared[99_999], data[99_999],
+            "a clone keeps the mapping alive"
+        );
         drop(shared);
         std::fs::write(&path, b"").unwrap();
-        assert!(Bytes::map(&path).unwrap().is_empty(), "an empty file maps to nothing");
+        assert!(
+            Bytes::map(&path).unwrap().is_empty(),
+            "an empty file maps to nothing"
+        );
         std::fs::remove_file(&path).unwrap();
         assert!(Bytes::from(vec![1, 2, 3]).iter().eq([1u8, 2, 3].iter()));
     }

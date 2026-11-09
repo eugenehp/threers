@@ -114,7 +114,9 @@ fn read_set(name: &str, fields: &[(String, UsdValue)]) -> ClipSet {
             return Vec::new();
         };
         let flat = value.flat_f32();
-        flat.chunks_exact(2)
+        flat.as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| (p[0] as f64, p[1] as f64))
             .collect()
     };
@@ -153,12 +155,12 @@ fn read_set(name: &str, fields: &[(String, UsdValue)]) -> ClipSet {
 /// Without one every attribute on the prim is a candidate, which is what USD
 /// falls back to and is only slower rather than wrong.
 pub fn animated_names(manifest: Option<&UsdLayer>, prim_path: &str, prim: &UsdPrim) -> Vec<String> {
-    if let Some(manifest) = manifest {
-        if let Some(found) = manifest.prim_at(prim_path) {
-            let names: Vec<String> = found.properties.iter().map(|p| p.name.clone()).collect();
-            if !names.is_empty() {
-                return names;
-            }
+    if let Some(manifest) = manifest
+        && let Some(found) = manifest.prim_at(prim_path)
+    {
+        let names: Vec<String> = found.properties.iter().map(|p| p.name.clone()).collect();
+        if !names.is_empty() {
+            return names;
         }
     }
     prim.properties.iter().map(|p| p.name.clone()).collect()

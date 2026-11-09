@@ -464,24 +464,24 @@ impl<'a> Integrator<'a> {
         }
 
         // --- emissive geometry, with MIS against the BSDF.
-        if !self.scene.emissive.is_empty() {
-            if let Some(es) = sample_emissive(self.scene, info.p, rng) {
-                let (f, bsdf_pdf) = bsdf.eval(wo, es.direction);
-                let cos = es.direction.dot(info.ns).abs();
-                if cos > 0.0 && es.pdf > 0.0 && f.length_sq() > 0.0 {
-                    // Stop just short of the emitter so the shadow ray does not
-                    // hit the very triangle it is aimed at.
-                    let t_max = es.distance * (1.0 - 1e-3);
-                    let vis = self.visibility(shadow_origin, es.direction, t_max, scratch);
-                    if vis.length_sq() > 0.0 {
-                        let mis = power_heuristic(1.0, es.pdf, 1.0, bsdf_pdf);
-                        let c = throughput
-                            .mul_componentwise(f)
-                            .mul_componentwise(es.radiance)
-                            .mul_componentwise(vis)
-                            * (cos * mis / es.pdf);
-                        self.emit(radiance, c, bounce);
-                    }
+        if !self.scene.emissive.is_empty()
+            && let Some(es) = sample_emissive(self.scene, info.p, rng)
+        {
+            let (f, bsdf_pdf) = bsdf.eval(wo, es.direction);
+            let cos = es.direction.dot(info.ns).abs();
+            if cos > 0.0 && es.pdf > 0.0 && f.length_sq() > 0.0 {
+                // Stop just short of the emitter so the shadow ray does not
+                // hit the very triangle it is aimed at.
+                let t_max = es.distance * (1.0 - 1e-3);
+                let vis = self.visibility(shadow_origin, es.direction, t_max, scratch);
+                if vis.length_sq() > 0.0 {
+                    let mis = power_heuristic(1.0, es.pdf, 1.0, bsdf_pdf);
+                    let c = throughput
+                        .mul_componentwise(f)
+                        .mul_componentwise(es.radiance)
+                        .mul_componentwise(vis)
+                        * (cos * mis / es.pdf);
+                    self.emit(radiance, c, bounce);
                 }
             }
         }

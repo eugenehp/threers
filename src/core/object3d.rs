@@ -20,7 +20,8 @@ pub enum ObjectKind {
     Sprite(Sprite),
     InstancedMesh(InstancedMesh),
     SkinnedMesh(SkinnedMesh),
-    /// A sound source at this node. It draws nothing.
+    /// A sound source at this node. It draws nothing. (`audio` feature.)
+    #[cfg(feature = "audio")]
     Audio(Box<crate::audio::PositionalAudio>),
 }
 
@@ -122,6 +123,7 @@ impl Object3D {
 
     /// A sound source; [`Scene::audio_mix`](crate::Scene::audio_mix) says how
     /// loud it is from a listener.
+    #[cfg(feature = "audio")]
     pub fn audio(audio: crate::audio::PositionalAudio) -> Self {
         Self::with_kind(ObjectKind::Audio(Box::new(audio)))
     }
@@ -369,10 +371,10 @@ impl ObjectArena {
     /// Attach `child` under `parent`. If `child` already has a parent, it is
     /// detached first — matches three.js semantics.
     pub fn add_child(&mut self, parent: ObjectId, child: ObjectId) {
-        if let Some(old_parent) = self.nodes.get(child).and_then(|c| c.parent) {
-            if let Some(p) = self.nodes.get_mut(old_parent) {
-                p.children.retain(|c| *c != child);
-            }
+        if let Some(old_parent) = self.nodes.get(child).and_then(|c| c.parent)
+            && let Some(p) = self.nodes.get_mut(old_parent)
+        {
+            p.children.retain(|c| *c != child);
         }
         if let Some(c) = self.nodes.get_mut(child) {
             c.parent = Some(parent);
@@ -385,10 +387,10 @@ impl ObjectArena {
     /// Detach `child` from its parent.
     pub fn remove_child(&mut self, child: ObjectId) {
         let parent = self.nodes.get(child).and_then(|c| c.parent);
-        if let Some(p) = parent {
-            if let Some(parent_obj) = self.nodes.get_mut(p) {
-                parent_obj.children.retain(|c| *c != child);
-            }
+        if let Some(p) = parent
+            && let Some(parent_obj) = self.nodes.get_mut(p)
+        {
+            parent_obj.children.retain(|c| *c != child);
         }
         if let Some(c) = self.nodes.get_mut(child) {
             c.parent = None;
@@ -403,10 +405,10 @@ impl ObjectArena {
         self.remove_child(id);
         if let Some(node) = self.nodes.remove(id) {
             for c in node.children {
-                if let Some(child) = self.nodes.get_mut(c) {
-                    if child.parent == Some(id) {
-                        child.parent = None;
-                    }
+                if let Some(child) = self.nodes.get_mut(c)
+                    && child.parent == Some(id)
+                {
+                    child.parent = None;
                 }
             }
         }
@@ -467,17 +469,17 @@ impl ObjectArena {
             .collect();
         let old = std::mem::take(&mut self.nodes[parent].children);
         for c in old {
-            if !keep.contains(&c) {
-                if let Some(n) = self.nodes.get_mut(c) {
-                    n.parent = None;
-                }
+            if !keep.contains(&c)
+                && let Some(n) = self.nodes.get_mut(c)
+            {
+                n.parent = None;
             }
         }
         for &c in &keep {
-            if let Some(prev) = self.nodes[c].parent.filter(|p| *p != parent) {
-                if let Some(p) = self.nodes.get_mut(prev) {
-                    p.children.retain(|x| *x != c);
-                }
+            if let Some(prev) = self.nodes[c].parent.filter(|p| *p != parent)
+                && let Some(p) = self.nodes.get_mut(prev)
+            {
+                p.children.retain(|x| *x != c);
             }
             self.nodes[c].parent = Some(parent);
         }

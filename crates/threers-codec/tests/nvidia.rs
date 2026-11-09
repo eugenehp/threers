@@ -290,7 +290,7 @@ mod nv {
                 let bgra = dec.take(s.pts).unwrap();
                 let src = frame(i as u32);
                 let mut se = 0.0;
-                for (a, b) in src.chunks_exact(4).zip(bgra.chunks_exact(4)) {
+                for (a, b) in src.as_chunks::<4>().0.iter().zip(bgra.as_chunks::<4>().0) {
                     for (x, y) in [(a[0], b[2]), (a[1], b[1]), (a[2], b[0])] {
                         se += (x as f64 - y as f64).powi(2);
                     }

@@ -157,7 +157,7 @@ impl Umbrella {
         let count = positions.count();
 
         let mut sets: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); count];
-        for tri in index.chunks_exact(3) {
+        for tri in index.as_chunks::<3>().0 {
             for (a, b) in [(0, 1), (1, 2), (2, 0)] {
                 let (u, v) = (tri[a] as usize, tri[b] as usize);
                 if u < count && v < count && u != v {
@@ -261,7 +261,7 @@ mod tests {
         let mut geometry = SphereGeometry::new(1.0, 24, 12);
         let attr = geometry.get_attribute("position").unwrap().clone();
         let mut array = attr.array.clone();
-        for (i, v) in array.chunks_exact_mut(3).enumerate() {
+        for (i, v) in array.as_chunks_mut::<3>().0.iter_mut().enumerate() {
             let jitter = 1.0 + 0.12 * (((i * 2654435761) % 1000) as f32 / 1000.0 - 0.5);
             v[0] *= jitter;
             v[1] *= jitter;

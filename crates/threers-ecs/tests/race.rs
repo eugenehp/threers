@@ -659,7 +659,7 @@ fn rewind_cost() {
         tv_sec: i64,
         tv_nsec: i64,
     }
-    extern "C" {
+    unsafe extern "C" {
         fn clock_gettime(id: i32, t: *mut Timespec) -> i32;
     }
     let mut app = App::new();
@@ -693,11 +693,8 @@ fn the_race_on_metal_looks_like_the_race_on_wgpu() {
     let mut game = TestGame::new(race::build);
     game.seconds(race::COUNTDOWN as f64 + 1.0);
     let (width, height) = (320, 180);
-    std::env::remove_var("THREERS_BACKEND");
-    let wgpu = game.render(width, height);
-    std::env::set_var("THREERS_BACKEND", "metal");
-    let metal = game.render(width, height);
-    std::env::remove_var("THREERS_BACKEND");
+    let wgpu = game.render_on(width, height, threers::RenderBackend::Wgpu);
+    let metal = game.render_on(width, height, threers::RenderBackend::Metal);
     if let Some(dir) = std::env::var_os("THREERS_SAVE_FRAMES") {
         let dir = std::path::Path::new(&dir);
         std::fs::write(

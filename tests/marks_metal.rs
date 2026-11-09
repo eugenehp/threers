@@ -13,6 +13,7 @@ use threers::marks::{
     DensityMarks, Mark, MarkView, Origin, PointMarks, PolygonFeature, PolygonMarks, SegmentMarks,
     ShapeMarks, TextLabel, TextLabels,
 };
+use threers::RenderBackend;
 use threers::{
     BoxGeometry, Color, HeadlessRenderer, Mesh, Object3D, PerspectiveCamera, PlaneGeometry, Scene,
     StandardMaterial, Vector3,
@@ -51,19 +52,15 @@ fn camera() -> PerspectiveCamera {
 }
 
 fn build(metal: bool, msaa: u32) -> HeadlessRenderer {
-    // SAFETY: one test in this file; nothing else reads the environment.
-    unsafe {
-        if metal {
-            std::env::set_var("THREERS_BACKEND", "metal");
-        } else {
-            std::env::remove_var("THREERS_BACKEND");
-        }
-    }
     let mut hr = HeadlessRenderer::builder()
+        .backend(if metal {
+            RenderBackend::Metal
+        } else {
+            RenderBackend::Wgpu
+        })
         .size(W, H)
         .build()
         .expect("headless renderer");
-    unsafe { std::env::remove_var("THREERS_BACKEND") };
     hr.set_msaa(msaa);
     assert_eq!(hr.is_native_metal(), metal);
     hr
@@ -72,8 +69,10 @@ fn build(metal: bool, msaa: u32) -> HeadlessRenderer {
 fn diff(a: &[u8], b: &[u8]) -> (f64, u8) {
     assert_eq!(a.len(), b.len());
     let mut d: Vec<u8> = a
-        .chunks_exact(4)
-        .zip(b.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
         .flat_map(|(p, q)| (0..3).map(move |c| p[c].abs_diff(q[c])))
         .collect();
     let mean = d.iter().map(|&v| v as f64).sum::<f64>() / d.len() as f64;
@@ -190,8 +189,10 @@ fn marks_on_metal_draw_what_they_draw_on_wgpu() {
                 let drawn = hr.read_rgba();
                 // The marks are there: a few hundred pixels of them.
                 let changed = bare
-                    .chunks_exact(4)
-                    .zip(drawn.chunks_exact(4))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(drawn.as_chunks::<4>().0)
                     .filter(|(a, b)| a != b)
                     .count();
                 assert!(

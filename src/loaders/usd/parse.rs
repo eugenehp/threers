@@ -443,11 +443,11 @@ impl Parser<'_> {
                     // operation in front of it, not a bare word followed by a
                     // field. Keeping them together is what lets the writer put
                     // the line back as it found it.
-                    if matches!(key.as_str(), "prepend" | "append" | "delete" | "add") {
-                        if let Some(Token::Ident(next)) = self.peek().cloned() {
-                            self.at += 1;
-                            key = format!("{key} {next}");
-                        }
+                    if matches!(key.as_str(), "prepend" | "append" | "delete" | "add")
+                        && let Some(Token::Ident(next)) = self.peek().cloned()
+                    {
+                        self.at += 1;
+                        key = format!("{key} {next}");
                     }
                     if self.eat_punct('=') {
                         let v = self.value()?;

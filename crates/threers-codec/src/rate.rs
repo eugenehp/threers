@@ -197,23 +197,23 @@ impl RateControl {
         // Two frames at different quantizers are a measurement of the slope.
         // Frames at the same quantizer are not, and neither is a pair a step
         // apart, where the content's own variation swamps the signal.
-        if let Some((q0, lg0)) = self.last {
-            if (q - q0).abs() >= 2.0 {
-                let obs = ((lg0 - lg) / (q - q0)).clamp(SLOPE_RANGE.0, SLOPE_RANGE.1);
-                // Trust the first real measurement outright. Blending it with
-                // the default drags the estimate toward a slope that describes
-                // some other content, and on steep material that error is worth
-                // ten quantizer steps — which is what set the oscillation off.
-                // Weighted hard toward the newest measurement. The slope is not
-                // one number — it is 0.12 where there is still detail to lose
-                // and 0.44 once most coefficients have gone — so an estimate
-                // that averages across regions describes neither, and an
-                // underestimate makes every correction overshoot. Swept against
-                // real encodes: 0.4 left a 30% miss where 0.7 leaves 8%.
-                let w = if self.pairs == 0 { 1.0 } else { 0.7 };
-                self.slope = self.slope * (1.0 - w) + obs * w;
-                self.pairs += 1;
-            }
+        if let Some((q0, lg0)) = self.last
+            && (q - q0).abs() >= 2.0
+        {
+            let obs = ((lg0 - lg) / (q - q0)).clamp(SLOPE_RANGE.0, SLOPE_RANGE.1);
+            // Trust the first real measurement outright. Blending it with
+            // the default drags the estimate toward a slope that describes
+            // some other content, and on steep material that error is worth
+            // ten quantizer steps — which is what set the oscillation off.
+            // Weighted hard toward the newest measurement. The slope is not
+            // one number — it is 0.12 where there is still detail to lose
+            // and 0.44 once most coefficients have gone — so an estimate
+            // that averages across regions describes neither, and an
+            // underestimate makes every correction overshoot. Swept against
+            // real encodes: 0.4 left a 30% miss where 0.7 leaves 8%.
+            let w = if self.pairs == 0 { 1.0 } else { 0.7 };
+            self.slope = self.slope * (1.0 - w) + obs * w;
+            self.pairs += 1;
         }
         self.last = Some((q, lg));
         self.prev_qp = Some(qp);
@@ -262,11 +262,11 @@ impl RateControl {
     pub fn seed_pair(&mut self, qp: i32, bytes: usize) {
         let lg = (bytes.max(1) as f64).log2();
         let q = f64::from(qp);
-        if let Some((q0, lg0)) = self.last {
-            if (q - q0).abs() >= 2.0 {
-                self.slope = ((lg0 - lg) / (q - q0)).clamp(SLOPE_RANGE.0, SLOPE_RANGE.1);
-                self.pairs += 1;
-            }
+        if let Some((q0, lg0)) = self.last
+            && (q - q0).abs() >= 2.0
+        {
+            self.slope = ((lg0 - lg) / (q - q0)).clamp(SLOPE_RANGE.0, SLOPE_RANGE.1);
+            self.pairs += 1;
         }
         self.k = lg + q * self.slope;
         self.last = Some((q, lg));

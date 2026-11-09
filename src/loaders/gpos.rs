@@ -274,14 +274,14 @@ fn x_advance(
         // XAdvDevice: after XAdvance, YAdvance, XPlaDevice, YPlaDevice.
         let dev_at = record + 2 * (format & 0x003F).count_ones() as usize;
         let dev = u16_at(b, dev_at)? as usize;
-        if dev != 0 {
-            if let Some(store) = store {
-                let d = base + dev;
-                // A VariationIndex table (deltaFormat 0x8000); hinting device
-                // tables are for one ppem and are not applied.
-                if u16_at(b, d + 4)? == 0x8000 {
-                    v += store.delta(u16_at(b, d)?, u16_at(b, d + 2)?);
-                }
+        if dev != 0
+            && let Some(store) = store
+        {
+            let d = base + dev;
+            // A VariationIndex table (deltaFormat 0x8000); hinting device
+            // tables are for one ppem and are not applied.
+            if u16_at(b, d + 4)? == 0x8000 {
+                v += store.delta(u16_at(b, d)?, u16_at(b, d + 2)?);
             }
         }
     }

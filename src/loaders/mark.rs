@@ -14,12 +14,12 @@
 //!
 //! A dot the shaper decomposed a letter into has **no codepoint** — nothing in `cmap`
 //! reaches it — so no property of a character can identify it. `GDEF`'s `GlyphClassDef`
-//! says so, by putting it in class 3. [`Marks::attach`] reads that map **once** per run
+//! says so, by putting it in class 3. `Marks::attach` reads that map **once** per run
 //! rather than once per glyph, which is why there is no public "is this a mark".
 //!
 //! # Every script, unlike `GPOS` kerning
 //!
-//! [`super::gpos::feature_lookups`] prefers the `latn` script, which is right for kerning
+//! `gpos::feature_lookups` prefers the `latn` script, which is right for kerning
 //! and wrong here: an Arabic font registers `mark` under `arab`, and asking for `latn`
 //! finds nothing. So this scans the `FeatureList` directly and takes every `mark` and
 //! `mkmk` feature whatever script registers it. Anchors are per glyph pair and do not
@@ -138,25 +138,25 @@ impl<'a> Marks<'a> {
             // `mark` attaches to the nearest preceding glyph that is not a mark; `mkmk`
             // to the immediately preceding mark, and overwrites — which is what stacks a
             // second mark on the first rather than on the base both of them cover.
-            if let Some(b) = (0..i).rev().find(|j| !is_mark(glyphs[*j])) {
-                if let Some((dx, dy)) = self.anchor_pair(*g, glyphs[b], 0, self.mkmk_at) {
-                    out[i] = Attachment {
-                        to: u16::try_from(b).ok(),
-                        dx,
-                        dy,
-                    };
-                }
+            if let Some(b) = (0..i).rev().find(|j| !is_mark(glyphs[*j]))
+                && let Some((dx, dy)) = self.anchor_pair(*g, glyphs[b], 0, self.mkmk_at)
+            {
+                out[i] = Attachment {
+                    to: u16::try_from(b).ok(),
+                    dx,
+                    dy,
+                };
             }
-            if i > 0 && is_mark(glyphs[i - 1]) {
-                if let Some((dx, dy)) =
+            if i > 0
+                && is_mark(glyphs[i - 1])
+                && let Some((dx, dy)) =
                     self.anchor_pair(*g, glyphs[i - 1], self.mkmk_at, self.lookups.len())
-                {
-                    out[i] = Attachment {
-                        to: u16::try_from(i - 1).ok(),
-                        dx,
-                        dy,
-                    };
-                }
+            {
+                out[i] = Attachment {
+                    to: u16::try_from(i - 1).ok(),
+                    dx,
+                    dy,
+                };
             }
         }
         out

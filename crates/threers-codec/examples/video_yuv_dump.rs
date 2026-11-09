@@ -2,12 +2,16 @@
 //! u16 LE) in presentation order, for comparison with
 //! `ffmpeg -i IN -f rawvideo -pix_fmt yuv420p -fps_mode passthrough OUT`.
 //!
-//!   cargo run --release --example video_yuv_dump --features video,native-codec -- IN OUT.yuv
+//!   cargo run --release -p threers-codec --example video_yuv_dump -- IN OUT.yuv
 use threers_codec::decode::NativeDecoder;
 use threers_codec::mp4_demux::demux_video;
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
+    if a.len() < 3 {
+        eprintln!("usage: video_yuv_dump IN OUT.yuv");
+        std::process::exit(2);
+    }
     let data = std::fs::read(&a[1]).expect("read");
     let track = demux_video(&data).expect("demux");
     let mut dec = NativeDecoder::new(&track).expect("decoder");

@@ -225,13 +225,12 @@ impl State {
     unsafe fn copy_out(&mut self, index: c_int) -> Result<PackedFrame, String> {
         let fmt = self.format.ok_or("a picture before the sequence header")?;
         let cuda = super::cuda().ok_or("CUDA went away")?;
-        let mut proc: ProcParams = std::mem::zeroed();
+        let mut proc: ProcParams = unsafe { std::mem::zeroed() };
         proc.progressive_frame = 1;
         let (mut dptr, mut pitch) = (0u64, 0u32);
-        check(
-            "cuvidMapVideoFrame",
-            (self.cuvid.map)(self.decoder, index, &mut dptr, &mut pitch, &mut proc),
-        )?;
+        check("cuvidMapVideoFrame", unsafe {
+            (self.cuvid.map)(self.decoder, index, &mut dptr, &mut pitch, &mut proc)
+        })?;
         let [left, top, right, bottom] = fmt.display_area;
         let (w, h) = ((right - left) as usize, (bottom - top) as usize);
         let deep = fmt.bit_depth_luma_minus8 > 0;
@@ -255,7 +254,7 @@ impl State {
             m.dst_pitch = width;
             m.width_in_bytes = width;
             m.height = rows;
-            check("cuMemcpy2D", (cuda.memcpy_2d)(&m))
+            check("cuMemcpy2D", unsafe { (cuda.memcpy_2d)(&m) })
         };
         let r = copy(
             dptr,
@@ -276,12 +275,12 @@ impl State {
                 h.div_ceil(2),
             )
         });
-        (self.cuvid.unmap)(self.decoder, dptr);
+        unsafe { (self.cuvid.unmap)(self.decoder, dptr) };
         r?;
         // Both copies wrote whole rows, `width` bytes apart, over each
         // buffer's length.
-        luma.set_len(luma_len);
-        chroma.set_len(chroma_len);
+        unsafe { luma.set_len(luma_len) };
+        unsafe { chroma.set_len(chroma_len) };
 
         let vsd = fmt.video_signal_description;
         let full_range = vsd[0] & 0x08 != 0;
@@ -308,8 +307,8 @@ impl State {
 }
 
 unsafe extern "C" fn on_sequence(user: *mut c_void, fmt: *mut VideoFormat) -> c_int {
-    let s = &mut *(user as *mut State);
-    let f = *fmt;
+    let s = unsafe { &mut *(user as *mut State) };
+    let f = unsafe { *fmt };
     if f.chroma_format != CHROMA_420 {
         return s.fail(format!(
             "NVDEC path handles 4:2:0 only (chroma format {})",
@@ -318,10 +317,10 @@ unsafe extern "C" fn on_sequence(user: *mut c_void, fmt: *mut VideoFormat) -> c_
     }
     let surfaces = (f.min_num_decode_surfaces as c_ulong).max(1) + 4;
     if !s.decoder.is_null() {
-        (s.cuvid.destroy_decoder)(s.decoder);
+        unsafe { (s.cuvid.destroy_decoder)(s.decoder) };
         s.decoder = std::ptr::null_mut();
     }
-    let mut ci: CreateInfo = std::mem::zeroed();
+    let mut ci: CreateInfo = unsafe { std::mem::zeroed() };
     ci.width = f.coded_width as c_ulong;
     ci.height = f.coded_height as c_ulong;
     ci.max_width = ci.width;
@@ -342,7 +341,7 @@ unsafe extern "C" fn on_sequence(user: *mut c_void, fmt: *mut VideoFormat) -> c_
     ci.target_width = ci.width;
     ci.target_height = ci.height;
     ci.num_output_surfaces = 2;
-    let r = (s.cuvid.create_decoder)(&mut s.decoder, &mut ci);
+    let r = unsafe { (s.cuvid.create_decoder)(&mut s.decoder, &mut ci) };
     if r != 0 {
         return s.fail(format!(
             "cuvidCreateDecoder failed (CUDA error {r}): {}x{} codec {}",
@@ -354,29 +353,31 @@ unsafe extern "C" fn on_sequence(user: *mut c_void, fmt: *mut VideoFormat) -> c_
 }
 
 unsafe extern "C" fn on_decode(user: *mut c_void, pic: *mut c_void) -> c_int {
-    let s = &mut *(user as *mut State);
+    let s = unsafe { &mut *(user as *mut State) };
     if s.decoder.is_null() {
         return s.fail("a picture before the decoder was created".into());
     }
-    let r = (s.cuvid.decode_picture)(s.decoder, pic);
+    let r = unsafe { (s.cuvid.decode_picture)(s.decoder, pic) };
     if r != 0 {
         return s.fail(format!("cuvidDecodePicture failed (CUDA error {r})"));
     }
     if s.on_display {
         return 1;
     }
-    let index = *(pic as *const u8)
-        .add(PICPARAMS_CURR_PIC_IDX)
-        .cast::<c_int>();
+    let index = unsafe {
+        *(pic as *const u8)
+            .add(PICPARAMS_CURR_PIC_IDX)
+            .cast::<c_int>()
+    };
     s.picture(index)
 }
 
 unsafe extern "C" fn on_display(user: *mut c_void, info: *mut DispInfo) -> c_int {
-    let s = &mut *(user as *mut State);
+    let s = unsafe { &mut *(user as *mut State) };
     if info.is_null() || !s.on_display {
         return 1;
     }
-    s.picture((*info).picture_index)
+    s.picture(unsafe { (*info).picture_index })
 }
 
 /// A hardware decoder on an NVIDIA GPU's NVDEC engine, with the interface of

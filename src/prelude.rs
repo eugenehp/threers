@@ -90,22 +90,25 @@ pub use crate::math::{Color, Euler, Matrix3, Matrix4, Quaternion, Vector2, Vecto
 // twenty-six separate copies of the generator alone.
 pub use crate::easing::Easing;
 pub use crate::extras::SimplexNoise;
+pub use crate::math::ToneMapping;
 pub use crate::math::{
     convex_hull, delaunay, inverse_lerp, lerp, map_range, map_range_clamped, smootherstep,
     smoothstep, ticks, voronoi_cells, ColorRamp, RampSpace, Rng, ScaleLinear, ScaleLog, ScalePow,
 };
 pub use crate::math::{ColorScale, ColorSpace, Palette, ScaleKind};
 pub use crate::overlay::Overlay;
-pub use crate::renderer::{RenderTarget, Renderer, ToneMapping};
+#[cfg(feature = "render")]
+pub use crate::renderer::{RenderTarget, Renderer};
 pub use crate::scene::{FogParams, Scene};
 pub use crate::textures::{
     CubeTexture, DataTexture, Texture, TextureFilter, TextureFormat, TextureWrap,
 };
 
 /// Offscreen rendering, and the PNG round trip that usually follows it.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "render", not(target_arch = "wasm32")))]
 pub use crate::renderer::headless::{HeadlessBuilder, HeadlessConfig, HeadlessRenderer};
 cfg_apple! {
+    #[cfg(feature = "render")]
     pub use crate::renderer::layer::{LayerGpu, LayerRenderer};
 }
 pub use crate::utils::png::{decode_png, encode_png, PngImage};
@@ -166,8 +169,8 @@ pub mod helpers {
 #[cfg(feature = "bvh-csg")]
 pub mod csg {
     pub use crate::csg::{
-        CsgBrush, CsgEvaluator, CsgNode, CsgOperation, CsgOperationGroup, ADDITION, DIFFERENCE,
-        INTERSECTION, SUBTRACTION,
+        CsgBrush, CsgEvaluator, CsgNode, CsgOperation, CsgOperationGroup, TriangleIntersection,
+        ADDITION, DIFFERENCE, INTERSECTION, SUBTRACTION,
     };
 }
 
@@ -194,15 +197,15 @@ pub mod raytrace {
     };
 }
 
-/// Video and animation codecs (`native-codec`), and the decoders (`video` or
-/// `native-decode`). The codec crate's own prelude, `threers::codec::prelude`,
+/// Video and animation codecs (`native-codec`), and the decoders
+/// (`native-decode`). The codec crate's own prelude, `threers::codec::prelude`,
 /// goes further: audio, containers and every codec module.
 ///
 /// `h264` and `hevc` are imported as modules because both have a
 /// `CompressedEncoder`: write `h264::CompressedEncoder`.
 #[cfg(feature = "native-codec")]
 pub mod video {
-    #[cfg(any(feature = "video", feature = "native-decode"))]
+    #[cfg(feature = "native-decode")]
     pub use crate::codec::decode::{Backend, DecodedFrame, Decoder, NativeDecoder};
     pub use crate::codec::hevc::Yuv420Frame;
     pub use crate::codec::hw::{EncodeBackend, EncodeOptions, Mp4Encoder};

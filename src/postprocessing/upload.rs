@@ -15,13 +15,13 @@ pub fn texels(format: TextureFormat, data: &[u8], count: usize) -> Option<Vec<[f
     let mut out = Vec::with_capacity(count);
     match format {
         TextureFormat::Rgba8UnormSrgb => {
-            for p in data.chunks_exact(4).take(count) {
+            for p in data.as_chunks::<4>().0.iter().take(count) {
                 let d = crate::utils::srgb::srgb_to_linear;
                 out.push([d(p[0]), d(p[1]), d(p[2]), p[3] as f32 / 255.0]);
             }
         }
         TextureFormat::Rgba8Unorm => {
-            for p in data.chunks_exact(4).take(count) {
+            for p in data.as_chunks::<4>().0.iter().take(count) {
                 out.push([
                     p[0] as f32 / 255.0,
                     p[1] as f32 / 255.0,
@@ -37,7 +37,7 @@ pub fn texels(format: TextureFormat, data: &[u8], count: usize) -> Option<Vec<[f
             }
         }
         TextureFormat::Rgba16Float => {
-            for p in data.chunks_exact(8).take(count) {
+            for p in data.as_chunks::<8>().0.iter().take(count) {
                 let h = |i: usize| {
                     crate::renderer::gpu_texture::f16_bits_to_f32(u16::from_le_bytes([
                         p[i],
@@ -52,7 +52,13 @@ pub fn texels(format: TextureFormat, data: &[u8], count: usize) -> Option<Vec<[f
             if f.channels() == 1 {
                 out.extend(v.iter().take(count).map(|&x| [x, x, x, 1.0]));
             } else {
-                out.extend(v.chunks_exact(4).take(count).map(|p| [p[0], p[1], p[2], p[3]]));
+                out.extend(
+                    v.as_chunks::<4>()
+                        .0
+                        .iter()
+                        .take(count)
+                        .map(|p| [p[0], p[1], p[2], p[3]]),
+                );
             }
         }
         _ => return None,
@@ -72,10 +78,11 @@ pub fn texture_target(
         return renderer.registered_target(id);
     }
     let key = tex.id ^ (Arc::as_ptr(&tex.data) as u64).rotate_left(17);
-    if let Some((k, t)) = slot {
-        if *k == key && t.size() == (tex.width.max(1), tex.height.max(1)) {
-            return Some(t.clone());
-        }
+    if let Some((k, t)) = slot
+        && *k == key
+        && t.size() == (tex.width.max(1), tex.height.max(1))
+    {
+        return Some(t.clone());
     }
     let count = (tex.width * tex.height) as usize;
     let texels = texels(tex.format, &tex.data, count)?;
@@ -100,10 +107,10 @@ pub fn cube_atlas(
     slot: &mut Option<(usize, Target)>,
 ) -> Option<Target> {
     let key = Arc::as_ptr(cube) as usize;
-    if let Some((k, t)) = slot {
-        if *k == key {
-            return Some(t.clone());
-        }
+    if let Some((k, t)) = slot
+        && *k == key
+    {
+        return Some(t.clone());
     }
     let size = cube.size.max(1);
     let n = (size * size) as usize;
@@ -111,7 +118,9 @@ pub fn cube_atlas(
     for f in 0..6 {
         let face = match &cube.faces_f32 {
             Some(hdr) => hdr[f]
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .take(n)
                 .map(|c| [c[0], c[1], c[2], c[3]])
                 .collect(),

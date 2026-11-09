@@ -90,7 +90,7 @@
 // and iterating the rows instead hides which is which.
 #![allow(clippy::needless_range_loop)]
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "render", not(target_arch = "wasm32")))]
 use super::gpu_solve::GpuSolver;
 use crate::math::Vector3;
 
@@ -122,7 +122,7 @@ pub enum Solver {
 ///
 /// Acquiring an adapter is tens of milliseconds — more than a small solve —
 /// and nothing about it is per-problem.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "render", not(target_arch = "wasm32")))]
 fn shared_gpu() -> Option<&'static GpuSolver> {
     static GPU: std::sync::OnceLock<Option<GpuSolver>> = std::sync::OnceLock::new();
     GPU.get_or_init(GpuSolver::new).as_ref()
@@ -947,7 +947,7 @@ fn cpu_solve<const N: usize>(
 ///
 /// All or nothing deliberately: half the cases at one precision and half at
 /// another would give a tensor whose entries do not belong to one another.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "render", not(target_arch = "wasm32")))]
 fn gpu_solve<const N: usize>(
     loads: &[Vec<f64>],
     ke: &[[f64; N]; N],
@@ -976,8 +976,9 @@ fn gpu_solve<const N: usize>(
     Some(out)
 }
 
-/// No device in the browser — see the module declaration in `mod.rs`.
-#[cfg(target_arch = "wasm32")]
+/// No device in the browser or without `render` — see the module declaration
+/// in `mod.rs`.
+#[cfg(not(all(feature = "render", not(target_arch = "wasm32"))))]
 fn gpu_solve<const N: usize>(
     _loads: &[Vec<f64>],
     _ke: &[[f64; N]; N],
@@ -992,7 +993,7 @@ fn gpu_solve<const N: usize>(
 
 /// The cube root of a perfect cube, exactly. Only the device path needs it —
 /// everything else already has `n` in hand.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "render", not(target_arch = "wasm32")))]
 fn cbrt(elements: usize) -> usize {
     let mut n = (elements as f64).cbrt().round() as usize;
     while n * n * n > elements {

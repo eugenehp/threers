@@ -4,7 +4,7 @@ Spinning-cube setup — the three.js "hello world", headless.
 
 Same structure as a minimal three.js app; Python uses the native bindings
 for offscreen PNG export. For the full THREE.* API in the browser, use the
-npm package (`import THREE from 'threers'`).
+npm package (`import THREE from '@threers/threers'`).
 
 three.js (JavaScript)                    →  threers (Python)
 ─────────────────────────────────────────────────────────────

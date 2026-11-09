@@ -331,13 +331,12 @@ vertex {vertex} {prefix}vs_blur(uint vid [[vertex_id]]{vertex_u}) {{
     fn parsed(&self, uniforms: Option<&str>) -> Result<(Vec<Item>, Vec<FnItem>), String> {
         let items = parse_items(&self.source).map_err(|e| e.replace("shader!", "passes!"))?;
         check_names(&items, "passes!")?;
-        if let Some(name) = uniforms {
-            if !items
+        if let Some(name) = uniforms
+            && !items
                 .iter()
                 .any(|it| matches!(it, Item::Struct(st) if st.name == name))
-            {
-                return Err(format!("passes!: no `struct {name}` for the uniform block"));
-            }
+        {
+            return Err(format!("passes!: no `struct {name}` for the uniform block"));
         }
         let passes: Vec<FnItem> = items
             .iter()
@@ -429,10 +428,10 @@ fn check_names(items: &[Item], macro_name: &str) -> Result<(), String> {
             }
         }
         for w in f.body.windows(2) {
-            if w[0].is("let") || w[0].is("var") {
-                if let Some(name) = RESERVED.iter().find(|r| w[1].is(r)) {
-                    return bad(name, "a local");
-                }
+            if (w[0].is("let") || w[0].is("var"))
+                && let Some(name) = RESERVED.iter().find(|r| w[1].is(r))
+            {
+                return bad(name, "a local");
             }
         }
     }

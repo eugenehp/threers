@@ -691,11 +691,11 @@ impl QuadView {
             None
         };
 
-        if let Some(gc) = self.gap_color {
-            if self.gap > 0.0 || self.border > 0.0 {
-                surface.renderer().reset_scissor();
-                surface.clear(gc, 1.0);
-            }
+        if let Some(gc) = self.gap_color
+            && (self.gap > 0.0 || self.border > 0.0)
+        {
+            surface.renderer().reset_scissor();
+            surface.clear(gc, 1.0);
         }
         for (pane, rect) in self.panes(w, h) {
             if rect.width <= 0.0 || rect.height <= 0.0 {

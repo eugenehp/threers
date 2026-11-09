@@ -962,7 +962,9 @@ fn build_mip_chain(src: &Texture) -> Vec<(u32, u32, Vec<u8>)> {
 fn float_mip_chain(src: &Texture) -> Vec<(u32, u32, Vec<u8>)> {
     let (mut w, mut h) = (src.width.max(1), src.height.max(1));
     let n = src.format.channels();
-    let Some(mut level) = src.texels_f32() else { return Vec::new() };
+    let Some(mut level) = src.texels_f32() else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     while w > 1 || h > 1 {
         let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
@@ -986,7 +988,9 @@ fn float_mip_chain(src: &Texture) -> Vec<(u32, u32, Vec<u8>)> {
             }
         }
         let bytes = match src.format {
-            TextureFormat::Rgba16Float | TextureFormat::R16Float => crate::math::float::pack_f16(&next),
+            TextureFormat::Rgba16Float | TextureFormat::R16Float => {
+                crate::math::float::pack_f16(&next)
+            }
             _ => crate::math::float::pack_f32(&next),
         };
         out.push((nw, nh, bytes));

@@ -229,7 +229,11 @@ impl KinematicArm {
                 ),
             );
         }
-        let tool = world.add_body(RigidBody::kinematic().shape(Shape::ball(0.05)).friction(1.0));
+        let tool = world.add_body(
+            RigidBody::kinematic()
+                .shape(Shape::ball(0.05))
+                .friction(1.0),
+        );
 
         let mut arm = Self {
             solver,
@@ -408,10 +412,10 @@ impl ServoArm {
                     .unwrap_or(Quaternion::identity())
             };
             let relative = parent.conjugate().multiply(commanded);
-            if let Some(joint) = world.joint_mut(self.servos[i]) {
-                if let JointKind::Fixed { rest_rotation } = &mut joint.kind {
-                    *rest_rotation = relative;
-                }
+            if let Some(joint) = world.joint_mut(self.servos[i])
+                && let JointKind::Fixed { rest_rotation } = &mut joint.kind
+            {
+                *rest_rotation = relative;
             }
         }
     }

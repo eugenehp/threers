@@ -131,7 +131,6 @@ mod waterline;
 mod waves_gpu;
 mod world;
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use threers::marks::gpu;
@@ -143,9 +142,7 @@ use threers::{encode_png, HeadlessRenderer, OrbitControls, PointerEvent, Rendere
 use winit::{
     dpi::PhysicalPosition,
     event::{ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent},
-    event_loop::EventLoop,
     keyboard::Key,
-    window::WindowBuilder,
 };
 
 use preset::{Preset, Quality, QUALITY_LEVELS};
@@ -387,10 +384,10 @@ fn offscreen(args: &Args) {
     if let Some(r) = args.mask {
         world.set_water_mask([0.0, 0.0], r, 12.0);
     }
-    if args.no_waterline {
-        if let Some(w) = &mut world.waterline {
-            w.enabled = false;
-        }
+    if args.no_waterline
+        && let Some(w) = &mut world.waterline
+    {
+        w.enabled = false;
     }
     if let Some(c) = args.cam {
         world.camera.position = threers::Vector3::new(c[0], c[1], c[2]);
@@ -655,61 +652,60 @@ impl Input {
 }
 
 async fn windowed(args: Args) {
-    let event_loop = EventLoop::new().expect("event loop");
-    let window = Arc::new(
-        WindowBuilder::new()
-            .with_title(format!("threers — ocean water ({})", args.preset.name))
-            .with_inner_size(winit::dpi::LogicalSize::new(1280, 720))
-            .build(&event_loop)
-            .expect("window"),
-    );
+    let attributes = winit::window::Window::default_attributes()
+        .with_title(format!("threers — ocean water ({})", args.preset.name))
+        .with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
+    threers::sketch::run_window(attributes, move |window| {
+        // wgpu by default; the native Metal backend with `--features metal` and
+        // `THREERS_BACKEND=metal`.
+        let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
+        let gpu = view.marks_gpu();
 
-    // wgpu by default; the native Metal backend with `--features metal` and
-    // `THREERS_BACKEND=metal`.
-    let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
-    let gpu = view.marks_gpu();
+        let mut world =
+            World::build_with(&args.preset, &args.quality, view.aspect(), cascades(&args));
+        let mut waves = world.attach_waves(&gpu, &gpu, &mut view);
+        report(&world, &args.preset, &args.quality);
+        println!("  left-drag orbits · right-drag pans · scroll zooms");
 
-    let mut world = World::build_with(&args.preset, &args.quality, view.aspect(), cascades(&args));
-    let mut waves = world.attach_waves(&gpu, &gpu, &mut view);
-    report(&world, &args.preset, &args.quality);
-    println!("  left-drag orbits · right-drag pans · scroll zooms");
+        // TAA where the renderer has it; the frames keep coming here, so it has
+        // the history it needs.
+        if let Some(r) = view.renderer() {
+            r.set_taa(true);
+        }
 
-    // TAA where the renderer has it; the frames keep coming here, so it has
-    // the history it needs.
-    if let Some(r) = view.renderer() {
-        r.set_taa(true);
-    }
+        let mut controls = OrbitControls::new(&world.camera);
+        controls.min_distance = 8.0;
+        controls.max_distance = 2500.0;
+        // Let the camera go under. The surface is double-sided and shades from below,
+        // so there is something down there now.
+        controls.max_polar_angle = 3.05;
+        controls.min_distance = 2.0;
 
-    let mut controls = OrbitControls::new(&world.camera);
-    controls.min_distance = 8.0;
-    controls.max_distance = 2500.0;
-    // Let the camera go under. The surface is double-sided and shades from below,
-    // so there is something down there now.
-    controls.max_polar_angle = 3.05;
-    controls.min_distance = 2.0;
+        let mut input = Input {
+            rotating: false,
+            panning: false,
+            last: None,
+        };
+        let start = Instant::now();
+        let win = window.clone();
+        let mut fps_frames = 0u32;
+        let mut fps_since = Instant::now();
 
-    let mut input = Input {
-        rotating: false,
-        panning: false,
-        last: None,
-    };
-    let start = Instant::now();
-    let win = window.clone();
-    let mut fps_frames = 0u32;
-    let mut fps_since = Instant::now();
+        // Live state, so the keys below can drive the runtime API rather than
+        // needing the example restarted. This is the same API the browser build
+        // exposes to JavaScript — exercised here so it cannot rot untested.
+        let all_presets = preset::all();
+        let mut cur_preset = args.preset;
+        let mut cur_quality = args.quality;
+        let mut cur_cas = cascades(&args);
+        println!(
+            "  keys        1-8 preset · [ ] quality · c cascades · , . wind dir · - = wind speed"
+        );
+        println!(
+            "              s w sun · k clouds · e r exposure · o p choppiness · h surface report"
+        );
 
-    // Live state, so the keys below can drive the runtime API rather than
-    // needing the example restarted. This is the same API the browser build
-    // exposes to JavaScript — exercised here so it cannot rot untested.
-    let all_presets = preset::all();
-    let mut cur_preset = args.preset;
-    let mut cur_quality = args.quality;
-    let mut cur_cas = cascades(&args);
-    println!("  keys        1-8 preset · [ ] quality · c cascades · , . wind dir · - = wind speed");
-    println!("              s w sun · k clouds · e r exposure · o p choppiness · h surface report");
-
-    event_loop
-        .run(move |event, target| {
+        move |event, target| {
             let Event::WindowEvent { event, window_id } = event else {
                 return;
             };
@@ -935,6 +931,6 @@ async fn windowed(args: Args) {
                 }
                 _ => {}
             }
-        })
-        .expect("event loop");
+        }
+    });
 }

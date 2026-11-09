@@ -246,14 +246,13 @@ impl HeightField {
             );
             self.for_each_triangle_in_aabb(&probe, |tri| {
                 let triangle = threers::math::Triangle::new(tri[0], tri[1], tri[2]);
-                if let Some(hit) = ray.intersect_triangle(&triangle, false) {
-                    if hit <= max_toi && best.is_none_or(|(b, _)| hit < b) {
-                        if let Some(n) =
-                            crate::math::try_normalize((tri[1] - tri[0]).cross(tri[2] - tri[0]))
-                        {
-                            best = Some((hit, n));
-                        }
-                    }
+                if let Some(hit) = ray.intersect_triangle(&triangle, false)
+                    && hit <= max_toi
+                    && best.is_none_or(|(b, _)| hit < b)
+                    && let Some(n) =
+                        crate::math::try_normalize((tri[1] - tri[0]).cross(tri[2] - tri[0]))
+                {
+                    best = Some((hit, n));
                 }
             });
             if let Some((hit, _)) = best {
@@ -473,7 +472,7 @@ mod tests {
         );
 
         // Every drawn vertex must sit on the collision surface.
-        for chunk in positions.array.chunks_exact(3) {
+        for chunk in positions.array.as_chunks::<3>().0 {
             let h = field.height_at(chunk[0], chunk[2]).unwrap();
             assert!(
                 (chunk[1] - h).abs() < 1e-3,

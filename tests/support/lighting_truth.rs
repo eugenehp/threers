@@ -788,7 +788,9 @@ pub fn instanced_shadow_scene(caster: Caster) -> Scene {
     let mut g = BoxGeometry::new(s, s, s);
     let base = g.get_attribute("position").unwrap().array.clone();
     let shifted: Vec<f32> = base
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .flat_map(|p| [p[0] + INST_MORPH_SHIFT as f32, p[1], p[2]])
         .collect();
     g.set_morph_attribute("position", vec![BufferAttribute::new(shifted, 3)]);

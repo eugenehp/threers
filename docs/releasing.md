@@ -3,15 +3,19 @@
 Seven crates publish to **crates.io**. Language packages publish to npm and
 PyPI (not crates.io). See also [`docs/bindings.md`](bindings.md).
 
-| Artifact | Version | Registry | On the index (2026-11-06) |
+| Artifact | Version | Registry | On the index (2026-11-10) |
 |---|---|---|---|
+| `threers-math` | 0.0.12 | crates.io | not yet: its first publish; `threers::math`, with no dependencies |
+| `threers-captions` | 0.0.12 | crates.io | not yet: its first publish; the caption data model, with no dependencies |
+| `threers-audio` | 0.0.12 | crates.io | not yet: its first publish; `threers::audio`, on `threers-math` |
 | `threers-codec` | 0.0.12 | crates.io | 0.0.10 |
 | `threers-softbody` | 0.0.12 | crates.io | 0.0.10; the soft-body lattice and solver (`gpu` feature: WebGPU compute) |
 | `threers` | 0.0.12 | crates.io | 0.0.10 |
 | `threers-physics` | 0.0.12 | crates.io | 0.0.10 |
 | `threers-animation` | 0.0.12 | crates.io | 0.0.1 |
 | `threers-probe` | 0.0.12 | crates.io | 0.0.2 |
-| `threers` (npm ESM) | 0.0.12 | npm / Deno | not yet; **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
+| `threers-video` | 0.0.12 | crates.io | not yet: its first publish; video export, sequences and `VideoPlayer`, on top of `threers` |
+| `@threers/threers` (npm ESM) | 0.0.12 | npm / Deno | not yet; **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
 | `threers-node` | 0.0.12 | npm | not yet; per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
 | `threers` (PyPI) | 0.0.12 | PyPI | not yet; per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
 
@@ -26,9 +30,11 @@ steady tension does not yet hold the rod at a steady bend). All of them are work
 
 ## The order is not optional
 
-`threers` depends on `threers-codec` and `threers-softbody` by **path and
-version**, so those two go up first. Both companions depend on `threers` the
-same way:
+`threers` depends on `threers-math`, `threers-captions`, `threers-audio`,
+`threers-codec` and `threers-softbody` by **path and version** (all but the
+math optionally), so those go up first, each after what it depends on itself.
+The crates on top — physics, animation, probe and video — depend on `threers`
+the same way:
 
 ```toml
 # crates/threers-physics/Cargo.toml
@@ -48,11 +54,24 @@ which is not a fault, it is the ordering telling you about itself.
 
 ## Checklist
 
+Steps 0 to 5, less the hardware, conformance and GPU parity suites, are one
+command, which runs every step even when one fails and ends with a table:
+
+```bash
+CARGO_TARGET_DIR=/path/of/its/own ./scripts/release-all.sh verify
+FULL=1 ./scripts/release-all.sh verify     # and the two browser tests
+```
+
+Here they are one by one:
+
 ```bash
 # 0. Versions first, because a publish cannot be taken back: npm and crates.io
 #    both refuse to replace a version that is already up. `CHECK=1` exits
 #    non-zero when any root that tracks the crate version has drifted, and
 #    `release-all.sh publish` runs it before it uploads anything.
+#    `bump` moves every one of them, the lockfiles, the install snippets in the
+#    docs and the CHANGELOG together, and prints the report; review the diff.
+./scripts/release-versions.sh bump X.Y.Z
 CHECK=1 ./scripts/release-versions.sh
 
 # 1. Everything builds and passes.
@@ -83,7 +102,7 @@ cargo clippy --workspace --all-targets --all-features
 #     combination is exactly how `gpu` shipped needing `pollster` without
 #     depending on it: every check here passed, and `cargo add threers-physics
 #     --features gpu` would not have compiled.
-for f in captions mesh-bvh raytrace bvh-csg openscad manifold planet video \
+for f in render audio captions softbody mesh-bvh raytrace bvh-csg openscad manifold planet native-decode \
          native-codec metal videotoolbox parallel async rlx rlx-geo nurbs brep \
          brep-csg brep-kernel step assembly-check learned-denoise; do
   cargo build -p threers --no-default-features --features "$f" --lib || break
@@ -106,11 +125,15 @@ cargo test --release --test softbody_parity --test softbody_gpu -- --test-thread
 #     Needs a chromedriver on PATH; see docs/webgl.md.
 FEATURES=webgl TEST=webgl ./scripts/wasm-browser-test.sh
 
-# 3c. The codec crate on its own: every feature combination, its declared
-#     minimum Rust (1.87), and the targets its hardware backends build for.
+# 3c. The codec crate on its own: every feature combination, and the targets
+#     its hardware backends build for.
 cargo test -p threers-codec --release --all-features
 cargo test -p threers-codec --release --no-default-features
-cargo +1.87 check -p threers-codec --all-targets --all-features
+# Every crate declares edition 2024 and `rust-version = "1.99"`; check the
+# published ones on exactly that, with every feature.
+for c in threers-math threers-captions threers-audio threers-codec threers-softbody threers threers-physics threers-animation threers-probe threers-video; do
+  cargo +1.99 check -p "$c" --all-targets --all-features || break
+done
 cargo clippy -p threers-codec --all-targets --features vaapi,nvidia,parallel --target x86_64-unknown-linux-gnu
 cargo clippy -p threers-codec --all-targets --features nvidia --target x86_64-pc-windows-msvc
 
@@ -154,15 +177,27 @@ cargo doc --no-deps -p threers-codec --features vaapi,nvidia,gif,parallel --targ
 cargo package -p threers --list | wc -l
 cargo package -p threers                     # size, and it must compile from the tarball
 cargo package -p threers-softbody --features gpu   # and the new crates, from theirs
+# Several crates packaged at once are unpacked into a local registry under
+# ~/.cargo/registry/src/-<hash>/, and a second run reuses what is there for
+# the same name and version: after changing code without bumping, delete that
+# directory first, or the tarballs are checked against the old sources.
+cargo package -p threers-math
+cargo package -p threers-captions
+cargo package -p threers-audio
 cargo package -p threers-codec
 
-# 6. Then, in this order — the two threers depends on first.
+# 6. Then, in this order — what threers depends on first (math under audio,
+#    captions under the codecs), threers, then what sits on top of it.
+cargo publish -p threers-math
+cargo publish -p threers-captions
+cargo publish -p threers-audio
 cargo publish -p threers-codec
 cargo publish -p threers-softbody
 cargo publish -p threers
 cargo publish -p threers-physics             # only after the first is on the index
 cargo publish -p threers-probe               # likewise
 cargo publish -p threers-animation           # after threers-physics, which it depends on
+cargo publish -p threers-video               # after threers and threers-codec
 git tag -a v0.0.12 -m 'threers 0.0.12' && git push --tags
 
 # 7. Language packages — one script locally; CI on tag push.
@@ -179,20 +214,35 @@ git tag -a v0.0.12 -m 'threers 0.0.12' && git push --tags
 | Command | What it does |
 |---------|----------------|
 | `./scripts/release-all.sh` | Build npm ESM (mini+full), npm-node (host), PyPI wheel (host) |
+| `./scripts/release-all.sh verify` | The checklist's local checks, with a pass/fail table |
 | `./scripts/release-all.sh pack` | Above + `npm pack` tarballs |
-| `PUBLISH=1 ./scripts/release-all.sh publish` | Upload language packages |
-| `TARGETS=crates ./scripts/release-all.sh publish` | crates.io only |
-| `TARGETS=all PUBLISH=1 ./scripts/release-all.sh publish` | crates.io + language |
+| `PUBLISH=1 ./scripts/release-all.sh publish` | Upload everything not yet up: crates.io, then npm, then PyPI |
+| `TARGETS=crates PUBLISH=1 ./scripts/release-all.sh publish` | crates.io only |
+| `TARGETS=language PUBLISH=1 ./scripts/release-all.sh publish` | npm + PyPI only |
+
+`publish` can be run again at any point. A crate, npm package or PyPI wheel
+whose version is already up is skipped before it is built, and the run ends
+with a table of what it published, skipped and left pending. Locally,
+`threers-node` and the other platforms' wheels stay pending: CI builds them
+when the `v*` tag is pushed, and its uploads skip whatever is already up.
 
 ```bash
-./scripts/release-versions.sh   # print versions from every manifest
+./scripts/release-versions.sh            # print versions from every manifest
+./scripts/release-versions.sh bump X.Y.Z # move all of them to X.Y.Z
 ./scripts/release-all.sh pack
 PUBLISH=1 TARGETS=npm-esm ./scripts/release-all.sh publish   # just wasm npm
 ```
 
-**Multi-arch** (`@threers/node-*`, PyPI arm64/x64 matrix): push a `v*` tag or run
-`gh workflow run release-language-packages.yml` after secrets are set (`NPM_TOKEN`,
-PyPI trusted publishing).
+**Multi-arch** (`@threers/node-*`, PyPI arm64/x64 matrix): push a `v*` tag, or run
+`gh workflow run release-language-packages.yml -f publish=true` (without
+`-f publish=true` it only builds), after secrets are set (`NPM_TOKEN`, PyPI
+trusted publishing).
+
+npm uploads go through `scripts/npm-publish-once.sh`, which skips a version
+already on the registry, so a release that stopped halfway is fixed by
+running it again. A local publish will not put `threers-node` up until every
+`@threers/node-*` package it lists is on npm at the same version: a parent
+without one installs on that platform and then cannot load.
 
 ```bash
 # After crates.io publish + version bump:
@@ -201,12 +251,22 @@ git tag v0.0.12 && git push origin v0.0.12
 
 ## npm ESM (`crates/threers-js`)
 
-Publish root for browsers, Deno (`npm:threers`), and Node ESM. Day-to-day JS
+Publish root for browsers, Deno (`npm:@threers/threers`), and Node ESM. Day-to-day JS
 still lives under `web/`; `build.sh` stages **two** wasm variants:
+
+The package is **`@threers/threers`**, not `threers`: npm refuses the bare name
+as too similar to `three` (`E403 … Package name too similar to existing
+package three`). Everything on npm lives in the `threers` organisation, so
+create it once at <https://www.npmjs.com/org/create> (free for public
+packages) before the first publish, or every scoped upload fails with
+`Scope not found`. Scoped packages default to restricted access, which a free
+organisation cannot publish, so each manifest says
+`"publishConfig": { "access": "public" }`. `web/package.json` is the in-repo
+development copy and is `private`, so it cannot go up by mistake.
 
 | Entry | Cargo | Role |
 |-------|-------|------|
-| `threers` / `threers/mini` | `--no-default-features` | Smallest browser download (default) |
+| `threers` / `threers/mini` | `--no-default-features --features render,audio` | Smallest browser download (default): the renderer, and the audio nodes the shim exposes |
 | `threers/full` | `--features wasm-full` | OpenSCAD/CSG, NURBS, codecs, planet, raytrace |
 
 ```bash
@@ -287,15 +347,17 @@ curl -s -H 'User-Agent: threers-release' https://crates.io/api/v1/crates/threers
   | python3 -c "import json,sys; print(json.load(sys.stdin)['crate']['max_version'])"
 ```
 
-It reads 0.0.10, and 0.0.12 is what ships: 0.0.11 was prepared but never
-published or tagged, so the index goes straight from 0.0.10. Note that 0.0.10 was published
-but never tagged (the tags stop at `v0.0.9`), and 0.0.9 was tagged but never
-published: tag after publishing, so the two agree.
+The two have disagreed before: 0.0.9 was tagged but never published, 0.0.10
+was published days before it was tagged, and 0.0.11 was prepared but went out
+as neither — the index goes straight from 0.0.10 to 0.0.12. Tag after
+publishing, so the two agree. `release-versions.sh bump` reads the same
+signal: a version with neither a tag nor a crates.io release never shipped,
+so its CHANGELOG section is renamed rather than kept.
 
 Every published crate now carries the one workspace version, so they all go
 up together; `release-versions.sh` treats each as an aligned root. Several
-skip versions on the index because of that: `threers-animation` goes from
-0.0.1 to 0.0.12 and `threers-probe` from 0.0.2. `CHECK=1
+skip versions on the index because of that: `threers-animation` went from
+0.0.1 straight to the workspace version, and `threers-probe` from 0.0.2. `CHECK=1
 ./scripts/release-versions.sh` asks crates.io and fails if a published crate
 is not ahead of its version there — `cargo publish` cannot replace a version,
 so a stale one would otherwise fail at the upload and not before. Check any

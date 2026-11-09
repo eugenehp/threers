@@ -559,10 +559,10 @@ pub fn real(x: f64) -> String {
         s = format!("{head}.");
     }
     // `1e-7` round-trips but has no decimal point in its mantissa.
-    if let Some(pos) = s.find(['e', 'E']) {
-        if !s[..pos].contains('.') {
-            s.insert(pos, '.');
-        }
+    if let Some(pos) = s.find(['e', 'E'])
+        && !s[..pos].contains('.')
+    {
+        s.insert(pos, '.');
     }
     s
 }

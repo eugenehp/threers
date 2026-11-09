@@ -1841,7 +1841,9 @@ fn main() {
     let mut rgba = renderer.render_to_rgba(&mut scene, &camera);
 
     let lit = rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 24)
         .count();
     println!(

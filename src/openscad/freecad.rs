@@ -17,10 +17,10 @@
 //!
 //! # Writer / loader
 //!
-//! [`FcstdWriter`](crate::openscad::freecad::FcstdWriter) builds multi-object
+//! [`FcstdWriter`] builds multi-object
 //! documents with placements and metadata.
-//! [`FcstdLoader`](crate::openscad::freecad::FcstdLoader) returns a typed
-//! [`FcstdDocument`](crate::openscad::freecad::FcstdDocument) with a skip report — same
+//! [`FcstdLoader`] returns a typed
+//! [`FcstdDocument`] with a skip report — same
 //! “decline rather than approximate” rule as STEP: missing sidecars and bad
 //! kernels are named, not silently dropped without a record.
 
@@ -33,7 +33,12 @@ use std::fmt;
 /// Normalise a geometry to `(vertices, triangle indices)`.
 fn tri_data(g: &BufferGeometry) -> Option<(Vec<[f32; 3]>, Vec<u32>)> {
     let pos = &g.get_attribute("position")?.array;
-    let verts: Vec<[f32; 3]> = pos.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+    let verts: Vec<[f32; 3]> = pos
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|c| [c[0], c[1], c[2]])
+        .collect();
     if verts.len() < 3 {
         return None;
     }
@@ -419,7 +424,7 @@ fn facet_neighbours(indices: &[u32]) -> Vec<[u32; 3]> {
     let n = indices.len() / 3;
     let mut edge_owner: HashMap<(u32, u32), (u32, u8)> = HashMap::with_capacity(n * 3);
     let mut neigh = vec![[0xFFFF_FFFFu32; 3]; n];
-    for (fi, t) in indices.chunks_exact(3).enumerate() {
+    for (fi, t) in indices.as_chunks::<3>().0.iter().enumerate() {
         let fi = fi as u32;
         for e in 0u8..3 {
             let a = t[e as usize];
@@ -506,7 +511,7 @@ MESH-MESH-MESH-\n";
     } else {
         vec![[0xFFFF_FFFFu32; 3]; n_fts as usize]
     };
-    for (ti, t) in indices.chunks_exact(3).enumerate() {
+    for (ti, t) in indices.as_chunks::<3>().0.iter().enumerate() {
         out.extend_from_slice(&t[0].to_le_bytes());
         out.extend_from_slice(&t[1].to_le_bytes());
         out.extend_from_slice(&t[2].to_le_bytes());
@@ -834,11 +839,11 @@ fn parse_document_meshes(xml: &str) -> Vec<DocMesh> {
         for frag in block.split("<Mesh").skip(1) {
             let Some(gt2) = frag.find('>') else { continue };
             let tag = &frag[..gt2];
-            if let Some(f) = xml_attr_str(tag, "file") {
-                if !f.is_empty() {
-                    bms_file = Some(f.to_string());
-                    break;
-                }
+            if let Some(f) = xml_attr_str(tag, "file")
+                && !f.is_empty()
+            {
+                bms_file = Some(f.to_string());
+                break;
             }
         }
         let Some(bms_file) = bms_file else { continue };
@@ -918,7 +923,7 @@ fn merge_meshes(meshes: &[FcstdMesh]) -> Option<BufferGeometry> {
         };
         let base = verts.len() as u32;
         verts.extend_from_slice(&v);
-        for t in idx.chunks_exact(3) {
+        for t in idx.as_chunks::<3>().0 {
             faces.push(vec![base + t[0], base + t[1], base + t[2]]);
         }
     }
@@ -940,7 +945,7 @@ fn merge_solid(meshes: &[FcstdMesh]) -> Option<Solid> {
         };
         let base = verts.len() as u32;
         verts.extend_from_slice(&v);
-        for t in idx.chunks_exact(3) {
+        for t in idx.as_chunks::<3>().0 {
             faces.push(vec![base + t[0], base + t[1], base + t[2]]);
         }
     }
@@ -1409,7 +1414,7 @@ mod tests {
                 + a[2] * (b[0] * c[1] - b[1] * c[0]);
         };
         if let Some(idx) = &g.index {
-            for t in idx.chunks_exact(3) {
+            for t in idx.as_chunks::<3>().0 {
                 tri(read(t[0]), read(t[1]), read(t[2]));
             }
         } else {

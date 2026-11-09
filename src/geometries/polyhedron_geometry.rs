@@ -40,7 +40,7 @@ impl PolyhedronGeometry {
 
         // `subdivide` / `subdivideFace`.
         let cols = detail + 1;
-        for tri in indices.chunks_exact(3) {
+        for tri in indices.as_chunks::<3>().0 {
             let (a, b, c) = (at(tri[0]), at(tri[1]), at(tri[2]));
             let mut grid: Vec<Vec<V>> = Vec::with_capacity(cols + 1);
             for i in 0..=cols {
@@ -95,7 +95,7 @@ impl PolyhedronGeometry {
             let w = inclination(v) / PI + 0.5;
             uvs.extend_from_slice(&[u, 1.0 - w]);
         }
-        for (f, face) in buffer.chunks_exact(3).enumerate() {
+        for (f, face) in buffer.as_chunks::<3>().0.iter().enumerate() {
             let j = f * 6;
             let (ua, ub, uc) = (uvs[j], uvs[j + 2], uvs[j + 4]);
             // `copy(a).add(b).add(c).divideScalar(3)`.
@@ -159,7 +159,7 @@ impl PolyhedronGeometry {
             }
         }
         // `normalizeNormals`, on the stored values.
-        for n in normals.chunks_exact_mut(3) {
+        for n in normals.as_chunks_mut::<3>().0 {
             let (x, y, z) = (n[0] as f64, n[1] as f64, n[2] as f64);
             let len = (x * x + y * y + z * z).sqrt();
             let inv = 1.0 / if len == 0.0 { 1.0 } else { len };

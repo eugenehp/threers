@@ -71,10 +71,10 @@ fn draw(
         scene.add(Object3D::light(Light::Directional(l)));
     }
     let id = scene.add(particles_object(system));
-    if let Some(o) = scene.get_mut(id) {
-        if let ObjectKind::InstancedMesh(m) = &mut o.kind {
-            write_instances(system, m, Some(eye));
-        }
+    if let Some(o) = scene.get_mut(id)
+        && let ObjectKind::InstancedMesh(m) = &mut o.kind
+    {
+        write_instances(system, m, Some(eye));
     }
     let mut camera = PerspectiveCamera::new(40.0, 1.0, 0.05, 100.0);
     camera.position = eye;
@@ -263,17 +263,17 @@ fn alpha_particles_sort_back_to_front() {
         let mut scene = Scene::new();
         scene.background = Color::BLACK;
         let id = scene.add(particles_object(&s));
-        if let Some(o) = scene.get_mut(id) {
-            if let ObjectKind::InstancedMesh(m) = &mut o.kind {
-                write_instances(&s, m, Some(eye));
-                for (k, t) in m.transforms.iter().enumerate() {
-                    let near = t.elements[14] > 0.0;
-                    m.colors[k] = if near {
-                        Color::new(1.0, 0.0, 0.0)
-                    } else {
-                        Color::new(0.0, 0.0, 1.0)
-                    };
-                }
+        if let Some(o) = scene.get_mut(id)
+            && let ObjectKind::InstancedMesh(m) = &mut o.kind
+        {
+            write_instances(&s, m, Some(eye));
+            for (k, t) in m.transforms.iter().enumerate() {
+                let near = t.elements[14] > 0.0;
+                m.colors[k] = if near {
+                    Color::new(1.0, 0.0, 0.0)
+                } else {
+                    Color::new(0.0, 0.0, 1.0)
+                };
             }
         }
         let mut camera = PerspectiveCamera::new(40.0, 1.0, 0.05, 100.0);

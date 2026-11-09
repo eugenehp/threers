@@ -582,3 +582,251 @@ impl WebOrbitControls {
         self.inner.screen_space_panning = on;
     }
 }
+
+// ---- controls ----
+#[wasm_bindgen]
+pub struct WebOrbitControls {
+    pub(super) inner: crate::OrbitControls,
+}
+#[wasm_bindgen]
+impl WebOrbitControls {
+    #[wasm_bindgen(constructor)]
+    pub fn new(camera: &WebCamera) -> WebOrbitControls {
+        let c = match &camera.inner {
+            CameraInner::Perspective(p) => p.clone(),
+            _ => crate::PerspectiveCamera::new(60.0, 1.0, 0.1, 100.0),
+        };
+        WebOrbitControls {
+            inner: crate::OrbitControls::new(&c),
+        }
+    }
+    #[wasm_bindgen(js_name = setLimits)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_limits(
+        &mut self,
+        min_distance: f32,
+        max_distance: f32,
+        min_polar_angle: f32,
+        max_polar_angle: f32,
+        rotate_speed: f32,
+        zoom_speed: f32,
+        pan_speed: f32,
+        damping: f32,
+    ) {
+        self.inner.min_distance = min_distance.max(0.0);
+        self.inner.max_distance = max_distance.max(self.inner.min_distance);
+        self.inner.min_polar_angle = min_polar_angle;
+        self.inner.max_polar_angle = max_polar_angle;
+        self.inner.rotate_speed = rotate_speed;
+        self.inner.zoom_speed = zoom_speed;
+        self.inner.pan_speed = pan_speed;
+        self.inner.damping = damping;
+        self.inner.enable_damping = damping > 0.0;
+    }
+
+    /// Enable / tune inertia and auto-rotate (three.js parity).
+    #[wasm_bindgen(js_name = setMotion)]
+    pub fn set_motion(
+        &mut self,
+        enable_damping: bool,
+        damping: f32,
+        auto_rotate: bool,
+        auto_rotate_speed: f32,
+    ) {
+        self.inner.enable_damping = enable_damping;
+        self.inner.damping = damping.clamp(0.0, 1.0);
+        self.inner.auto_rotate = auto_rotate;
+        self.inner.auto_rotate_speed = auto_rotate_speed;
+    }
+
+    pub fn update(
+        &mut self,
+        camera: &mut WebCamera,
+        dx: f32,
+        dy: f32,
+        wheel: f32,
+        rotating: bool,
+        panning: bool,
+        w: f32,
+        h: f32,
+    ) {
+        self.update_dt(camera, dx, dy, wheel, rotating, panning, w, h, 1.0 / 60.0);
+    }
+
+    #[wasm_bindgen(js_name = updateDt)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_dt(
+        &mut self,
+        camera: &mut WebCamera,
+        dx: f32,
+        dy: f32,
+        wheel: f32,
+        rotating: bool,
+        panning: bool,
+        w: f32,
+        h: f32,
+        dt: f32,
+    ) {
+        let ev = crate::PointerEvent {
+            dx,
+            dy,
+            wheel,
+            rotating,
+            panning,
+            cursor: (0.0, 0.0),
+        };
+        if let CameraInner::Perspective(c) = &mut camera.inner {
+            self.inner.update_dt(ev, c, (w, h), dt);
+        }
+    }
+
+    #[wasm_bindgen(js_name = reseedFromCamera)]
+    pub fn reseed_from_camera(&mut self, camera: &WebCamera) {
+        if let CameraInner::Perspective(c) = &camera.inner {
+            self.inner.reseed_from_camera(c);
+        }
+    }
+
+    /// Orbit centre.
+    #[wasm_bindgen(js_name = setTarget)]
+    pub fn set_target(&mut self, x: f32, y: f32, z: f32) {
+        self.inner.target = crate::Vector3::new(x, y, z);
+    }
+}
+
+#[wasm_bindgen]
+pub struct WebTrackballControls {
+    pub(super) inner: crate::TrackballControls,
+}
+#[wasm_bindgen]
+impl WebTrackballControls {
+    #[wasm_bindgen(constructor)]
+    pub fn new(camera: &WebCamera) -> WebTrackballControls {
+        let c = match &camera.inner {
+            CameraInner::Perspective(p) => p.clone(),
+            _ => crate::PerspectiveCamera::new(60.0, 1.0, 0.1, 100.0),
+        };
+        WebTrackballControls {
+            inner: crate::TrackballControls::new(&c),
+        }
+    }
+    pub fn update(
+        &mut self,
+        camera: &mut WebCamera,
+        dx: f32,
+        dy: f32,
+        wheel: f32,
+        rotating: bool,
+        panning: bool,
+        w: f32,
+        h: f32,
+    ) {
+        let ev = crate::PointerEvent {
+            dx,
+            dy,
+            wheel,
+            rotating,
+            panning,
+            cursor: (0.0, 0.0),
+        };
+        if let CameraInner::Perspective(c) = &mut camera.inner {
+            self.inner.update(ev, c, (w, h));
+        }
+    }
+}
+
+#[wasm_bindgen]
+pub struct WebArcballControls {
+    pub(super) inner: crate::ArcballControls,
+}
+#[wasm_bindgen]
+impl WebArcballControls {
+    #[wasm_bindgen(constructor)]
+    pub fn new(camera: &WebCamera) -> WebArcballControls {
+        let c = match &camera.inner {
+            CameraInner::Perspective(p) => p.clone(),
+            _ => crate::PerspectiveCamera::new(60.0, 1.0, 0.1, 100.0),
+        };
+        WebArcballControls {
+            inner: crate::ArcballControls::new(&c),
+        }
+    }
+    #[wasm_bindgen(js_name = setTarget)]
+    pub fn set_target(&mut self, x: f32, y: f32, z: f32) {
+        self.inner.target = crate::Vector3::new(x, y, z);
+    }
+    pub fn update(
+        &mut self,
+        camera: &mut WebCamera,
+        ndc_x: f32,
+        ndc_y: f32,
+        wheel: f32,
+        rotating: bool,
+    ) {
+        let ev = crate::PointerEvent {
+            dx: 0.0,
+            dy: 0.0,
+            wheel,
+            rotating,
+            panning: false,
+            cursor: (0.0, 0.0),
+        };
+        let ndc = crate::Vector2::new(ndc_x, ndc_y);
+        if let CameraInner::Perspective(c) = &mut camera.inner {
+            self.inner.update(ndc, ev, c);
+        }
+    }
+}
+
+#[wasm_bindgen]
+pub struct WebFirstPersonControls {
+    pub(super) inner: crate::FirstPersonControls,
+}
+#[wasm_bindgen]
+impl WebFirstPersonControls {
+    #[wasm_bindgen(constructor)]
+    pub fn new(camera: &WebCamera) -> WebFirstPersonControls {
+        let c = match &camera.inner {
+            CameraInner::Perspective(p) => p.clone(),
+            _ => crate::PerspectiveCamera::new(60.0, 1.0, 0.1, 100.0),
+        };
+        WebFirstPersonControls {
+            inner: crate::FirstPersonControls::new(&c),
+        }
+    }
+    pub fn update(&mut self, camera: &mut WebCamera, dx: f32, dy: f32, dt: f32, rotating: bool) {
+        let ev = crate::PointerEvent {
+            dx,
+            dy,
+            wheel: 0.0,
+            rotating,
+            panning: false,
+            cursor: (0.0, 0.0),
+        };
+        if let CameraInner::Perspective(c) = &mut camera.inner {
+            self.inner.update(ev, c, dt);
+        }
+    }
+    #[wasm_bindgen(js_name = setMoveInput)]
+    pub fn set_move_input(&mut self, forward: f32, right: f32, up: f32) {
+        self.inner.move_input = crate::Vector3::new(forward, right, up);
+    }
+}
+
+#[wasm_bindgen]
+pub struct WebPointerLockControls {
+    pub(super) inner: crate::PointerLockControls,
+}
+#[wasm_bindgen]
+impl WebPointerLockControls {
+    #[wasm_bindgen(constructor)]
+    pub fn new(camera: &WebCamera) -> WebPointerLockControls {
+        let c = match &camera.inner {
+            CameraInner::Perspective(p) => p.clone(),
+            _ => crate::PerspectiveCamera::new(60.0, 1.0, 0.1, 100.0),
+        };
+        WebPointerLockControls {
+            inner: crate::PointerLockControls::new(&c),
+        }
+    }
+}

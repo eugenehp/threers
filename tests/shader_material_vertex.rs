@@ -145,7 +145,7 @@ fn the_vertex_stage_reads_the_user_data_and_the_storage_arrays() {
     };
     let narrow = render(small, blank_quad()).expect("second render");
 
-    let covered = |px: &[u8]| px.chunks_exact(4).filter(|p| p[0] > 128).count();
+    let covered = |px: &[u8]| px.as_chunks::<4>().0.iter().filter(|p| p[0] > 128).count();
     let (a, b) = (covered(&wide), covered(&narrow));
     assert!(a > 0 && b > 0, "neither quad drew anything ({a}, {b})");
     assert!(
@@ -232,7 +232,9 @@ fn the_pipeline_cache_tells_two_vertex_stages_apart() {
     let covered = |m: ShaderMaterial| -> Option<usize> {
         Some(
             render(m, blank_quad())?
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|p| p[0] > 128)
                 .count(),
         )

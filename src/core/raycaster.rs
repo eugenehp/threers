@@ -479,7 +479,9 @@ impl Raycaster {
             ObjectKind::LineSegments(ls) => self.raycast_line_segments(id, obj, ls, hits),
             ObjectKind::Points(p) => self.raycast_points(id, obj, p, hits),
             ObjectKind::Sprite(s) => self.raycast_sprite(id, obj, s, hits),
-            ObjectKind::Group | ObjectKind::Light(_) | ObjectKind::Audio(_) => {}
+            ObjectKind::Group | ObjectKind::Light(_) => {}
+            #[cfg(feature = "audio")]
+            ObjectKind::Audio(_) => {}
         }
     }
 
@@ -547,7 +549,7 @@ impl Raycaster {
             return;
         };
         let mut bounds = Box3::empty();
-        for p in posed.chunks_exact(3) {
+        for p in posed.as_chunks::<3>().0 {
             bounds.expand_by_point(Vector3::new(p[0], p[1], p[2]));
         }
         if bounds.is_empty() {
@@ -555,7 +557,9 @@ impl Raycaster {
         }
         let center = bounds.center();
         let r2 = posed
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|p| (Vector3::new(p[0], p[1], p[2]) - center).length_sq())
             .fold(0.0f32, f32::max);
         self.cast(
@@ -1006,10 +1010,11 @@ impl Raycaster {
         }
         // Not three.js, but safe: nothing in the grown sphere is nearer than
         // where the ray enters it.
-        if let Some(t) = self.ray.intersect_sphere(&sphere) {
-            if !sphere.contains_point(self.ray.origin) && t > hits.limit(self.far) {
-                return None;
-            }
+        if let Some(t) = self.ray.intersect_sphere(&sphere)
+            && !sphere.contains_point(self.ray.origin)
+            && t > hits.limit(self.far)
+        {
+            return None;
         }
         let local = self.ray.apply_matrix4(&obj.matrix_world.invert());
         let s = obj.scale;

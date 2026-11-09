@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use threers::marks::gpu;
+use threers::RenderBackend;
 use threers::{
     BasicMaterial, BufferGeometry, Color, HeadlessRenderer, Material, Mesh, Object3D,
     OrthographicCamera, PerspectiveCamera, PlaneGeometry, Scene, ShaderMaterial, Vector3,
@@ -33,24 +34,16 @@ fn build(metal: bool) -> HeadlessRenderer {
 }
 
 fn build_as(metal: bool, format: wgpu::TextureFormat) -> HeadlessRenderer {
-    // The backend is read from the environment as a renderer is built, and
-    // the tests here run at once: one build at a time.
-    static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
-    // SAFETY: the lock above; nothing else here reads the environment.
-    unsafe {
-        if metal {
-            std::env::set_var("THREERS_BACKEND", "metal");
-        } else {
-            std::env::remove_var("THREERS_BACKEND");
-        }
-    }
     let mut hr = HeadlessRenderer::builder()
+        .backend(if metal {
+            RenderBackend::Metal
+        } else {
+            RenderBackend::Wgpu
+        })
         .size(SIZE, SIZE)
         .color_format(format)
         .build()
         .expect("headless renderer");
-    unsafe { std::env::remove_var("THREERS_BACKEND") };
     hr.set_msaa(1);
     assert_eq!(hr.is_native_metal(), metal);
     hr

@@ -172,14 +172,20 @@ fn main() {
     std::fs::write(name, encode_png(sw as u32, sh as u32, &sheet)).unwrap();
     println!("wrote {name} (rows: source, faithful, ghost, raw, echo; frames {picks:?})");
 
-    #[cfg(feature = "video")]
+    // An MP4 per look, with the pure-Rust H.264 encoder.
+    #[cfg(feature = "native-codec")]
     for ((name, _), row) in looks.iter().zip(&rows[1..]) {
         let path = format!("time_smear/{name}.mp4");
-        let opts = threers::VideoOptions::new(&path)
-            .fps(30)
-            .codec(threers::VideoCodec::H264)
-            .crf(18);
-        threers::export_video(rw, rh, FRAMES, &opts, |i| row[i].clone()).expect("export");
+        let opts = threers::AnimationEncodeOptions {
+            width: rw,
+            height: rh,
+            fps: 30,
+            codec: threers::BrowserCodec::Mp4,
+            ..Default::default()
+        };
+        let bytes = threers::encode_animation_rgba(&opts, row.iter().take(FRAMES).cloned())
+            .expect("export");
+        std::fs::write(&path, bytes).expect("write mp4");
         println!("wrote {path}");
     }
 }

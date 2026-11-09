@@ -7,7 +7,7 @@ set -euo pipefail
 # (wasm-pack is not used — this drives cargo and wasm-bindgen directly.)
 #
 # Variants (browser download sizes):
-#   VARIANT=mini  — core renderer only (`--no-default-features`); smallest wasm
+#   VARIANT=mini  — core renderer only (`--no-default-features --features render,audio`); smallest wasm
 #   VARIANT=full  — `--features wasm-full` (openscad, codecs, nurbs, planet, raytrace, fluid)
 #   (unset)       — opt-in via MESH_BVH / BVH_CSG / OPENSCAD / NATIVE_CODEC / NATIVE_DECODE / FLUID / … flags
 #
@@ -43,14 +43,10 @@ WEB="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
 # wasm-bindgen's CLI must match the crate in Cargo.lock exactly; a mismatch
-# only shows after the whole cargo build, as a schema-version error. Check first.
-WB_LOCK=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)
-WB_CLI=$(wasm-bindgen --version 2>/dev/null | awk '{ print $2 }' || true)
-if [ -n "$WB_LOCK" ] && [ "$WB_CLI" != "$WB_LOCK" ]; then
-    echo "error: wasm-bindgen CLI is ${WB_CLI:-missing}, Cargo.lock has $WB_LOCK" >&2
-    echo "       cargo install -f wasm-bindgen-cli --version $WB_LOCK --locked" >&2
-    exit 1
-fi
+# only shows after the whole cargo build, as a schema-version error. Settle it
+# first, with a repo-local install if the one on PATH is another version.
+. "$ROOT/scripts/wasm-bindgen-cli.sh"
+use_matching_wasm_bindgen "$ROOT"
 
 PROFILE="${PROFILE:-release}"
 PROFILE_FLAG=""
@@ -72,8 +68,11 @@ NO_DEFAULT_FEATURES=""
 FEATURE_LIST=()
 
 if [ "$VARIANT" = "mini" ]; then
-    echo "==> Variant: mini (core renderer, --no-default-features)"
+    echo "==> Variant: mini (core renderer, --no-default-features --features render,audio)"
     NO_DEFAULT_FEATURES="--no-default-features"
+    # The renderer is itself a feature now; mini is the renderer and nothing
+    # else, plus audio, which the shim imports by name (`AudioListener`).
+    FEATURE_LIST+=("render" "audio")
     # Clear additive feature envs so a leftover OPENSCAD=1 cannot inflate mini.
     unset MESH_BVH BVH_CSG NATIVE_CODEC NATIVE_DECODE OPENSCAD NURBS BREP BREP_CSG BREP_KERNEL STEP RLX RLX_GEO FLUID || true
 elif [ "$VARIANT" = "full" ]; then
@@ -195,11 +194,15 @@ fi
 $CARGO_CMD build --target wasm32-unknown-unknown --lib $PROFILE_FLAG $NO_DEFAULT_FEATURES $FEATURES $BUILD_STD
 
 echo "==> Generating JS bindings into web/pkg..."
+# The profile strips debug info only, so wasm-bindgen can still read the
+# `target_features` section; the symbol names and producers go here instead.
 wasm-bindgen \
     "$TARGET_DIR/threers.wasm" \
     --target web \
     --out-dir web/pkg \
-    --no-typescript
+    --no-typescript \
+    --remove-name-section \
+    --remove-producers-section
 
 # --- wasm-opt -------------------------------------------------------------
 #

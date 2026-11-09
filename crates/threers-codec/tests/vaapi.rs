@@ -170,7 +170,11 @@ mod va {
                 matches!(p, Picture::Packed(_)),
                 !grain,
                 "{name}: VAAPI handed back {}",
-                if grain { "a picture without its film grain" } else { "planes, not the surface's NV12/P010" }
+                if grain {
+                    "a picture without its film grain"
+                } else {
+                    "planes, not the surface's NV12/P010"
+                }
             );
             p.into_decoded()
         })
@@ -568,8 +572,10 @@ mod va {
                 let bgra = dec.take(s.pts).unwrap();
                 let src = frame(i as u32);
                 let se: f64 = src
-                    .chunks_exact(4)
-                    .zip(bgra.chunks_exact(4))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(bgra.as_chunks::<4>().0)
                     .map(|(a, b)| {
                         [(a[0], b[2]), (a[1], b[1]), (a[2], b[0])]
                             .iter()

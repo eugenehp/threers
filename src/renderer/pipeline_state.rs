@@ -194,18 +194,18 @@ impl PipelineRecipe {
                 ds.bias.slope_scale = -ds.bias.slope_scale;
             }
         }
-        if !s.color_write {
-            if let Some((_, targets)) = r.fragment.as_mut() {
-                for t in targets.iter_mut().flatten() {
-                    t.write_mask = wgpu::ColorWrites::empty();
-                }
+        if !s.color_write
+            && let Some((_, targets)) = r.fragment.as_mut()
+        {
+            for t in targets.iter_mut().flatten() {
+                t.write_mask = wgpu::ColorWrites::empty();
             }
         }
-        if s.additive {
-            if let Some((_, targets)) = r.fragment.as_mut() {
-                for t in targets.iter_mut().flatten() {
-                    t.blend = Some(ADDITIVE);
-                }
+        if s.additive
+            && let Some((_, targets)) = r.fragment.as_mut()
+        {
+            for t in targets.iter_mut().flatten() {
+                t.blend = Some(ADDITIVE);
             }
         }
         r
@@ -365,13 +365,15 @@ impl Pipeline {
         recipe: PipelineRecipe,
         state: Option<ResolvedState>,
     ) -> Self {
-        Self(std::sync::Arc::new(PipelineInner::Deferred(Box::new(Deferred {
-            compiled: std::sync::OnceLock::new(),
-            device: device.clone(),
-            recipe,
-            state,
-            failure: std::sync::OnceLock::new(),
-        }))))
+        Self(std::sync::Arc::new(PipelineInner::Deferred(Box::new(
+            Deferred {
+                compiled: std::sync::OnceLock::new(),
+                device: device.clone(),
+                recipe,
+                state,
+                failure: std::sync::OnceLock::new(),
+            },
+        ))))
     }
 
     pub(crate) fn is_compiled(&self) -> bool {
@@ -775,10 +777,10 @@ impl StatePipelines {
         if &r.vertex.module == from {
             r.vertex.module = module.clone();
         }
-        if let Some((f, _)) = r.fragment.as_mut() {
-            if &f.module == from {
-                f.module = module.clone();
-            }
+        if let Some((f, _)) = r.fragment.as_mut()
+            && &f.module == from
+        {
+            f.module = module.clone();
         }
         let pipeline = self.source.build(device, r.clone(), Some(r.stock()));
         self.layouts.entry(layout).or_insert_with(|| {

@@ -1,9 +1,9 @@
 [package]
 name = "threers-connectome"
 version.workspace = true
-edition = "2021"
+edition = "2024"
 # Matches `threers`, whose wasm build the browser side loads.
-rust-version = "1.87"
+rust-version = "1.99"
 authors = ["Eugene Hauptmann"]
 description = "Both Drosophila connectomes as one node per neuron, drawn by threers in the browser — text-tree reader, node-table builder and viewer host"
 license = "MIT"

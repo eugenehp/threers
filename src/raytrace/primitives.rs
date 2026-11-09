@@ -138,7 +138,9 @@ pub fn line_segment_quads(
     //   meant to be disjoint rather than dropping the unpaired last one.
     let pairs: Vec<(usize, usize)> = match geometry.index.as_ref() {
         Some(idx) => idx
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| (c[0] as usize, c[1] as usize))
             .filter(|(a, b)| *a < n_verts && *b < n_verts)
             .collect(),

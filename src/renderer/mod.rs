@@ -12,13 +12,10 @@
 //! On native targets, [`crate::renderer::headless`] provides [`HeadlessRenderer`] for
 //! offscreen RGBA readback without managing a window surface.
 
-/// What the device can do — compute and storage, which WebGL2 lacks. See
-/// [`caps`].
 pub mod caps;
 // No outer doc comments on these three: each carries `//!` docs of its own,
 // and an outer `///` here makes the intra-doc links inside them resolve in
 // *this* scope instead of the module's. The warning for that names no file.
-/// Bloom as compute passes over a finished frame. See [`bloom`].
 pub mod bloom;
 mod caption_pass;
 pub mod colorspace;
@@ -30,14 +27,9 @@ pub mod readback;
 mod render_target;
 pub(crate) mod yuv;
 // `set_viewport` / `set_scissor` state and the partial clear behind them.
-/// GPU-side timing for the main pass. See [`gpu_timer`].
 pub mod gpu_timer;
-/// Pack RGBA to tightly-packed RGB on the GPU, so the alpha never crosses the
-/// readback. See [`rgb_pack`].
 pub mod rgb_pack;
-/// Depth-only ambient occlusion as a compute pass. See [`ssao`].
 pub mod ssao;
-/// [`ssao`] composited onto a live surface. See [`ssao_composite`].
 pub mod ssao_composite;
 pub mod viewport;
 // The renderer itself, in a file named after it; this module is the facade.
@@ -169,10 +161,24 @@ cfg_apple! {
 pub use render_target::{CubeRenderTarget, RenderTarget};
 #[allow(unused_imports)] // only the Metal backend reads it from outside
 pub(crate) use renderer::stored_clear;
-pub use renderer::{halton, stratified_jitter};
+pub use renderer::{halton, stratified_jitter, DEFAULT_CACHE_RETENTION};
 pub use renderer::{PostFxBlend, PostFxNoise, PostFxOp, PostFxOutput};
 pub use renderer::{PostFxCamera, Renderer, RendererOptions, ToneMapping};
 pub use viewport::{PixelRect, ShadowMap, ViewportRect};
+
+/// Which backend a renderer draws with: [`HeadlessBuilder::backend`] and
+/// [`WindowRenderer::with_backend`](window::WindowRenderer::with_backend).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RenderBackend {
+    /// wgpu, unless `THREERS_BACKEND=metal` asks for Metal (falling back to
+    /// wgpu, with a notice, if Metal cannot open).
+    #[default]
+    Auto,
+    Wgpu,
+    /// The native Metal backend, on any Apple platform with the `metal`
+    /// feature.
+    Metal,
+}
 
 #[cfg(test)]
 mod clear_value_tests {

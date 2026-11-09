@@ -102,13 +102,10 @@ pub mod island;
 pub mod joint;
 pub mod material;
 pub mod math;
-/// A `.scad` mechanism, simulated — the physics-driven counterpart of
-/// `ScadAnimation`.
 #[cfg(all(feature = "assembly", feature = "openscad"))]
 pub mod mechanism;
 pub mod narrowphase;
 pub mod query;
-/// Colliders straight from an OpenSCAD [`Solid`](threers::openscad::Solid).
 #[cfg(feature = "openscad")]
 pub mod scad;
 pub mod shape;
@@ -117,7 +114,6 @@ pub mod solver;
 pub mod tendon;
 pub mod trimesh;
 pub mod vehicle;
-/// Checking a declared mechanism against the parts that have to perform it.
 #[cfg(all(feature = "assembly", feature = "openscad"))]
 pub mod verify;
 pub mod world;

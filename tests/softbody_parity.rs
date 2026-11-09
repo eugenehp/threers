@@ -308,12 +308,12 @@ fn the_particles_are_the_originals_through_a_grab_and_a_tear() {
             sim.start_grab(tip, slot);
             sim.grab.as_mut().unwrap().axis = [0.3, -0.5, -0.8];
         }
-        if frame > 11 {
-            if let Some(g) = sim.grab.as_mut() {
-                let k = (frame - 11) as f64;
-                g.target = [tip[0] + 0.03 * k, tip[1] + 0.01 * k, tip[2] + 0.015 * k];
-                g.angle = 0.02 * k;
-            }
+        if frame > 11
+            && let Some(g) = sim.grab.as_mut()
+        {
+            let k = (frame - 11) as f64;
+            g.target = [tip[0] + 0.03 * k, tip[1] + 0.01 * k, tip[2] + 0.015 * k];
+            g.angle = 0.02 * k;
         }
         if frame == 45 {
             sim.grab = None;

@@ -20,7 +20,7 @@ pub fn compute_vertex_normals(geom: &mut BufferGeometry) {
     let read = |i: usize| -> Vector3 { Vector3::new(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]) };
 
     if let Some(idx) = geom.index.clone() {
-        for tri in idx.chunks_exact(3) {
+        for tri in idx.as_chunks::<3>().0 {
             let a = read(tri[0] as usize);
             let b = read(tri[1] as usize);
             let c = read(tri[2] as usize);
@@ -41,7 +41,7 @@ pub fn compute_vertex_normals(geom: &mut BufferGeometry) {
         }
     }
 
-    for n in normals.chunks_exact_mut(3) {
+    for n in normals.as_chunks_mut::<3>().0 {
         let v = Vector3::new(n[0], n[1], n[2]).normalize();
         n[0] = v.x;
         n[1] = v.y;
@@ -108,7 +108,7 @@ pub fn compute_tangents(geom: &mut BufferGeometry) {
     };
 
     if let Some(idx) = geom.index.clone() {
-        for tri in idx.chunks_exact(3) {
+        for tri in idx.as_chunks::<3>().0 {
             process_tri(tri[0] as usize, tri[1] as usize, tri[2] as usize);
         }
     } else {
@@ -190,7 +190,7 @@ pub fn center(geom: &mut BufferGeometry) {
     let bb = geom.compute_bounding_box();
     let c = bb.center();
     if let Some(attr) = geom.attributes.get_mut("position") {
-        for v in attr.array.chunks_exact_mut(3) {
+        for v in attr.array.as_chunks_mut::<3>().0 {
             v[0] -= c.x;
             v[1] -= c.y;
             v[2] -= c.z;
@@ -203,7 +203,7 @@ pub fn center(geom: &mut BufferGeometry) {
 /// Uniform scale.
 pub fn scale(geom: &mut BufferGeometry, sx: f32, sy: f32, sz: f32) {
     if let Some(attr) = geom.attributes.get_mut("position") {
-        for v in attr.array.chunks_exact_mut(3) {
+        for v in attr.array.as_chunks_mut::<3>().0 {
             v[0] *= sx;
             v[1] *= sy;
             v[2] *= sz;

@@ -162,14 +162,13 @@ impl Weather {
     /// centred over `centre` (x and z; usually the camera, so it is always
     /// snowing where the camera looks).
     pub fn update(&self, scene: &mut Scene, id: ObjectId, time: f32, centre: Vector3) {
-        if let Some(o) = scene.get_mut(id) {
-            if let ObjectKind::InstancedMesh(mesh) = &mut o.kind {
-                if let Material::Shader(m) = &*mesh.material {
-                    let mut m = m.clone();
-                    m.data = self.data(time, centre);
-                    mesh.material = Arc::new(Material::Shader(m));
-                }
-            }
+        if let Some(o) = scene.get_mut(id)
+            && let ObjectKind::InstancedMesh(mesh) = &mut o.kind
+            && let Material::Shader(m) = &*mesh.material
+        {
+            let mut m = m.clone();
+            m.data = self.data(time, centre);
+            mesh.material = Arc::new(Material::Shader(m));
         }
     }
 }

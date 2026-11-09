@@ -1,6 +1,10 @@
 //! Decode a WebM Opus file N times (profiling aid). usage: opus_bench IN N
 fn main() {
     let a: Vec<String> = std::env::args().collect();
+    if a.len() < 3 {
+        eprintln!("usage: opus_bench IN N");
+        std::process::exit(2);
+    }
     let data = std::fs::read(&a[1]).expect("read");
     let n: usize = a.get(2).map_or(10, |s| s.parse().unwrap());
     let t = std::time::Instant::now();

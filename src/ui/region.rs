@@ -63,7 +63,10 @@ impl<'a> Culled<'a> {
     /// Whether anything drawn in `r` can reach the rectangle.
     fn visible(&self, r: Rect) -> bool {
         let v = self.view;
-        r.x < v.x + v.width + SPILL && r.x + r.width > v.x - SPILL && r.y < v.y + v.height + SPILL && r.y + r.height > v.y - SPILL
+        r.x < v.x + v.width + SPILL
+            && r.x + r.width > v.x - SPILL
+            && r.y < v.y + v.height + SPILL
+            && r.y + r.height > v.y - SPILL
     }
 }
 
@@ -98,7 +101,15 @@ impl Painter for Culled<'_> {
         }
     }
 
-    fn path(&mut self, rect: Rect, d: &[String], view_box: [f32; 4], stroke: Option<f32>, fill: bool, color: Rgba) {
+    fn path(
+        &mut self,
+        rect: Rect,
+        d: &[String],
+        view_box: [f32; 4],
+        stroke: Option<f32>,
+        fill: bool,
+        color: Rgba,
+    ) {
         if self.visible(rect) {
             self.inner.path(rect, d, view_box, stroke, fill, color);
         }

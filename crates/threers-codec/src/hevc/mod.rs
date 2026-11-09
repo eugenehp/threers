@@ -6,7 +6,7 @@
 //!
 //! # Why from scratch
 //!
-//! The existing `threers::video` path shells out to the system `ffmpeg`. That
+//! The `threers_video::export` path can shell out to the system `ffmpeg`. That
 //! can't work in the browser and forces an external dependency on native. A
 //! native encoder removes both constraints — at the cost of reimplementing a
 //! genuinely large codec. HEVC is CABAC-only (no CAVLC fallback), so even a

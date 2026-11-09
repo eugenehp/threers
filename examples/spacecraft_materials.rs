@@ -39,8 +39,6 @@ use threers::{
 use winit::{
     dpi::PhysicalPosition,
     event::{ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent},
-    event_loop::EventLoop,
-    window::WindowBuilder,
 };
 
 // Brings in `Arc`-wrapped procedural textures, `orbital_environment`, `SUN_DIR`.
@@ -78,49 +76,43 @@ fn main() {
 }
 
 async fn run() {
-    let event_loop = EventLoop::new().expect("event loop");
-    let window = Arc::new(
-        WindowBuilder::new()
-            .with_title("threers — spacecraft materials")
-            .with_inner_size(winit::dpi::LogicalSize::new(1100, 750))
-            .build(&event_loop)
-            .expect("window"),
-    );
+    let attributes = winit::window::Window::default_attributes()
+        .with_title("threers — spacecraft materials")
+        .with_inner_size(winit::dpi::LogicalSize::new(1100, 750));
+    threers::sketch::run_window(attributes, move |window| {
+        // wgpu by default; the native Metal backend with `--features metal` and
+        // `THREERS_BACKEND=metal`.
+        let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
 
-    // wgpu by default; the native Metal backend with `--features metal` and
-    // `THREERS_BACKEND=metal`.
-    let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
+        let mut scene = Scene::new();
+        scene.background = Color::from_hex(0x03040a);
 
-    let mut scene = Scene::new();
-    scene.background = Color::from_hex(0x03040a);
+        // The load-bearing line: prefiltered orbital IBL. Remove it and every metal
+        // below turns black.
+        scene.environment = Some(orbital_environment(SUN_DIR));
 
-    // The load-bearing line: prefiltered orbital IBL. Remove it and every metal
-    // below turns black.
-    scene.environment = Some(orbital_environment(SUN_DIR));
+        build_spacecraft(&mut scene);
 
-    build_spacecraft(&mut scene);
+        scene.add_light(AmbientLight::new(Color::from_hex(0x223044), 0.06));
 
-    scene.add_light(AmbientLight::new(Color::from_hex(0x223044), 0.06));
+        let mut sun = Object3D::light(DirectionalLight::new(Color::from_hex(0xfff6e8), 2.4));
+        sun.position = Vector3::new(SUN_DIR[0], SUN_DIR[1], SUN_DIR[2]) * 12.0;
+        sun.cast_shadow = true;
+        scene.add(sun);
 
-    let mut sun = Object3D::light(DirectionalLight::new(Color::from_hex(0xfff6e8), 2.4));
-    sun.position = Vector3::new(SUN_DIR[0], SUN_DIR[1], SUN_DIR[2]) * 12.0;
-    sun.cast_shadow = true;
-    scene.add(sun);
+        let mut bounce = Object3D::light(DirectionalLight::new(earth_bounce(), 0.5));
+        bounce.position = Vector3::new(-0.3, -1.0, 0.2) * 12.0;
+        scene.add(bounce);
 
-    let mut bounce = Object3D::light(DirectionalLight::new(earth_bounce(), 0.5));
-    bounce.position = Vector3::new(-0.3, -1.0, 0.2) * 12.0;
-    scene.add(bounce);
+        let mut camera = PerspectiveCamera::new(42.0, view.aspect(), 0.1, 200.0);
+        camera.position = Vector3::new(4.2, 2.4, 6.0);
+        camera.look_at(Vector3::ZERO);
 
-    let mut camera = PerspectiveCamera::new(42.0, view.aspect(), 0.1, 200.0);
-    camera.position = Vector3::new(4.2, 2.4, 6.0);
-    camera.look_at(Vector3::ZERO);
+        let mut controls = OrbitControls::new(&camera);
+        let mut input = InputState::new();
+        let window_for_loop = window.clone();
 
-    let mut controls = OrbitControls::new(&camera);
-    let mut input = InputState::new();
-    let window_for_loop = window.clone();
-
-    event_loop
-        .run(move |event, target| {
+        move |event, target| {
             if let Event::WindowEvent { event, window_id } = event {
                 if window_id != window_for_loop.id() {
                     return;
@@ -192,6 +184,6 @@ async fn run() {
                     _ => {}
                 }
             }
-        })
-        .expect("event loop");
+        }
+    });
 }

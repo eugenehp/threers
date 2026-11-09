@@ -523,7 +523,7 @@ fn b44(data: &[u8], channels: &[Channel], width: usize, lines: usize) -> Option<
             // B44 only compresses HALF: other channels sit there as they are.
             let n = words(t) * width * lines;
             let raw = data.get(pos..pos + n * 2)?;
-            for (slot, w) in tmp[start..start + n].iter_mut().zip(raw.chunks_exact(2)) {
+            for (slot, w) in tmp[start..start + n].iter_mut().zip(raw.as_chunks::<2>().0) {
                 *slot = u16::from_le_bytes([w[0], w[1]]);
             }
             pos += n * 2;

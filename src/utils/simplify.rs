@@ -198,11 +198,18 @@ pub fn simplify(
     };
     let mut pos: Vec<[f64; 3]> = position
         .array
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|c| [c[0] as f64, c[1] as f64, c[2] as f64])
         .collect();
     let n = pos.len();
-    let mut tris: Vec<[u32; 3]> = index.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect();
+    let mut tris: Vec<[u32; 3]> = index
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|t| [t[0], t[1], t[2]])
+        .collect();
     let mut alive = vec![true; tris.len()];
     let mut live = tris.len();
     let mut report = SimplifyReport {
@@ -288,16 +295,16 @@ pub fn simplify(
                 quadric: &[Quadric],
                 version: &[u32]| {
         let (a, b) = (a.min(b), a.max(b));
-        if let Some((c, to)) = cost(a, b, pos, quadric, &boundary) {
-            if c <= max_error {
-                heap.push(Candidate {
-                    cost: c,
-                    a,
-                    b,
-                    stamp: (version[a as usize], version[b as usize]),
-                    to,
-                });
-            }
+        if let Some((c, to)) = cost(a, b, pos, quadric, &boundary)
+            && c <= max_error
+        {
+            heap.push(Candidate {
+                cost: c,
+                a,
+                b,
+                stamp: (version[a as usize], version[b as usize]),
+                to,
+            });
         }
     };
     {
@@ -547,7 +554,7 @@ mod tests {
         );
         // Every vertex still on the sphere, to the tolerance.
         let p = &s.get_attribute("position").unwrap().array;
-        for v in p.chunks_exact(3) {
+        for v in p.as_chunks::<3>().0 {
             let r = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
             assert!((r - 0.8).abs() < 0.03, "vertex at radius {r}");
         }

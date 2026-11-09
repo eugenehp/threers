@@ -561,7 +561,7 @@ mod tests {
         ];
         let geometry = heightfield_geometry(&samples).unwrap();
         let normals = geometry.get_attribute("normal").unwrap();
-        for n in normals.array.chunks_exact(3) {
+        for n in normals.array.as_chunks::<3>().0 {
             assert!(n[1] > 0.99, "normal points {n:?}, not up");
         }
         let uv = geometry.get_attribute("uv").unwrap();
@@ -635,7 +635,7 @@ mod tests {
         let flat = vec![0.5f32; 16];
         let map = normal_map_from_height(&flat, 4, 4, 4.0);
         assert_eq!(map.format, TextureFormat::Rgba8Unorm);
-        for px in map.data.chunks_exact(4) {
+        for px in map.data.as_chunks::<4>().0 {
             assert_eq!(px[0], 128, "x deflected on a flat field");
             assert_eq!(px[1], 128, "y deflected on a flat field");
             assert_eq!(px[2], 255, "z should be full");

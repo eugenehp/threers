@@ -11,9 +11,9 @@ struct Prop {
     name: String,
     /// Component type for scalar properties. None = list.
     #[allow(dead_code)]
-    scalar: Option<&'static str>,
+    scalar: Option<String>,
     /// For lists: (count_type, item_type).
-    list: Option<(&'static str, &'static str)>,
+    list: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,22 +65,19 @@ impl PlyLoader {
                     }
                 }
                 ["property", "list", count_ty, item_ty, name] => {
-                    let count_ty: &'static str = leak(count_ty);
-                    let item_ty: &'static str = leak(item_ty);
                     if let Some(e) = elements.last_mut() {
                         e.props.push(Prop {
                             name: (*name).into(),
                             scalar: None,
-                            list: Some((count_ty, item_ty)),
+                            list: Some(((*count_ty).into(), (*item_ty).into())),
                         });
                     }
                 }
                 ["property", ty, name] => {
-                    let ty: &'static str = leak(ty);
                     if let Some(e) = elements.last_mut() {
                         e.props.push(Prop {
                             name: (*name).into(),
-                            scalar: Some(ty),
+                            scalar: Some((*ty).into()),
                             list: None,
                         });
                     }
@@ -227,10 +224,6 @@ impl PlyLoader {
         }
         g
     }
-}
-
-fn leak(s: &str) -> &'static str {
-    Box::leak(s.to_string().into_boxed_str())
 }
 
 #[cfg(test)]

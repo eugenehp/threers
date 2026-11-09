@@ -48,13 +48,13 @@ impl NurbsSurface {
                 got: points.len(),
             });
         }
-        if let Some(w) = weights {
-            if w.len() != points.len() {
-                return Err(NurbsError::WeightCount {
-                    expected: points.len(),
-                    got: w.len(),
-                });
-            }
+        if let Some(w) = weights
+            && w.len() != points.len()
+        {
+            return Err(NurbsError::WeightCount {
+                expected: points.len(),
+                got: w.len(),
+            });
         }
         let control = points
             .iter()

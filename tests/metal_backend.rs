@@ -121,7 +121,10 @@ fn background_clears_the_frame() {
 
     assert_eq!(rgba.len(), (SIZE * SIZE * 4) as usize);
     assert!(
-        rgba.chunks_exact(4).all(|px| px == [0, 0, 0, 255]),
+        rgba.as_chunks::<4>()
+            .0
+            .iter()
+            .all(|px| *px == [0, 0, 0, 255]),
         "an empty scene should be nothing but the clear colour"
     );
 
@@ -410,7 +413,12 @@ fn line_segments_draw() {
 
     let rgba = hr.render_to_rgba(&mut scene, &unit_camera()).unwrap();
     assert_eq!(hr.stats().draw_calls, 1);
-    let drawn = rgba.chunks_exact(4).filter(|px| px[0] > 128).count();
+    let drawn = rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|px| px[0] > 128)
+        .count();
     assert!(
         drawn >= SIZE as usize / 2,
         "the line barely drew: {drawn} px"
@@ -526,7 +534,9 @@ fn msaa_produces_partial_coverage_on_a_diagonal_edge() {
         )));
         let rgba = hr.render_to_rgba(&mut scene, &unit_camera()).unwrap();
         Some(
-            rgba.chunks_exact(4)
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|px| px[0] > 8 && px[0] < 247)
                 .count(),
         )
@@ -654,7 +664,7 @@ fn resizing_reallocates_the_target() {
     // 37 pixels is not a multiple of the 256-byte row alignment, so this also
     // checks the readback un-pads correctly.
     assert!(
-        rgba.chunks_exact(4).all(|px| px[0] > 250),
+        rgba.as_chunks::<4>().0.iter().all(|px| px[0] > 250),
         "un-padding the readback rows went wrong"
     );
 }
@@ -1538,7 +1548,7 @@ fn morphed_meshes_are_drawn_where_they_are_picked() {
         let mut g = PlaneGeometry::new(1.0, 1.0);
         let base = g.get_attribute("position").unwrap().array.clone();
         let (mut t0, mut t1) = (Vec::new(), Vec::new());
-        for p in base.chunks_exact(3) {
+        for p in base.as_chunks::<3>().0 {
             // Target 0 widens x by 1.6, target 1 shifts up by 0.4.
             if relative {
                 t0.extend_from_slice(&[p[0] * 0.6, 0.0, 0.0]);
@@ -1722,7 +1732,7 @@ fn morph_targets_match_the_wgpu_backend() {
         let base = g.get_attribute("position").unwrap().array.clone();
         let (mut t0, mut n0) = (Vec::new(), Vec::new());
         let (s, c) = (40f32.to_radians().sin(), 40f32.to_radians().cos());
-        for p in base.chunks_exact(3) {
+        for p in base.as_chunks::<3>().0 {
             let target = [p[0] * 1.5, p[1] + 0.2 * p[0], p[2]];
             if relative {
                 t0.extend_from_slice(&[target[0] - p[0], target[1] - p[1], 0.0]);

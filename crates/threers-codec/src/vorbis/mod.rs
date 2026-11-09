@@ -1096,19 +1096,18 @@ fn residue_inverse(
                 let mut k = 0;
                 while k < ppw && i < partvals {
                     let part = r.decodemap[partword[l]][k];
-                    if r.secondstages[part] & (1 << s) != 0 {
-                        if let Some(Some(bk)) = r.partbooks[part].get(s) {
-                            if !decodevv_add(
-                                &books[*bk],
-                                pcm,
-                                chans,
-                                i * spp + r.begin as usize,
-                                p,
-                                spp,
-                            ) {
-                                return;
-                            }
-                        }
+                    if r.secondstages[part] & (1 << s) != 0
+                        && let Some(Some(bk)) = r.partbooks[part].get(s)
+                        && !decodevv_add(
+                            &books[*bk],
+                            pcm,
+                            chans,
+                            i * spp + r.begin as usize,
+                            p,
+                            spp,
+                        )
+                    {
+                        return;
                     }
                     k += 1;
                     i += 1;
@@ -1149,16 +1148,16 @@ fn residue_inverse(
                 for (j, &c) in used.iter().enumerate() {
                     let off = r.begin as usize + i * spp;
                     let part = r.decodemap[partword[j][l]][k];
-                    if r.secondstages[part] & (1 << s) != 0 {
-                        if let Some(Some(bk)) = r.partbooks[part].get(s) {
-                            let ok = if r.kind == 0 {
-                                decodevs_add(&books[*bk], &mut pcm[c][off..], p, spp)
-                            } else {
-                                decodev_add(&books[*bk], &mut pcm[c][off..], p, spp)
-                            };
-                            if !ok {
-                                return;
-                            }
+                    if r.secondstages[part] & (1 << s) != 0
+                        && let Some(Some(bk)) = r.partbooks[part].get(s)
+                    {
+                        let ok = if r.kind == 0 {
+                            decodevs_add(&books[*bk], &mut pcm[c][off..], p, spp)
+                        } else {
+                            decodev_add(&books[*bk], &mut pcm[c][off..], p, spp)
+                        };
+                        if !ok {
+                            return;
                         }
                     }
                 }

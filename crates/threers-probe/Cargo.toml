@@ -1,9 +1,9 @@
 [package]
 name = "threers-probe"
 version.workspace = true
-edition = "2021"
+edition = "2024"
 # Matches `threers`, which this depends on.
-rust-version = "1.87"
+rust-version = "1.99"
 authors = ["Eugene Hauptmann"]
 description = "Screen-space neural GI from G-buffer + lighting probes — train in RLX, run anywhere RLX runs"
 license = "MIT"

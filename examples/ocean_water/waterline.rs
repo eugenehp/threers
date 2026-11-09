@@ -166,10 +166,10 @@ impl Waterline {
             let h = 2.0 * STANDOFF * (fov * 0.5).tan() * 1.08;
             obj.scale = Vector3::new(h * aspect, h, 1.0);
             obj.quaternion = face_camera(fwd);
-            if let ObjectKind::Mesh(mesh) = &mut obj.kind {
-                if let Material::Shader(sm) = Arc::make_mut(&mut mesh.material) {
-                    sm.data.clone_from(&self.slots);
-                }
+            if let ObjectKind::Mesh(mesh) = &mut obj.kind
+                && let Material::Shader(sm) = Arc::make_mut(&mut mesh.material)
+            {
+                sm.data.clone_from(&self.slots);
             }
         }
     }

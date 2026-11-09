@@ -27,7 +27,7 @@ fn frame(i: u32) -> Vec<u8> {
 
 fn psnr(rgba: &[u8], bgra: &[u8]) -> f64 {
     let mut se = 0.0f64;
-    for (s, d) in rgba.chunks_exact(4).zip(bgra.chunks_exact(4)) {
+    for (s, d) in rgba.as_chunks::<4>().0.iter().zip(bgra.as_chunks::<4>().0) {
         for (a, b) in [(s[0], d[2]), (s[1], d[1]), (s[2], d[0])] {
             let e = a as f64 - b as f64;
             se += e * e;
@@ -131,7 +131,7 @@ fn hardware_and_native_decoders_agree() {
         sw.push(bytes, s.pts, s.dts, s.duration as i64).unwrap();
         let (a, b) = (hw.take(s.pts).unwrap(), sw.take(s.pts).unwrap());
         let mut as_rgba = b.clone();
-        for p in as_rgba.chunks_exact_mut(4) {
+        for p in as_rgba.as_chunks_mut::<4>().0 {
             p.swap(0, 2);
         }
         assert!(

@@ -279,8 +279,7 @@ def play(driver, url, backend):
     wait_for(driver, lambda s: abs(s["y"] - ground) < 0.1, "landing", 120)
 
     # A jump straight up reaches the coin overhead, and the score goes up.
-    target = standing(driver)
-    walk = "a" if target["x"] > 0 else "d"
+    standing(driver)
     for _ in range(40):
         at = state(driver)
         if abs(at["x"]) < 0.2:

@@ -238,13 +238,13 @@ fn write_rgba(tex: &Owned, src: &Texture, rgba: &[u8]) -> Result<(), MetalError>
 }
 
 unsafe fn mip_levels(tex: &Owned) -> NSUInteger {
-    msg0(tex.id(), sel!("mipmapLevelCount"))
+    unsafe { msg0(tex.id(), sel!("mipmapLevelCount")) }
 }
 
 unsafe fn encode_mipmaps(cmd: Id, tex: &Owned) {
-    let blit: Id = msg0(cmd, sel!("blitCommandEncoder"));
+    let blit: Id = unsafe { msg0(cmd, sel!("blitCommandEncoder")) };
     if !blit.is_null() {
-        let _: () = msg1(blit, sel!("generateMipmapsForTexture:"), tex.id());
-        let _: () = msg0(blit, sel!("endEncoding"));
+        let _: () = unsafe { msg1(blit, sel!("generateMipmapsForTexture:"), tex.id()) };
+        let _: () = unsafe { msg0(blit, sel!("endEncoding")) };
     }
 }

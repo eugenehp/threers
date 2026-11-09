@@ -510,10 +510,10 @@ fn raycast_shape(shape: &Shape, ray: &Ray, max_toi: f32) -> Option<(f32, Vector3
                     local.inverse_transform_point(ray.origin),
                     local.inverse_transform_vector(ray.direction),
                 );
-                if let Some((toi, n)) = raycast_shape(child, &inner, max_toi) {
-                    if best.is_none_or(|(b, _)| toi < b) {
-                        best = Some((toi, local.transform_vector(n)));
-                    }
+                if let Some((toi, n)) = raycast_shape(child, &inner, max_toi)
+                    && best.is_none_or(|(b, _)| toi < b)
+                {
+                    best = Some((toi, local.transform_vector(n)));
                 }
             }
             best
@@ -606,10 +606,11 @@ fn raycast_capsule(ray: &Ray, half_height: f32, radius: f32) -> Option<(f32, Vec
     // The two end caps.
     for centre in [a, b] {
         let sphere = threers::math::Sphere::new(centre, radius);
-        if let Some(t) = ray.intersect_sphere(&sphere) {
-            if t >= 0.0 && best.is_none_or(|x| t < x) {
-                best = Some(t);
-            }
+        if let Some(t) = ray.intersect_sphere(&sphere)
+            && t >= 0.0
+            && best.is_none_or(|x| t < x)
+        {
+            best = Some(t);
         }
     }
 
@@ -767,10 +768,10 @@ fn project_onto_shape(
         Shape::Compound(parts) => {
             let mut best: Option<(Vector3, f32, bool)> = None;
             for (offset, child) in parts.iter() {
-                if let Some(r) = project_onto_shape(child, &iso.mul(offset), point) {
-                    if best.is_none_or(|b| r.1 < b.1) {
-                        best = Some(r);
-                    }
+                if let Some(r) = project_onto_shape(child, &iso.mul(offset), point)
+                    && best.is_none_or(|b| r.1 < b.1)
+                {
+                    best = Some(r);
                 }
             }
             best

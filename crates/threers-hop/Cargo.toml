@@ -1,8 +1,8 @@
 [package]
 name = "threers-hop"
 version.workspace = true
-edition = "2021"
-rust-version = "1.87"
+edition = "2024"
+rust-version = "1.99"
 publish = false
 description = "The `hop` example from threers-ecs, as a browser package"
 license = "MIT"

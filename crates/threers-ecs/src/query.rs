@@ -155,15 +155,15 @@ pub struct View<C> {
 
 impl<C> View<C> {
     unsafe fn row(&self, id: Entity) -> Option<usize> {
-        (*self.rows).get(id).map(|&row| row as usize)
+        unsafe { (*self.rows).get(id) }.map(|&row| row as usize)
     }
 }
 
 /// Goes through a raw world pointer and touches only `stores`, so that a
 /// `Node` term's pointer into `scene`, taken earlier, stays valid.
 unsafe fn view<C: Component>(world: *mut World) -> Option<View<C>> {
-    let (tick, since) = ((*world).tick, (*world).since);
-    let stores = &mut *addr_of_mut!((*world).stores);
+    let (tick, since) = unsafe { ((*world).tick, (*world).since) };
+    let stores = unsafe { &mut *addr_of_mut!((*world).stores) };
     let store: &mut dyn Any = stores.get_mut(&TypeId::of::<C>())?.as_mut();
     let store: &mut Store<C> = store.downcast_mut()?;
     Some(View {
@@ -180,8 +180,8 @@ unsafe fn view<C: Component>(world: *mut World) -> Option<View<C>> {
 /// The same, for terms that only read: `each_ref` has just a shared world, so
 /// nothing here may take `&mut`, and nothing may later write through the result.
 unsafe fn read_view<C: Component>(world: *mut World) -> Option<View<C>> {
-    let (tick, since) = ((*world).tick, (*world).since);
-    let stores = &*addr_of!((*world).stores);
+    let (tick, since) = unsafe { ((*world).tick, (*world).since) };
+    let stores = unsafe { &*addr_of!((*world).stores) };
     let store: &dyn Any = stores.get(&TypeId::of::<C>())?.as_ref();
     let store: &Store<C> = store.downcast_ref()?;
     Some(View {
@@ -231,7 +231,7 @@ unsafe impl Term for Node {
         access.write::<Node>();
     }
     unsafe fn state(world: *mut World) -> *mut ObjectArena {
-        addr_of_mut!((*world).scene.arena)
+        unsafe { addr_of_mut!((*world).scene.arena) }
     }
     fn candidates(_: &*mut ObjectArena) -> Option<*const [Entity]> {
         None
@@ -240,7 +240,7 @@ unsafe impl Term for Node {
         true
     }
     unsafe fn fetch<'w>(arena: &*mut ObjectArena, id: Entity) -> Option<&'w mut Object3D> {
-        (**arena).get_mut(id)
+        unsafe { (**arena).get_mut(id) }
     }
 }
 
@@ -255,17 +255,19 @@ unsafe impl<C: Component> Term for &C {
         access.read::<C>();
     }
     unsafe fn state(world: *mut World) -> Self::State {
-        read_view::<C>(world)
+        unsafe { read_view::<C>(world) }
     }
     fn candidates(state: &Self::State) -> Option<*const [Entity]> {
         rows_of(state)
     }
     unsafe fn matches(state: &Self::State, id: Entity) -> bool {
-        state.as_ref().is_some_and(|view| view.row(id).is_some())
+        state
+            .as_ref()
+            .is_some_and(|view| unsafe { view.row(id) }.is_some())
     }
     unsafe fn fetch<'w>(state: &Self::State, id: Entity) -> Option<&'w C> {
         let view = state.as_ref()?;
-        Some(&*view.values.add(view.row(id)?))
+        Some(unsafe { &*view.values.add(view.row(id)?) })
     }
 }
 
@@ -280,19 +282,21 @@ unsafe impl<C: Component> Term for &mut C {
         access.write::<C>();
     }
     unsafe fn state(world: *mut World) -> Self::State {
-        view::<C>(world)
+        unsafe { view::<C>(world) }
     }
     fn candidates(state: &Self::State) -> Option<*const [Entity]> {
         rows_of(state)
     }
     unsafe fn matches(state: &Self::State, id: Entity) -> bool {
-        state.as_ref().is_some_and(|view| view.row(id).is_some())
+        state
+            .as_ref()
+            .is_some_and(|view| unsafe { view.row(id) }.is_some())
     }
     unsafe fn fetch<'w>(state: &Self::State, id: Entity) -> Option<&'w mut C> {
         let view = state.as_ref()?;
-        let row = view.row(id)?;
-        *view.changed.add(row) = view.tick;
-        Some(&mut *view.values.add(row))
+        let row = unsafe { view.row(id) }?;
+        unsafe { *view.changed.add(row) = view.tick };
+        Some(unsafe { &mut *view.values.add(row) })
     }
 }
 
@@ -307,7 +311,7 @@ unsafe impl<C: Component> Term for Option<&C> {
         access.read::<C>();
     }
     unsafe fn state(world: *mut World) -> Self::State {
-        read_view::<C>(world)
+        unsafe { read_view::<C>(world) }
     }
     fn candidates(_: &Self::State) -> Option<*const [Entity]> {
         None
@@ -316,7 +320,7 @@ unsafe impl<C: Component> Term for Option<&C> {
         true
     }
     unsafe fn fetch<'w>(state: &Self::State, id: Entity) -> Option<Option<&'w C>> {
-        Some(<&C as Term>::fetch(state, id))
+        Some(unsafe { <&C as Term>::fetch(state, id) })
     }
 }
 
@@ -331,7 +335,7 @@ unsafe impl<C: Component> Term for Option<&mut C> {
         access.write::<C>();
     }
     unsafe fn state(world: *mut World) -> Self::State {
-        view::<C>(world)
+        unsafe { view::<C>(world) }
     }
     fn candidates(_: &Self::State) -> Option<*const [Entity]> {
         None
@@ -340,7 +344,7 @@ unsafe impl<C: Component> Term for Option<&mut C> {
         true
     }
     unsafe fn fetch<'w>(state: &Self::State, id: Entity) -> Option<Option<&'w mut C>> {
-        Some(<&mut C as Term>::fetch(state, id))
+        Some(unsafe { <&mut C as Term>::fetch(state, id) })
     }
 }
 
@@ -353,13 +357,15 @@ unsafe impl<C: Component> Term for With<C> {
         access.read::<C>();
     }
     unsafe fn state(world: *mut World) -> Self::State {
-        read_view::<C>(world)
+        unsafe { read_view::<C>(world) }
     }
     fn candidates(state: &Self::State) -> Option<*const [Entity]> {
         rows_of(state)
     }
     unsafe fn matches(state: &Self::State, id: Entity) -> bool {
-        state.as_ref().is_some_and(|view| view.row(id).is_some())
+        state
+            .as_ref()
+            .is_some_and(|view| unsafe { view.row(id) }.is_some())
     }
     unsafe fn fetch<'w>(_: &Self::State, _: Entity) -> Option<Self::Item<'w>> {
         Some(())
@@ -375,13 +381,15 @@ unsafe impl<C: Component> Term for Without<C> {
         access.read::<C>();
     }
     unsafe fn state(world: *mut World) -> Self::State {
-        read_view::<C>(world)
+        unsafe { read_view::<C>(world) }
     }
     fn candidates(_: &Self::State) -> Option<*const [Entity]> {
         None
     }
     unsafe fn matches(state: &Self::State, id: Entity) -> bool {
-        !state.as_ref().is_some_and(|view| view.row(id).is_some())
+        !state
+            .as_ref()
+            .is_some_and(|view| unsafe { view.row(id) }.is_some())
     }
     unsafe fn fetch<'w>(_: &Self::State, _: Entity) -> Option<Self::Item<'w>> {
         Some(())
@@ -400,7 +408,7 @@ unsafe impl Term for NodeRef {
         access.read::<Node>();
     }
     unsafe fn state(world: *mut World) -> *const ObjectArena {
-        addr_of!((*world).scene.arena)
+        unsafe { addr_of!((*world).scene.arena) }
     }
     fn candidates(_: &*const ObjectArena) -> Option<*const [Entity]> {
         None
@@ -409,7 +417,7 @@ unsafe impl Term for NodeRef {
         true
     }
     unsafe fn fetch<'w>(arena: &*const ObjectArena, id: Entity) -> Option<Self::Item<'w>> {
-        (**arena).get(id)
+        unsafe { (**arena).get(id) }
     }
 }
 
@@ -422,7 +430,7 @@ unsafe impl<C: Component> Term for Added<C> {
         access.read::<C>();
     }
     unsafe fn state(world: *mut World) -> Self::State {
-        read_view::<C>(world)
+        unsafe { read_view::<C>(world) }
     }
     fn candidates(state: &Self::State) -> Option<*const [Entity]> {
         rows_of(state)
@@ -430,7 +438,7 @@ unsafe impl<C: Component> Term for Added<C> {
     unsafe fn matches(state: &Self::State, id: Entity) -> bool {
         state
             .as_ref()
-            .is_some_and(|v| v.row(id).is_some_and(|row| *v.added.add(row) > v.since))
+            .is_some_and(|v| unsafe { v.row(id).is_some_and(|row| *v.added.add(row) > v.since) })
     }
     unsafe fn fetch<'w>(_: &Self::State, _: Entity) -> Option<Self::Item<'w>> {
         Some(())
@@ -446,7 +454,7 @@ unsafe impl<C: Component> Term for Changed<C> {
         access.read::<C>();
     }
     unsafe fn state(world: *mut World) -> Self::State {
-        read_view::<C>(world)
+        unsafe { read_view::<C>(world) }
     }
     fn candidates(state: &Self::State) -> Option<*const [Entity]> {
         rows_of(state)
@@ -454,7 +462,7 @@ unsafe impl<C: Component> Term for Changed<C> {
     unsafe fn matches(state: &Self::State, id: Entity) -> bool {
         state
             .as_ref()
-            .is_some_and(|v| v.row(id).is_some_and(|row| *v.changed.add(row) > v.since))
+            .is_some_and(|v| unsafe { v.row(id).is_some_and(|row| *v.changed.add(row) > v.since) })
     }
     unsafe fn fetch<'w>(_: &Self::State, _: Entity) -> Option<Self::Item<'w>> {
         Some(())
@@ -502,10 +510,11 @@ impl<'w, Q: Term + ReadOnly> Iterator for QueryIter<'w, Q> {
             let ids = &*self.ids;
             while let Some(&id) = ids.get(self.at) {
                 self.at += 1;
-                if self.world.is_alive(id) && Q::matches(&self.state, id) {
-                    if let Some(item) = Q::fetch(&self.state, id) {
-                        return Some(item);
-                    }
+                if self.world.is_alive(id)
+                    && Q::matches(&self.state, id)
+                    && let Some(item) = Q::fetch(&self.state, id)
+                {
+                    return Some(item);
                 }
             }
         }
@@ -578,7 +587,7 @@ macro_rules! term_tuple {
                 $($name::access(access);)+
             }
             unsafe fn state(world: *mut World) -> Self::State {
-                ($($name::state(world),)+)
+                ($(unsafe { $name::state(world) },)+)
             }
             /// The shortest list wins: the query visits only those ids.
             #[allow(non_snake_case)]
@@ -597,12 +606,13 @@ macro_rules! term_tuple {
             #[allow(non_snake_case)]
             unsafe fn matches(state: &Self::State, id: Entity) -> bool {
                 let ($($name,)+) = state;
-                $($name::matches($name, id))&&+
+                // SAFETY: each `matches` asks what this one does of its caller.
+                unsafe { $($name::matches($name, id))&&+ }
             }
             #[allow(non_snake_case)]
             unsafe fn fetch<'w>(state: &Self::State, id: Entity) -> Option<Self::Item<'w>> {
                 let ($($name,)+) = state;
-                Some(($($name::fetch($name, id)?,)+))
+                Some(($(unsafe { $name::fetch($name, id) }?,)+))
             }
         }
     };

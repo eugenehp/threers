@@ -470,17 +470,17 @@ impl MetalPostFx {
 /// Begin a render pass on `tex`, clearing it to `clear` or loading it.
 unsafe fn begin(cmd: Id, tex: Id, clear: Option<MTLClearColor>) -> Result<Id, MetalError> {
     let desc = render_pass_descriptor(tex);
-    let attachments: Id = msg0(desc, sel!("colorAttachments"));
-    let color: Id = msg1(attachments, sel!("objectAtIndexedSubscript:"), 0usize);
+    let attachments: Id = unsafe { msg0(desc, sel!("colorAttachments")) };
+    let color: Id = unsafe { msg1(attachments, sel!("objectAtIndexedSubscript:"), 0usize) };
     match clear {
         Some(c) => {
-            let _: () = msg1(color, sel!("setClearColor:"), c);
+            let _: () = unsafe { msg1(color, sel!("setClearColor:"), c) };
         }
         None => {
-            let _: () = msg1(color, sel!("setLoadAction:"), load_action::LOAD);
+            let _: () = unsafe { msg1(color, sel!("setLoadAction:"), load_action::LOAD) };
         }
     }
-    let enc: Id = msg1(cmd, sel!("renderCommandEncoderWithDescriptor:"), desc);
+    let enc: Id = unsafe { msg1(cmd, sel!("renderCommandEncoderWithDescriptor:"), desc) };
     if enc.is_null() {
         return Err(MetalError::Unsupported("post-fx render encoder failed".into()));
     }

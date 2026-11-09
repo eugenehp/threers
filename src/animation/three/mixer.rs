@@ -286,10 +286,10 @@ impl<K: HostKind> AnimationMixer<K> {
         });
         let mut prototype = None;
         if let Some(afc) = self.actions_by_clip.get(&clip_uuid) {
-            if let Some(&existing) = afc.action_by_root.get(&root_uuid) {
-                if self.action_store[existing].blend_mode == blend_mode {
-                    return Ok(Some(existing));
-                }
+            if let Some(&existing) = afc.action_by_root.get(&root_uuid)
+                && self.action_store[existing].blend_mode == blend_mode
+            {
+                return Ok(Some(existing));
             }
             // we know the clip, so we don't have to parse all
             // the bindings again but can just copy
@@ -348,12 +348,11 @@ impl<K: HostKind> AnimationMixer<K> {
             }
             None => false,
         };
-        if free {
-            if let Some(mut b) = self.binding_store.remove(id) {
-                if let (Some(host), Binding::Single(pb)) = (host, &mut b.binding) {
-                    pb.release(host);
-                }
-            }
+        if free
+            && let Some(mut b) = self.binding_store.remove(id)
+            && let (Some(host), Binding::Single(pb)) = (host, &mut b.binding)
+        {
+            pb.release(host);
         }
     }
 
@@ -542,14 +541,14 @@ impl<K: HostKind> AnimationMixer<K> {
         let clip_uuid = a.clip.uuid.clone();
         let root_uuid = self.root_of(a).uuid(host);
         if let Some(afc) = self.actions_by_clip.get_mut(&clip_uuid) {
-            if let Some(by_clip) = self.action_store[id].by_clip_cache_index {
-                if let Some(&last_known) = afc.known_actions.last() {
-                    self.action_store[last_known].by_clip_cache_index = Some(by_clip);
-                    if by_clip < afc.known_actions.len() {
-                        afc.known_actions[by_clip] = last_known;
-                    }
-                    afc.known_actions.pop();
+            if let Some(by_clip) = self.action_store[id].by_clip_cache_index
+                && let Some(&last_known) = afc.known_actions.last()
+            {
+                self.action_store[last_known].by_clip_cache_index = Some(by_clip);
+                if by_clip < afc.known_actions.len() {
+                    afc.known_actions[by_clip] = last_known;
                 }
+                afc.known_actions.pop();
             }
             afc.action_by_root.remove(&root_uuid);
             if afc.known_actions.is_empty() {
@@ -1083,10 +1082,10 @@ impl<K: HostKind> AnimationMixer<K> {
     /// bindings are applied).
     pub fn resume<H: AnimationHost<K>>(&mut self, host: &mut H) -> Option<MixerEvent> {
         let mut p = self.pending?;
-        if let Some((i, time, clip_time)) = p.mid.take() {
-            if let Some(&id) = self.actions.get(i) {
-                self.update_action_weight(id, time, clip_time, p.accu_index);
-            }
+        if let Some((i, time, clip_time)) = p.mid.take()
+            && let Some(&id) = self.actions.get(i)
+        {
+            self.update_action_weight(id, time, clip_time, p.accu_index);
         }
         while p.next < p.n_actions {
             let i = p.next;
@@ -1109,10 +1108,10 @@ impl<K: HostKind> AnimationMixer<K> {
         // update scene graph
         let n_bindings = self.n_active_bindings;
         for i in 0..n_bindings {
-            if let Some(&b) = self.bindings.get(i) {
-                if let Some(m) = self.binding_store.get_mut(b) {
-                    m.apply(host, p.accu_index);
-                }
+            if let Some(&b) = self.bindings.get(i)
+                && let Some(m) = self.binding_store.get_mut(b)
+            {
+                m.apply(host, p.accu_index);
             }
         }
         self.pending = None;

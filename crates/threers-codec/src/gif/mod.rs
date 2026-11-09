@@ -554,7 +554,7 @@ where
 fn count_opaque_unique(frames: &[(Vec<u8>, u16, u16)], opts: &GifOptions) -> usize {
     let mut set = HashMap::<[u8; 3], ()>::new();
     for (rgba, _, _) in frames {
-        for px in rgba.chunks_exact(4) {
+        for px in rgba.as_chunks::<4>().0 {
             if !(opts.transparency && px[3] < opts.alpha_threshold) {
                 set.insert([px[0], px[1], px[2]], ());
             }
@@ -719,7 +719,7 @@ fn choose_disposal(
         DisposalMode::Auto => {}
     }
 
-    let initially_empty = canvas.chunks_exact(4).all(|p| p[3] == 0);
+    let initially_empty = canvas.as_chunks::<4>().0.iter().all(|p| p[3] == 0);
     if initially_empty && has_transparency {
         return 2;
     }
@@ -746,8 +746,10 @@ fn choose_disposal(
         let mut max_y = 0usize;
         let mut changed = false;
         for (pixel, (desired, under)) in next
-            .chunks_exact(4)
-            .zip(candidate.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(candidate.as_chunks::<4>().0)
             .enumerate()
         {
             let desired_tr = opts.transparency && desired[3] < opts.alpha_threshold;
@@ -799,7 +801,12 @@ fn choose_disposal(
 }
 
 fn compose_source(canvas: &mut [u8], rgba: &[u8], opts: &GifOptions) {
-    for (dst, src) in canvas.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
+    for (dst, src) in canvas
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(rgba.as_chunks::<4>().0)
+    {
         if !(opts.transparency && src[3] < opts.alpha_threshold)
             && (dst[3] == 0 || pixels_differ(dst, src, opts))
         {
@@ -1010,17 +1017,19 @@ fn index_region(
                 let pi = ly * rw + lx;
 
                 // Unchanged vs previous → transparent (diff mode).
-                if let (Some(prev), Some(ti)) = (prev, transparent) {
-                    if opts.diff_rects && !pixels_differ(&rgba[i..i + 4], &prev[i..i + 4], opts) {
-                        out[pi] = ti;
-                        continue;
-                    }
+                if let (Some(prev), Some(ti)) = (prev, transparent)
+                    && opts.diff_rects
+                    && !pixels_differ(&rgba[i..i + 4], &prev[i..i + 4], opts)
+                {
+                    out[pi] = ti;
+                    continue;
                 }
-                if let Some(t) = transparent {
-                    if opts.transparency && work[o + 3] < opts.alpha_threshold as f32 {
-                        out[pi] = t;
-                        continue;
-                    }
+                if let Some(t) = transparent
+                    && opts.transparency
+                    && work[o + 3] < opts.alpha_threshold as f32
+                {
+                    out[pi] = t;
+                    continue;
                 }
 
                 let rgb = [
@@ -1064,11 +1073,12 @@ fn index_region(
                 let y = rect.y as usize + ly;
                 let i = (y * stride_w + x) * 4;
                 let pi = ly * rw + lx;
-                if let (Some(prev), Some(ti)) = (prev, transparent) {
-                    if opts.diff_rects && !pixels_differ(&rgba[i..i + 4], &prev[i..i + 4], opts) {
-                        out[pi] = ti;
-                        continue;
-                    }
+                if let (Some(prev), Some(ti)) = (prev, transparent)
+                    && opts.diff_rects
+                    && !pixels_differ(&rgba[i..i + 4], &prev[i..i + 4], opts)
+                {
+                    out[pi] = ti;
+                    continue;
                 }
                 if let Some(t) =
                     transparent.filter(|_| opts.transparency && rgba[i + 3] < opts.alpha_threshold)
@@ -1236,7 +1246,7 @@ fn build_palette_from_frames(
     let mut samples = Vec::new();
     let mut needs_tr = false;
     for (rgba, _, _) in frames {
-        for px in rgba.chunks_exact(4) {
+        for px in rgba.as_chunks::<4>().0 {
             if opts.transparency && px[3] < opts.alpha_threshold {
                 needs_tr = true;
             } else {
@@ -1421,10 +1431,11 @@ fn reduce_tree(node: &mut OctNode, leaf_count: &mut usize) -> bool {
     }
     // Prefer reducing deeper first.
     for i in 0..8 {
-        if let Some(ch) = node.children[i].as_mut() {
-            if !ch.leaf && reduce_tree(ch, leaf_count) {
-                return true;
-            }
+        if let Some(ch) = node.children[i].as_mut()
+            && !ch.leaf
+            && reduce_tree(ch, leaf_count)
+        {
+            return true;
         }
     }
     let mut child_leaves = 0;
@@ -1586,15 +1597,15 @@ fn nearest_index_lossy(
     neighbor: Option<u8>,
     lossy: u8,
 ) -> u8 {
-    if lossy > 0 {
-        if let Some(index) = neighbor {
-            let i = index as usize;
-            if i < palette.len()
-                && transparent != Some(index)
-                && dist2(rgb, palette[i]) <= lossy_dist2(lossy)
-            {
-                return index;
-            }
+    if lossy > 0
+        && let Some(index) = neighbor
+    {
+        let i = index as usize;
+        if i < palette.len()
+            && transparent != Some(index)
+            && dist2(rgb, palette[i]) <= lossy_dist2(lossy)
+        {
+            return index;
         }
     }
     nearest_index(rgb, palette, transparent)

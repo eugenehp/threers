@@ -23,12 +23,7 @@ fn compiles_for_wgpu_and_webgl2(m: ShaderMaterial) {
     m.validate(true).expect("native wgpu");
     m.validate(false).expect("WebGL2 (no storage buffers)");
 
-    let path = std::env::temp_dir().join(format!("threers-fur-{}.wgsl", std::process::id()));
-    std::env::set_var("THREERS_DUMP_SHADER", &path);
-    m.validate(false).unwrap();
-    std::env::remove_var("THREERS_DUMP_SHADER");
-    let source = std::fs::read_to_string(&path).expect("dumped module");
-    let _ = std::fs::remove_file(&path);
+    let source = m.module_source(false);
     let module = naga::front::wgsl::parse_str(&source).expect("parses");
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
@@ -1022,11 +1017,11 @@ fn shade(px: &[u8]) -> (f32, f32) {
     let floor = floor_points();
     let (mut far, mut nf) = (0.0f64, 0u32);
     for (i, p) in floor.iter().enumerate() {
-        if let Some((x, z)) = p {
-            if (2.5..3.5).contains(&(x * x + z * z).sqrt()) {
-                far += px[i * 4] as f64;
-                nf += 1;
-            }
+        if let Some((x, z)) = p
+            && (2.5..3.5).contains(&(x * x + z * z).sqrt())
+        {
+            far += px[i * 4] as f64;
+            nf += 1;
         }
     }
     let far = far / nf.max(1) as f64;
@@ -1131,11 +1126,11 @@ fn shadow_half_width(px: &[u8]) -> f32 {
     let floor = floor_points();
     let (mut far, mut nf) = (0.0f64, 0u32);
     for (i, p) in floor.iter().enumerate() {
-        if let Some((x, z)) = p {
-            if (2.5..3.5).contains(&(x * x + z * z).sqrt()) {
-                far += px[i * 4] as f64;
-                nf += 1;
-            }
+        if let Some((x, z)) = p
+            && (2.5..3.5).contains(&(x * x + z * z).sqrt())
+        {
+            far += px[i * 4] as f64;
+            nf += 1;
         }
     }
     let far = far / nf.max(1) as f64;

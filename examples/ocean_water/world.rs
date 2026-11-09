@@ -418,15 +418,15 @@ impl World {
             fft.cascade_views[1].clone(),
             fft.cascade_views[2].clone(),
         ];
-        if let Some(obj) = self.scene.get_mut(self.seabed_id) {
-            if let ObjectKind::Mesh(mesh) = &mut obj.kind {
-                mesh.material = Arc::new(shader::seabed_material(
-                    slots.clone(),
-                    pw,
-                    cascades.clone(),
-                    &self.cas,
-                ));
-            }
+        if let Some(obj) = self.scene.get_mut(self.seabed_id)
+            && let ObjectKind::Mesh(mesh) = &mut obj.kind
+        {
+            mesh.material = Arc::new(shader::seabed_material(
+                slots.clone(),
+                pw,
+                cascades.clone(),
+                &self.cas,
+            ));
         }
 
         // The lens overlay goes in last, so it is last in the transparent sort
@@ -535,12 +535,11 @@ impl World {
     /// supported this — it is how a hull or a dock sits *in* the sea rather than
     /// the sea sitting inside it — but nothing drove it until now.
     pub fn set_water_mask(&mut self, centre: [f32; 2], radius: f32, feather: f32) {
-        if let Some(obj) = self.scene.get_mut(self.water_id) {
-            if let ObjectKind::Mesh(mesh) = &mut obj.kind {
-                if let Material::Shader(sm) = Arc::make_mut(&mut mesh.material) {
-                    sm.data[15] = [centre[0], centre[1], radius, feather];
-                }
-            }
+        if let Some(obj) = self.scene.get_mut(self.water_id)
+            && let ObjectKind::Mesh(mesh) = &mut obj.kind
+            && let Material::Shader(sm) = Arc::make_mut(&mut mesh.material)
+        {
+            sm.data[15] = [centre[0], centre[1], radius, feather];
         }
     }
 
@@ -561,17 +560,16 @@ impl World {
             self.cas.extent(),
         );
         for id in [self.water_id, self.sky_id, self.seabed_id] {
-            if let Some(obj) = self.scene.get_mut(id) {
-                if let ObjectKind::Mesh(mesh) = &mut obj.kind {
-                    if let Material::Shader(sm) = Arc::make_mut(&mut mesh.material) {
-                        // Slot 0's time and slot 11's disc centre are written per
-                        // frame; leave whatever the last frame put there.
-                        let (time, centre) = (sm.data[0][0], sm.data[11]);
-                        sm.data.clone_from(&slots);
-                        sm.data[0][0] = time;
-                        sm.data[11] = centre;
-                    }
-                }
+            if let Some(obj) = self.scene.get_mut(id)
+                && let ObjectKind::Mesh(mesh) = &mut obj.kind
+                && let Material::Shader(sm) = Arc::make_mut(&mut mesh.material)
+            {
+                // Slot 0's time and slot 11's disc centre are written per
+                // frame; leave whatever the last frame put there.
+                let (time, centre) = (sm.data[0][0], sm.data[11]);
+                sm.data.clone_from(&slots);
+                sm.data[0][0] = time;
+                sm.data[11] = centre;
             }
         }
         if let Some(w) = &mut self.waterline {
@@ -750,12 +748,11 @@ impl World {
         }
         // The clouds drift, so the dome and the floor need the clock too.
         for id in [self.sky_id, self.seabed_id] {
-            if let Some(obj) = self.scene.get_mut(id) {
-                if let ObjectKind::Mesh(mesh) = &mut obj.kind {
-                    if let Material::Shader(sm) = Arc::make_mut(&mut mesh.material) {
-                        sm.data[0][0] = t;
-                    }
-                }
+            if let Some(obj) = self.scene.get_mut(id)
+                && let ObjectKind::Mesh(mesh) = &mut obj.kind
+                && let Material::Shader(sm) = Arc::make_mut(&mut mesh.material)
+            {
+                sm.data[0][0] = t;
             }
         }
 
@@ -820,12 +817,11 @@ impl World {
         } else {
             self.surface_fog
         };
-        if let Some(obj) = self.scene.get_mut(self.water_id) {
-            if let ObjectKind::Mesh(mesh) = &mut obj.kind {
-                if let Material::Shader(sm) = Arc::make_mut(&mut mesh.material) {
-                    sm.data[14][2] = submersion;
-                }
-            }
+        if let Some(obj) = self.scene.get_mut(self.water_id)
+            && let ObjectKind::Mesh(mesh) = &mut obj.kind
+            && let Material::Shader(sm) = Arc::make_mut(&mut mesh.material)
+        {
+            sm.data[14][2] = submersion;
         }
 
         // The film on the lens, last of all: it needs this frame's submersion.

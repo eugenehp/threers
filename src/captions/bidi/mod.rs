@@ -20,7 +20,7 @@
 //! (**BD13**), the weak types (**W1–W7**), paired brackets and neutrals (**N0–N2**),
 //! implicit levels (**I1–I2**) and reordering (**L1–L2**). [`mirror`] covers **L4**.
 //!
-//! The class of every codepoint is in [`class_table`], **generated** from
+//! The class of every codepoint is in `class_table`, **generated** from
 //! `ubidi_getClass` in the platform's own ICU rather than transcribed — see
 //! `examples/gen_classes.rs`. 1286 ranges, which is the whole of Unicode.
 //!
@@ -337,10 +337,10 @@ fn explicit(classes: &[Class], para: u8, pdi_of: &[Option<usize>]) -> (Vec<u8>, 
                 // neutral rules: one `U+200B` inside an override changed a neighbouring
                 // `ON`'s level, which showed up as about one random string in two
                 // thousand coming out in the wrong order.
-                if !c.is_removed_by_x9() {
-                    if let Some(o) = top.override_to {
-                        out[i] = o;
-                    }
+                if !c.is_removed_by_x9()
+                    && let Some(o) = top.override_to
+                {
+                    out[i] = o;
                 }
             }
         }

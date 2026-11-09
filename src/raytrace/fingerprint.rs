@@ -136,7 +136,9 @@ fn hash_object(scene: &Scene, id: ObjectId, h: &mut DefaultHasher) {
             }
             obj.layers.mask.hash(h);
         }
-        ObjectKind::Group | ObjectKind::Audio(_) => {}
+        ObjectKind::Group => {}
+        #[cfg(feature = "audio")]
+        ObjectKind::Audio(_) => {}
     }
     for child in scene
         .arena

@@ -557,10 +557,11 @@ impl Body {
                         if sine < 1e-2 {
                             return true;
                         }
-                        if let Some((was, dir)) = before {
-                            if dir * lean < 0.0 && was.min(sine) < 0.2 {
-                                return true;
-                            }
+                        if let Some((was, dir)) = before
+                            && dir * lean < 0.0
+                            && was.min(sine) < 0.2
+                        {
+                            return true;
                         }
                         before = Some((sine, lean));
                     }
@@ -752,11 +753,11 @@ impl Body {
                 'search: for dx in -1..=1 {
                     for dy in -1..=1 {
                         for dz in -1..=1 {
-                            if let Some(&j) = first.get(&(x + dx, y + dy, z + dz)) {
-                                if v3::dist(*p, vertices[j]) <= quantum {
-                                    found = Some(j);
-                                    break 'search;
-                                }
+                            if let Some(&j) = first.get(&(x + dx, y + dy, z + dz))
+                                && v3::dist(*p, vertices[j]) <= quantum
+                            {
+                                found = Some(j);
+                                break 'search;
                             }
                         }
                     }
@@ -1279,10 +1280,10 @@ impl Body {
 
         // An interior point of either inside the other.
         for (ring, against) in [(&a.uv, &theirs_here), (&theirs_here, &a.uv)] {
-            if let Some(p) = interior_point(ring) {
-                if point_in_ring(against, p) {
-                    return true;
-                }
+            if let Some(p) = interior_point(ring)
+                && point_in_ring(against, p)
+            {
+                return true;
             }
         }
 
@@ -1799,12 +1800,11 @@ impl Body {
         // rectangles, so they re-tessellate at any tolerance. Anything else —
         // a cut across the sweep, or a ring that closes inside the face — needs
         // the same subdivision the planar case uses, in `(u, v)`.
-        if chords.is_empty() {
-            if let Ok(bands) =
+        if chords.is_empty()
+            && let Ok(bands) =
                 self.split_swept(face_index, face, &surface, rings.clone(), carried.clone())
-            {
-                return Ok(bands);
-            }
+        {
+            return Ok(bands);
         }
         // Everything else — a cut across the sweep, or a ring closing inside
         // the face — is the same subdivision the planar case uses, run in
@@ -3053,7 +3053,9 @@ impl Body {
                 pos.array[o + 2] as f64,
             ]
         };
-        idx.chunks_exact(3)
+        idx.as_chunks::<3>()
+            .0
+            .iter()
             .map(|t| [v(t[0]), v(t[1]), v(t[2])])
             .collect()
     }
@@ -3344,10 +3346,10 @@ impl Body {
                     match pair_at(k) {
                         Some(p) => carry = p,
                         None => {
-                            if let Some(next) = next_pair(k) {
-                                if next != carry {
-                                    carry = next;
-                                }
+                            if let Some(next) = next_pair(k)
+                                && next != carry
+                            {
+                                carry = next;
                             }
                         }
                     }
@@ -4411,11 +4413,11 @@ fn split_at_seam_ends(edges: &mut Vec<Edge>, faces: &mut [Face]) {
             if face.edges.iter().filter(|&&x| x == e).count() != 2 {
                 continue;
             }
-            if let Some(edge) = edges.get(e) {
-                if let (Some(&a), Some(&b)) = (edge.vertices.first(), edge.vertices.last()) {
-                    cuts.insert(a);
-                    cuts.insert(b);
-                }
+            if let Some(edge) = edges.get(e)
+                && let (Some(&a), Some(&b)) = (edge.vertices.first(), edge.vertices.last())
+            {
+                cuts.insert(a);
+                cuts.insert(b);
             }
         }
     }
@@ -4886,10 +4888,10 @@ fn parameter_outline(
             // so is the difference between the chord landing on it and the two
             // being welded together afterwards, or not.
             out.extend(along(from, to).into_iter().map(|c| (c, usize::MAX)));
-            if let Some(last) = out.last_mut() {
-                if (last.0[1] - v).abs() <= f64::EPSILON {
-                    last.1 = name;
-                }
+            if let Some(last) = out.last_mut()
+                && (last.0[1] - v).abs() <= f64::EPSILON
+            {
+                last.1 = name;
             }
             from = to;
         }
@@ -5355,13 +5357,16 @@ fn point_in_ring(ring: &[[f64; 2]], p: [f64; 2]) -> bool {
 /// edges and vertices of a tessellated quadric constantly, and each such hit is
 /// a coin flip on the parity.
 fn point_in_mesh(tris: &[[V3; 3]], p: V3) -> bool {
+    // An arbitrary direction, unlikely to line up with any face; its first
+    // component only happens to be close to Euler's gamma.
+    #[allow(clippy::approx_constant)]
     let dir = [0.577_215_66, 0.413_255_11, 0.700_113_47];
     let mut hits = 0usize;
     for t in tris {
-        if let Some(d) = ray_triangle(p, dir, t) {
-            if d > 1e-9 {
-                hits += 1;
-            }
+        if let Some(d) = ray_triangle(p, dir, t)
+            && d > 1e-9
+        {
+            hits += 1;
         }
     }
     hits % 2 == 1
@@ -5406,7 +5411,9 @@ mod tests {
             let o = i as usize * 3;
             [pos[o] as f64, pos[o + 1] as f64, pos[o + 2] as f64]
         };
-        idx.chunks_exact(3)
+        idx.as_chunks::<3>()
+            .0
+            .iter()
             .map(|t| {
                 let (a, b, c) = (v(t[0]), v(t[1]), v(t[2]));
                 v3::dot(a, v3::cross(b, c)) / 6.0

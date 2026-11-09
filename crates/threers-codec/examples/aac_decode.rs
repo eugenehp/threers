@@ -6,6 +6,10 @@
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() < 3 {
+        eprintln!("usage: aac_decode IN OUT.f32 | aac_decode IN --compare REF.f32");
+        std::process::exit(2);
+    }
     let data = std::fs::read(&args[1]).expect("read input");
     let t = std::time::Instant::now();
     let mut a = threers_codec::aac::decode_mp4(&data).unwrap_or_else(|e| {
@@ -17,8 +21,10 @@ fn main() {
     if let Ok(f) = std::env::var("AAC_PLANES_FROM") {
         let r = std::fs::read(f).expect("read planes");
         let r: Vec<f32> = r
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
             .collect();
         let ch = a.planes.len();
         for (c, p) in a.planes.iter_mut().enumerate() {
@@ -59,7 +65,9 @@ fn main() {
         });
         let r = std::fs::read(&args[4]).expect("read reference");
         let r: Vec<i16> = r
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|b| i16::from_le_bytes([b[0], b[1]]))
             .collect();
         let m = ours.len().min(r.len());
@@ -81,8 +89,10 @@ fn main() {
     if args.get(2).map(String::as_str) == Some("--compare") {
         let r = std::fs::read(&args[3]).expect("read reference");
         let r: Vec<f32> = r
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
             .collect();
         println!("samples: ours {} ref {}", inter.len() / ch, r.len() / ch);
         let m = inter.len().min(r.len());

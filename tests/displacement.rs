@@ -127,8 +127,10 @@ fn scale_zero_and_no_map_render_identically() {
     let none = render(&mut r, None, 0.0);
     let zero = render(&mut r, Some(map.clone()), 0.0);
     let differing = none
-        .chunks_exact(4)
-        .zip(zero.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(zero.as_chunks::<4>().0)
         .filter(|(a, b)| a[0].abs_diff(b[0]) > 2)
         .count();
     assert_eq!(differing, 0, "a zero scale should be a no-op");

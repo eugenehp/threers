@@ -56,7 +56,9 @@ impl CaptionFont {
     /// `None` means the machine has none that covers it all.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn system_for_language(language: &str, covering: &str) -> Option<Self> {
-        system_font_paths(language).into_iter().find_map(|path| shared_covering(&path.to_string_lossy(), covering).map(Self::from_shared_face))
+        system_font_paths(language).into_iter().find_map(|path| {
+            shared_covering(&path.to_string_lossy(), covering).map(Self::from_shared_face)
+        })
     }
 }
 
@@ -107,14 +109,27 @@ impl CaptionFont {
     #[must_use]
     pub fn with_system_fallbacks(mut self, preferred: &[&str]) -> Self {
         // A few letters every face for the script has, to take the first face that is one.
-        const SAMPLES: [(&str, &str); 7] = [("ja", "日本語かな"), ("zh", "中文"), ("ko", "한국어"), ("hi", "हिन्दी"), ("th", "ไทย"), ("he", "שלום"), ("ar", "مرحبا")];
-        let base = |tag: &str| tag.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase();
+        const SAMPLES: [(&str, &str); 7] = [
+            ("ja", "日本語かな"),
+            ("zh", "中文"),
+            ("ko", "한국어"),
+            ("hi", "हिन्दी"),
+            ("th", "ไทย"),
+            ("he", "שלום"),
+            ("ar", "مرحبا"),
+        ];
+        let base = |tag: &str| {
+            tag.split(['-', '_'])
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase()
+        };
         let mut order: Vec<(String, &str)> = Vec::new();
         for tag in preferred {
-            if let Some(&(b, sample)) = SAMPLES.iter().find(|(b, _)| *b == base(tag)) {
-                if !order.iter().any(|(t, _)| base(t) == b) {
-                    order.push(((*tag).to_string(), sample));
-                }
+            if let Some(&(b, sample)) = SAMPLES.iter().find(|(b, _)| *b == base(tag))
+                && !order.iter().any(|(t, _)| base(t) == b)
+            {
+                order.push(((*tag).to_string(), sample));
             }
         }
         for &(b, sample) in &SAMPLES {
@@ -132,8 +147,10 @@ impl CaptionFont {
 }
 
 /// Letters an interface face must have: Latin with accents, digits, punctuation, Cyrillic.
+#[cfg(not(target_arch = "wasm32"))]
 const INTERFACE_SAMPLE: &str = "Hamburgefonstiv 0123456789 .,:;!?%()+- éüñçÅøß Привет";
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy)]
 enum Generic {
     Sans,
@@ -142,29 +159,76 @@ enum Generic {
 }
 
 /// Where the regular files of a generic family usually are, best first, on every platform.
+#[cfg(not(target_arch = "wasm32"))]
 fn generic_paths(kind: Generic) -> Vec<String> {
-    let roots = ["/usr/share/fonts/truetype", "/usr/share/fonts/opentype", "/usr/share/fonts/TTF", "/usr/share/fonts/liberation", "/usr/share/fonts/dejavu", "/usr/share/fonts"];
-    let in_roots = |sub: &str, file: &str| -> Vec<String> { roots.iter().map(|r| format!("{r}/{sub}/{file}")).collect() };
+    let roots = [
+        "/usr/share/fonts/truetype",
+        "/usr/share/fonts/opentype",
+        "/usr/share/fonts/TTF",
+        "/usr/share/fonts/liberation",
+        "/usr/share/fonts/dejavu",
+        "/usr/share/fonts",
+    ];
+    let in_roots = |sub: &str, file: &str| -> Vec<String> {
+        roots.iter().map(|r| format!("{r}/{sub}/{file}")).collect()
+    };
     let mut paths: Vec<String> = Vec::new();
     match kind {
         Generic::Sans => {
-            for (sub, file) in [("noto", "NotoSans-Regular.ttf"), ("ubuntu", "Ubuntu-R.ttf"), ("ubuntu", "UbuntuSans[wdth,wght].ttf"), ("liberation", "LiberationSans-Regular.ttf"), ("liberation2", "LiberationSans-Regular.ttf"), ("dejavu", "DejaVuSans.ttf"), ("droid", "DroidSans.ttf")] {
+            for (sub, file) in [
+                ("noto", "NotoSans-Regular.ttf"),
+                ("ubuntu", "Ubuntu-R.ttf"),
+                ("ubuntu", "UbuntuSans[wdth,wght].ttf"),
+                ("liberation", "LiberationSans-Regular.ttf"),
+                ("liberation2", "LiberationSans-Regular.ttf"),
+                ("dejavu", "DejaVuSans.ttf"),
+                ("droid", "DroidSans.ttf"),
+            ] {
                 paths.extend(in_roots(sub, file));
             }
-            paths.extend(["/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/NotoSans-Regular.ttf", "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"].map(String::from));
+            paths.extend(
+                [
+                    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+                    "/usr/share/fonts/NotoSans-Regular.ttf",
+                    "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+                ]
+                .map(String::from),
+            );
             paths.extend(["segoeui.ttf", "arial.ttf"].map(|f| format!("C:/Windows/Fonts/{f}")));
-            paths.extend(["Helvetica.ttc", "HelveticaNeue.ttc"].map(|f| format!("/System/Library/Fonts/{f}")));
+            paths.extend(
+                ["Helvetica.ttc", "HelveticaNeue.ttc"]
+                    .map(|f| format!("/System/Library/Fonts/{f}")),
+            );
         }
         Generic::Mono => {
-            paths.extend(["Menlo.ttc", "Monaco.ttf", "Courier.ttc"].map(|f| format!("/System/Library/Fonts/{f}")));
-            for (sub, file) in [("dejavu", "DejaVuSansMono.ttf"), ("liberation", "LiberationMono-Regular.ttf"), ("noto", "NotoSansMono-Regular.ttf"), ("ubuntu", "UbuntuMono-R.ttf")] {
+            paths.extend(
+                ["Menlo.ttc", "Monaco.ttf", "Courier.ttc"]
+                    .map(|f| format!("/System/Library/Fonts/{f}")),
+            );
+            for (sub, file) in [
+                ("dejavu", "DejaVuSansMono.ttf"),
+                ("liberation", "LiberationMono-Regular.ttf"),
+                ("noto", "NotoSansMono-Regular.ttf"),
+                ("ubuntu", "UbuntuMono-R.ttf"),
+            ] {
                 paths.extend(in_roots(sub, file));
             }
             paths.extend(["consola.ttf", "cour.ttf"].map(|f| format!("C:/Windows/Fonts/{f}")));
         }
         Generic::Serif => {
-            paths.extend(["/System/Library/Fonts/NewYork.ttf", "/System/Library/Fonts/Supplemental/Times New Roman.ttf", "/System/Library/Fonts/Times.ttc"].map(String::from));
-            for (sub, file) in [("noto", "NotoSerif-Regular.ttf"), ("liberation", "LiberationSerif-Regular.ttf"), ("dejavu", "DejaVuSerif.ttf")] {
+            paths.extend(
+                [
+                    "/System/Library/Fonts/NewYork.ttf",
+                    "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
+                    "/System/Library/Fonts/Times.ttc",
+                ]
+                .map(String::from),
+            );
+            for (sub, file) in [
+                ("noto", "NotoSerif-Regular.ttf"),
+                ("liberation", "LiberationSerif-Regular.ttf"),
+                ("dejavu", "DejaVuSerif.ttf"),
+            ] {
                 paths.extend(in_roots(sub, file));
             }
             paths.extend(["times.ttf", "georgia.ttf"].map(|f| format!("C:/Windows/Fonts/{f}")));
@@ -176,22 +240,51 @@ fn generic_paths(kind: Generic) -> Vec<String> {
 /// The bold, italic and bold-italic files beside a regular one, by the ways fonts are named: `-Regular` becomes `-Bold`, `-Italic`
 /// and `-BoldItalic`; Ubuntu's `-R` becomes `-B`, `-RI` and `-BI`; DejaVu's plain name gains `-Bold`, `-Oblique` and `-BoldOblique`;
 /// Windows' gains `b`/`bd`, `i` and `z`/`bi`. Only files that exist are returned.
+#[cfg(not(target_arch = "wasm32"))]
 fn siblings(regular: &str) -> [Option<std::path::PathBuf>; 3] {
     let path = std::path::Path::new(regular);
-    let (Some(stem), Some(ext)) = (path.file_stem().and_then(|s| s.to_str()), path.extension().and_then(|e| e.to_str())) else {
+    let (Some(stem), Some(ext)) = (
+        path.file_stem().and_then(|s| s.to_str()),
+        path.extension().and_then(|e| e.to_str()),
+    ) else {
         return [None, None, None];
     };
     let dir = path.parent().unwrap_or(std::path::Path::new(""));
-    let find = |names: &[String]| names.iter().map(|n| dir.join(format!("{n}.{ext}"))).find(|p| p.exists());
-    let (base, bold, italic, bold_italic): (&str, Vec<&str>, Vec<&str>, Vec<&str>) = if let Some(b) = stem.strip_suffix("-Regular") {
-        (b, vec!["-Bold"], vec!["-Italic", "-Oblique"], vec!["-BoldItalic", "-BoldOblique"])
-    } else if let Some(b) = stem.strip_suffix("-R") {
-        (b, vec!["-B"], vec!["-RI"], vec!["-BI"])
-    } else {
-        (stem, vec!["-Bold", "b", "bd"], vec!["-Italic", "-Oblique", "i"], vec!["-BoldItalic", "-BoldOblique", "z", "bi"])
+    let find = |names: &[String]| {
+        names
+            .iter()
+            .map(|n| dir.join(format!("{n}.{ext}")))
+            .find(|p| p.exists())
     };
-    let names = |suffixes: Vec<&str>| suffixes.into_iter().map(|s| format!("{base}{s}")).collect::<Vec<_>>();
-    [find(&names(bold)), find(&names(italic)), find(&names(bold_italic))]
+    let (base, bold, italic, bold_italic): (&str, Vec<&str>, Vec<&str>, Vec<&str>) =
+        if let Some(b) = stem.strip_suffix("-Regular") {
+            (
+                b,
+                vec!["-Bold"],
+                vec!["-Italic", "-Oblique"],
+                vec!["-BoldItalic", "-BoldOblique"],
+            )
+        } else if let Some(b) = stem.strip_suffix("-R") {
+            (b, vec!["-B"], vec!["-RI"], vec!["-BI"])
+        } else {
+            (
+                stem,
+                vec!["-Bold", "b", "bd"],
+                vec!["-Italic", "-Oblique", "i"],
+                vec!["-BoldItalic", "-BoldOblique", "z", "bi"],
+            )
+        };
+    let names = |suffixes: Vec<&str>| {
+        suffixes
+            .into_iter()
+            .map(|s| format!("{base}{s}"))
+            .collect::<Vec<_>>()
+    };
+    [
+        find(&names(bold)),
+        find(&names(italic)),
+        find(&names(bold_italic)),
+    ]
 }
 
 /// The first candidate that is installed and covers `sample`, as a family with the bold and italic files it has.
@@ -201,12 +294,21 @@ fn family_from(candidates: &[String], sample: &str) -> Option<CaptionFont> {
         let bytes = std::fs::read(path).ok()?;
         // A collection's first face covering the sample is the regular; a family's own files are single faces.
         let regular = CaptionFont::from_collection(&bytes, sample)?;
-        let [bold, italic, bold_italic] = siblings(path).map(|p| p.and_then(|p| std::fs::read(p).ok()));
+        let [bold, italic, bold_italic] =
+            siblings(path).map(|p| p.and_then(|p| std::fs::read(p).ok()));
         // Only files, not collections, make a family; a `.ttc` regular stays as it is.
         if path.ends_with(".ttc") {
             return Some(regular);
         }
-        CaptionFont::from_family_files(&bytes, bold.as_deref(), italic.as_deref(), bold_italic.as_deref()).ok().filter(|f| f.covers(sample)).or(Some(regular))
+        CaptionFont::from_family_files(
+            &bytes,
+            bold.as_deref(),
+            italic.as_deref(),
+            bold_italic.as_deref(),
+        )
+        .ok()
+        .filter(|f| f.covers(sample))
+        .or(Some(regular))
     })
 }
 
@@ -214,7 +316,9 @@ fn family_from(candidates: &[String], sample: &str) -> Option<CaptionFont> {
 /// window, takes the same face again for the price of a reference instead of reading a twenty-megabyte collection.
 #[cfg(not(target_arch = "wasm32"))]
 fn face_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, CachedFile>> {
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, CachedFile>>> = std::sync::OnceLock::new();
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, CachedFile>>,
+    > = std::sync::OnceLock::new();
     CACHE.get_or_init(Default::default)
 }
 
@@ -231,7 +335,12 @@ struct CachedFile {
 /// The first face of `path` that covers `covering`, from the cache where it has been parsed already.
 #[cfg(not(target_arch = "wasm32"))]
 fn shared_covering(path: &str, covering: &str) -> Option<std::sync::Arc<TtfFont>> {
-    let covers = |f: &TtfFont| covering.chars().filter(|c| !c.is_whitespace() && !c.is_control()).all(|c| f.cmap.contains_key(&(c as u32)));
+    let covers = |f: &TtfFont| {
+        covering
+            .chars()
+            .filter(|c| !c.is_whitespace() && !c.is_control())
+            .all(|c| f.cmap.contains_key(&(c as u32)))
+    };
     let mut cache = face_cache().lock().unwrap_or_else(|e| e.into_inner());
     let entry = cache.entry(path.to_string()).or_default();
     if entry.missing {
@@ -266,13 +375,21 @@ fn shared_covering(path: &str, covering: &str) -> Option<std::sync::Arc<TtfFont>
 /// How many system files have faces held, for tests and for a program that wants to know what it is keeping.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn system_face_cache_len() -> usize {
-    face_cache().lock().unwrap_or_else(|e| e.into_inner()).values().filter(|f| !f.faces.is_empty()).count()
+    face_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .filter(|f| !f.faces.is_empty())
+        .count()
 }
 
 /// Lets go of every cached system face. Faces already handed out keep their own reference.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn clear_system_face_cache() {
-    face_cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
+    face_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
 }
 
 /// Where faces for `language` are usually kept, best first, on every platform
@@ -421,16 +538,27 @@ pub fn system_font_paths(language: &str) -> Vec<std::path::PathBuf> {
 fn scan_script_fonts(dirs: &[&str], keywords: &[&str]) -> Vec<String> {
     let mut found: Vec<(u8, String)> = Vec::new();
     for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             let lower = name.to_ascii_lowercase();
-            if !(lower.ends_with(".ttf") || lower.ends_with(".otf") || lower.ends_with(".ttc")) || !keywords.iter().any(|k| lower.contains(k)) {
+            if !(lower.ends_with(".ttf") || lower.ends_with(".otf") || lower.ends_with(".ttc"))
+                || !keywords.iter().any(|k| lower.contains(k))
+            {
                 continue;
             }
             // Lower ranks first: regular beats bold and italic, sans beats serif, and the plain design beats a stylised one (Noto's
             // looped Thai, which comes first alphabetically).
-            let rank = u8::from(!lower.contains("regular")) * 4 + u8::from(lower.contains("serif")) * 2 + u8::from(lower.contains("bold") || lower.contains("italic") || lower.contains("mono") || lower.contains("looped"));
+            let rank = u8::from(!lower.contains("regular")) * 4
+                + u8::from(lower.contains("serif")) * 2
+                + u8::from(
+                    lower.contains("bold")
+                        || lower.contains("italic")
+                        || lower.contains("mono")
+                        || lower.contains("looped"),
+                );
             found.push((rank, format!("{dir}/{name}")));
         }
     }
@@ -460,9 +588,13 @@ mod tests {
 
     #[test]
     fn a_collection_gives_the_first_face_that_covers_the_text() {
-        let face = CaptionFont::from_collection(dejavu_bytes(), "abc").expect("a plain font is one face");
+        let face =
+            CaptionFont::from_collection(dejavu_bytes(), "abc").expect("a plain font is one face");
         assert!(face.covers("abc"));
-        assert!(CaptionFont::from_collection(dejavu_bytes(), "日本語").is_none(), "no face has it");
+        assert!(
+            CaptionFont::from_collection(dejavu_bytes(), "日本語").is_none(),
+            "no face has it"
+        );
         assert!(CaptionFont::from_collection(b"not a font at all", "a").is_none());
         assert!(CaptionFont::from_collection(&[], "a").is_none());
         // A collection header with no faces behind it ends the search at once.
@@ -473,10 +605,16 @@ mod tests {
 
     #[test]
     fn each_language_that_needs_a_face_has_places_to_look() {
-        for tag in ["ja", "zh", "zh-CN", "zh-Hans", "zh-TW", "zh_HK", "zh-Hant", "ko", "hi", "th", "he", "ar"] {
+        for tag in [
+            "ja", "zh", "zh-CN", "zh-Hans", "zh-TW", "zh_HK", "zh-Hant", "ko", "hi", "th", "he",
+            "ar",
+        ] {
             let paths = system_font_paths(tag);
             assert!(paths.len() > 3, "{tag}: {paths:?}");
-            assert!(paths.iter().any(|p| p.ends_with("Arial Unicode.ttf")), "{tag} ends with the broad face");
+            assert!(
+                paths.iter().any(|p| p.ends_with("Arial Unicode.ttf")),
+                "{tag} ends with the broad face"
+            );
         }
         // Simplified and Traditional start in different places.
         assert_ne!(system_font_paths("zh")[0], system_font_paths("zh-TW")[0]);
@@ -511,23 +649,80 @@ mod tests {
         assert_eq!(zh_first.gid('中') >> 24, 1);
         assert_eq!(ja_first.gid('中') >> 24, 1);
         // The same languages again add nothing.
-        assert_eq!(CaptionFont::builtin().with_system_fallbacks(&["zh", "zh-TW", "zh"]).fallback_count(), chain.fallback_count());
+        assert_eq!(
+            CaptionFont::builtin()
+                .with_system_fallbacks(&["zh", "zh-TW", "zh"])
+                .fallback_count(),
+            chain.fallback_count()
+        );
     }
 
     #[test]
     fn bold_and_italic_files_are_found_beside_a_regular_one_by_the_ways_fonts_are_named() {
         let dir = std::env::temp_dir().join(format!("threers-family-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let touch = |names: &[&str]| names.iter().for_each(|n| std::fs::write(dir.join(n), b"x").unwrap());
-        touch(&["Alpha-Regular.ttf", "Alpha-Bold.ttf", "Alpha-Italic.ttf", "Alpha-BoldItalic.ttf", "Beta-R.ttf", "Beta-B.ttf", "Beta-RI.ttf", "Beta-BI.ttf"]);
-        touch(&["Gamma.ttf", "Gamma-Bold.ttf", "Gamma-Oblique.ttf", "Gamma-BoldOblique.ttf", "delta.ttf", "deltab.ttf", "deltai.ttf", "deltaz.ttf", "eps.ttf", "epsbd.ttf", "Zeta.ttf"]);
-        let found = |regular: &str| siblings(dir.join(regular).to_str().unwrap()).map(|p| p.map(|p| p.file_name().unwrap().to_str().unwrap().to_string()));
+        let touch = |names: &[&str]| {
+            names
+                .iter()
+                .for_each(|n| std::fs::write(dir.join(n), b"x").unwrap())
+        };
+        touch(&[
+            "Alpha-Regular.ttf",
+            "Alpha-Bold.ttf",
+            "Alpha-Italic.ttf",
+            "Alpha-BoldItalic.ttf",
+            "Beta-R.ttf",
+            "Beta-B.ttf",
+            "Beta-RI.ttf",
+            "Beta-BI.ttf",
+        ]);
+        touch(&[
+            "Gamma.ttf",
+            "Gamma-Bold.ttf",
+            "Gamma-Oblique.ttf",
+            "Gamma-BoldOblique.ttf",
+            "delta.ttf",
+            "deltab.ttf",
+            "deltai.ttf",
+            "deltaz.ttf",
+            "eps.ttf",
+            "epsbd.ttf",
+            "Zeta.ttf",
+        ]);
+        let found = |regular: &str| {
+            siblings(dir.join(regular).to_str().unwrap())
+                .map(|p| p.map(|p| p.file_name().unwrap().to_str().unwrap().to_string()))
+        };
         let s = |n: &str| Some(n.to_string());
-        assert_eq!(found("Alpha-Regular.ttf"), [s("Alpha-Bold.ttf"), s("Alpha-Italic.ttf"), s("Alpha-BoldItalic.ttf")]);
-        assert_eq!(found("Beta-R.ttf"), [s("Beta-B.ttf"), s("Beta-RI.ttf"), s("Beta-BI.ttf")]);
-        assert_eq!(found("Gamma.ttf"), [s("Gamma-Bold.ttf"), s("Gamma-Oblique.ttf"), s("Gamma-BoldOblique.ttf")]);
-        assert_eq!(found("delta.ttf"), [s("deltab.ttf"), s("deltai.ttf"), s("deltaz.ttf")]);
-        assert_eq!(found("eps.ttf"), [s("epsbd.ttf"), None, None], "only what exists");
+        assert_eq!(
+            found("Alpha-Regular.ttf"),
+            [
+                s("Alpha-Bold.ttf"),
+                s("Alpha-Italic.ttf"),
+                s("Alpha-BoldItalic.ttf")
+            ]
+        );
+        assert_eq!(
+            found("Beta-R.ttf"),
+            [s("Beta-B.ttf"), s("Beta-RI.ttf"), s("Beta-BI.ttf")]
+        );
+        assert_eq!(
+            found("Gamma.ttf"),
+            [
+                s("Gamma-Bold.ttf"),
+                s("Gamma-Oblique.ttf"),
+                s("Gamma-BoldOblique.ttf")
+            ]
+        );
+        assert_eq!(
+            found("delta.ttf"),
+            [s("deltab.ttf"), s("deltai.ttf"), s("deltaz.ttf")]
+        );
+        assert_eq!(
+            found("eps.ttf"),
+            [s("epsbd.ttf"), None, None],
+            "only what exists"
+        );
         assert_eq!(found("Zeta.ttf"), [None, None, None]);
         assert_eq!(siblings("no extension"), [None, None, None]);
         let _ = std::fs::remove_dir_all(dir);
@@ -538,12 +733,21 @@ mod tests {
     fn the_monospaced_and_serif_faces_are_what_they_say() {
         if let Some(mut mono) = CaptionFont::system_mono() {
             assert!(mono.covers("Hamburgefonstiv 0123"));
-            assert!((mono.advance('i', 16.0) - mono.advance('m', 16.0)).abs() < 0.5, "a monospaced face: {} vs {}", mono.advance('i', 16.0), mono.advance('m', 16.0));
+            assert!(
+                (mono.advance('i', 16.0) - mono.advance('m', 16.0)).abs() < 0.5,
+                "a monospaced face: {} vs {}",
+                mono.advance('i', 16.0),
+                mono.advance('m', 16.0)
+            );
         }
-        if let (Some(mut serif), Some(mut sans)) = (CaptionFont::system_serif(), CaptionFont::system_sans()) {
+        if let (Some(mut serif), Some(mut sans)) =
+            (CaptionFont::system_serif(), CaptionFont::system_sans())
+        {
             assert!(serif.covers("Hamburgefonstiv 0123"));
             // Not the same face as the sans: some letter is a different width.
-            assert!("Hamburgefonstiv".chars().any(|c| (serif.advance(c, 20.0) - sans.advance(c, 20.0)).abs() > 0.3));
+            assert!("Hamburgefonstiv"
+                .chars()
+                .any(|c| (serif.advance(c, 20.0) - sans.advance(c, 20.0)).abs() > 0.3));
         }
     }
 
@@ -551,18 +755,30 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_system_face_is_parsed_once_and_shared() {
+        // Other tests load system faces into the same process-wide cache while
+        // this runs, so it checks the sharing itself, not how full the cache is.
+        let text = "한국어";
+        let Some(path) = system_font_paths("ko")
+            .into_iter()
+            .filter_map(|p| p.to_str().map(str::to_owned))
+            .find(|p| shared_covering(p, text).is_some())
+        else {
+            return;
+        };
+        let first = shared_covering(&path, text).expect("the face found above");
+        let again = shared_covering(&path, text).expect("the same again");
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &again),
+            "the second asking parsed nothing new"
+        );
+        let mut font = CaptionFont::system_for_language("ko", text).expect("a Korean face");
+        assert!(font.covers(text));
+        assert!(font.advance('한', 16.0) > 8.0);
         clear_system_face_cache();
-        let Some(first) = CaptionFont::system_for_language("ko", "한국어") else { return };
-        let held = system_face_cache_len();
-        assert!(held >= 1);
-        let mut second = CaptionFont::system_for_language("ko", "한국어").expect("the same again");
-        assert_eq!(system_face_cache_len(), held, "the second asking parsed nothing new");
-        assert!(first.covers("한국어") && second.covers("한국어"));
-        assert!(second.advance('한', 16.0) > 8.0);
-        clear_system_face_cache();
-        assert_eq!(system_face_cache_len(), 0);
-        // What was handed out still draws.
-        assert!(second.glyph('한', 16.0).width > 0);
+        // What was handed out still draws, and the next asking parses afresh.
+        assert!(font.glyph('한', 16.0).width > 0);
+        let fresh = shared_covering(&path, text).expect("parsed again");
+        assert!(!std::sync::Arc::ptr_eq(&first, &fresh));
     }
 
     /// The interface face is a real sans where the machine has one, not the monospaced bitmap.
@@ -570,7 +786,20 @@ mod tests {
     fn the_system_has_a_sans_face_for_an_interface() {
         let Some(font) = CaptionFont::system_sans() else {
             // A machine with no fonts at all is not a failure of the code.
-            assert!(["/usr/share/fonts", "/System/Library/Fonts", "C:/Windows/Fonts"].iter().all(|d| !std::path::Path::new(d).exists()) || cfg!(not(any(target_os = "macos", target_os = "linux", target_os = "windows"))));
+            assert!(
+                [
+                    "/usr/share/fonts",
+                    "/System/Library/Fonts",
+                    "C:/Windows/Fonts"
+                ]
+                .iter()
+                .all(|d| !std::path::Path::new(d).exists())
+                    || cfg!(not(any(
+                        target_os = "macos",
+                        target_os = "linux",
+                        target_os = "windows"
+                    )))
+            );
             return;
         };
         assert!(font.covers("Hamburgefonstiv 0123 Привет éüñ"));
@@ -584,10 +813,22 @@ mod tests {
     fn script_fonts_are_found_by_name_and_the_plain_ones_come_first() {
         let dir = std::env::temp_dir().join(format!("threers-fonts-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        for name in ["NotoSerifThai-Bold.ttf", "NotoSansThai-Regular.ttf", "NotoSansThai-Bold.ttf", "NotoLoopedThai-Regular.ttf", "NotoSansHebrew-Regular.ttf", "readme.txt", "NotoSansThai.json"] {
+        for name in [
+            "NotoSerifThai-Bold.ttf",
+            "NotoSansThai-Regular.ttf",
+            "NotoSansThai-Bold.ttf",
+            "NotoLoopedThai-Regular.ttf",
+            "NotoSansHebrew-Regular.ttf",
+            "readme.txt",
+            "NotoSansThai.json",
+        ] {
             std::fs::write(dir.join(name), b"x").unwrap();
         }
-        let found: Vec<String> = scan_script_fonts(&[dir.to_str().unwrap(), "/no/such/folder"], &["thai"]).into_iter().map(|p| p.rsplit('/').next().unwrap().to_string()).collect();
+        let found: Vec<String> =
+            scan_script_fonts(&[dir.to_str().unwrap(), "/no/such/folder"], &["thai"])
+                .into_iter()
+                .map(|p| p.rsplit('/').next().unwrap().to_string())
+                .collect();
         assert_eq!(found.len(), 4, "{found:?}");
         // The plain regular sans first, then the stylised and the bold, then the serif.
         assert_eq!(found[0], "NotoSansThai-Regular.ttf", "{found:?}");
@@ -609,7 +850,12 @@ mod tests {
         ] {
             let Some(font) = CaptionFont::system_for_language(tag, text) else {
                 // A machine with the fonts removed is not a failure of the code.
-                assert!(system_font_paths(tag).iter().all(|p| !p.exists() || std::fs::read(p).is_err()), "{tag}: a face exists but none covered {text}");
+                assert!(
+                    system_font_paths(tag)
+                        .iter()
+                        .all(|p| !p.exists() || std::fs::read(p).is_err()),
+                    "{tag}: a face exists but none covered {text}"
+                );
                 continue;
             };
             assert!(font.covers(text), "{tag}");

@@ -124,7 +124,7 @@ impl Api {
     unsafe fn f<F: Copy>(&mut self, offset: usize) -> F {
         let p = self.table.get_ptr(offset);
         assert!(!p.is_null(), "NVENC table entry {offset} is empty");
-        std::mem::transmute_copy(&p)
+        unsafe { std::mem::transmute_copy(&p) }
     }
 }
 

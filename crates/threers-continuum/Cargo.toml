@@ -1,7 +1,7 @@
 [package]
 name = "threers-continuum"
 version = "0.0.12"
-edition = "2021"
+edition = "2024"
 # Not on crates.io yet: a cable under steady tension does not hold the rod at
 # a steady bend (`pulling_a_cable_bends_the_rod_toward_it` in tests/rod.rs).
 publish = false

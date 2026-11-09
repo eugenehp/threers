@@ -54,7 +54,7 @@ pub type Bool = i8;
 pub const YES: Bool = 1;
 pub const NO: Bool = 0;
 
-extern "C" {
+unsafe extern "C" {
     /// libSystem: nonzero on the process's main thread.
     fn pthread_main_np() -> i32;
 }
@@ -65,7 +65,7 @@ pub fn is_main_thread() -> bool {
 }
 
 #[link(name = "objc", kind = "dylib")]
-extern "C" {
+unsafe extern "C" {
     fn objc_getClass(name: *const c_char) -> Id;
     fn sel_registerName(name: *const c_char) -> Sel;
     fn objc_msgSend();
@@ -104,8 +104,8 @@ macro_rules! msg_fn {
         #[allow(clippy::too_many_arguments)] // a method's arity is the method's
         pub unsafe fn $name<R, $($t),*>(recv: Id, sel: Sel, $($p: $t),*) -> R {
             let send: unsafe extern "C" fn(Id, Sel, $($t),*) -> R =
-                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-            send(recv, sel, $($p),*)
+                unsafe { std::mem::transmute(objc_msgSend as unsafe extern "C" fn()) };
+            unsafe { send(recv, sel, $($p),*) }
         }
     };
 }
@@ -149,8 +149,8 @@ pub(crate) use sel;
 /// # Safety
 /// `cls` must be a class whose designated initialiser is `-init`.
 pub unsafe fn alloc_init(cls: Id) -> Id {
-    let obj: Id = msg0(cls, sel!("alloc"));
-    msg0(obj, sel!("init"))
+    let obj: Id = unsafe { msg0(cls, sel!("alloc")) };
+    unsafe { msg0(obj, sel!("init")) }
 }
 
 /// An owned (+1) reference. Releases on drop, retains on clone.
@@ -182,7 +182,7 @@ impl Owned {
         if id.is_null() {
             None
         } else {
-            Some(Self(objc_retain(id)))
+            Some(Self(unsafe { objc_retain(id) }))
         }
     }
 
@@ -242,17 +242,15 @@ impl Drop for AutoreleasePool {
     }
 }
 
-/// An autoreleased `NSString` from a Rust string.
-///
-/// # Safety
-/// An [`AutoreleasePool`] must be live; the result is valid until it drains.
+/// An autoreleased `NSString` from a Rust string, valid until the enclosing
+/// [`AutoreleasePool`] drains (without one it leaks, which is not unsafe).
 /// Returns `nil` if `s` contains an interior NUL.
-pub unsafe fn nsstring(s: &str) -> Id {
+pub fn nsstring(s: &str) -> Id {
     let Ok(c) = CString::new(s) else {
         return NIL;
     };
     let cls = class!("NSString");
-    msg1(cls, sel!("stringWithUTF8String:"), c.as_ptr())
+    unsafe { msg1(cls, sel!("stringWithUTF8String:"), c.as_ptr()) }
 }
 
 /// `[[nserror localizedDescription] UTF8String]`, or a placeholder.
@@ -263,15 +261,17 @@ pub unsafe fn error_message(err: Id) -> String {
     if err.is_null() {
         return "unknown error (nil NSError)".into();
     }
-    let desc: Id = msg0(err, sel!("localizedDescription"));
+    let desc: Id = unsafe { msg0(err, sel!("localizedDescription")) };
     if desc.is_null() {
         return "unknown error (no description)".into();
     }
-    let utf8: *const c_char = msg0(desc, sel!("UTF8String"));
+    let utf8: *const c_char = unsafe { msg0(desc, sel!("UTF8String")) };
     if utf8.is_null() {
         return "unknown error (no UTF-8 description)".into();
     }
-    CStr::from_ptr(utf8).to_string_lossy().into_owned()
+    unsafe { CStr::from_ptr(utf8) }
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// The UTF-8 contents of an `NSString`, or `None` for `nil`.
@@ -282,11 +282,11 @@ pub unsafe fn nsstring_to_string(s: Id) -> Option<String> {
     if s.is_null() {
         return None;
     }
-    let utf8: *const c_char = msg0(s, sel!("UTF8String"));
+    let utf8: *const c_char = unsafe { msg0(s, sel!("UTF8String")) };
     if utf8.is_null() {
         return None;
     }
-    Some(CStr::from_ptr(utf8).to_string_lossy().into_owned())
+    Some(unsafe { CStr::from_ptr(utf8) }.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]

@@ -443,15 +443,19 @@ fn sample_bytes<'a>(file: &Ogawa<'a>, group: usize) -> Option<&'a [u8]> {
 
 fn floats(bytes: &[u8]) -> Vec<f32> {
     bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect()
 }
 
 fn ints(bytes: &[u8]) -> Vec<i32> {
     bytes
-        .chunks_exact(4)
-        .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| i32::from_le_bytes(*c))
         .collect()
 }
 
@@ -586,7 +590,7 @@ mod tests {
             "two pole rings of triangles"
         );
         // And it is a unit sphere, which a mis-strided read would not be.
-        for p in sphere.points.chunks_exact(3) {
+        for p in sphere.points.as_chunks::<3>().0 {
             let r = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
             assert!((r - 1.0).abs() < 1e-4, "{p:?} is at radius {r}");
         }

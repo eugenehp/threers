@@ -15,9 +15,9 @@
 //! showing a frame.
 
 use crate::renderer::fullscreen::{FormatPipelines, VS, VS_ENTRY};
-use crate::textures::YuvFrame;
 #[cfg(test)]
 use crate::textures::Samples;
+use crate::textures::YuvFrame;
 use std::collections::HashMap;
 
 /// `YuvParams` in the shader, field for field.
@@ -39,7 +39,13 @@ pub(crate) struct YuvParams {
 
 impl YuvParams {
     /// For `frame` drawn into a `target_height` texture `scale` times smaller.
-    pub(crate) fn new(frame: &YuvFrame, flip: bool, scale: u32, srgb_target: bool, target_height: u32) -> Self {
+    pub(crate) fn new(
+        frame: &YuvFrame,
+        flip: bool,
+        scale: u32,
+        srgb_target: bool,
+        target_height: u32,
+    ) -> Self {
         let k = frame.coefficients();
         let (cw, ch) = frame.chroma_size();
         Self {
@@ -50,7 +56,12 @@ impl YuvParams {
                 flip as u32,
                 frame.is_monochrome() as u32,
             ],
-            out: [scale.max(1), srgb_target as u32, target_height.max(1), frame.interleaved as u32],
+            out: [
+                scale.max(1),
+                srgb_target as u32,
+                target_height.max(1),
+                frame.interleaved as u32,
+            ],
             k0: [k.y_off, k.y_scale, k.c_mid, 0.0],
             k1: [k.rv, k.gu, k.gv, k.bu],
         }
@@ -62,7 +73,11 @@ impl YuvParams {
 pub(crate) fn fit(width: u32, height: u32, max: u32) -> (u32, u32, u32) {
     let max = max.max(1);
     let scale = width.div_ceil(max).max(height.div_ceil(max)).max(1);
-    (scale, width.div_ceil(scale).max(1), height.div_ceil(scale).max(1))
+    (
+        scale,
+        width.div_ceil(scale).max(1),
+        height.div_ceil(scale).max(1),
+    )
 }
 
 const FS: &str = crate::wgsl!(
@@ -267,7 +282,11 @@ impl YuvConverter {
         let (cw, ch) = frame.chroma_size();
         // A luma-only frame binds 1x1 chroma planes the shader never reads;
         // an interleaved one a two-channel plane and a 1x1 spare.
-        let chroma = if frame.is_monochrome() { (1, 1) } else { (cw, ch) };
+        let chroma = if frame.is_monochrome() {
+            (1, 1)
+        } else {
+            (cw, ch)
+        };
         let sizes = if frame.interleaved {
             [(frame.width.max(1), frame.height.max(1)), chroma, (1, 1)]
         } else {
@@ -279,21 +298,39 @@ impl YuvConverter {
         } else {
             (wgpu::TextureFormat::R16Uint, wgpu::TextureFormat::Rg16Uint)
         };
-        let formats = if frame.interleaved { [one, two, one] } else { [one; 3] };
-        if self.planes.get(&id).is_none_or(|p| p.sizes != sizes || p.formats != formats) {
+        let formats = if frame.interleaved {
+            [one, two, one]
+        } else {
+            [one; 3]
+        };
+        if self
+            .planes
+            .get(&id)
+            .is_none_or(|p| p.sizes != sizes || p.formats != formats)
+        {
             let planes = self.make_planes(device, sizes, formats);
             self.planes.insert(id, planes);
         }
         let planes = &self.planes[&id];
         let blank = [0u8; 4];
         let data: [&[u8]; 3] = if frame.is_monochrome() {
-            [frame.y.as_bytes(), &blank[..bytes as usize], &blank[..bytes as usize]]
+            [
+                frame.y.as_bytes(),
+                &blank[..bytes as usize],
+                &blank[..bytes as usize],
+            ]
         } else if frame.interleaved {
-            [frame.y.as_bytes(), frame.u.as_bytes(), &blank[..bytes as usize]]
+            [
+                frame.y.as_bytes(),
+                frame.u.as_bytes(),
+                &blank[..bytes as usize],
+            ]
         } else {
             [frame.y.as_bytes(), frame.u.as_bytes(), frame.v.as_bytes()]
         };
-        for (((texture, &(w, h)), samples), format) in planes.textures.iter().zip(&sizes).zip(data).zip(formats) {
+        for (((texture, &(w, h)), samples), format) in
+            planes.textures.iter().zip(&sizes).zip(data).zip(formats)
+        {
             let bytes = format.block_copy_size(None).unwrap_or(bytes);
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -315,7 +352,10 @@ impl YuvConverter {
                 },
             );
         }
-        let scale = frame.width.div_ceil(target.width().max(1)).max(frame.height.div_ceil(target.height().max(1)));
+        let scale = frame
+            .width
+            .div_ceil(target.width().max(1))
+            .max(frame.height.div_ceil(target.height().max(1)));
         let params = YuvParams::new(frame, flip, scale, format.is_srgb(), target.height());
         queue.write_buffer(&planes.params, 0, bytemuck::bytes_of(&params));
 
@@ -381,7 +421,12 @@ impl YuvConverter {
         queue.submit(Some(encoder.finish()));
     }
 
-    fn make_planes(&self, device: &wgpu::Device, sizes: [(u32, u32); 3], formats: [wgpu::TextureFormat; 3]) -> Planes {
+    fn make_planes(
+        &self,
+        device: &wgpu::Device,
+        sizes: [(u32, u32); 3],
+        formats: [wgpu::TextureFormat; 3],
+    ) -> Planes {
         let mut at = 0;
         let textures = sizes.map(|(width, height)| {
             let format = formats[at];
@@ -411,7 +456,11 @@ impl YuvConverter {
             .each_ref()
             .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
         // Interleaved: the Cb/Cr plane at both chroma bindings.
-        let second = if formats[1] != formats[0] { &views[1] } else { &views[2] };
+        let second = if formats[1] != formats[0] {
+            &views[1]
+        } else {
+            &views[2]
+        };
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("threers yuv bind"),
             layout: &self.layout,
@@ -455,9 +504,19 @@ mod tests {
 
     /// Planes with detail in every one: luma ramps across, chroma varies both
     /// ways, so siting and orientation both show.
-    fn frame(w: u32, h: u32, depth: u8, sub: (u8, u8), mono: bool, matrix: YuvMatrix, full: bool) -> YuvFrame {
+    fn frame(
+        w: u32,
+        h: u32,
+        depth: u8,
+        sub: (u8, u8),
+        mono: bool,
+        matrix: YuvMatrix,
+        full: bool,
+    ) -> YuvFrame {
         let max = (1u32 << depth) - 1;
-        let y: Vec<u16> = (0..w * h).map(|i| ((i % w) * max / w.max(1) + (i / w) * 3) as u16 % max as u16).collect();
+        let y: Vec<u16> = (0..w * h)
+            .map(|i| ((i % w) * max / w.max(1) + (i / w) * 3) as u16 % max as u16)
+            .collect();
         let mut f = YuvFrame {
             width: w,
             height: h,
@@ -472,14 +531,26 @@ mod tests {
             // From the subsampling: `chroma_size` says (0, 0) until there is
             // chroma.
             let (cw, ch) = (w.div_ceil(sub.0 as u32), h.div_ceil(sub.1 as u32));
-            f.u = (0..cw * ch).map(|i| ((i % cw) * max / cw + 7 * (i / cw)) as u16 % max as u16).collect::<Vec<u16>>().into();
-            f.v = (0..cw * ch).map(|i| (max - ((i / cw) * max / ch + 5 * (i % cw)) % (max + 1)) as u16).collect::<Vec<u16>>().into();
+            f.u = (0..cw * ch)
+                .map(|i| ((i % cw) * max / cw + 7 * (i / cw)) as u16 % max as u16)
+                .collect::<Vec<u16>>()
+                .into();
+            f.v = (0..cw * ch)
+                .map(|i| (max - ((i / cw) * max / ch + 5 * (i % cw)) % (max + 1)) as u16)
+                .collect::<Vec<u16>>()
+                .into();
         }
         assert!(f.is_valid());
         f
     }
 
-    fn convert(gpu: &crate::gpu::GpuContext, frame: &YuvFrame, target: (u32, u32), format: wgpu::TextureFormat, flip: bool) -> Vec<u8> {
+    fn convert(
+        gpu: &crate::gpu::GpuContext,
+        frame: &YuvFrame,
+        target: (u32, u32),
+        format: wgpu::TextureFormat,
+        flip: bool,
+    ) -> Vec<u8> {
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
@@ -501,7 +572,11 @@ mod tests {
 
     fn worst(a: &[u8], b: &[u8]) -> u8 {
         assert_eq!(a.len(), b.len());
-        a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0)
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| x.abs_diff(*y))
+            .max()
+            .unwrap_or(0)
     }
 
     #[test]
@@ -539,19 +614,33 @@ mod tests {
                 f.to_rgba_into(&mut a);
                 bytes.to_rgba_into(&mut b);
                 assert_eq!(a, b);
-                let got = convert(&gpu, &bytes, (37, 23), wgpu::TextureFormat::Rgba8UnormSrgb, false);
+                let got = convert(
+                    &gpu,
+                    &bytes,
+                    (37, 23),
+                    wgpu::TextureFormat::Rgba8UnormSrgb,
+                    false,
+                );
                 assert!(worst(&got, &a) <= 1, "8-bit {sub:?} mono {mono}: bytes");
             }
             let mut want = Vec::new();
             f.to_rgba_into(&mut want);
-            for format in [wgpu::TextureFormat::Rgba8UnormSrgb, wgpu::TextureFormat::Rgba8Unorm] {
+            for format in [
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                wgpu::TextureFormat::Rgba8Unorm,
+            ] {
                 let got = convert(&gpu, &f, (37, 23), format, false);
                 let d = worst(&got, &want);
-                assert!(d <= 1, "{depth}-bit {sub:?} mono {mono} {matrix:?} full {full} {format:?}: off by {d}");
+                assert!(
+                    d <= 1,
+                    "{depth}-bit {sub:?} mono {mono} {matrix:?} full {full} {format:?}: off by {d}"
+                );
             }
             if sub == (2, 2) && !mono {
                 // The same frame with Cb and Cr in pairs (NV12, P010 order).
-                let (Samples::Words(u), Samples::Words(v)) = (&f.u, &f.v) else { unreachable!() };
+                let (Samples::Words(u), Samples::Words(v)) = (&f.u, &f.v) else {
+                    unreachable!()
+                };
                 let pairs: Vec<u16> = u.iter().zip(v).flat_map(|(a, b)| [*a, *b]).collect();
                 let mut nv = YuvFrame {
                     u: pairs.clone().into(),
@@ -560,7 +649,9 @@ mod tests {
                     ..f.clone()
                 };
                 if depth == 8 {
-                    let Samples::Words(y) = &f.y else { unreachable!() };
+                    let Samples::Words(y) = &f.y else {
+                        unreachable!()
+                    };
                     nv.y = Samples::Bytes(y.iter().map(|&x| x as u8).collect());
                     nv.u = Samples::Bytes(pairs.iter().map(|&x| x as u8).collect());
                     nv.v = Samples::Bytes(Vec::new());
@@ -569,14 +660,32 @@ mod tests {
                 let mut cpu = Vec::new();
                 nv.to_rgba_into(&mut cpu);
                 assert_eq!(cpu, want, "{depth}-bit interleaved on the CPU");
-                let got = convert(&gpu, &nv, (37, 23), wgpu::TextureFormat::Rgba8UnormSrgb, false);
-                assert!(worst(&got, &want) <= 1, "{depth}-bit interleaved on the GPU");
+                let got = convert(
+                    &gpu,
+                    &nv,
+                    (37, 23),
+                    wgpu::TextureFormat::Rgba8UnormSrgb,
+                    false,
+                );
+                assert!(
+                    worst(&got, &want) <= 1,
+                    "{depth}-bit interleaved on the GPU"
+                );
             }
             // Turned over: the rows reversed, nothing else.
-            let got = convert(&gpu, &f, (37, 23), wgpu::TextureFormat::Rgba8UnormSrgb, true);
+            let got = convert(
+                &gpu,
+                &f,
+                (37, 23),
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                true,
+            );
             let stride = 37 * 4;
             let turned: Vec<u8> = want.chunks_exact(stride).rev().flatten().copied().collect();
-            assert!(worst(&got, &turned) <= 1, "{depth}-bit {sub:?}: turned over");
+            assert!(
+                worst(&got, &turned) <= 1,
+                "{depth}-bit {sub:?}: turned over"
+            );
         }
     }
 
@@ -593,12 +702,21 @@ mod tests {
         // mean of a 2x2 block wholly inside one half, so the colours hold.
         let (w, h) = (16u32, 8u32);
         let mut f = frame(w, h, 8, (2, 2), false, YuvMatrix::Bt709, false);
-        f.y = (0..w * h).map(|i| if i % w < w / 2 { 60u16 } else { 200 }).collect::<Vec<u16>>().into();
+        f.y = (0..w * h)
+            .map(|i| if i % w < w / 2 { 60u16 } else { 200 })
+            .collect::<Vec<u16>>()
+            .into();
         f.u = vec![128u16; f.u.len()].into();
         f.v = vec![128u16; f.v.len()].into();
         let mut full = Vec::new();
         f.to_rgba_into(&mut full);
-        let got = convert(&gpu, &f, (w / 2, h / 2), wgpu::TextureFormat::Rgba8UnormSrgb, false);
+        let got = convert(
+            &gpu,
+            &f,
+            (w / 2, h / 2),
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            false,
+        );
         let left = &full[..4];
         let right = &full[((w - 1) * 4) as usize..][..4];
         assert!(worst(&got[..4], left) <= 1, "{:?} vs {left:?}", &got[..4]);

@@ -64,10 +64,10 @@ impl WebSceneExporter {
         matrix_world: &[f64],
     ) -> Result<u32, JsValue> {
         let parent = usize::try_from(parent).ok();
-        if let Some(p) = parent {
-            if p >= self.entries.len() {
-                return Err(JsValue::from_str(&format!("addObject: no parent {p}")));
-            }
+        if let Some(p) = parent
+            && p >= self.entries.len()
+        {
+            return Err(JsValue::from_str(&format!("addObject: no parent {p}")));
         }
         let kind = match kind {
             "mesh" => Some(ExportKind::Mesh),

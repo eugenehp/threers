@@ -166,7 +166,9 @@ fn triangles(geom: &BufferGeometry) -> Vec<[[f32; 3]; 3]> {
     let p = |i: usize| [pos.array[i * 3], pos.array[i * 3 + 1], pos.array[i * 3 + 2]];
     match &geom.index {
         Some(ix) => ix
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|t| [p(t[0] as usize), p(t[1] as usize), p(t[2] as usize)])
             .collect(),
         None => (0..pos.count() / 3)
@@ -374,14 +376,14 @@ pub fn schematic_project(
                 _ => {}
             }
         }
-        if let Some(prev) = run_vis {
-            if run_start < steps {
-                let seg = [lerp2(run_start as f32 / steps as f32), q2];
-                if prev {
-                    visible.push(seg)
-                } else {
-                    hidden.push(seg)
-                }
+        if let Some(prev) = run_vis
+            && run_start < steps
+        {
+            let seg = [lerp2(run_start as f32 / steps as f32), q2];
+            if prev {
+                visible.push(seg)
+            } else {
+                hidden.push(seg)
             }
         }
     }

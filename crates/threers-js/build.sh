@@ -5,8 +5,8 @@
 #   dist/mini/  — smallest wasm (core THREE.* renderer)
 #   dist/full/  — wasm-full (openscad, codecs, nurbs, planet, raytrace)
 #
-# Default package entry (`.`) is **mini** so casual `import 'threers'` stays small.
-# Opt into the kitchen sink with `import … from 'threers/full'`.
+# Default package entry (`.`) is **mini** so casual `import '@threers/threers'` stays small.
+# Opt into the kitchen sink with `import … from '@threers/threers/full'`.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -69,7 +69,7 @@ EOF
  * threers (${variant}) — Deno / ESM entry.
  *
  * \`\`\`ts
- * import THREE, { initThreers } from "npm:threers/${variant}";
+ * import THREE, { initThreers } from "npm:@threers/threers/${variant}";
  * await initThreers();
  * \`\`\`
  */
@@ -97,7 +97,7 @@ export * from './mini/index.js';
 EOF
 
 cat > "$DIST/mod.ts" <<'EOF'
-/** Default Deno entry — mini. Prefer `npm:threers/full` when you need CAD/codecs. */
+/** Default Deno entry — mini. Prefer `npm:@threers/threers/full` when you need CAD/codecs. */
 export { default, initThreers } from "./mini/mod.ts";
 export * from "./mini/mod.ts";
 EOF
@@ -109,4 +109,4 @@ EOF
 echo "==> dist ready"
 du -sh "$DIST" "$DIST/mini" "$DIST/full" "$DIST/mini/pkg/threers_bg.wasm" "$DIST/full/pkg/threers_bg.wasm" 2>/dev/null || true
 echo "    npm pack / npm publish from $PKG"
-echo "    import from 'threers' | 'threers/mini' (small) or 'threers/full'"
+echo "    import from '@threers/threers' | '@threers/threers/mini' (small) or '@threers/threers/full'"

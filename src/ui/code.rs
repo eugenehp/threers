@@ -50,11 +50,11 @@ pub fn brace_folds(text: &str) -> Vec<Fold> {
         match c {
             '{' | '[' => stack.push(k),
             _ => {
-                if let Some(&open) = stack.last() {
-                    if (all[open].2 == '{') == (c == '}') {
-                        stack.pop();
-                        matched[open] = Some(k);
-                    }
+                if let Some(&open) = stack.last()
+                    && (all[open].2 == '{') == (c == '}')
+                {
+                    stack.pop();
+                    matched[open] = Some(k);
                 }
             }
         }

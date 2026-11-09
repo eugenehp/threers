@@ -256,12 +256,12 @@ impl EffectComposer {
     /// Allocate (or resize) the two buffers now rather than on the first render.
     pub fn ensure_buffers(&mut self, renderer: &mut dyn PostBackend) {
         let (w, h) = self.effective();
-        if self.user_target {
-            if let Some(t) = &self.rt1 {
-                let (tw, th, tf) = (t.width(), t.height(), t.format());
-                ensure(&mut self.rt2, renderer, tw, th, tf);
-                return;
-            }
+        if self.user_target
+            && let Some(t) = &self.rt1
+        {
+            let (tw, th, tf) = (t.width(), t.height(), t.format());
+            ensure(&mut self.rt2, renderer, tw, th, tf);
+            return;
         }
         ensure(&mut self.rt1, renderer, w, h, self.format);
         ensure(&mut self.rt2, renderer, w, h, self.format);

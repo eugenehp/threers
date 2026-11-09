@@ -82,7 +82,7 @@
 //! checkpointing and EXR export; tile/region accumulation for viewports with
 //! noise-priority scheduling, soft time budgets, adaptive early stop, and
 //! deferred GPU readback (one full sync at resolve instead of per-tile copies).
-//! [`gpu::GpuCaps`](crate::raytrace::gpu::GpuCaps) validates storage-buffer, uniform, texture, and film
+//! [`gpu::GpuCaps`] validates storage-buffer, uniform, texture, and film
 //! sizes against wgpu limits (downlevel/WebGL2, shared raster devices, and
 //! native Metal/Vulkan/CUDA stacks all differ).
 //! Per-pixel variance for adaptive sampling and denoising uses Welford `M₂`
@@ -109,22 +109,14 @@ mod bvh;
 mod camera;
 mod checkpoint;
 mod denoise;
-/// The trained denoiser's forward pass, dependency-free and wasm-capable.
 pub mod denoise_net;
 mod distribution;
 mod film;
 mod fingerprint;
 mod integrator;
-/// The trained denoiser. Needs `learned-denoise`.
 #[cfg(all(feature = "learned-denoise", not(target_arch = "wasm32")))]
 pub mod learned;
 mod lights;
-/// Turning lines and points into the triangles a tracer can intersect.
-///
-/// Public because a rasteriser needs the same expansion: hardware lines are one
-/// pixel wide and have no width to give, so drawing a line of a stated world
-/// width means building these quads either way, and two copies of the
-/// construction would drift.
 pub mod primitives;
 mod render;
 mod sampler;
@@ -132,7 +124,6 @@ mod scene;
 mod settings;
 mod texture;
 
-/// The wgpu compute backend — see [`crate::raytrace::gpu::GpuBackend`].
 pub mod gpu;
 
 pub use backend::{

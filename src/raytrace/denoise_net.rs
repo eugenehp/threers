@@ -731,7 +731,9 @@ impl<'a> Reader<'a> {
 
     fn f32s(&mut self, n: usize) -> Result<Vec<f32>, DenoiseError> {
         let b = self.take(n * 4)?;
-        Ok(b.chunks_exact(4)
+        Ok(b.as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect())
     }

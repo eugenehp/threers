@@ -76,7 +76,7 @@ fn main() {
 fn mosaic(frame: &[u8], labels: &[u32], cells: usize, palette: &Palette) -> Vec<u8> {
     let mut sums = vec![[0.0f64; 3]; cells];
     let mut counts = vec![0u32; cells];
-    for (px, label) in frame.chunks_exact(4).zip(labels) {
+    for (px, label) in frame.as_chunks::<4>().0.iter().zip(labels) {
         let cell = *label as usize;
         if cell >= cells {
             continue;
@@ -107,7 +107,7 @@ fn mosaic(frame: &[u8], labels: &[u32], cells: usize, palette: &Palette) -> Vec<
         .collect();
 
     let mut out = Vec::with_capacity(frame.len());
-    for (px, label) in frame.chunks_exact(4).zip(labels) {
+    for (px, label) in frame.as_chunks::<4>().0.iter().zip(labels) {
         let c = cell_color
             .get(*label as usize)
             .copied()

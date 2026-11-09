@@ -524,16 +524,21 @@ fn mark_ss_plane(a : vec4<f32>, b : vec4<f32>, c : vec4<f32>) -> MarkPlane {
     } else {
         out.abc = vec4<f32>(0.0, 0.0, p0.z, 1.0);
     }
-    out.origin = vec4<f32>(p0.x * (1.0 / 16.0), p0.y * (1.0 / 16.0), 0.0, 0.0);
+    // The layer's polygon offset: `layer.shadow.y` units of `2^(e − 23)`,
+    // `e` the largest exponent of the corners' depths (a float buffer's).
+    let e = max(max(bitcast<i32>(p0.z) & 0x7F800000, bitcast<i32>(p1.z) & 0x7F800000), bitcast<i32>(p2.z) & 0x7F800000);
+    let bias = bitcast<f32>(e) * (1.0 / 8388608.0) * layer.shadow.y;
+    out.origin = vec4<f32>(p0.x * (1.0 / 16.0), p0.y * (1.0 / 16.0), bias, 0.0);
     return out;
 }
 
 /// SwiftShader's depth plane for a line from `a` to `b` (clip positions as
-/// rasterized): no reordering; a third point a segment's length across
-/// from `b`, at `b`'s depth, so depth runs along the line only.
+/// rasterized): set up from its last end (GL's last provoking vertex); a
+/// third point a segment's length across from `a`, at `a`'s depth, so
+/// depth runs along the line only.
 fn mark_ss_line_plane(a : vec4<f32>, b : vec4<f32>) -> MarkPlane {
-    let p0 = mark_ss_window(a);
-    let p1 = mark_ss_window(b);
+    let p0 = mark_ss_window(b);
+    let p1 = mark_ss_window(a);
     let x1 = (p1.x - p0.x) * (1.0 / 16.0);
     let y1s = (p1.y - p0.y) * (1.0 / 16.0);
     let x2 = ((p1.x + p1.y - p0.y) - p0.x) * (1.0 / 16.0);
@@ -563,7 +568,7 @@ fn mark_ss_depth(plane : vec4<f32>, origin : vec4<f32>, frag : vec4<f32>) -> f32
     let yf = (frag.y - 0.5) - origin.y;
     let row = plane.z + yf * plane.y;
     let z = xf * plane.x + row;
-    return clamp(z, 0.0, 1.0);
+    return clamp(z + origin.z, 0.0, 1.0);
 }
 
 /// Whether relative point `p` is outside the layer's clip rectangle on the
@@ -2870,11 +2875,12 @@ fn localize(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     for line in body.lines() {
         let t = line.trim();
-        if t.starts_with("@location(") && t.ends_with("_lo : vec3<f32>,") {
-            if let Some(name) = t.split(')').nth(1).and_then(|r| r.split(':').next()) {
-                names.push(name.trim().to_string());
-                continue;
-            }
+        if t.starts_with("@location(")
+            && t.ends_with("_lo : vec3<f32>,")
+            && let Some(name) = t.split(')').nth(1).and_then(|r| r.split(':').next())
+        {
+            names.push(name.trim().to_string());
+            continue;
         }
         out.push_str(line);
         out.push('\n');

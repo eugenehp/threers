@@ -47,7 +47,9 @@ const GRANULE: usize = 576;
 pub const DELAY: usize = 1057;
 
 /// MPEG-1 Layer III bitrates, kbit/s, by header index 1 to 14.
-pub const BITRATES: [u32; 14] = [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+pub const BITRATES: [u32; 14] = [
+    32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320,
+];
 
 /// The MPEG-1 sample rates, in header order.
 pub const SAMPLE_RATES: [u32; 3] = [44_100, 48_000, 32_000];
@@ -64,7 +66,11 @@ pub struct Mp3Config {
 
 impl Mp3Config {
     pub fn new(sample_rate: u32, channels: usize, kbps: u32) -> Self {
-        Self { sample_rate, channels, kbps }
+        Self {
+            sample_rate,
+            channels,
+            kbps,
+        }
     }
 }
 
@@ -125,11 +131,25 @@ struct Tables {
 /// Walks a radix-16 table (the decoder's `huff_pair` layout), recording each
 /// leaf's code. A non-negative entry is `length << 8 | x << 4 | y` for the
 /// bits left in this nibble; a negative one points to a sub-table.
-fn walk_pairs(tab: &[i16], base: usize, prefix: u32, prefix_len: u32, len: &mut [[u8; 16]; 16], code: &mut [[u16; 16]; 16]) {
+fn walk_pairs(
+    tab: &[i16],
+    base: usize,
+    prefix: u32,
+    prefix_len: u32,
+    len: &mut [[u8; 16]; 16],
+    code: &mut [[u16; 16]; 16],
+) {
     for idx in 0..16usize {
         let e = tab[base + idx];
         if e < 0 {
-            walk_pairs(tab, base + (-e) as usize, (prefix << 4) | idx as u32, prefix_len + 4, len, code);
+            walk_pairs(
+                tab,
+                base + (-e) as usize,
+                (prefix << 4) | idx as u32,
+                prefix_len + 4,
+                len,
+                code,
+            );
         } else {
             let l = (e >> 8) as u32;
             // A leaf of length l fills 2^(4-l) entries; take its first.
@@ -151,7 +171,13 @@ fn walk_quads(tab: &[i16], at: usize, prefix: u32, depth: u32, out: &mut QuadTab
         out.code[a as usize] = prefix as u8;
     } else {
         walk_quads(tab, at + 1, prefix << 1, depth + 1, out);
-        walk_quads(tab, at + 1 + (-a) as usize, (prefix << 1) | 1, depth + 1, out);
+        walk_quads(
+            tab,
+            at + 1 + (-a) as usize,
+            (prefix << 1) | 1,
+            depth + 1,
+            out,
+        );
     }
 }
 
@@ -169,14 +195,40 @@ fn tables() -> &'static Tables {
             walk_pairs(tab, 0, 0, 0, &mut len, &mut code);
             if n == 0 {
                 // Table 0 carries only zeros, in no bits.
-                pairs.push(Some(PairTable { len, code, linbits: 0, max: 0 }));
+                pairs.push(Some(PairTable {
+                    len,
+                    code,
+                    linbits: 0,
+                    max: 0,
+                }));
                 continue;
             }
-            let tree_max = (0..16).filter(|&x| (0..16).any(|y| len[x][y] > 0 || len[y][x] > 0)).max().unwrap_or(0) as i32;
-            let max = if *linbits > 0 { 15 + (1 << linbits) - 1 } else { tree_max };
-            pairs.push(Some(PairTable { len, code, linbits: *linbits, max }));
+            let tree_max = (0..16)
+                .filter(|&x| (0..16).any(|y| len[x][y] > 0 || len[y][x] > 0))
+                .max()
+                .unwrap_or(0) as i32;
+            let max = if *linbits > 0 {
+                15 + (1 << linbits) - 1
+            } else {
+                tree_max
+            };
+            pairs.push(Some(PairTable {
+                len,
+                code,
+                linbits: *linbits,
+                max,
+            }));
         }
-        let mut quads = [QuadTable { len: [0; 16], code: [0; 16] }, QuadTable { len: [0; 16], code: [0; 16] }];
+        let mut quads = [
+            QuadTable {
+                len: [0; 16],
+                code: [0; 16],
+            },
+            QuadTable {
+                len: [0; 16],
+                code: [0; 16],
+            },
+        ];
         for (q, (_, tab)) in quads.iter_mut().zip(HTC.iter()) {
             walk_quads(tab, 0, 0, 0, q);
         }
@@ -192,7 +244,8 @@ fn tables() -> &'static Tables {
             .map(|k| {
                 let mut row = [0.0; 64];
                 for (i, r) in row.iter_mut().enumerate() {
-                    *r = ((2 * k + 1) as f64 * (i as f64 - 16.0) * std::f64::consts::PI / 64.0).cos();
+                    *r = ((2 * k + 1) as f64 * (i as f64 - 16.0) * std::f64::consts::PI / 64.0)
+                        .cos();
                 }
                 row
             })
@@ -205,12 +258,22 @@ fn tables() -> &'static Tables {
             .map(|k| {
                 let mut row = [0.0; 36];
                 for (i, r) in row.iter_mut().enumerate() {
-                    *r = (std::f64::consts::PI / 72.0 * (2 * i + 1 + 18) as f64 * (2 * k + 1) as f64).cos();
+                    *r = (std::f64::consts::PI / 72.0
+                        * (2 * i + 1 + 18) as f64
+                        * (2 * k + 1) as f64)
+                        .cos();
                 }
                 row
             })
             .collect();
-        Tables { pairs, quads, window, matrix, mdct_window, mdct_cos }
+        Tables {
+            pairs,
+            quads,
+            window,
+            matrix,
+            mdct_window,
+            mdct_cos,
+        }
     })
 }
 
@@ -219,7 +282,11 @@ fn pair_bits(t: &PairTable, x: i32, y: i32) -> Option<u32> {
     if x > t.max || y > t.max {
         return None;
     }
-    let (cx, cy) = if t.linbits > 0 { (x.min(15), y.min(15)) } else { (x, y) };
+    let (cx, cy) = if t.linbits > 0 {
+        (x.min(15), y.min(15))
+    } else {
+        (x, y)
+    };
     let mut bits = u32::from(t.len[cx as usize][cy as usize]);
     if t.linbits > 0 {
         if x >= 15 {
@@ -251,7 +318,17 @@ struct Granule {
 
 impl Granule {
     fn silent() -> Self {
-        Self { global_gain: 0, ix: [0; GRANULE], big_values: 0, count1_quads: 0, count1_table: 0, region0_count: 0, region1_count: 0, tables: [0; 3], bits: 0 }
+        Self {
+            global_gain: 0,
+            ix: [0; GRANULE],
+            big_values: 0,
+            count1_quads: 0,
+            count1_table: 0,
+            region0_count: 0,
+            region1_count: 0,
+            tables: [0; 3],
+            bits: 0,
+        }
     }
 }
 
@@ -309,7 +386,12 @@ fn code_granule(ix: &[i32; GRANULE], long: &[u16; 23]) -> Option<Granule> {
         if from >= to {
             return (0, 0);
         }
-        usable.iter().filter(|&&n| bad[n][to] == bad[n][from]).map(|&n| (cost[n][to] - cost[n][from], n)).min().unwrap_or((u32::MAX / 4, 0))
+        usable
+            .iter()
+            .filter(|&&n| bad[n][to] == bad[n][from])
+            .map(|&n| (cost[n][to] - cost[n][from], n))
+            .min()
+            .unwrap_or((u32::MAX / 4, 0))
     };
 
     let mut best: Option<(u32, usize, usize, [usize; 3])> = None;
@@ -318,7 +400,8 @@ fn code_granule(ix: &[i32; GRANULE], long: &[u16; 23]) -> Option<Granule> {
             // Regions in pairs; they cannot pass the end of the big values.
             let a = (edge(long, r0 + 1) / 2).min(pairs);
             let b = (edge(long, r0 + r1 + 2) / 2).min(pairs).max(a);
-            let ((c0, t0), (c1, t1), (c2, t2)) = (best_table(0, a), best_table(a, b), best_table(b, pairs));
+            let ((c0, t0), (c1, t1), (c2, t2)) =
+                (best_table(0, a), best_table(a, b), best_table(b, pairs));
             let total = c0.saturating_add(c1).saturating_add(c2);
             if best.is_none_or(|(bits, ..)| total < bits) {
                 best = Some((total, r0, r1, [t0, t1, t2]));
@@ -327,23 +410,44 @@ fn code_granule(ix: &[i32; GRANULE], long: &[u16; 23]) -> Option<Granule> {
     }
     let (big_bits, region0_count, region1_count, tables_chosen) = best?;
     let bits = big_bits.saturating_add(best_count1);
-    Some(Granule { global_gain: 0, ix: *ix, big_values: pairs, count1_quads: quads, count1_table, region0_count, region1_count, tables: tables_chosen, bits })
+    Some(Granule {
+        global_gain: 0,
+        ix: *ix,
+        big_values: pairs,
+        count1_quads: quads,
+        count1_table,
+        region0_count,
+        region1_count,
+        tables: tables_chosen,
+        bits,
+    })
 }
 
 fn write_granule(w: &mut BitWriter, g: &Granule, long: &[u16; 23]) {
     let t = tables();
     let a = (edge(long, g.region0_count + 1) / 2).min(g.big_values);
-    let b = (edge(long, g.region0_count + g.region1_count + 2) / 2).min(g.big_values).max(a);
+    let b = (edge(long, g.region0_count + g.region1_count + 2) / 2)
+        .min(g.big_values)
+        .max(a);
     for (region, (from, to)) in [(0, a), (a, b), (b, g.big_values)].into_iter().enumerate() {
-        let table = t.pairs[g.tables[region]].as_ref().expect("a chosen table exists");
+        let table = t.pairs[g.tables[region]]
+            .as_ref()
+            .expect("a chosen table exists");
         for p in from..to {
             let (x, y) = (g.ix[2 * p], g.ix[2 * p + 1]);
             let (ax, ay) = (x.abs(), y.abs());
             if g.tables[region] == 0 {
                 continue; // table 0: zeros, no bits
             }
-            let (cx, cy) = if table.linbits > 0 { (ax.min(15), ay.min(15)) } else { (ax, ay) };
-            w.write_bits(u32::from(table.code[cx as usize][cy as usize]), u32::from(table.len[cx as usize][cy as usize]));
+            let (cx, cy) = if table.linbits > 0 {
+                (ax.min(15), ay.min(15))
+            } else {
+                (ax, ay)
+            };
+            w.write_bits(
+                u32::from(table.code[cx as usize][cy as usize]),
+                u32::from(table.len[cx as usize][cy as usize]),
+            );
             if table.linbits > 0 && ax >= 15 {
                 w.write_bits((ax - 15) as u32, table.linbits);
             }
@@ -404,11 +508,18 @@ const SCALE: f64 = 0.1122;
 
 impl Mp3Encoder {
     pub fn new(cfg: Mp3Config) -> Result<Self, Mp3Error> {
-        let sr_index = SAMPLE_RATES.iter().position(|&r| r == cfg.sample_rate).ok_or(Mp3Error::SampleRate(cfg.sample_rate))?;
+        let sr_index = SAMPLE_RATES
+            .iter()
+            .position(|&r| r == cfg.sample_rate)
+            .ok_or(Mp3Error::SampleRate(cfg.sample_rate))?;
         if !(1..=2).contains(&cfg.channels) {
             return Err(Mp3Error::Channels(cfg.channels));
         }
-        let bitrate_index = BITRATES.iter().position(|&b| b == cfg.kbps).ok_or(Mp3Error::Bitrate(cfg.kbps))? + 1;
+        let bitrate_index = BITRATES
+            .iter()
+            .position(|&b| b == cfg.kbps)
+            .ok_or(Mp3Error::Bitrate(cfg.kbps))?
+            + 1;
         let per_channel = f64::from(cfg.kbps) * 1000.0 / cfg.channels as f64;
         let cutoff_hz = (per_channel * 0.25).clamp(4_000.0, f64::from(cfg.sample_rate) / 2.0);
         let cutoff = ((cutoff_hz / (f64::from(cfg.sample_rate) / 2.0)) * GRANULE as f64) as usize;
@@ -419,7 +530,12 @@ impl Mp3Encoder {
             bitrate_index,
             long: BAND_INFO[sr_index].long_idx,
             side_bytes: if cfg.channels == 1 { 17 } else { 32 },
-            channels: (0..cfg.channels).map(|_| Channel { x: [0.0; 512], previous: [[0.0; 18]; 32] }).collect(),
+            channels: (0..cfg.channels)
+                .map(|_| Channel {
+                    x: [0.0; 512],
+                    previous: [[0.0; 18]; 32],
+                })
+                .collect(),
             pending: vec![Vec::new(); cfg.channels],
             cutoff: cutoff.min(GRANULE),
             padding_acc: 0,
@@ -442,7 +558,11 @@ impl Mp3Encoder {
     /// bytes of every frame that is now complete.
     pub fn push(&mut self, planar: &[&[f32]]) -> Result<Vec<u8>, Mp3Error> {
         if planar.len() != self.cfg.channels {
-            return Err(Mp3Error::Input(format!("{} channels given, {} expected", planar.len(), self.cfg.channels)));
+            return Err(Mp3Error::Input(format!(
+                "{} channels given, {} expected",
+                planar.len(),
+                self.cfg.channels
+            )));
         }
         if planar.iter().any(|c| c.len() != planar[0].len()) {
             return Err(Mp3Error::Input("the channels differ in length".into()));
@@ -453,7 +573,11 @@ impl Mp3Encoder {
         self.pushed += planar[0].len() as u64;
         let mut out = Vec::new();
         while self.pending[0].len() >= FRAME {
-            let frame: Vec<Vec<f32>> = self.pending.iter_mut().map(|p| p.drain(..FRAME).collect()).collect();
+            let frame: Vec<Vec<f32>> = self
+                .pending
+                .iter_mut()
+                .map(|p| p.drain(..FRAME).collect())
+                .collect();
             out.extend(self.encode_frame(&frame));
         }
         Ok(out)
@@ -501,7 +625,9 @@ impl Mp3Encoder {
             }
             let mut y = [0.0f64; 64];
             for (i, yi) in y.iter_mut().enumerate() {
-                *yi = (0..8).map(|j| t.window[i + 64 * j] * state.x[i + 64 * j]).sum();
+                *yi = (0..8)
+                    .map(|j| t.window[i + 64 * j] * state.x[i + 64 * j])
+                    .sum();
             }
             for (k, o) in out.iter_mut().enumerate() {
                 *o = t.matrix[k].iter().zip(&y).map(|(m, v)| m * v).sum();
@@ -514,17 +640,25 @@ impl Mp3Encoder {
             // frequency inversion.
             let mut z = [0.0f64; 36];
             for slot in 0..18 {
-                let flip = if sb % 2 == 1 && slot % 2 == 1 { -1.0 } else { 1.0 };
+                let flip = if sb % 2 == 1 && slot % 2 == 1 {
+                    -1.0
+                } else {
+                    1.0
+                };
                 z[slot] = state.previous[sb][slot];
                 z[18 + slot] = slots[slot][sb] * flip;
             }
             state.previous[sb].copy_from_slice(&z[18..36]);
             for k in 0..18 {
-                xr[sb * 18 + k] = (0..36).map(|i| t.mdct_window[i] * z[i] * t.mdct_cos[k][i]).sum();
+                xr[sb * 18 + k] = (0..36)
+                    .map(|i| t.mdct_window[i] * z[i] * t.mdct_cos[k][i])
+                    .sum();
             }
         }
         // Alias reduction between neighbouring subbands.
-        const C: [f64; 8] = [-0.6, -0.535, -0.33, -0.185, -0.095, -0.041, -0.0142, -0.0037];
+        const C: [f64; 8] = [
+            -0.6, -0.535, -0.33, -0.185, -0.095, -0.041, -0.0142, -0.0037,
+        ];
         for sb in 1..32 {
             for (i, c) in C.iter().enumerate() {
                 let (cs, ca) = (1.0 / (1.0 + c * c).sqrt(), c / (1.0 + c * c).sqrt());
@@ -542,7 +676,10 @@ impl Mp3Encoder {
         let mut xr = vec![vec![[0.0f64; GRANULE]; nch]; 2];
         for gr in 0..2 {
             for ch in 0..nch {
-                let s: Vec<f64> = frame[ch][gr * GRANULE..(gr + 1) * GRANULE].iter().map(|&v| f64::from(v) * SCALE).collect();
+                let s: Vec<f64> = frame[ch][gr * GRANULE..(gr + 1) * GRANULE]
+                    .iter()
+                    .map(|&v| f64::from(v) * SCALE)
+                    .collect();
                 let mut spec = self.analyze(ch, &s);
                 for v in &mut spec[self.cutoff..] {
                     *v = 0.0;
@@ -559,7 +696,8 @@ impl Mp3Encoder {
                 for k in 0..self.cutoff {
                     let (l, r) = (xr[gr][0][k], xr[gr][1][k]);
                     lr += l.abs().powf(0.75) + r.abs().powf(0.75);
-                    mid_side += ((l + r) * std::f64::consts::FRAC_1_SQRT_2).abs().powf(0.75) + ((l - r) * std::f64::consts::FRAC_1_SQRT_2).abs().powf(0.75);
+                    mid_side += ((l + r) * std::f64::consts::FRAC_1_SQRT_2).abs().powf(0.75)
+                        + ((l - r) * std::f64::consts::FRAC_1_SQRT_2).abs().powf(0.75);
                 }
             }
             ms = mid_side < lr * 0.9;
@@ -699,7 +837,11 @@ fn crc16(data: &[u8]) -> u16 {
     for &b in data {
         crc ^= u16::from(b);
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xA001 } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xA001
+            } else {
+                crc >> 1
+            };
         }
     }
     crc
@@ -728,7 +870,9 @@ fn build_info_frame(enc: &Mp3Encoder, frames: u64, bytes: u64, samples: u64) -> 
     let l = at + 16;
     f[l..l + 9].copy_from_slice(b"LAMEthrs ");
     f[l + 9] = 0x01; // tag revision 0, constant bitrate
-    f[l + 10] = ((f64::from(cfg.kbps) * 1000.0 / cfg.channels as f64 * 0.25).clamp(4_000.0, 20_000.0) / 100.0) as u8; // low-pass, 100 Hz units
+    f[l + 10] = ((f64::from(cfg.kbps) * 1000.0 / cfg.channels as f64 * 0.25)
+        .clamp(4_000.0, 20_000.0)
+        / 100.0) as u8; // low-pass, 100 Hz units
     f[l + 20] = cfg.kbps.min(255) as u8;
     // Delay and padding, 12 bits each: the delay a decoder removes besides
     // its own 529 samples, and the silence at the end.
@@ -781,10 +925,18 @@ mod tests {
             for (i, &(a, la)) in codes.iter().enumerate() {
                 for &(b, lb) in &codes[i + 1..] {
                     let l = la.min(lb);
-                    assert_ne!(a >> (la - l), b >> (lb - l), "table {n}: one code starts another");
+                    assert_ne!(
+                        a >> (la - l),
+                        b >> (lb - l),
+                        "table {n}: one code starts another"
+                    );
                 }
             }
-            let xmax = if table.linbits > 0 { 15 } else { table.max as usize };
+            let xmax = if table.linbits > 0 {
+                15
+            } else {
+                table.max as usize
+            };
             for x in 0..=xmax {
                 for y in 0..=xmax {
                     assert!(table.len[x][y] > 0, "table {n} lacks ({x},{y})");
@@ -792,7 +944,10 @@ mod tests {
             }
         }
         for (n, q) in t.quads.iter().enumerate() {
-            assert!(q.len.iter().all(|&l| l > 0), "count-1 table {n} covers all 16 quads");
+            assert!(
+                q.len.iter().all(|&l| l > 0),
+                "count-1 table {n} covers all 16 quads"
+            );
             let kraft: f64 = q.len.iter().map(|&l| 0.5f64.powi(i32::from(l))).sum();
             assert!((kraft - 1.0).abs() < 1e-9, "count-1 table {n}: {kraft}");
         }
@@ -815,10 +970,22 @@ mod tests {
 
     #[test]
     fn bad_settings_are_refused() {
-        assert_eq!(Mp3Encoder::new(Mp3Config::new(22_050, 2, 128)).err(), Some(Mp3Error::SampleRate(22_050)));
-        assert_eq!(Mp3Encoder::new(Mp3Config::new(44_100, 3, 128)).err(), Some(Mp3Error::Channels(3)));
-        assert_eq!(Mp3Encoder::new(Mp3Config::new(44_100, 2, 100)).err(), Some(Mp3Error::Bitrate(100)));
+        assert_eq!(
+            Mp3Encoder::new(Mp3Config::new(22_050, 2, 128)).err(),
+            Some(Mp3Error::SampleRate(22_050))
+        );
+        assert_eq!(
+            Mp3Encoder::new(Mp3Config::new(44_100, 3, 128)).err(),
+            Some(Mp3Error::Channels(3))
+        );
+        assert_eq!(
+            Mp3Encoder::new(Mp3Config::new(44_100, 2, 100)).err(),
+            Some(Mp3Error::Bitrate(100))
+        );
         let mut enc = Mp3Encoder::new(Mp3Config::new(44_100, 2, 128)).unwrap();
-        assert!(matches!(enc.push(&[&[0.0; 4][..]]), Err(Mp3Error::Input(_))));
+        assert!(matches!(
+            enc.push(&[&[0.0; 4][..]]),
+            Err(Mp3Error::Input(_))
+        ));
     }
 }

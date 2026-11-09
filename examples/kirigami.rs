@@ -199,7 +199,7 @@ fn add_net(scene: &mut Scene, net: &KirigamiNet, origin: Vector3) {
     let mut min = [f32::MAX; 3];
     let mut max = [f32::MIN; 3];
     if let Some(pos) = geom.attributes.get("position") {
-        for chunk in pos.array.chunks_exact(3) {
+        for chunk in pos.array.as_chunks::<3>().0 {
             for k in 0..3 {
                 min[k] = min[k].min(chunk[k]);
                 max[k] = max[k].max(chunk[k]);

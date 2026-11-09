@@ -622,7 +622,7 @@ pub(crate) fn mean_luminance(hdr: &[f32]) -> f32 {
     }
     let mut sum = 0.0f64;
     let mut n = 0usize;
-    for px in hdr.chunks_exact(4) {
+    for px in hdr.as_chunks::<4>().0 {
         sum += super::scene::luminance(Vector3::new(px[0], px[1], px[2])) as f64;
         n += 1;
     }
@@ -652,7 +652,7 @@ pub(crate) mod sun {
         let mut faces: [Vec<u8>; 6] = Default::default();
         for f in faces.iter_mut() {
             *f = vec![0u8; (face_size * face_size * 4) as usize];
-            for p in f.chunks_exact_mut(4) {
+            for p in f.as_chunks_mut::<4>().0 {
                 p[3] = 255;
             }
         }
@@ -1137,8 +1137,14 @@ mod tests {
 
         // And the picture is the same to within the noise it stopped at.
         let (a, b) = (full.resolve_hdr(), adaptive.resolve_hdr());
-        let mean =
-            |v: &[f32]| v.chunks_exact(4).map(|p| p[0] as f64).sum::<f64>() / (v.len() / 4) as f64;
+        let mean = |v: &[f32]| {
+            v.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p[0] as f64)
+                .sum::<f64>()
+                / (v.len() / 4) as f64
+        };
         let (ma, mb) = (mean(&a), mean(&b));
         assert!(
             (ma - mb).abs() < 0.02 * ma,
@@ -1422,7 +1428,13 @@ mod tests {
         );
         // Mean must stay finite and lit.
         let hdr = film.resolve_hdr();
-        let mean = hdr.chunks_exact(4).map(|p| p[0] as f64).sum::<f64>() / (hdr.len() / 4) as f64;
+        let mean = hdr
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[0] as f64)
+            .sum::<f64>()
+            / (hdr.len() / 4) as f64;
         assert!(mean.is_finite() && mean > 0.01, "mean {mean}");
     }
 
@@ -1450,8 +1462,14 @@ mod tests {
 
         let reference = render(2048);
         let quick = render(24);
-        let mean =
-            |v: &[f32]| v.chunks_exact(4).map(|p| p[0] as f64).sum::<f64>() / (v.len() / 4) as f64;
+        let mean = |v: &[f32]| {
+            v.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p[0] as f64)
+                .sum::<f64>()
+                / (v.len() / 4) as f64
+        };
         let (r, q) = (mean(&reference), mean(&quick));
         assert!(r > 0.02, "the reference render is not lit ({r})");
         assert!(
@@ -1462,7 +1480,9 @@ mod tests {
         // And the noise has to be low, not merely centred: a handful of huge
         // spikes averaging out to the right number is the failure this is for.
         let peak = quick
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| p[0] as f64)
             .fold(0.0f64, f64::max);
         assert!(
@@ -1494,7 +1514,12 @@ mod tests {
         let mut sse = 0.0f64;
         let mut n = 0usize;
         let mut mean = 0.0f64;
-        for (a, b) in quick.chunks_exact(4).zip(reference.chunks_exact(4)) {
+        for (a, b) in quick
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(reference.as_chunks::<4>().0)
+        {
             for k in 0..3 {
                 let d = (a[k] - b[k]) as f64;
                 sse += d * d;
@@ -1619,7 +1644,13 @@ mod tests {
         let rms = |v: &[f32], ball_only: bool| {
             let mut sse = 0.0f64;
             let mut n = 0usize;
-            for (i, (a, b)) in v.chunks_exact(4).zip(reference.chunks_exact(4)).enumerate() {
+            for (i, (a, b)) in v
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(reference.as_chunks::<4>().0)
+                .enumerate()
+            {
                 let (x, y) = ((i % 48) as i32, (i / 48) as i32);
                 let inside = (x - 24).pow(2) + (y - 22).pow(2) < 13 * 13;
                 if ball_only != inside {
@@ -1684,7 +1715,12 @@ mod tests {
         let rel_rms = |v: &[f32]| {
             let mut sum = 0.0f64;
             let mut n = 0usize;
-            for (a, b) in v.chunks_exact(4).zip(reference.chunks_exact(4)) {
+            for (a, b) in v
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(reference.as_chunks::<4>().0)
+            {
                 for k in 0..3 {
                     let d = (a[k] - b[k]) as f64;
                     let r = b[k] as f64;

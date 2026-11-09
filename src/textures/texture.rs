@@ -104,7 +104,10 @@ impl TextureFormat {
     /// Whether texels are floats (any width), which hold values outside
     /// `[0, 1]` and are not colour-encoded.
     pub fn is_float(self) -> bool {
-        matches!(self, Self::Rgba16Float | Self::R16Float | Self::R32Float | Self::Rgba32Float)
+        matches!(
+            self,
+            Self::Rgba16Float | Self::R16Float | Self::R32Float | Self::Rgba32Float
+        )
     }
 
     /// Channels a texel holds.
@@ -126,7 +129,9 @@ impl TextureFormat {
     /// `None` for the block formats.
     pub fn texels_f32(self, data: &[u8]) -> Option<Vec<f32>> {
         Some(match self {
-            Self::Rgba8UnormSrgb | Self::Rgba8Unorm | Self::R8Unorm => data.iter().map(|b| *b as f32 / 255.0).collect(),
+            Self::Rgba8UnormSrgb | Self::Rgba8Unorm | Self::R8Unorm => {
+                data.iter().map(|b| *b as f32 / 255.0).collect()
+            }
             Self::Rgba16Float | Self::R16Float => crate::math::float::unpack_f16(data),
             Self::R32Float | Self::Rgba32Float => crate::math::float::unpack_f32(data),
             Self::Bc1RgbaUnormSrgb | Self::Bc7RgbaUnormSrgb => return None,
@@ -142,7 +147,7 @@ impl TextureFormat {
 pub fn pack_rgba16f(rgba: &[f32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rgba.len() * 2);
     for v in rgba {
-        out.extend_from_slice(&crate::renderer::gpu_texture::f32_to_f16_bits(*v).to_le_bytes());
+        out.extend_from_slice(&crate::math::float::f32_to_f16(*v).to_le_bytes());
     }
     out
 }
@@ -377,7 +382,10 @@ impl Texture {
                 let texels = f.texels_f32(self.data.get(..f.data_len(self.width, self.height))?)?;
                 let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
                 if f.channels() == 1 {
-                    texels.iter().flat_map(|v| [byte(*v), byte(*v), byte(*v), 255]).collect()
+                    texels
+                        .iter()
+                        .flat_map(|v| [byte(*v), byte(*v), byte(*v), 255])
+                        .collect()
                 } else {
                     texels.iter().map(|v| byte(*v)).collect()
                 }
@@ -429,7 +437,7 @@ impl Texture {
     /// Same [`id`](Self::id), so the renderer resolves it to the same uploaded
     /// texture; empty `data`, so the copy in system memory can be dropped. The
     /// caller must have uploaded it first — see
-    /// `HeadlessRenderer::preload_texture` — because nothing here can put the
+    /// `Renderer::preload_texture` — because nothing here can put the
     /// bytes back.
     ///
     /// This exists for the case where the bytes are large and numerous: a
@@ -473,10 +481,19 @@ impl Texture {
     /// If `format` is not a float format or `values` is not a texel's
     /// channels for every one of `width × height`.
     pub fn from_f32(width: u32, height: u32, format: TextureFormat, values: &[f32]) -> Self {
-        assert!(format.is_float(), "from_f32 needs a float format, not {format:?}");
-        assert_eq!(values.len(), width as usize * height as usize * format.channels(), "values for {width}×{height} {format:?}");
+        assert!(
+            format.is_float(),
+            "from_f32 needs a float format, not {format:?}"
+        );
+        assert_eq!(
+            values.len(),
+            width as usize * height as usize * format.channels(),
+            "values for {width}×{height} {format:?}"
+        );
         let data = match format {
-            TextureFormat::Rgba16Float | TextureFormat::R16Float => crate::math::float::pack_f16(values),
+            TextureFormat::Rgba16Float | TextureFormat::R16Float => {
+                crate::math::float::pack_f16(values)
+            }
             _ => crate::math::float::pack_f32(values),
         };
         let mut t = Self::new(width, height, format, data);
@@ -494,12 +511,26 @@ impl Texture {
     pub fn from_f64(width: u32, height: u32, format: TextureFormat, values: &[f64]) -> Self {
         match format {
             TextureFormat::Rgba16Float | TextureFormat::R16Float => {
-                assert_eq!(values.len(), width as usize * height as usize * format.channels(), "values for {width}×{height} {format:?}");
-                let mut t = Self::new(width, height, format, crate::math::float::pack_f16_from_f64(values));
+                assert_eq!(
+                    values.len(),
+                    width as usize * height as usize * format.channels(),
+                    "values for {width}×{height} {format:?}"
+                );
+                let mut t = Self::new(
+                    width,
+                    height,
+                    format,
+                    crate::math::float::pack_f16_from_f64(values),
+                );
                 t.mipmap_filter = None;
                 t
             }
-            _ => Self::from_f32(width, height, format, &values.iter().map(|v| *v as f32).collect::<Vec<_>>()),
+            _ => Self::from_f32(
+                width,
+                height,
+                format,
+                &values.iter().map(|v| *v as f32).collect::<Vec<_>>(),
+            ),
         }
     }
 
@@ -515,4 +546,3 @@ impl Texture {
         Self::new(1, 1, format, rgba.to_vec())
     }
 }
-

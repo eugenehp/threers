@@ -263,18 +263,18 @@ pub fn demux_video(data: &[u8]) -> Result<VideoTrack, String> {
     // offset signed, which is how a stream expresses a picture shown *before*
     // the frame it was coded after.
     let mut offsets: Vec<i32> = Vec::new();
-    if let Some(ctts) = find(stbl, b"ctts") {
-        if ctts.len() >= 8 {
-            let n = u32at(ctts, 4) as usize;
-            for i in 0..n {
-                let o = 8 + i * 8;
-                if o + 8 > ctts.len() {
-                    break;
-                }
-                let count = u32at(ctts, o) as usize;
-                let off = u32at(ctts, o + 4) as i32;
-                offsets.extend(std::iter::repeat_n(off, count));
+    if let Some(ctts) = find(stbl, b"ctts")
+        && ctts.len() >= 8
+    {
+        let n = u32at(ctts, 4) as usize;
+        for i in 0..n {
+            let o = 8 + i * 8;
+            if o + 8 > ctts.len() {
+                break;
             }
+            let count = u32at(ctts, o) as usize;
+            let off = u32at(ctts, o + 4) as i32;
+            offsets.extend(std::iter::repeat_n(off, count));
         }
     }
 

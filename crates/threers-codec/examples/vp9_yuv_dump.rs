@@ -10,6 +10,10 @@ use threers_codec::mkv_demux::{parse_ivf, Mkv, TrackKind};
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
+    if a.len() < 3 {
+        eprintln!("usage: vp9_yuv_dump IN.webm|IN.ivf OUT.yuv");
+        std::process::exit(2);
+    }
     let data = std::fs::read(&a[1]).expect("read");
     let packets: Vec<Vec<u8>> = if data.starts_with(b"DKIF") {
         parse_ivf(&data)

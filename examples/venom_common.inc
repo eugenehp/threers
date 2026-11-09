@@ -49,7 +49,7 @@ fn composite(frame: &mut [u8], overlay: &[u8]) {
         let s = if l <= 0.0031308 { l * 12.92 } else { 1.055 * l.powf(1.0 / 2.4) - 0.055 };
         (s * 255.0 + 0.5) as u8
     };
-    for (d, s) in frame.chunks_exact_mut(4).zip(overlay.chunks_exact(4)) {
+    for (d, s) in frame.as_chunks_mut::<4>().0.iter_mut().zip(overlay.as_chunks::<4>().0) {
         let a = s[3] as f32 / 255.0;
         if a <= 0.0 {
             continue;

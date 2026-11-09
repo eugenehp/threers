@@ -122,10 +122,10 @@ mod legacy {
                         continue;
                     }
                     let t = Triangle::new(positions[a], positions[b], positions[c]);
-                    if let Some(t) = local_ray.intersect_triangle(&t, false) {
-                        if t <= max_local_t {
-                            push(i, t);
-                        }
+                    if let Some(t) = local_ray.intersect_triangle(&t, false)
+                        && t <= max_local_t
+                    {
+                        push(i, t);
                     }
                 }
             }

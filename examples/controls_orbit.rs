@@ -8,8 +8,6 @@
 //!
 //! See `docs/controls.md` for three.js / threers shim / TypeScript equivalents.
 
-use std::sync::Arc;
-
 use threers::cameras::Camera;
 use threers::renderer::WindowRenderer;
 use threers::{
@@ -20,8 +18,6 @@ use threers::{
 use winit::{
     dpi::PhysicalPosition,
     event::{ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent},
-    event_loop::EventLoop,
-    window::WindowBuilder,
 };
 
 struct InputState {
@@ -55,43 +51,37 @@ fn main() {
 }
 
 async fn run() {
-    let event_loop = EventLoop::new().expect("event loop");
-    let window = Arc::new(
-        WindowBuilder::new()
-            .with_title("threers — OrbitControls (Rust)")
-            .with_inner_size(winit::dpi::LogicalSize::new(900, 700))
-            .build(&event_loop)
-            .expect("window"),
-    );
+    let attributes = winit::window::Window::default_attributes()
+        .with_title("threers — OrbitControls (Rust)")
+        .with_inner_size(winit::dpi::LogicalSize::new(900, 700));
+    threers::sketch::run_window(attributes, move |window| {
+        // wgpu by default; the native Metal backend with `--features metal` and
+        // `THREERS_BACKEND=metal`.
+        let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
 
-    // wgpu by default; the native Metal backend with `--features metal` and
-    // `THREERS_BACKEND=metal`.
-    let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
+        let mut scene = Scene::new();
+        scene.background = Color::from_hex(0x202030);
 
-    let mut scene = Scene::new();
-    scene.background = Color::from_hex(0x202030);
+        let geom = BoxGeometry::new(1.0, 1.0, 1.0);
+        let mat = StandardMaterial::new(Color::from_hex(0xff6633))
+            .with_roughness(0.4)
+            .with_metalness(0.1);
+        scene.add(Object3D::mesh(Mesh::new(geom, mat.into())));
 
-    let geom = BoxGeometry::new(1.0, 1.0, 1.0);
-    let mat = StandardMaterial::new(Color::from_hex(0xff6633))
-        .with_roughness(0.4)
-        .with_metalness(0.1);
-    scene.add(Object3D::mesh(Mesh::new(geom, mat.into())));
+        scene.add_light(AmbientLight::new(Color::from_hex(0xffffff), 0.35));
+        let mut key = Object3D::light(DirectionalLight::new(Color::from_hex(0xffffff), 1.0));
+        key.position = Vector3::new(3.0, 5.0, 2.0);
+        scene.add(key);
 
-    scene.add_light(AmbientLight::new(Color::from_hex(0xffffff), 0.35));
-    let mut key = Object3D::light(DirectionalLight::new(Color::from_hex(0xffffff), 1.0));
-    key.position = Vector3::new(3.0, 5.0, 2.0);
-    scene.add(key);
+        let mut camera = PerspectiveCamera::new(60.0, view.aspect(), 0.1, 100.0);
+        camera.position = Vector3::new(2.5, 2.0, 3.5);
+        camera.look_at(Vector3::ZERO);
 
-    let mut camera = PerspectiveCamera::new(60.0, view.aspect(), 0.1, 100.0);
-    camera.position = Vector3::new(2.5, 2.0, 3.5);
-    camera.look_at(Vector3::ZERO);
+        let mut controls = OrbitControls::new(&camera);
+        let mut input = InputState::new();
+        let window_for_loop = window.clone();
 
-    let mut controls = OrbitControls::new(&camera);
-    let mut input = InputState::new();
-    let window_for_loop = window.clone();
-
-    event_loop
-        .run(move |event, target| match event {
+        move |event, target| match event {
             Event::WindowEvent { event, window_id } if window_id == window_for_loop.id() => {
                 match event {
                     WindowEvent::CloseRequested => target.exit(),
@@ -154,6 +144,6 @@ async fn run() {
                 }
             }
             _ => {}
-        })
-        .expect("event loop");
+        }
+    });
 }

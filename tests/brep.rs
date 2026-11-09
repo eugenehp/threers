@@ -423,7 +423,9 @@ fn transforming_the_surface_equals_transforming_the_mesh() {
             // describes it.
             let mut moved = g.clone();
             let pos: Vec<f32> = positions(&g)
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .flat_map(|c| {
                     let p = Vector3::new(c[0], c[1], c[2]).apply_matrix4(&m);
                     [p.x, p.y, p.z]
@@ -559,7 +561,9 @@ fn a_truncated_cones_apex_is_recovered_though_no_vertex_is_there() {
             assert!(dist(*apex, [0.0, 4.0, 0.0]) < 1e-9, "apex at {apex:?}");
             // Confirm it really is outside the mesh.
             let top_y = positions(&g)
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|c| c[1] as f64)
                 .fold(f64::MIN, f64::max);
             assert!(
@@ -599,7 +603,9 @@ fn plate_volume(body: &Body, tolerance: f64) -> (f64, usize) {
         [pos[o] as f64, pos[o + 1] as f64, pos[o + 2] as f64]
     };
     let volume = idx
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|t| {
             let (a, b, c) = (v(t[0]), v(t[1]), v(t[2]));
             (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])

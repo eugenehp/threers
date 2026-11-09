@@ -96,6 +96,19 @@ pub fn ddgi_planes_with_visibility(
     probe_rgba: &[f32],
     ctx: &DdgiContext<'_>,
 ) -> (Vec<f32>, Vec<f32>) {
+    planes(width, height, probe_rgba, ctx, room_chroma_mix())
+}
+
+/// The planes, with the lateral-wall chroma mix given rather than read from
+/// `DDGI_ROOM_CHROMA` — so a test can turn it on without touching the
+/// environment the other tests share.
+fn planes(
+    width: usize,
+    height: usize,
+    probe_rgba: &[f32],
+    ctx: &DdgiContext<'_>,
+    room_chroma: Option<f32>,
+) -> (Vec<f32>, Vec<f32>) {
     let n = width * height;
     let ncell = cells();
     let mut sums = vec![0.0f32; OUT_CHANNELS * ncell];
@@ -141,7 +154,7 @@ pub fn ddgi_planes_with_visibility(
             colour[c * n + i] = cell_colour[c * ncell + cell];
         }
     }
-    if let Some(mix) = room_chroma_mix() {
+    if let Some(mix) = room_chroma {
         paint_lateral_wall_chroma(&mut colour, ctx, &wall_cells, mix);
     }
     (colour, vis)
@@ -376,7 +389,6 @@ mod tests {
 
     #[test]
     fn floor_lookup_picks_up_lateral_wall_chroma() {
-        std::env::set_var("DDGI_ROOM_CHROMA", "1");
         let mut world = vec![[f32::NAN; 3]; 8];
         // left wall (x bin 0), mid height, chromatic
         world[0] = [-0.9, 0.0, 0.0];
@@ -410,12 +422,12 @@ mod tests {
             bounds_min: [-1.0, -1.0, -1.0],
             bounds_max: [1.0, 1.0, 1.0],
         };
-        let colour = ddgi_planes(2, 4, &probe, &ctx);
+        // `DDGI_ROOM_CHROMA=1`'s mix, passed in.
+        let (colour, _) = planes(2, 4, &probe, &ctx, Some(0.55));
         let n = 8;
         let floor_r = crate::expand(colour[4]);
         let floor_g = crate::expand(colour[n + 4]);
         let floor_b = crate::expand(colour[2 * n + 4]);
-        std::env::remove_var("DDGI_ROOM_CHROMA");
         assert!(
             rgb_chroma(floor_r, floor_g, floor_b) > 0.02,
             "floor DDGI should carry wall chroma, got {floor_r:.3} {floor_g:.3} {floor_b:.3}"

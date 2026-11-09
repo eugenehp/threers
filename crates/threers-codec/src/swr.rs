@@ -125,7 +125,12 @@ impl Resampler {
         let mut a = [0f32; 4];
         let (mut val, mut i);
         if x8 >= 8 {
-            for (s8, f8) in src[..x8].chunks_exact(8).zip(f[..x8].chunks_exact(8)) {
+            for (s8, f8) in src[..x8]
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .zip(f[..x8].as_chunks::<8>().0)
+            {
                 for k in 0..4 {
                     a[k] = s8[k].mul_add(f8[k], a[k]);
                 }
@@ -136,7 +141,12 @@ impl Resampler {
             val = (a[0] + a[1]) + (a[2] + a[3]);
             i = x8;
         } else if x4 >= 4 {
-            for (s4, f4) in src[..x4].chunks_exact(4).zip(f[..x4].chunks_exact(4)) {
+            for (s4, f4) in src[..x4]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(f[..x4].as_chunks::<4>().0)
+            {
                 for k in 0..4 {
                     a[k] = s4[k].mul_add(f4[k], a[k]);
                 }

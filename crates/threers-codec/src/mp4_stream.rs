@@ -237,11 +237,9 @@ impl Track {
     /// Record `n` samples starting at `offset`, extending the current chunk when
     /// this track also wrote the previous sample.
     fn add_chunk(&mut self, offset: u64, n: u32, contiguous: bool) {
-        if contiguous {
-            if let Some(last) = self.chunks.last_mut() {
-                last.1 += n;
-                return;
-            }
+        if contiguous && let Some(last) = self.chunks.last_mut() {
+            last.1 += n;
+            return;
         }
         self.chunks.push((offset, n));
     }

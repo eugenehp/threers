@@ -69,8 +69,8 @@ fn one(m: &Model, verbose: bool) {
 /// Every bundled mechanism, one line each. The check that they all still run.
 fn all() {
     println!(
-        "{:<12} {:>5} {:>6} {:>6} {:>7} {:>6} {:>8}  {}",
-        "model", "parts", "mates", "tris", "solved", "keys", "verify", "joints"
+        "{:<12} {:>5} {:>6} {:>6} {:>7} {:>6} {:>8}  joints",
+        "model", "parts", "mates", "tris", "solved", "keys", "verify"
     );
     let mut failed = 0;
     for m in MODELS {

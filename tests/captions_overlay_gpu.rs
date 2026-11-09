@@ -123,7 +123,7 @@ fn overlay_only_touches_caption_pixels() {
         "the caption band must have changed"
     );
     // The target stays opaque.
-    assert!(captioned.chunks_exact(4).all(|px| px[3] == 255));
+    assert!(captioned.as_chunks::<4>().0.iter().all(|px| px[3] == 255));
 }
 
 #[test]

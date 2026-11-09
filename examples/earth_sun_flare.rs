@@ -704,7 +704,12 @@ fn draw_flare(rgba: &mut [u8], w: u32, h: u32, sx: f32, sy: f32, strength: f32) 
     );
 
     // Screen blend, so the flare lifts the image without clipping it flat.
-    for (px, add) in rgba.chunks_exact_mut(4).zip(acc.chunks_exact(3)) {
+    for (px, add) in rgba
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(acc.as_chunks::<3>().0)
+    {
         for c in 0..3 {
             let base = px[c] as f32 / 255.0;
             let out = 1.0 - (1.0 - base) * (1.0 - add[c].clamp(0.0, 1.0));
@@ -935,14 +940,14 @@ fn main() {
 
             let mut rgba = renderer.render_to_rgba_resolved(scene, camera);
 
-            if let Some((sx, sy)) = project(sun_pos, camera, w, h) {
-                if let (Some(c), Some(edge)) = (
+            if let Some((sx, sy)) = project(sun_pos, camera, w, h)
+                && let (Some(c), Some(edge)) = (
                     project(Vector3::ZERO, camera, w, h),
                     project(camera_right(camera) * EARTH_R, camera, w, h),
-                ) {
-                    let radius = ((edge.0 - c.0).powi(2) + (edge.1 - c.1).powi(2)).sqrt();
-                    draw_atmosphere(&mut rgba, w, h, c.0, c.1, radius, (sx, sy), 0.85);
-                }
+                )
+            {
+                let radius = ((edge.0 - c.0).powi(2) + (edge.1 - c.1).powi(2)).sqrt();
+                draw_atmosphere(&mut rgba, w, h, c.0, c.1, radius, (sx, sy), 0.85);
             }
             if want_flare {
                 // Project the sun, and fade the flare out behind the planet.
@@ -1032,22 +1037,33 @@ fn main() {
     eprintln!();
 
     if let Some(path) = video {
-        #[cfg(feature = "video")]
+        // The pure-Rust encoders; `threers-video` adds ffmpeg, captions and
+        // quality settings on top of these.
+        #[cfg(feature = "native-codec")]
         {
-            use threers::{export_video, VideoCodec, VideoOptions};
+            use threers::{encode_animation_rgba, AnimationEncodeOptions, BrowserCodec};
             let codec = if path.ends_with(".gif") {
-                VideoCodec::Gif
+                BrowserCodec::Gif
             } else {
-                VideoCodec::H264
+                BrowserCodec::Mp4
             };
-            let options = VideoOptions::new(path.clone()).fps(30).codec(codec).crf(18);
-            match export_video(w, h, captured.len(), &options, |i| captured[i].clone()) {
-                Ok(()) => println!("wrote {path}"),
+            let options = AnimationEncodeOptions {
+                width: w,
+                height: h,
+                fps: 30,
+                codec,
+                ..Default::default()
+            };
+            match encode_animation_rgba(&options, captured.iter().cloned()) {
+                Ok(bytes) => {
+                    std::fs::write(&path, bytes).expect("write video");
+                    println!("wrote {path}");
+                }
                 Err(e) => eprintln!("video export failed: {e}"),
             }
         }
-        #[cfg(not(feature = "video"))]
-        eprintln!("--video needs `--features video` (path was {path})");
+        #[cfg(not(feature = "native-codec"))]
+        eprintln!("--video needs `--features native-codec` (path was {path})");
     } else {
         for (i, rgba) in captured.iter().enumerate() {
             let out = format!("out/earth_{i:04}.png");

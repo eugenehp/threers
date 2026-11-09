@@ -244,7 +244,7 @@ fn main() {
                 f
             })
             .collect();
-        let gen = ms(t);
+        let generate = ms(t);
         let t = Instant::now();
         let mut p = PolygonMarks::new();
         p.set_polygons(&features, 0.0);
@@ -254,7 +254,7 @@ fn main() {
             .collect();
         p.set_elevations(&heights);
         p.set_default_color([120, 140, 190, 255]);
-        let build = gen + ms(t);
+        let build = generate + ms(t);
         println!(
             "polygons: {rows} features, {} vertices; triangulating took {triangulate:.0} ms",
             p.vertex_count()

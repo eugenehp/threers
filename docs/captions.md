@@ -10,7 +10,7 @@ rasterizes cue text, and hands the pixels to whichever path you need.
 
 ```bash
 cargo run --example captions_render                                          # PNGs: captions over a 3D render
-cargo run --release --example captions_video --features "video,native-codec" # every delivery mode
+cargo run --release -p threers-video --example captions_video # every delivery mode
 ```
 
 **On screen** — the renderer blends the active cue over the frame it just drew:

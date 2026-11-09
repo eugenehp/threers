@@ -104,7 +104,7 @@ impl RenderTarget {
             return;
         }
         let lut = srgb_to_linear_bytes();
-        for px in rgba.chunks_exact_mut(4) {
+        for px in rgba.as_chunks_mut::<4>().0 {
             for c in &mut px[..3] {
                 *c = lut[*c as usize];
             }

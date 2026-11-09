@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 use threers::marks::gpu;
+use threers::RenderBackend;
 use threers::{
     BasicMaterial, BufferGeometry, Color, HeadlessRenderer, Material, Mesh, Object3D,
     PerspectiveCamera, PlaneGeometry, Scene, Vector3,
@@ -28,19 +29,15 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
 "#;
 
 fn build(metal: bool) -> HeadlessRenderer {
-    // SAFETY: one test in this file; nothing else reads the environment.
-    unsafe {
-        if metal {
-            std::env::set_var("THREERS_BACKEND", "metal");
-        } else {
-            std::env::remove_var("THREERS_BACKEND");
-        }
-    }
     let hr = HeadlessRenderer::builder()
+        .backend(if metal {
+            RenderBackend::Metal
+        } else {
+            RenderBackend::Wgpu
+        })
         .size(SIZE, SIZE)
         .build()
         .expect("headless renderer");
-    unsafe { std::env::remove_var("THREERS_BACKEND") };
     assert_eq!(hr.is_native_metal(), metal);
     hr
 }
@@ -110,7 +107,11 @@ fn shrink(gpu: &gpu::Gpu, buffer: &gpu::Buffer, count: u32, stride: u32) {
 }
 
 fn lit(rgba: &[u8]) -> usize {
-    rgba.chunks_exact(4).filter(|p| p[0] > 128).count()
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| p[0] > 128)
+        .count()
 }
 
 #[test]
@@ -162,8 +163,10 @@ fn a_compute_pass_moves_a_mesh_on_either_backend() {
     }
     let differing = frames[0]
         .2
-        .chunks_exact(4)
-        .zip(frames[1].2.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(frames[1].2.as_chunks::<4>().0)
         .filter(|(a, b)| a != b)
         .count();
     assert!(

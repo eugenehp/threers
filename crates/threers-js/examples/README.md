@@ -3,7 +3,7 @@
 | File | Description |
 |------|-------------|
 | [cube.html](examples/cube.html) | **THREE.* drop-in** — spinning cube in the browser |
-| [cube.mjs](examples/cube.mjs) | Same scene for bundlers (`import … from 'threers'`) |
+| [cube.mjs](examples/cube.mjs) | Same scene for bundlers (`import … from '@threers/threers'`) |
 | [cube.deno.ts](examples/cube.deno.ts) | Deno — identical THREE setup |
 
 ```bash

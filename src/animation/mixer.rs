@@ -144,26 +144,24 @@ impl AnimationMixer {
                     Request::Weight(w) => engine.set_effective_weight(id, w as f64),
                 }
             }
-            if !faded {
-                if let Some(ea) = engine.action_mut(id) {
-                    ea.weight = a.weight as f64;
-                }
+            if !faded && let Some(ea) = engine.action_mut(id) {
+                ea.weight = a.weight as f64;
             }
             if a.enabled {
                 if !engine.is_scheduled(id) {
                     engine.play(&mut host, id);
                 }
-                if let Some(ea) = engine.action_mut(id) {
-                    if ea.paused && a.loop_mode != LoopMode::Once {
-                        ea.paused = false;
-                    }
+                if let Some(ea) = engine.action_mut(id)
+                    && ea.paused
+                    && a.loop_mode != LoopMode::Once
+                {
+                    ea.paused = false;
                 }
-            } else if engine.is_scheduled(id) {
-                if let Some(ea) = engine.action_mut(id) {
-                    if ea.enabled {
-                        ea.paused = true;
-                    }
-                }
+            } else if engine.is_scheduled(id)
+                && let Some(ea) = engine.action_mut(id)
+                && ea.enabled
+            {
+                ea.paused = true;
             }
         }
         engine.update(&mut host, delta as f64);

@@ -1,3 +1,4 @@
+#[cfg(feature = "render")]
 use crate::math::{Matrix4, Vector3};
 
 /// Shadow-map configuration carried by lights that can cast shadows.
@@ -71,6 +72,7 @@ pub enum ShadowType {
 
 impl ShadowType {
     /// The shader's number for it (`ShadowRecord.info.w`).
+    #[cfg(feature = "render")]
     pub(crate) fn code(self) -> u32 {
         match self {
             ShadowType::Basic => 0,
@@ -102,11 +104,13 @@ impl Default for ShadowSettings {
 
 /// How many shadow-map texels several lights of one kind share before each
 /// map shrinks: 32M, two 4096² maps. One light gets the size it asks for.
+#[cfg(feature = "render")]
 pub(crate) const SHADOW_TEXEL_BUDGET: u64 = 32 << 20;
 
 /// The side of each map when `lights` lights of a kind share an array: what
 /// they asked for (clamped to 256..8192, a power of two), halved until the
 /// array fits [`SHADOW_TEXEL_BUDGET`]. Both renderers size their arrays by it.
+#[cfg(feature = "render")]
 pub(crate) fn shadow_layer_size(requested: u32, lights: usize) -> u32 {
     let mut size = requested.clamp(256, 8192).next_power_of_two();
     while lights > 1 && size > 256 && lights as u64 * (size as u64).pow(2) > SHADOW_TEXEL_BUDGET {
@@ -118,10 +122,12 @@ pub(crate) fn shadow_layer_size(requested: u32, lights: usize) -> u32 {
 /// How many lights can cast shadows at once (`ShadowRecord`s in the shader).
 /// Sixteen keeps the frame uniforms inside WebGL2's 16 KB uniform-block
 /// floor; a light past it lights unshadowed.
+#[cfg(feature = "render")]
 pub(crate) const MAX_SHADOW_RECORDS: usize = 16;
 
 /// A light that casts this frame, in the order its record takes.
 #[derive(Clone, Copy)]
+#[cfg(feature = "render")]
 pub(crate) enum Caster {
     Dir {
         dir: Vector3,
@@ -140,6 +146,7 @@ pub(crate) enum Caster {
     },
 }
 
+#[cfg(feature = "render")]
 impl Caster {
     pub(crate) fn settings(&self) -> &ShadowSettings {
         match self {
@@ -168,6 +175,7 @@ impl Caster {
 /// shimmer, and a sphere does not. The sphere's centre is then snapped to
 /// the map's texel grid in the light's frame, so a moving camera slides the
 /// map by whole texels and the shadow's edge stands still.
+#[cfg(feature = "render")]
 pub(crate) fn cascade_frusta(
     view: &Matrix4,
     projection: &Matrix4,

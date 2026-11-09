@@ -685,10 +685,10 @@ impl WebScene {
         from.inner.arena.remove_child(node.id);
         let mut obj = from.inner.arena.nodes.remove(node.id)?;
         for c in &obj.children {
-            if let Some(child) = from.inner.arena.get_mut(*c) {
-                if child.parent == Some(node.id) {
-                    child.parent = None;
-                }
+            if let Some(child) = from.inner.arena.get_mut(*c)
+                && child.parent == Some(node.id)
+            {
+                child.parent = None;
             }
         }
         obj.parent = None;

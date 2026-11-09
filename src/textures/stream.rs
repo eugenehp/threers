@@ -104,7 +104,16 @@ impl Samples {
     pub fn as_bytes(&self) -> &[u8] {
         match self {
             Samples::Bytes(v) => v,
-            Samples::Words(v) => bytemuck::cast_slice(v),
+            // SAFETY: a `u16` has no padding and every byte of it is
+            // initialised, and `u8` has the weakest alignment there is, so the
+            // same memory read as twice as many bytes is valid for as long as
+            // `v` is borrowed.
+            Samples::Words(v) => unsafe {
+                std::slice::from_raw_parts(
+                    v.as_ptr().cast::<u8>(),
+                    std::mem::size_of_val(v.as_slice()),
+                )
+            },
         }
     }
 }
@@ -199,7 +208,8 @@ impl YuvFrame {
             && (self.u.is_empty() || self.u.bytes_per_sample() == bytes)
             && (self.v.is_empty() || self.v.bytes_per_sample() == bytes)
             && self.y.len() == self.width as usize * self.height as usize
-            && (self.interleaved || (self.u.len() == self.v.len() && (self.u.is_empty() || self.u.len() == chroma)))
+            && (self.interleaved
+                || (self.u.len() == self.v.len() && (self.u.is_empty() || self.u.len() == chroma)))
     }
 
     /// The conversion's constants for this frame's depth, range and matrix.
@@ -293,7 +303,11 @@ fn chroma_rows(y: usize, ch: usize, halved: bool) -> (usize, usize, u32, u32) {
         return (r, r, 4, 0);
     }
     let c = (y / 2).min(ch.saturating_sub(1));
-    let other = if y.is_multiple_of(2) { c.saturating_sub(1) } else { (c + 1).min(ch.saturating_sub(1)) };
+    let other = if y.is_multiple_of(2) {
+        c.saturating_sub(1)
+    } else {
+        (c + 1).min(ch.saturating_sub(1))
+    };
     (c, other, 3, 1)
 }
 
@@ -386,7 +400,6 @@ enum Kind {
     Browser(OnMainThread),
 }
 
-
 /// The latest frame for a streamed [`Texture`], and how many have been written.
 ///
 /// Frames are RGBA8 in the texture's size, top row first, or [`YuvFrame`]
@@ -461,9 +474,15 @@ impl TextureStream {
             // Back to RGBA: reuse the copy `read` made, if there is one.
             let buffer = held.rgba.take().map(|(_, b)| b);
             let size = self.width as usize * self.height as usize * 4;
-            held.frame = Kind::Rgba(buffer.filter(|b| b.len() == size).unwrap_or_else(|| vec![0; size]));
+            held.frame = Kind::Rgba(
+                buffer
+                    .filter(|b| b.len() == size)
+                    .unwrap_or_else(|| vec![0; size]),
+            );
         }
-        let Kind::Rgba(frame) = &mut held.frame else { unreachable!() };
+        let Kind::Rgba(frame) = &mut held.frame else {
+            unreachable!()
+        };
         let size = self.width as usize * self.height as usize * 4;
         if frame.len() != size {
             *frame = black(self.width, self.height);
@@ -578,7 +597,11 @@ impl TextureStream {
 /// An opaque black RGBA frame.
 fn black(width: u32, height: u32) -> Vec<u8> {
     let mut black = vec![0u8; width as usize * height as usize * 4];
-    black.chunks_exact_mut(4).for_each(|p| p[3] = 255);
+    black
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .for_each(|p| p[3] = 255);
     black
 }
 

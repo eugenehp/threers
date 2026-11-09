@@ -277,10 +277,10 @@ fn count_refs<const N: usize>(
         if let Some(k) = pick(e.r#ref[0][o]) {
             cnt[k] += 1;
         }
-        if e.comp_type[o] != 0 {
-            if let Some(k) = pick(e.r#ref[1][o]) {
-                cnt[k] += 1;
-            }
+        if e.comp_type[o] != 0
+            && let Some(k) = pick(e.r#ref[1][o])
+        {
+            cnt[k] += 1;
         }
     };
     if have_top && a.intra[xb4] == 0 {

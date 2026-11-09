@@ -49,7 +49,6 @@ use super::{cube, polyhedron, Solid};
 use crate::math::Matrix4;
 use std::collections::HashMap;
 
-/// File-format importers (OFF/DXF/SVG/3MF/AMF) and `surface()` heightmaps.
 mod import;
 use import::{
     decode_png_luma, parse_3mf, parse_amf, parse_dxf, parse_off, parse_svg, surface_dat,
@@ -495,19 +494,18 @@ impl Parser {
             // named?  ident = expr
             if let (Tok::Ident(n), Some(Tok::Op(eq))) =
                 (self.peek().clone(), self.t.get(self.i + 1))
+                && eq == "="
             {
-                if eq == "=" {
-                    self.i += 2;
-                    let value = self.expr()?;
-                    out.push(Arg {
-                        name: Some(n),
-                        value,
-                    });
-                    if self.is_punct(',') {
-                        self.i += 1;
-                    }
-                    continue;
+                self.i += 2;
+                let value = self.expr()?;
+                out.push(Arg {
+                    name: Some(n),
+                    value,
+                });
+                if self.is_punct(',') {
+                    self.i += 1;
                 }
+                continue;
             }
             let value = self.expr()?;
             out.push(Arg { name: None, value });
@@ -1296,15 +1294,15 @@ fn eval_list_elem(
 
 fn eval_binary(op: &str, x: Value, y: Value) -> Result<Value, String> {
     // vector +/- and scalar ops
-    if let (Value::Vector(a), Value::Vector(b)) = (&x, &y) {
-        if op == "+" || op == "-" {
-            let n = a.len().min(b.len());
-            let mut out = Vec::with_capacity(n);
-            for i in 0..n {
-                out.push(eval_binary(op, a[i].clone(), b[i].clone())?);
-            }
-            return Ok(Value::Vector(out));
+    if let (Value::Vector(a), Value::Vector(b)) = (&x, &y)
+        && (op == "+" || op == "-")
+    {
+        let n = a.len().min(b.len());
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            out.push(eval_binary(op, a[i].clone(), b[i].clone())?);
         }
+        return Ok(Value::Vector(out));
     }
     let (a, b) = (x.num(), y.num());
     Ok(match op {
@@ -2416,10 +2414,11 @@ fn resize_factor(cur: [f32; 3], newsize: [f32; 3], auto: [bool; 3]) -> [f32; 3] 
         .find(|&i| newsize[i] > 0.0 && cur[i] > 1e-9)
         .map(|i| f[i]);
     for i in 0..3 {
-        if newsize[i] <= 0.0 && auto[i] {
-            if let Some(r) = reff {
-                f[i] = r;
-            }
+        if newsize[i] <= 0.0
+            && auto[i]
+            && let Some(r) = reff
+        {
+            f[i] = r;
         }
     }
     f
@@ -3105,13 +3104,13 @@ fn glyph_contours(shape: &crate::curves::Shape, samples: usize) -> Vec<Vec<[f32;
     for curve in shape.outline.curve_path.curves.iter() {
         let s = curve.get_point(0.0);
         let s = [s.x, s.y];
-        if let Some(l) = last {
-            if (l[0] - s[0]).abs() > 1e-3 || (l[1] - s[1]).abs() > 1e-3 {
-                if cur.len() >= 3 {
-                    out.push(std::mem::take(&mut cur));
-                } else {
-                    cur.clear();
-                }
+        if let Some(l) = last
+            && ((l[0] - s[0]).abs() > 1e-3 || (l[1] - s[1]).abs() > 1e-3)
+        {
+            if cur.len() >= 3 {
+                out.push(std::mem::take(&mut cur));
+            } else {
+                cur.clear();
             }
         }
         if cur.is_empty() {
@@ -3635,7 +3634,9 @@ pub(super) fn solid_points(s: &Solid) -> Vec<[f32; 3]> {
     match g.attributes.get("position") {
         Some(a) => a
             .array
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| [c[0], c[1], c[2]])
             .collect(),
         None => Vec::new(),
@@ -3650,7 +3651,9 @@ fn solid_is_convex(s: &Solid) -> bool {
     let pts: Vec<[f32; 3]> = match g.attributes.get("position") {
         Some(a) => a
             .array
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| [c[0], c[1], c[2]])
             .collect(),
         None => return true,
@@ -3673,7 +3676,9 @@ fn solid_is_convex(s: &Solid) -> bool {
         match hull.attributes.get("position") {
             Some(a) => a
                 .array
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|c| key(&[c[0], c[1], c[2]]))
                 .collect(),
             None => return true,
@@ -4568,12 +4573,12 @@ fn extract_directives(src: &str) -> (String, Vec<(bool, String)>) {
         };
         if let Some((is_use, off)) = kw {
             let rest = t[off..].trim_start();
-            if let Some(open) = rest.find('<') {
-                if let Some(close) = rest[open + 1..].find('>') {
-                    let path = rest[open + 1..open + 1 + close].trim().to_string();
-                    dirs.push((is_use, path));
-                    continue; // drop the directive line
-                }
+            if let Some(open) = rest.find('<')
+                && let Some(close) = rest[open + 1..].find('>')
+            {
+                let path = rest[open + 1..open + 1 + close].trim().to_string();
+                dirs.push((is_use, path));
+                continue; // drop the directive line
             }
         }
         cleaned.push_str(line);
@@ -4681,10 +4686,10 @@ fn parse_scad_in_with_flags(
             let ubase = up.parent().unwrap_or(base).to_path_buf();
             let mut u2 = Vec::new();
             let mut s2 = std::collections::HashSet::new();
-            if let Ok(uc) = inline_includes(&text, &ubase, &mut u2, &mut s2) {
-                if let Ok(up_prog) = parse_program(&uc) {
-                    hoist_defs(&up_prog, &mut env);
-                }
+            if let Ok(uc) = inline_includes(&text, &ubase, &mut u2, &mut s2)
+                && let Ok(up_prog) = parse_program(&uc)
+            {
+                hoist_defs(&up_prog, &mut env);
             }
         }
     }
@@ -4790,10 +4795,10 @@ fn parse_scad_mechanism_in(
             let ubase = up.parent().unwrap_or(base).to_path_buf();
             let mut u2 = Vec::new();
             let mut s2 = std::collections::HashSet::new();
-            if let Ok(uc) = inline_includes(&text, &ubase, &mut u2, &mut s2) {
-                if let Ok(up_prog) = parse_program(&uc) {
-                    hoist_defs(&up_prog, &mut env);
-                }
+            if let Ok(uc) = inline_includes(&text, &ubase, &mut u2, &mut s2)
+                && let Ok(up_prog) = parse_program(&uc)
+            {
+                hoist_defs(&up_prog, &mut env);
             }
         }
     }
@@ -5114,10 +5119,10 @@ pub fn scad_values_in(
             let ubase = up.parent().unwrap_or(base).to_path_buf();
             let mut u2 = Vec::new();
             let mut s2 = std::collections::HashSet::new();
-            if let Ok(uc) = inline_includes(&text, &ubase, &mut u2, &mut s2) {
-                if let Ok(up_prog) = parse_program(&uc) {
-                    hoist_defs(&up_prog, &mut env);
-                }
+            if let Ok(uc) = inline_includes(&text, &ubase, &mut u2, &mut s2)
+                && let Ok(up_prog) = parse_program(&uc)
+            {
+                hoist_defs(&up_prog, &mut env);
             }
         }
     }
@@ -5413,7 +5418,7 @@ mod tests {
         };
         let mut s = 0.0;
         if let Some(idx) = &g.index {
-            for t in idx.chunks_exact(3) {
+            for t in idx.as_chunks::<3>().0 {
                 s += tri(v(t[0] as usize), v(t[1] as usize), v(t[2] as usize));
             }
         } else {
@@ -5804,7 +5809,9 @@ mod tests {
             .get("position")
             .unwrap()
             .array
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| c[0])
             .collect();
         let (xmin, xmax) = (
@@ -5912,7 +5919,7 @@ mod tests {
         let g = parse_scad_file(dir.join("s.scad")).unwrap().to_geometry();
         let pos = &g.attributes.get("position").unwrap().array;
         let (mut zmin, mut zmax) = (f32::INFINITY, f32::NEG_INFINITY);
-        for c in pos.chunks_exact(3) {
+        for c in pos.as_chunks::<3>().0 {
             zmin = zmin.min(c[2]);
             zmax = zmax.max(c[2]);
         }

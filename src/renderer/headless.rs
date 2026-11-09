@@ -20,9 +20,15 @@ use crate::cameras::Camera;
 cfg_metal! {
     use super::headless_metal::MetalPath;
 
-    /// The Metal side of a new renderer, when `THREERS_BACKEND=metal` asks.
-    fn metal_path_for(format: wgpu::TextureFormat, width: u32, height: u32) -> Option<MetalPath> {
-        if super::headless_metal::requested() {
+    /// The Metal side of a new renderer, when `backend` (or, for `Auto`,
+    /// `THREERS_BACKEND=metal`) asks for it.
+    fn metal_path_for(
+        backend: super::RenderBackend,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> Option<MetalPath> {
+        if super::headless_metal::requested(backend) {
             MetalPath::new(format, width, height)
         } else {
             None
@@ -35,7 +41,12 @@ cfg_no_metal! {
     /// empty enum has no values, so nothing can ever be on this path.
     enum MetalPath {}
 
-    fn metal_path_for(_: wgpu::TextureFormat, _: u32, _: u32) -> Option<MetalPath> {
+    fn metal_path_for(
+        _: super::RenderBackend,
+        _: wgpu::TextureFormat,
+        _: u32,
+        _: u32,
+    ) -> Option<MetalPath> {
         None
     }
 }
@@ -164,6 +175,10 @@ pub struct HeadlessConfig {
     pub power_preference: wgpu::PowerPreference,
     /// When set, pick a discrete adapter from this vendor (Vulkan on Linux).
     pub gpu_vendor: GpuVendor,
+    /// The backend frames are drawn with. [`Auto`](super::RenderBackend::Auto)
+    /// reads `THREERS_BACKEND`; name one to choose it in code instead, which a
+    /// test running beside others must, since the environment is shared.
+    pub backend: super::RenderBackend,
 }
 
 impl Default for HeadlessConfig {
@@ -178,6 +193,7 @@ impl Default for HeadlessConfig {
             taa: false,
             power_preference: wgpu::PowerPreference::HighPerformance,
             gpu_vendor: GpuVendor::Any,
+            backend: super::RenderBackend::Auto,
         }
     }
 }
@@ -233,6 +249,11 @@ impl HeadlessBuilder {
         self
     }
     /// Prefer NVIDIA or AMD when multiple GPUs are present (Linux/Windows Vulkan).
+    /// The backend to draw with — see [`HeadlessConfig::backend`].
+    pub fn backend(mut self, backend: super::RenderBackend) -> Self {
+        self.config.backend = backend;
+        self
+    }
     pub fn gpu_vendor(mut self, vendor: GpuVendor) -> Self {
         self.config.gpu_vendor = vendor;
         self
@@ -451,7 +472,12 @@ impl HeadlessRenderer {
         target.set_presents(true);
 
         Ok(Self {
-            metal: metal_path_for(config.color_format, render_width, render_height),
+            metal: metal_path_for(
+                config.backend,
+                config.color_format,
+                render_width,
+                render_height,
+            ),
             compose_target: None,
             metal_off: std::sync::atomic::AtomicBool::new(false),
             device,
@@ -559,11 +585,10 @@ impl HeadlessRenderer {
     pub fn set_msaa(&mut self, samples: u32) {
         self.renderer.set_msaa(samples);
         on_metal! {
-            if let Some(m) = self.metal_path() {
-                if !m.set_msaa(samples) {
+            if let Some(m) = self.metal_path()
+                && !m.set_msaa(samples) {
                     self.leave_metal("MSAA on this device");
                 }
-            }
         }
     }
     /// The render resolution (output size × supersample).
@@ -855,13 +880,12 @@ impl HeadlessRenderer {
     ) {
         let gpu = self.marks_gpu();
         on_metal! {
-            if gpu.is_metal() {
-                if let Some(m) = self.metal_path() {
+            if gpu.is_metal()
+                && let Some(m) = self.metal_path() {
                     let target = m.mark_target();
                     marks.draw_on(&gpu, &target, view, layers);
                     return;
                 }
-            }
         }
         let target = self.wgpu_mark_target();
         marks.draw_on(&gpu, &target, view, layers);
@@ -895,11 +919,10 @@ impl HeadlessRenderer {
     /// this renderer on wgpu ([`device`](Self::device), for one).
     pub fn mark_target(&self) -> crate::marks::MarkTarget<'_> {
         on_metal! {
-            if self.is_native_metal() {
-                if let Some(m) = self.metal.as_ref() {
+            if self.is_native_metal()
+                && let Some(m) = self.metal.as_ref() {
                     return m.mark_target();
                 }
-            }
         }
         self.wgpu_mark_target()
     }
@@ -1136,10 +1159,11 @@ impl HeadlessRenderer {
         // the frame on the CPU, which against a GPU render is noise, and it
         // guarantees the two readbacks cannot drift apart because there is only
         // one of them.
-        if self.has_post() && self.rgb_readback_supported() {
-            if let Some(rgb) = self.read_rgb_resolved_now() {
-                return rgba_from_rgb(&rgb);
-            }
+        if self.has_post()
+            && self.rgb_readback_supported()
+            && let Some(rgb) = self.read_rgb_resolved_now()
+        {
+            return rgba_from_rgb(&rgb);
         }
         let Some((w, h)) = self.run_resolve() else {
             // Either there is nothing to average, or the GPU pass declined this
@@ -1668,14 +1692,16 @@ impl HeadlessRenderer {
 /// Drop the alpha: the RGB readbacks' layout, from an RGBA frame.
 #[allow(dead_code)] // only the Metal path builds one from RGBA
 fn rgb_from_rgba(rgba: &[u8]) -> Vec<u8> {
-    rgba.chunks_exact(4)
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|p| [p[0], p[1], p[2]])
         .collect()
 }
 
 fn rgba_from_rgb(rgb: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rgb.len() / 3 * 4);
-    for p in rgb.chunks_exact(3) {
+    for p in rgb.as_chunks::<3>().0 {
         out.extend_from_slice(&[p[0], p[1], p[2], 255]);
     }
     out
@@ -2041,7 +2067,9 @@ impl HeadlessRenderer {
         // caller that is about to write a PNG.
         if p.format == wgpu::TextureFormat::Rgba16Float {
             return pixels
-                .chunks_exact(8)
+                .as_chunks::<8>()
+                .0
+                .iter()
                 .flat_map(|px| {
                     let h = |i: usize| half_to_f32(u16::from_le_bytes([px[i], px[i + 1]]));
                     [

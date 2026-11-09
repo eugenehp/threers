@@ -41,7 +41,10 @@ pub const FRAME: usize = 1024;
 pub const DELAY: usize = FRAME;
 
 /// The sample rates AAC has an index for.
-pub const SAMPLE_RATES: [u32; 13] = [96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000, 7_350];
+pub const SAMPLE_RATES: [u32; 13] = [
+    96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000,
+    7_350,
+];
 
 /// What to encode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,7 +58,11 @@ pub struct EncoderConfig {
 
 impl EncoderConfig {
     pub fn new(sample_rate: u32, channels: usize, bitrate: u32) -> Self {
-        Self { sample_rate, channels, bitrate }
+        Self {
+            sample_rate,
+            channels,
+            bitrate,
+        }
     }
 }
 
@@ -77,7 +84,9 @@ impl std::fmt::Display for EncodeError {
         match self {
             Self::SampleRate(r) => write!(f, "AAC has no sample-rate code for {r} Hz"),
             Self::Channels(c) => write!(f, "{c} channels: only mono and stereo are supported"),
-            Self::Bitrate(b) => write!(f, "{b} bit/s is outside 8 kbit/s per channel to 320 kbit/s"),
+            Self::Bitrate(b) => {
+                write!(f, "{b} bit/s is outside 8 kbit/s per channel to 320 kbit/s")
+            }
             Self::Input(why) => write!(f, "bad input: {why}"),
         }
     }
@@ -99,11 +108,21 @@ impl Fft {
         let bits = n.trailing_zeros();
         Self {
             n,
-            twiddle: (0..n / 2).map(|k| {
-                let a = -2.0 * std::f64::consts::PI * k as f64 / n as f64;
-                (a.cos(), a.sin())
-            }).collect(),
-            reversed: (0..n).map(|i| if bits == 0 { 0 } else { i.reverse_bits() >> (usize::BITS - bits) }).collect(),
+            twiddle: (0..n / 2)
+                .map(|k| {
+                    let a = -2.0 * std::f64::consts::PI * k as f64 / n as f64;
+                    (a.cos(), a.sin())
+                })
+                .collect(),
+            reversed: (0..n)
+                .map(|i| {
+                    if bits == 0 {
+                        0
+                    } else {
+                        i.reverse_bits() >> (usize::BITS - bits)
+                    }
+                })
+                .collect(),
         }
     }
 
@@ -155,8 +174,12 @@ impl Mdct {
         Self {
             m,
             fft: Fft::new(m / 2),
-            pre: (0..m / 2).map(|n| (angle(n as f64).cos(), angle(n as f64).sin())).collect(),
-            post: (0..m / 2).map(|k| (angle(k as f64 + 0.25).cos(), angle(k as f64 + 0.25).sin())).collect(),
+            pre: (0..m / 2)
+                .map(|n| (angle(n as f64).cos(), angle(n as f64).sin()))
+                .collect(),
+            post: (0..m / 2)
+                .map(|k| (angle(k as f64 + 0.25).cos(), angle(k as f64 + 0.25).sin()))
+                .collect(),
         }
     }
 
@@ -201,15 +224,18 @@ struct Sink {
 
 impl Sink {
     fn writing() -> Self {
-        Self { writer: Some(BitWriter::new()), bits: 0 }
+        Self {
+            writer: Some(BitWriter::new()),
+            bits: 0,
+        }
     }
 
     fn put(&mut self, value: u32, n: u32) {
         self.bits += n as usize;
-        if let Some(w) = &mut self.writer {
-            if n > 0 {
-                w.write_bits(value, n);
-            }
+        if let Some(w) = &mut self.writer
+            && n > 0
+        {
+            w.write_bits(value, n);
         }
     }
 }
@@ -221,7 +247,9 @@ const CB_MAX: [i32; 11] = [1, 1, 2, 2, 4, 4, 7, 7, 12, 12, 8191];
 /// Values per codeword.
 const CB_DIM: [usize; 11] = [4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 2];
 /// Signed codebooks carry the sign in the codeword; the others after it.
-const CB_SIGNED: [bool; 11] = [true, true, false, false, true, true, false, false, false, false, false];
+const CB_SIGNED: [bool; 11] = [
+    true, true, false, false, true, true, false, false, false, false, false,
+];
 
 /// The codeword index of a tuple in codebook `cb` (1-based).
 fn tuple_index(cb: usize, v: &[i32]) -> usize {
@@ -231,7 +259,9 @@ fn tuple_index(cb: usize, v: &[i32]) -> usize {
         5 | 6 => v.iter().fold(0, |a, &x| a * 9 + (x + 4) as usize),
         7 | 8 => v.iter().fold(0, |a, &x| a * 8 + x.unsigned_abs() as usize),
         9 | 10 => v.iter().fold(0, |a, &x| a * 13 + x.unsigned_abs() as usize),
-        _ => v.iter().fold(0, |a, &x| a * 17 + x.unsigned_abs().min(16) as usize),
+        _ => v
+            .iter()
+            .fold(0, |a, &x| a * 17 + x.unsigned_abs().min(16) as usize),
     }
 }
 
@@ -248,7 +278,11 @@ fn tuple_bits(cb: usize, v: &[i32]) -> u32 {
         bits += v.iter().filter(|&&x| x != 0).count() as u32;
     }
     if cb == 11 {
-        bits += v.iter().filter(|&&x| x.abs() >= 16).map(|&x| escape_bits(x.abs())).sum::<u32>();
+        bits += v
+            .iter()
+            .filter(|&&x| x.abs() >= 16)
+            .map(|&x| escape_bits(x.abs()))
+            .sum::<u32>();
     }
     bits
 }
@@ -316,7 +350,10 @@ fn plan(q: &[i32], offsets: &[u16], sf: &[i32], max_sfb: usize) -> Plan {
             cbs.push(0);
             continue;
         }
-        let (cb, bits) = (1..=11).filter_map(|cb| band_bits(cb, band).map(|bits| (cb, bits))).min_by_key(|&(_, bits)| bits).expect("book 11 takes any value");
+        let (cb, bits) = (1..=11)
+            .filter_map(|cb| band_bits(cb, band).map(|bits| (cb, bits)))
+            .min_by_key(|&(_, bits)| bits)
+            .expect("book 11 takes any value");
         cbs.push(cb);
         spectral += bits;
     }
@@ -325,7 +362,11 @@ fn plan(q: &[i32], offsets: &[u16], sf: &[i32], max_sfb: usize) -> Plan {
     for (b, &cb) in cbs.iter().enumerate() {
         match sections.last_mut() {
             Some(s) if s.cb == cb => s.end = b + 1,
-            _ => sections.push(Section { cb, first: b, end: b + 1 }),
+            _ => sections.push(Section {
+                cb,
+                first: b,
+                end: b + 1,
+            }),
         }
     }
     let mut bits = spectral;
@@ -439,7 +480,10 @@ const SCALE: f64 = 2.0 * 32_768.0;
 
 impl AacEncoder {
     pub fn new(cfg: EncoderConfig) -> Result<Self, EncodeError> {
-        let sf_index = SAMPLE_RATES.iter().position(|&r| r == cfg.sample_rate).ok_or(EncodeError::SampleRate(cfg.sample_rate))?;
+        let sf_index = SAMPLE_RATES
+            .iter()
+            .position(|&r| r == cfg.sample_rate)
+            .ok_or(EncodeError::SampleRate(cfg.sample_rate))?;
         if !(1..=2).contains(&cfg.channels) {
             return Err(EncodeError::Channels(cfg.channels));
         }
@@ -450,21 +494,28 @@ impl AacEncoder {
         let num_swb = usize::from(NUM_SWB_1024[sf_index]);
         // About a quarter of the per-channel bitrate in Hz: 64 kbit/s a
         // channel keeps 16 kHz, 32 kbit/s keeps 8 kHz.
-        let cutoff_hz = (f64::from(cfg.bitrate) / cfg.channels as f64 * 0.25).clamp(4_000.0, f64::from(cfg.sample_rate) / 2.0);
+        let cutoff_hz = (f64::from(cfg.bitrate) / cfg.channels as f64 * 0.25)
+            .clamp(4_000.0, f64::from(cfg.sample_rate) / 2.0);
         let cutoff_bin = (cutoff_hz / (f64::from(cfg.sample_rate) / 2.0) * FRAME as f64) as usize;
-        let cutoff_bands = (0..num_swb).take_while(|&b| usize::from(offsets[b + 1]) <= cutoff_bin.max(usize::from(offsets[1]))).count().max(1);
+        let cutoff_bands = (0..num_swb)
+            .take_while(|&b| usize::from(offsets[b + 1]) <= cutoff_bin.max(usize::from(offsets[1])))
+            .count()
+            .max(1);
         Ok(Self {
             cfg,
             sf_index,
             offsets,
             num_swb,
-            window: (0..2 * FRAME).map(|n| (std::f64::consts::PI * (n as f64 + 0.5) / (2 * FRAME) as f64).sin()).collect(),
+            window: (0..2 * FRAME)
+                .map(|n| (std::f64::consts::PI * (n as f64 + 0.5) / (2 * FRAME) as f64).sin())
+                .collect(),
             mdct: Mdct::new(FRAME),
             previous: vec![vec![0.0; FRAME]; cfg.channels],
             pending: vec![Vec::new(); cfg.channels],
             cutoff_bands,
             bank: 0,
-            average_bits: (f64::from(cfg.bitrate) * FRAME as f64 / f64::from(cfg.sample_rate)) as i64,
+            average_bits: (f64::from(cfg.bitrate) * FRAME as f64 / f64::from(cfg.sample_rate))
+                as i64,
             frames: 0,
             pushed: 0,
         })
@@ -485,7 +536,11 @@ impl AacEncoder {
     /// raw access units for every frame that is now complete.
     pub fn push(&mut self, planar: &[&[f32]]) -> Result<Vec<Vec<u8>>, EncodeError> {
         if planar.len() != self.cfg.channels {
-            return Err(EncodeError::Input(format!("{} channels given, {} expected", planar.len(), self.cfg.channels)));
+            return Err(EncodeError::Input(format!(
+                "{} channels given, {} expected",
+                planar.len(),
+                self.cfg.channels
+            )));
         }
         if planar.iter().any(|c| c.len() != planar[0].len()) {
             return Err(EncodeError::Input("the channels differ in length".into()));
@@ -496,7 +551,11 @@ impl AacEncoder {
         self.pushed += planar[0].len() as u64;
         let mut units = Vec::new();
         while self.pending[0].len() >= FRAME {
-            let frame: Vec<Vec<f32>> = self.pending.iter_mut().map(|p| p.drain(..FRAME).collect()).collect();
+            let frame: Vec<Vec<f32>> = self
+                .pending
+                .iter_mut()
+                .map(|p| p.drain(..FRAME).collect())
+                .collect();
             units.push(self.encode_frame(&frame));
         }
         Ok(units)
@@ -515,7 +574,11 @@ impl AacEncoder {
                 .pending
                 .iter_mut()
                 .map(|p| {
-                    let mut f: Vec<f32> = if round == 0 { std::mem::take(p) } else { Vec::new() };
+                    let mut f: Vec<f32> = if round == 0 {
+                        std::mem::take(p)
+                    } else {
+                        Vec::new()
+                    };
                     f.resize(FRAME, 0.0);
                     f
                 })
@@ -553,7 +616,10 @@ impl AacEncoder {
         let mut ms = vec![false; self.num_swb];
         if channels == 2 {
             for b in 0..self.cutoff_bands {
-                let (lo, hi) = (usize::from(self.offsets[b]), usize::from(self.offsets[b + 1]));
+                let (lo, hi) = (
+                    usize::from(self.offsets[b]),
+                    usize::from(self.offsets[b + 1]),
+                );
                 let (mut lr, mut msc) = (0.0, 0.0);
                 for k in lo..hi {
                     let (l, r) = (spectra[0][k], spectra[1][k]);
@@ -575,14 +641,21 @@ impl AacEncoder {
             }
         }
 
-        let companded: Vec<Vec<f64>> = spectra.iter().map(|s| s.iter().map(|x| x.abs().powf(0.75)).collect()).collect();
-        let signs: Vec<Vec<bool>> = spectra.iter().map(|s| s.iter().map(|&x| x < 0.0).collect()).collect();
+        let companded: Vec<Vec<f64>> = spectra
+            .iter()
+            .map(|s| s.iter().map(|x| x.abs().powf(0.75)).collect())
+            .collect();
+        let signs: Vec<Vec<bool>> = spectra
+            .iter()
+            .map(|s| s.iter().map(|&x| x < 0.0).collect())
+            .collect();
 
         // The bit budget: the average plus half of whatever is banked.
         // A frame cannot hold more than 6144 bits a channel, whatever was
         // asked for: at a low sample rate a high bitrate asks for more.
         let most = 6144 * channels as i64 - 100;
-        let budget = (self.average_bits + self.bank / 2).clamp(self.average_bits.min(most) / 2, most) as u32;
+        let budget =
+            (self.average_bits + self.bank / 2).clamp(self.average_bits.min(most) / 2, most) as u32;
 
         // The finest step (lowest scalefactor) that fits.
         let (mut lo, mut hi) = (0i32, 255i32);
@@ -599,26 +672,46 @@ impl AacEncoder {
         }
         let e = best.unwrap_or_else(|| self.try_step(255, &companded, &signs, &ms));
         let bytes = self.write_unit(&e, &ms);
-        self.bank = (self.bank + self.average_bits - (bytes.len() as i64) * 8).clamp(-self.average_bits * 4, self.average_bits * 4);
+        self.bank = (self.bank + self.average_bits - (bytes.len() as i64) * 8)
+            .clamp(-self.average_bits * 4, self.average_bits * 4);
         self.frames += 1;
         bytes
     }
 
     /// Quantizes everything at scalefactor `g` (mid/side bands a little finer)
     /// and plans the coding.
-    fn try_step(&self, g: i32, companded: &[Vec<f64>], signs: &[Vec<bool>], ms: &[bool]) -> Encoded {
+    fn try_step(
+        &self,
+        g: i32,
+        companded: &[Vec<f64>],
+        signs: &[Vec<bool>],
+        ms: &[bool],
+    ) -> Encoded {
         let mut channels = Vec::new();
         let mut total = 0;
         let mut max_sfb_all = 0;
         let mut qs = Vec::new();
         for ch in 0..self.cfg.channels {
-            let sf: Vec<i32> = (0..self.num_swb).map(|b| if ms[b] { (g - 2).max(0) } else { g }).collect();
+            let sf: Vec<i32> = (0..self.num_swb)
+                .map(|b| if ms[b] { (g - 2).max(0) } else { g })
+                .collect();
             let mut q = vec![0i32; FRAME];
             if !quantize(&companded[ch], self.offsets, &sf, self.cutoff_bands, &mut q) {
                 // Too fine a step for the loudest coefficient: not codable.
-                return Encoded { channels: Vec::new(), max_sfb: 0, bits: u32::MAX };
+                return Encoded {
+                    channels: Vec::new(),
+                    max_sfb: 0,
+                    bits: u32::MAX,
+                };
             }
-            let top = (0..self.cutoff_bands).rev().find(|&b| q[usize::from(self.offsets[b])..usize::from(self.offsets[b + 1])].iter().any(|&x| x != 0)).map_or(0, |b| b + 1);
+            let top = (0..self.cutoff_bands)
+                .rev()
+                .find(|&b| {
+                    q[usize::from(self.offsets[b])..usize::from(self.offsets[b + 1])]
+                        .iter()
+                        .any(|&x| x != 0)
+                })
+                .map_or(0, |b| b + 1);
             max_sfb_all = max_sfb_all.max(top);
             qs.push((q, sf));
         }
@@ -642,10 +735,22 @@ impl AacEncoder {
         total += if self.cfg.channels == 1 {
             3 + 4 + 11
         } else {
-            3 + 4 + 1 + 11 + 2 + if ms.iter().take(max_sfb_all).any(|&m| m) { max_sfb_all as u32 } else { 0 }
+            3 + 4
+                + 1
+                + 11
+                + 2
+                + if ms.iter().take(max_sfb_all).any(|&m| m) {
+                    max_sfb_all as u32
+                } else {
+                    0
+                }
         };
         total += 3 + 4;
-        Encoded { channels, max_sfb: max_sfb_all, bits: total }
+        Encoded {
+            channels,
+            max_sfb: max_sfb_all,
+            bits: total,
+        }
     }
 
     fn write_unit(&self, e: &Encoded, ms: &[bool]) -> Vec<u8> {
@@ -661,7 +766,10 @@ impl AacEncoder {
         // differences.
         let global = |c: &ChannelData| -> u32 {
             let p = c.plan.as_ref().expect("planned");
-            p.sections.iter().find(|s| s.cb != 0).map_or(100, |s| c.sf[s.first]) as u32
+            p.sections
+                .iter()
+                .find(|s| s.cb != 0)
+                .map_or(100, |s| c.sf[s.first]) as u32
         };
         if self.cfg.channels == 1 {
             out.put(0, 3); // SCE
@@ -669,7 +777,13 @@ impl AacEncoder {
             let c = &e.channels[0];
             out.put(global(c), 8);
             ics_info(&mut out);
-            write_channel_body(&mut out, &c.q, self.offsets, &c.sf, c.plan.as_ref().expect("planned"));
+            write_channel_body(
+                &mut out,
+                &c.q,
+                self.offsets,
+                &c.sf,
+                c.plan.as_ref().expect("planned"),
+            );
         } else {
             out.put(1, 3); // CPE
             out.put(0, 4);
@@ -684,7 +798,13 @@ impl AacEncoder {
             }
             for c in &e.channels {
                 out.put(global(c), 8);
-                write_channel_body(&mut out, &c.q, self.offsets, &c.sf, c.plan.as_ref().expect("planned"));
+                write_channel_body(
+                    &mut out,
+                    &c.q,
+                    self.offsets,
+                    &c.sf,
+                    c.plan.as_ref().expect("planned"),
+                );
             }
         }
         out.put(7, 3); // END
@@ -746,12 +866,25 @@ mod tests {
     #[test]
     fn mdct_matches_its_definition() {
         let m = 16;
-        let x: Vec<f64> = (0..2 * m).map(|i| ((i * 7 + 3) % 11) as f64 - 5.0).collect();
+        let x: Vec<f64> = (0..2 * m)
+            .map(|i| ((i * 7 + 3) % 11) as f64 - 5.0)
+            .collect();
         let mut fast = vec![0.0; m];
         Mdct::new(m).forward(&x, &mut fast);
         for k in 0..m {
-            let direct: f64 = (0..2 * m).map(|n| x[n] * (std::f64::consts::PI / m as f64 * (n as f64 + 0.5 + m as f64 / 2.0) * (k as f64 + 0.5)).cos()).sum();
-            assert!((fast[k] - direct).abs() < 1e-9, "bin {k}: {} vs {direct}", fast[k]);
+            let direct: f64 = (0..2 * m)
+                .map(|n| {
+                    x[n] * (std::f64::consts::PI / m as f64
+                        * (n as f64 + 0.5 + m as f64 / 2.0)
+                        * (k as f64 + 0.5))
+                        .cos()
+                })
+                .sum();
+            assert!(
+                (fast[k] - direct).abs() < 1e-9,
+                "bin {k}: {} vs {direct}",
+                fast[k]
+            );
         }
     }
 
@@ -762,7 +895,12 @@ mod tests {
         let mut fast = vec![0.0; m];
         Mdct::new(m).dct4(&u, &mut fast);
         for k in 0..m {
-            let direct: f64 = (0..m).map(|n| u[n] * (std::f64::consts::PI / m as f64 * (n as f64 + 0.5) * (k as f64 + 0.5)).cos()).sum();
+            let direct: f64 = (0..m)
+                .map(|n| {
+                    u[n] * (std::f64::consts::PI / m as f64 * (n as f64 + 0.5) * (k as f64 + 0.5))
+                        .cos()
+                })
+                .sum();
             assert!((fast[k] - direct).abs() < 1e-9, "bin {k}");
         }
     }
@@ -784,12 +922,27 @@ mod tests {
 
     #[test]
     fn bad_settings_are_refused() {
-        assert_eq!(AacEncoder::new(EncoderConfig::new(12_345, 2, 128_000)).err(), Some(EncodeError::SampleRate(12_345)));
-        assert_eq!(AacEncoder::new(EncoderConfig::new(44_100, 3, 128_000)).err(), Some(EncodeError::Channels(3)));
-        assert_eq!(AacEncoder::new(EncoderConfig::new(44_100, 2, 8_000)).err(), Some(EncodeError::Bitrate(8_000)));
+        assert_eq!(
+            AacEncoder::new(EncoderConfig::new(12_345, 2, 128_000)).err(),
+            Some(EncodeError::SampleRate(12_345))
+        );
+        assert_eq!(
+            AacEncoder::new(EncoderConfig::new(44_100, 3, 128_000)).err(),
+            Some(EncodeError::Channels(3))
+        );
+        assert_eq!(
+            AacEncoder::new(EncoderConfig::new(44_100, 2, 8_000)).err(),
+            Some(EncodeError::Bitrate(8_000))
+        );
         let mut enc = AacEncoder::new(EncoderConfig::new(44_100, 2, 128_000)).unwrap();
-        assert!(matches!(enc.push(&[&[0.0; 10][..]]), Err(EncodeError::Input(_))));
-        assert!(matches!(enc.push(&[&[0.0; 10][..], &[0.0; 9][..]]), Err(EncodeError::Input(_))));
+        assert!(matches!(
+            enc.push(&[&[0.0; 10][..]]),
+            Err(EncodeError::Input(_))
+        ));
+        assert!(matches!(
+            enc.push(&[&[0.0; 10][..], &[0.0; 9][..]]),
+            Err(EncodeError::Input(_))
+        ));
     }
 
     #[test]

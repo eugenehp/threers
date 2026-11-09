@@ -834,7 +834,7 @@ mod tests {
         for row in 0..side {
             let start = (row * bytes_per_row) as usize;
             let end = start + (side * 8) as usize;
-            for pair in data[start..end].chunks_exact(2) {
+            for pair in data[start..end].as_chunks::<2>().0 {
                 out.push(half_to_f32(u16::from_le_bytes([pair[0], pair[1]])));
             }
         }

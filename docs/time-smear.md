@@ -67,7 +67,7 @@ let frame = smear.wrap(width, height, n, |i| {
     pose(&mut scene, i);
     renderer.render_to_rgba(&mut scene, &camera)
 });
-threers::export_video(width, height, n, &opts, frame)?; // `video` feature
+threers_video::export_video(width, height, n, &opts, frame)?; // the threers-video crate
 ```
 
 `wrap` must be called with `0, 1, 2, …` in order, which is what
@@ -112,7 +112,7 @@ renders the shot above and writes the sheet:
 ```text
 cargo run --release --example time_smear                          # wgpu
 cargo run --release --example time_smear --features metal -- --metal
-cargo run --release --example time_smear --features video         # + one MP4 per look
+cargo run --release --example time_smear --features native-codec  # + one MP4 per look
 ```
 
 Both renderers give the same backdrop value, `(100, 103, 112)`, and the same
@@ -122,7 +122,7 @@ rayon. There is one parallel call per 32 frames, not one per pixel.
 ## In the browser
 
 ```js
-import THREE, { initThreers } from 'threers';
+import THREE, { initThreers } from '@threers/threers';
 
 const smear = await THREE.TimeSmear.capture(renderer, scene, camera, {
     frames: 160,

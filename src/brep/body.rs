@@ -207,10 +207,9 @@ impl Body {
                     };
                     if let (Some(face), Some((u, w))) =
                         (triangle_normal(&v), surface.invert(centroid(&v)))
+                        && let Some(sn) = surface.normal(u, w)
                     {
-                        if let Some(sn) = surface.normal(u, w) {
-                            votes += if v3::dot(face, sn) < 0.0 { -1 } else { 1 };
-                        }
+                        votes += if v3::dot(face, sn) < 0.0 { -1 } else { 1 };
                     }
                 }
                 // Parameter footprint, from the mesh's own vertices.
@@ -615,15 +614,15 @@ impl Body {
                 if s.distance(*p) > 1e-6 {
                     continue;
                 }
-                if let Some((u, v)) = s.invert(*p) {
-                    if let Some(sn) = s.normal(u, v) {
-                        n = if face.flipped {
-                            v3::scale(sn, -1.0)
-                        } else {
-                            sn
-                        };
-                        break;
-                    }
+                if let Some((u, v)) = s.invert(*p)
+                    && let Some(sn) = s.normal(u, v)
+                {
+                    n = if face.flipped {
+                        v3::scale(sn, -1.0)
+                    } else {
+                        sn
+                    };
+                    break;
                 }
             }
             let o = emitted[vi] as usize * 3;
@@ -1320,10 +1319,10 @@ fn refine_on_surface(
                 for k in 0..3 {
                     let (a, b) = (t[k], t[(k + 1) % 3]);
                     let key = (a.min(b), a.max(b));
-                    if let std::collections::hash_map::Entry::Vacant(slot) = paths.entry(key) {
-                        if let Some(mid) = between(key.0, key.1) {
-                            slot.insert(mid);
-                        }
+                    if let std::collections::hash_map::Entry::Vacant(slot) = paths.entry(key)
+                        && let Some(mid) = between(key.0, key.1)
+                    {
+                        slot.insert(mid);
                     }
                 }
             }
@@ -1735,7 +1734,7 @@ fn degenerate_at(positions: &[f32], a: u32, b: u32, c: u32) -> bool {
 
 fn count_boundary_edges(indices: &[u32]) -> usize {
     let mut counts: HashMap<(u32, u32), usize> = HashMap::new();
-    for t in indices.chunks_exact(3) {
+    for t in indices.as_chunks::<3>().0 {
         for k in 0..3 {
             let (a, b) = (t[k], t[(k + 1) % 3]);
             *counts.entry((a.min(b), a.max(b))).or_insert(0) += 1;
@@ -1784,7 +1783,13 @@ mod tests {
 
         // And it is the right solid: nothing beyond the radius, nothing outside
         // the height.
-        for c in out.get_attribute("position").unwrap().array.chunks_exact(3) {
+        for c in out
+            .get_attribute("position")
+            .unwrap()
+            .array
+            .as_chunks::<3>()
+            .0
+        {
             let r = ((c[0] as f64).powi(2) + (c[2] as f64).powi(2)).sqrt();
             assert!(r <= 2.0 + 1e-4, "radius {r}");
             assert!((c[1] as f64).abs() <= 2.0 + 1e-4, "y {}", c[1]);
@@ -1911,7 +1916,13 @@ mod tests {
 
             // And it is the right shape.
             let surface = &body.surfaces()[0];
-            for c in out.get_attribute("position").unwrap().array.chunks_exact(3) {
+            for c in out
+                .get_attribute("position")
+                .unwrap()
+                .array
+                .as_chunks::<3>()
+                .0
+            {
                 let p = [c[0] as f64, c[1] as f64, c[2] as f64];
                 assert!(
                     surface.distance(p) < 1e-3 * scale,
@@ -2315,7 +2326,13 @@ mod tests {
         let mut body = Body::cylinder([0.0; 3], [0.0, 0.0, 1.0], 2.0, 5.0);
         body.refine_edges(1e-3);
         let (out, _) = body.tessellate(1e-3);
-        for c in out.get_attribute("position").unwrap().array.chunks_exact(3) {
+        for c in out
+            .get_attribute("position")
+            .unwrap()
+            .array
+            .as_chunks::<3>()
+            .0
+        {
             let r = ((c[0] as f64).powi(2) + (c[1] as f64).powi(2)).sqrt();
             assert!(r <= 2.0 + 1e-3, "radius {r}");
             assert!((-1e-3..=5.0 + 1e-3).contains(&(c[2] as f64)), "z {}", c[2]);
@@ -2324,7 +2341,13 @@ mod tests {
         let mut sphere = Body::sphere([1.0, -2.0, 0.5], 3.0);
         sphere.refine_edges(1e-3);
         let (out, _) = sphere.tessellate(1e-3);
-        for c in out.get_attribute("position").unwrap().array.chunks_exact(3) {
+        for c in out
+            .get_attribute("position")
+            .unwrap()
+            .array
+            .as_chunks::<3>()
+            .0
+        {
             let d = v3::dist([c[0] as f64, c[1] as f64, c[2] as f64], [1.0, -2.0, 0.5]);
             assert!((d - 3.0).abs() < 1e-3, "radius {d}");
         }
@@ -2372,7 +2395,7 @@ mod tests {
         // Nothing inside the bore: a solid plate would put triangles there.
         let pos = &out.get_attribute("position").unwrap().array;
         let idx = out.index.as_ref().unwrap();
-        for t in idx.chunks_exact(3) {
+        for t in idx.as_chunks::<3>().0 {
             let mut c = [0.0f64; 3];
             for &i in t {
                 let o = i as usize * 3;

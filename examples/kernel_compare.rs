@@ -28,7 +28,9 @@ fn triangles(g: &BufferGeometry) -> Vec<[[f64; 3]; 3]> {
         Some(i) => i.iter().map(|v| *v as usize).collect(),
         None => (0..pos.len() / 3).collect(),
     };
-    idx.chunks_exact(3)
+    idx.as_chunks::<3>()
+        .0
+        .iter()
         .map(|c| {
             let v = |i: usize| {
                 [

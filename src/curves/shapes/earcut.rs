@@ -198,11 +198,11 @@ fn linked_list(
             i -= dim as isize;
         }
     }
-    if let Some(l) = last {
-        if a.equals(l, a.next(l)) {
-            a.remove_node(l);
-            last = Some(a.next(l));
-        }
+    if let Some(l) = last
+        && a.equals(l, a.next(l))
+    {
+        a.remove_node(l);
+        last = Some(a.next(l));
     }
     last
 }

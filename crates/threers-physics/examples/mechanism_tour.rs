@@ -269,15 +269,14 @@ fn main() {
         .assembly
         .part_named("crank")
         .and_then(|p| mech.assembly.part_of(p))
+        && let Some(mesh) = part.geometry.as_ref()
     {
-        if let Some(mesh) = part.geometry.as_ref() {
-            let here = geo::from_geometry(mesh);
-            let moved = geo::from_geometry_at(mesh, &shifted());
-            println!(
-                "  the crank's identity survives being moved and turned: {}",
-                geo::rigid_key(&here).matches(&geo::rigid_key(&moved))
-            );
-        }
+        let here = geo::from_geometry(mesh);
+        let moved = geo::from_geometry_at(mesh, &shifted());
+        println!(
+            "  the crank's identity survives being moved and turned: {}",
+            geo::rigid_key(&here).matches(&geo::rigid_key(&moved))
+        );
     }
 
     // ---- render ------------------------------------------------------------

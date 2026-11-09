@@ -9,7 +9,9 @@ use crate::curves::shapes::{self, shape_utils, ShapeCurve, Vec2d};
 use crate::geometries::{ExtrudeFace, ExtrudeGeometry, ExtrudeOptions, ExtrudePath, ShapeGeometry};
 
 fn pairs(flat: &[f64]) -> Vec<Vec2d> {
-    flat.chunks_exact(2)
+    flat.as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| Vec2d::new(c[0], c[1]))
         .collect()
 }

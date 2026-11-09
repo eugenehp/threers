@@ -255,7 +255,9 @@ pub fn build(node: &Node) -> Option<(BufferGeometry, Vec<i32>)> {
     if !colour.is_empty() {
         // FBX colours are RGBA; this crate's vertex colours are RGB.
         let rgb: Vec<f32> = colour
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|c| [c[0], c[1], c[2]])
             .collect();
         geometry.set_attribute("color", BufferAttribute::new(rgb, 3));

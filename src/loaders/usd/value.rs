@@ -549,14 +549,12 @@ fn escape(s: &str) -> String {
 /// gives a half-length vector that is not a rotation at all, and a rotation
 /// blended that way slows down in the middle of its arc.
 fn lerp(a: &UsdValue, b: &UsdValue, t: f64) -> UsdValue {
-    if let (UsdValue::Tuple(x), UsdValue::Tuple(y)) = (a, b) {
-        if x.len() == 4 && y.len() == 4 {
-            if let (Some(p), Some(q)) = (four(x), four(y)) {
-                return UsdValue::Tuple(
-                    slerp(p, q, t).iter().map(|v| UsdValue::Float(*v)).collect(),
-                );
-            }
-        }
+    if let (UsdValue::Tuple(x), UsdValue::Tuple(y)) = (a, b)
+        && x.len() == 4
+        && y.len() == 4
+        && let (Some(p), Some(q)) = (four(x), four(y))
+    {
+        return UsdValue::Tuple(slerp(p, q, t).iter().map(|v| UsdValue::Float(*v)).collect());
     }
     lerp_componentwise(a, b, t)
 }

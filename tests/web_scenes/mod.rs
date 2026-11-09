@@ -1510,7 +1510,7 @@ async fn fur_and_hair_cast_shadows() {
             let sum: f64 = under
                 .iter()
                 .enumerate()
-                .filter(|(_, &u)| u)
+                .filter(|&(_, &u)| u)
                 .map(|(i, _)| px[i * 4] as f64)
                 .sum();
             light[k] = sum / floor_px as f64;

@@ -165,21 +165,19 @@ impl CreasePattern {
         let n = self.verts.len();
         for mode in [VertexMode::A, VertexMode::B] {
             let assign = Assignment::uniform(n, mode);
-            if let Some(drive) = self.drive_hinge(&assign) {
-                if let Some(tangents) = self.propagate(&assign, drive, drive_t) {
-                    if let Some(folded) = self.fold(&assign, drive, drive_t) {
-                        return Some((assign, tangents, folded));
-                    }
-                }
+            if let Some(drive) = self.drive_hinge(&assign)
+                && let Some(tangents) = self.propagate(&assign, drive, drive_t)
+                && let Some(folded) = self.fold(&assign, drive, drive_t)
+            {
+                return Some((assign, tangents, folded));
             }
         }
         for assign in self.find_assignments(1e-6) {
-            if let Some(drive) = self.drive_hinge(&assign) {
-                if let Some(tangents) = self.propagate(&assign, drive, drive_t) {
-                    if let Some(folded) = self.fold(&assign, drive, drive_t) {
-                        return Some((assign, tangents, folded));
-                    }
-                }
+            if let Some(drive) = self.drive_hinge(&assign)
+                && let Some(tangents) = self.propagate(&assign, drive, drive_t)
+                && let Some(folded) = self.fold(&assign, drive, drive_t)
+            {
+                return Some((assign, tangents, folded));
             }
         }
         for v in self.interior_deg4() {
@@ -566,10 +564,10 @@ fn clean_ring(verts: &[V3], face: &[usize]) -> Vec<usize> {
         if i >= verts.len() {
             continue;
         }
-        if let Some(&prev) = out.last() {
-            if prev == i || nearly_same(verts[prev], verts[i]) {
-                continue;
-            }
+        if let Some(&prev) = out.last()
+            && (prev == i || nearly_same(verts[prev], verts[i]))
+        {
+            continue;
         }
         out.push(i);
     }

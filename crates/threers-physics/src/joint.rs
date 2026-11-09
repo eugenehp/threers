@@ -1026,10 +1026,10 @@ impl Joint {
     /// Configure translation along joint axis `axis` (0 = x, 1 = y, 2 = z).
     /// Ignored by every kind but [`JointKind::Generic`].
     pub fn with_linear_dof(mut self, axis: usize, dof: Dof) -> Self {
-        if let JointKind::Generic { linear, .. } = &mut self.kind {
-            if let Some(slot) = linear.get_mut(axis) {
-                *slot = dof;
-            }
+        if let JointKind::Generic { linear, .. } = &mut self.kind
+            && let Some(slot) = linear.get_mut(axis)
+        {
+            *slot = dof;
         }
         self
     }
@@ -1037,10 +1037,10 @@ impl Joint {
     /// Configure rotation about joint axis `axis` (0 = x, 1 = y, 2 = z).
     /// Ignored by every kind but [`JointKind::Generic`].
     pub fn with_angular_dof(mut self, axis: usize, dof: Dof) -> Self {
-        if let JointKind::Generic { angular, .. } = &mut self.kind {
-            if let Some(slot) = angular.get_mut(axis) {
-                *slot = dof;
-            }
+        if let JointKind::Generic { angular, .. } = &mut self.kind
+            && let Some(slot) = angular.get_mut(axis)
+        {
+            *slot = dof;
         }
         self
     }

@@ -5,6 +5,10 @@
 //!   media_banner FILE
 fn main() {
     let a: Vec<String> = std::env::args().collect();
+    if a.len() < 2 {
+        eprintln!("usage: media_banner FILE");
+        std::process::exit(2);
+    }
     let data = std::fs::read(&a[1]).expect("read");
     match threers_codec::ffcompat::reader::VideoReader::open(data) {
         Ok(r) => {

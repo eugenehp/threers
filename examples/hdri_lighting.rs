@@ -212,7 +212,7 @@ fn report_dynamic_range(equirect: &[f32], source: &str) {
     let mut lo = f32::INFINITY;
     let mut hi = 0.0f32;
     let mut sum = 0.0f64;
-    for px in equirect.chunks_exact(4) {
+    for px in equirect.as_chunks::<4>().0 {
         let l = 0.2126 * px[0] + 0.7152 * px[1] + 0.0722 * px[2];
         lo = lo.min(l);
         hi = hi.max(l);

@@ -37,9 +37,7 @@ use threers::{OrbitControls, PerspectiveCamera, PointerEvent, ToneMapping};
 use winit::{
     dpi::PhysicalPosition,
     event::{ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent},
-    event_loop::EventLoop,
     keyboard::{Key, NamedKey},
-    window::WindowBuilder,
 };
 
 // The city itself lives in `examples/simcity/`, shared by all three
@@ -119,68 +117,63 @@ async fn run() {
             .unwrap_or(defaults.layout),
     };
 
-    let event_loop = EventLoop::new().expect("event loop");
-    let window = Arc::new(
-        WindowBuilder::new()
-            .with_title("threers — simcity")
-            .with_inner_size(winit::dpi::LogicalSize::new(1280, 800))
-            .build(&event_loop)
-            .expect("window"),
-    );
+    let attributes = winit::window::Window::default_attributes()
+        .with_title("threers — simcity")
+        .with_inner_size(winit::dpi::LogicalSize::new(1280, 800));
+    threers::sketch::run_window(attributes, move |window| {
+        // wgpu by default; the native Metal backend with `--features metal` and
+        // `THREERS_BACKEND=metal`.
+        let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
+        // Lit windows and a low sun both go well above white; ACES rolls them off
+        // without dragging the hue with them.
+        view.set_tone_mapping(ToneMapping::AcesFilmic, 1.0);
 
-    // wgpu by default; the native Metal backend with `--features metal` and
-    // `THREERS_BACKEND=metal`.
-    let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
-    // Lit windows and a low sun both go well above white; ACES rolls them off
-    // without dragging the hue with them.
-    view.set_tone_mapping(ToneMapping::AcesFilmic, 1.0);
-
-    let mut scene = Scene::new();
-    let mut city = generate_city(&mut scene, &params);
-    let s = &city.stats;
-    println!(
+        let mut scene = Scene::new();
+        let mut city = generate_city(&mut scene, &params);
+        let s = &city.stats;
+        println!(
         "{} · seed {} · {} blocks/side · {} buildings · {} cars · {} on foot · {} draws · {} static triangles + up to {} in movers · {:.0} m across",
         params.layout.name(), params.seed, s.blocks, s.buildings, s.cars, s.walkers, s.draws, s.triangles, s.mover_triangles,
         s.extent * 2.0
     );
-    println!("drag to orbit · right-drag to pan · wheel to zoom");
-    println!("space pause · [ ] day speed · n night · d day · v street · f frame");
-    println!("l next layout · c ride along · r new city");
+        println!("drag to orbit · right-drag to pan · wheel to zoom");
+        println!("space pause · [ ] day speed · n night · d day · v street · f frame");
+        println!("l next layout · c ride along · r new city");
 
-    let mut camera = PerspectiveCamera::new(38.0, view.aspect(), 1.0, city.stats.extent * 14.0);
-    place_camera(&mut camera, city.stats.extent);
-    let mut controls = OrbitControls::new(&camera);
-    controls.min_distance = 25.0;
-    controls.max_distance = city.stats.extent * 5.0;
-    // Stop just short of the horizon: below it the camera is under the ground
-    // and the whole city turns into the back face of a terrain plane.
-    controls.max_polar_angle = std::f32::consts::FRAC_PI_2 * 0.98;
-    controls.enable_damping = true;
+        let mut camera = PerspectiveCamera::new(38.0, view.aspect(), 1.0, city.stats.extent * 14.0);
+        place_camera(&mut camera, city.stats.extent);
+        let mut controls = OrbitControls::new(&camera);
+        controls.min_distance = 25.0;
+        controls.max_distance = city.stats.extent * 5.0;
+        // Stop just short of the horizon: below it the camera is under the ground
+        // and the whole city turns into the back face of a terrain plane.
+        controls.max_polar_angle = std::f32::consts::FRAC_PI_2 * 0.98;
+        controls.enable_damping = true;
 
-    // A compute pass rewrites the water mesh's vertex buffer in place
-    // between frames, so the surface never crosses host memory.
-    let water_gpu = view.marks_gpu();
-    let mut water = city
-        .water
-        .as_ref()
-        .map(|w| WaterSim::new(&water_gpu, w.vertices, w.level));
+        // A compute pass rewrites the water mesh's vertex buffer in place
+        // between frames, so the surface never crosses host memory.
+        let water_gpu = view.marks_gpu();
+        let mut water = city
+            .water
+            .as_ref()
+            .map(|w| WaterSim::new(&water_gpu, w.vertices, w.level));
 
-    let mut input = InputState::default();
-    let mut time_of_day = 0.07f32;
-    let mut day_speed = 1.0f32;
-    let mut paused = false;
-    // Ride-along: none, in a car, or on foot.
-    let mut ride: Option<Gait> = None;
-    let mut rebuild = false;
-    let mut last = Instant::now();
-    let mut elapsed = 0.0f32;
-    let mut frames = 0u32;
-    let mut fps_accum = 0.0f32;
-    let window_loop = window.clone();
+        let mut input = InputState::default();
+        let mut time_of_day = 0.07f32;
+        let mut day_speed = 1.0f32;
+        let mut paused = false;
+        // Ride-along: none, in a car, or on foot.
+        let mut ride: Option<Gait> = None;
+        let mut rebuild = false;
+        let mut last = Instant::now();
+        let mut elapsed = 0.0f32;
+        let mut frames = 0u32;
+        let mut fps_accum = 0.0f32;
+        let window_loop = window.clone();
 
-    event_loop
-        .run(move |event, target| match event {
-            Event::WindowEvent { event, window_id } if window_id == window_loop.id() => match event {
+        move |event, target| match event {
+            Event::WindowEvent { event, window_id } if window_id == window_loop.id() => match event
+            {
                 WindowEvent::CloseRequested => target.exit(),
                 WindowEvent::Resized(new_size) => {
                     view.resize(new_size.width, new_size.height);
@@ -315,8 +308,12 @@ async fn run() {
                     }
                     // Runs even when paused: the camera still moves, and the
                     // level-of-detail split is measured from where it is.
-                    let (near, movers) =
-                        city.drive(&mut scene, if paused { 0.0 } else { dt }, camera.position, elapsed);
+                    let (near, movers) = city.drive(
+                        &mut scene,
+                        if paused { 0.0 } else { dt },
+                        camera.position,
+                        elapsed,
+                    );
                     elapsed += dt;
                     if let (Some(sim), Some(w)) = (&mut water, &city.water) {
                         let mesh = || {
@@ -372,6 +369,6 @@ async fn run() {
                 _ => {}
             },
             _ => {}
-        })
-        .expect("event loop");
+        }
+    });
 }

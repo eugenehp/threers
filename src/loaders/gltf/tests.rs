@@ -452,9 +452,11 @@ fn a_meshopt_file_reads_as_the_same_mesh() {
     );
     assert!(normals.is_some(), "normals survived the filter");
     let tolerance = 2.0 / 32767.0 * 4.0;
-    for v in ours.chunks_exact(3) {
+    for v in ours.as_chunks::<3>().0 {
         let nearest = plain
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|p| ((p[0] - v[0]).powi(2) + (p[1] - v[1]).powi(2) + (p[2] - v[2]).powi(2)).sqrt())
             .fold(f32::MAX, f32::min);
         assert!(
@@ -462,7 +464,7 @@ fn a_meshopt_file_reads_as_the_same_mesh() {
             "decoded vertex {v:?} is {nearest} from anything in the original"
         );
     }
-    for v in ours.chunks_exact(3) {
+    for v in ours.as_chunks::<3>().0 {
         let r = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
         assert!((r - 1.0).abs() < 1e-3, "{v:?} is at radius {r}, not 1");
     }
@@ -481,7 +483,7 @@ fn meshopt_indices_are_a_valid_triangle_list() {
             "index {i} past {vertices} vertices"
         );
     }
-    for t in index.chunks_exact(3) {
+    for t in index.as_chunks::<3>().0 {
         assert!(
             t[0] != t[1] && t[1] != t[2] && t[0] != t[2],
             "degenerate {t:?}"
@@ -670,11 +672,11 @@ fn truncated_files_do_not_panic() {
             if cut < file.len() {
                 let _ = GltfLoader::parse_glb(&file[..cut]);
                 let doc = Document::from_bytes(&file[..cut]);
-                if let Ok(doc) = doc {
-                    if let Ok(mut p) = GltfParser::new(doc, GltfOptions::default()) {
-                        let _ = supply_images(&mut p, &GltfImages::new());
-                        let _ = p.parse(&mut ObjectArena::new());
-                    }
+                if let Ok(doc) = doc
+                    && let Ok(mut p) = GltfParser::new(doc, GltfOptions::default())
+                {
+                    let _ = supply_images(&mut p, &GltfImages::new());
+                    let _ = p.parse(&mut ObjectArena::new());
                 }
             }
         }

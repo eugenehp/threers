@@ -110,7 +110,6 @@
 mod filters;
 #[cfg(feature = "rlx")]
 mod grade;
-/// Mesh operations as graphs over the positions tensor (`rlx` feature).
 #[cfg(feature = "rlx")]
 pub mod mesh;
 #[cfg(feature = "rlx")]
@@ -134,7 +133,6 @@ pub use tensor::{
     texture_to_tensor, ColorSpace, Layout, Tensor, TensorError,
 };
 
-/// Exact Delaunay triangulation and discrete Voronoi (`rlx-geo` feature).
 #[cfg(feature = "rlx-geo")]
 pub mod geo;
 

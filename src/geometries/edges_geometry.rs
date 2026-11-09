@@ -75,7 +75,12 @@ impl EdgesGeometry {
         };
 
         let triangles: Vec<[u32; 3]> = match &source.index {
-            Some(idx) => idx.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+            Some(idx) => idx
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|c| [c[0], c[1], c[2]])
+                .collect(),
             None => (0..positions.len() as u32 / 3)
                 .map(|i| [i * 3, i * 3 + 1, i * 3 + 2])
                 .collect(),
@@ -303,7 +308,9 @@ mod tests {
     fn edge_set(g: &BufferGeometry) -> Vec<[[i64; 3]; 2]> {
         let p = &g.get_attribute("position").unwrap().array;
         let mut out: Vec<_> = p
-            .chunks_exact(6)
+            .as_chunks::<6>()
+            .0
+            .iter()
             .map(|s| {
                 let a = rounded_key(Vector3::new(s[0], s[1], s[2]));
                 let b = rounded_key(Vector3::new(s[3], s[4], s[5]));

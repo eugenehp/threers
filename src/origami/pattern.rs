@@ -419,12 +419,11 @@ impl CreasePattern {
                 };
             }
             let assign = Assignment { mode };
-            if self.is_rigid(&assign, eps) {
-                if let Some(drive) = self.drive_hinge(&assign) {
-                    if self.propagate(&assign, drive, 1.0).is_some() {
-                        out.push(assign);
-                    }
-                }
+            if self.is_rigid(&assign, eps)
+                && let Some(drive) = self.drive_hinge(&assign)
+                && self.propagate(&assign, drive, 1.0).is_some()
+            {
+                out.push(assign);
             }
         }
         out

@@ -442,7 +442,8 @@ impl TtfFace {
         };
         face.family = family.clone();
         let has_weights = face.source.as_ref().is_some_and(|s| s.wght.is_some());
-        face.synthetic_bold = want_bold && !bold_file && !has_weights && face.base.weight_class < 600;
+        face.synthetic_bold =
+            want_bold && !bold_file && !has_weights && face.base.weight_class < 600;
         face.oblique = italic && !italic_file;
         face.style = (weight, italic);
         Ok(face)
@@ -850,7 +851,11 @@ impl CaptionFont {
             hinting: self.hinting,
             font_smoothing: self.font_smoothing,
             // Each fallback in the same style: real where it has one, a plain copy where it has none.
-            fallbacks: self.fallbacks.iter().filter_map(|f| f.styled(weight, italic).or_else(|| f.duplicate())).collect(),
+            fallbacks: self
+                .fallbacks
+                .iter()
+                .filter_map(|f| f.styled(weight, italic).or_else(|| f.duplicate()))
+                .collect(),
         })
     }
 
@@ -1056,7 +1061,11 @@ impl CaptionFont {
         }
         let mut out: Option<FontMetrics> = None;
         for (i, _) in used.iter().enumerate().filter(|(_, u)| **u) {
-            let m = if i == 0 { self.metrics(size) } else { self.fallbacks[i - 1].metrics(size) };
+            let m = if i == 0 {
+                self.metrics(size)
+            } else {
+                self.fallbacks[i - 1].metrics(size)
+            };
             out = Some(match out {
                 None => m,
                 Some(o) => FontMetrics {
@@ -1166,7 +1175,12 @@ impl CaptionFont {
     ) -> Option<&GlyphBitmap> {
         let tag = (gid >> FACE_SHIFT) as usize;
         if tag != 0 {
-            return self.fallbacks.get_mut(tag - 1)?.grown_glyph_of(gid & FACE_MASK, size, phase, radius);
+            return self.fallbacks.get_mut(tag - 1)?.grown_glyph_of(
+                gid & FACE_MASK,
+                size,
+                phase,
+                radius,
+            );
         }
         let Face::Ttf(face) = &self.face else {
             return None;
@@ -1245,7 +1259,10 @@ impl CaptionFont {
         if self.fallbacks.is_empty() || c.is_whitespace() || c.is_control() || self.has_glyph(c) {
             return 0;
         }
-        self.fallbacks.iter().position(|f| f.has_glyph(c)).map_or(0, |i| i + 1)
+        self.fallbacks
+            .iter()
+            .position(|f| f.has_glyph(c))
+            .map_or(0, |i| i + 1)
     }
 
     /// Whether this face or one of its fallbacks has a glyph for `c`: what can be drawn.
@@ -1256,7 +1273,9 @@ impl CaptionFont {
     /// Whether every character of `text` can be drawn, by this face or a fallback. White space and
     /// controls need no glyph. See [`covers`](Self::covers) for this face alone.
     pub fn can_draw_all(&self, text: &str) -> bool {
-        text.chars().filter(|c| !c.is_whitespace() && !c.is_control()).all(|c| self.can_draw(c))
+        text.chars()
+            .filter(|c| !c.is_whitespace() && !c.is_control())
+            .all(|c| self.can_draw(c))
     }
 
     /// This face with `font` tried, after any fallbacks already added, for characters it has no
@@ -1285,7 +1304,9 @@ impl CaptionFont {
     fn duplicate(&self) -> Option<Self> {
         let face = match &self.face {
             Face::Builtin => Face::Builtin,
-            Face::Ttf(f) => Face::Ttf(Box::new(TtfFace::styled(&f.family, f.style.0, f.style.1).ok()?)),
+            Face::Ttf(f) => Face::Ttf(Box::new(
+                TtfFace::styled(&f.family, f.style.0, f.style.1).ok()?,
+            )),
             Face::Sdf(set) => Face::Sdf(set.clone()),
             Face::Bitmap(set) => Face::Bitmap(set.clone()),
         };
@@ -1317,10 +1338,19 @@ impl CaptionFont {
         let mut start = 0;
         while start < glyphs.len() {
             let tag = glyphs[start] >> FACE_SHIFT;
-            let end = (start..glyphs.len()).find(|&i| glyphs[i] >> FACE_SHIFT != tag).unwrap_or(glyphs.len());
+            let end = (start..glyphs.len())
+                .find(|&i| glyphs[i] >> FACE_SHIFT != tag)
+                .unwrap_or(glyphs.len());
             let bare: Vec<u32> = glyphs[start..end].iter().map(|g| g & FACE_MASK).collect();
-            let face = if tag == 0 { Some(self) } else { self.fallbacks.get(tag as usize - 1) };
-            let found = face.map_or_else(|| vec![crate::loaders::mark::Attachment::default(); bare.len()], |f| f.attachments_own(&bare, size));
+            let face = if tag == 0 {
+                Some(self)
+            } else {
+                self.fallbacks.get(tag as usize - 1)
+            };
+            let found = face.map_or_else(
+                || vec![crate::loaders::mark::Attachment::default(); bare.len()],
+                |f| f.attachments_own(&bare, size),
+            );
             out.extend(found.into_iter().map(|mut a| {
                 a.to = a.to.map(|t| t + start as u16);
                 a
@@ -1383,9 +1413,19 @@ impl CaptionFont {
         let mut start = 0;
         while start < chars.len() {
             let tag = self.face_for(chars[start]);
-            let end = (start..chars.len()).find(|&i| self.face_for(chars[i]) != tag).unwrap_or(chars.len());
-            let face = if tag == 0 { self } else { &self.fallbacks[tag - 1] };
-            out.extend(face.shape_own(&chars[start..end], script, size).into_iter().map(|(g, cluster)| ((tag as u32) << FACE_SHIFT | g, start + cluster)));
+            let end = (start..chars.len())
+                .find(|&i| self.face_for(chars[i]) != tag)
+                .unwrap_or(chars.len());
+            let face = if tag == 0 {
+                self
+            } else {
+                &self.fallbacks[tag - 1]
+            };
+            out.extend(
+                face.shape_own(&chars[start..end], script, size)
+                    .into_iter()
+                    .map(|(g, cluster)| ((tag as u32) << FACE_SHIFT | g, start + cluster)),
+            );
             start = end;
         }
         out
@@ -1428,7 +1468,7 @@ impl CaptionFont {
     ///
     /// True for a face whose letters join, where both glyphs cover the same stroke and a
     /// union darkens every joint. The built-in face is Latin, so it takes the union. See
-    /// [`crate::loaders::overlap`] for the rule and how it was read.
+    /// `loaders/overlap.rs` for the rule and how it was read.
     pub fn composites_run(&self) -> bool {
         match &self.face {
             Face::Ttf(f) => f.base.composites_run,
@@ -1480,7 +1520,9 @@ impl CaptionFont {
             return 0.0;
         }
         if tag_left != 0 {
-            return self.fallbacks.get(tag_left as usize - 1).map_or(0.0, |f| f.kerning_of(left & FACE_MASK, right & FACE_MASK, size));
+            return self.fallbacks.get(tag_left as usize - 1).map_or(0.0, |f| {
+                f.kerning_of(left & FACE_MASK, right & FACE_MASK, size)
+            });
         }
         let Face::Ttf(face) = &self.face else {
             return 0.0;
@@ -2300,10 +2342,10 @@ fn is_straight(curve: &dyn Curve2) -> bool {
 
 /// Repeat the first point so `windows(2)` yields the closing edge.
 fn close_contour(points: &mut Vec<(f32, f32)>) {
-    if let Some(&first) = points.first() {
-        if points.last() != Some(&first) {
-            points.push(first);
-        }
+    if let Some(&first) = points.first()
+        && points.last() != Some(&first)
+    {
+        points.push(first);
     }
 }
 
@@ -2898,8 +2940,13 @@ mod tests {
         let mut dejavu = dejavu();
         let mut builtin = CaptionFont::builtin();
         let size = 16.0;
-        let expected = builtin.advance('a', size) + dejavu.advance('α', size) + builtin.advance('b', size);
-        assert!((with.measure("aαb", size, 0.0) - expected).abs() < 1e-3, "{} vs {expected}", with.measure("aαb", size, 0.0));
+        let expected =
+            builtin.advance('a', size) + dejavu.advance('α', size) + builtin.advance('b', size);
+        assert!(
+            (with.measure("aαb", size, 0.0) - expected).abs() < 1e-3,
+            "{} vs {expected}",
+            with.measure("aαb", size, 0.0)
+        );
         // The advance of a fallback's glyph, asked of the chain, is the fallback's.
         assert!((with.advance('α', size) - dejavu.advance('α', size)).abs() < 1e-4);
         // Letter spacing counts the letters of both faces.
@@ -2911,15 +2958,42 @@ mod tests {
         let mut with = with_greek();
         let mut plain = CaptionFont::builtin();
         let mut dejavu = dejavu();
-        let same = |a: &GlyphBitmap, b: &GlyphBitmap| (a.width, a.height, a.offset_x, a.offset_y, a.advance, &a.coverage) == (b.width, b.height, b.offset_x, b.offset_y, b.advance, &b.coverage);
+        let same = |a: &GlyphBitmap, b: &GlyphBitmap| {
+            (
+                a.width,
+                a.height,
+                a.offset_x,
+                a.offset_y,
+                a.advance,
+                &a.coverage,
+            ) == (
+                b.width,
+                b.height,
+                b.offset_x,
+                b.offset_y,
+                b.advance,
+                &b.coverage,
+            )
+        };
         let drawn = with.glyph('α', 20.0).clone();
-        assert!(same(&drawn, dejavu.glyph('α', 20.0)), "the same bitmap as the face itself");
-        assert_ne!(drawn.coverage, plain.glyph('α', 20.0).coverage, "not the missing-glyph box");
+        assert!(
+            same(&drawn, dejavu.glyph('α', 20.0)),
+            "the same bitmap as the face itself"
+        );
+        assert_ne!(
+            drawn.coverage,
+            plain.glyph('α', 20.0).coverage,
+            "not the missing-glyph box"
+        );
         // Its own letters are unchanged by having a chain.
         assert!(same(&with.glyph('a', 20.0).clone(), plain.glyph('a', 20.0)));
         // A grown outline comes from the face that has the letter, too.
-        let grown_with = with.grown_glyph_at('α', 20.0, 0, 1.0).map(|g| g.coverage.clone());
-        let grown_alone = dejavu.grown_glyph_at('α', 20.0, 0, 1.0).map(|g| g.coverage.clone());
+        let grown_with = with
+            .grown_glyph_at('α', 20.0, 0, 1.0)
+            .map(|g| g.coverage.clone());
+        let grown_alone = dejavu
+            .grown_glyph_at('α', 20.0, 0, 1.0)
+            .map(|g| g.coverage.clone());
         assert_eq!(grown_with, grown_alone);
     }
 
@@ -2927,8 +3001,15 @@ mod tests {
     fn runs_are_shaped_in_the_face_that_draws_them() {
         let with = with_greek();
         let run = with.shape_run(&['a', 'α', 'β', 'b'], b"latn", 16.0);
-        assert_eq!(run.iter().map(|r| r.0 >> 24).collect::<Vec<_>>(), [0, 1, 1, 0]);
-        assert_eq!(run.iter().map(|r| r.1).collect::<Vec<_>>(), [0, 1, 2, 3], "clusters stay the run's own indices");
+        assert_eq!(
+            run.iter().map(|r| r.0 >> 24).collect::<Vec<_>>(),
+            [0, 1, 1, 0]
+        );
+        assert_eq!(
+            run.iter().map(|r| r.1).collect::<Vec<_>>(),
+            [0, 1, 2, 3],
+            "clusters stay the run's own indices"
+        );
         // The tagged ids are the ones `gid` gives.
         assert_eq!(run[1].0, with.gid('α'));
         // No marks, so nothing attaches, in whichever face.
@@ -2959,13 +3040,22 @@ mod tests {
             o.text_size(24.0);
             o.fill(crate::Color::WHITE);
             assert!(o.text(4.0, 4.0, text));
-            o.pixels().chunks(4).map(|p| f32::from(p[3]) / 255.0).sum::<f32>()
+            o.pixels()
+                .chunks(4)
+                .map(|p| f32::from(p[3]) / 255.0)
+                .sum::<f32>()
         };
         let box_only = ink(CaptionFont::builtin(), "α");
         let chained = ink(with_greek(), "α");
         let alone = ink(dejavu(), "α");
-        assert!((chained - alone).abs() < alone * 0.02, "{chained} against {alone}");
-        assert!((chained - box_only).abs() > alone * 0.1, "not the box: {chained} against {box_only}");
+        assert!(
+            (chained - alone).abs() < alone * 0.02,
+            "{chained} against {alone}"
+        );
+        assert!(
+            (chained - box_only).abs() > alone * 0.1,
+            "not the box: {chained} against {box_only}"
+        );
     }
 
     #[test]
@@ -2974,8 +3064,14 @@ mod tests {
         let size = 20.0;
         let builtin = CaptionFont::builtin().metrics(size);
         let dejavu = dejavu().metrics(size);
-        assert!((builtin.ascent - dejavu.ascent).abs() > 0.1 || (builtin.descent - dejavu.descent).abs() > 0.1, "the two faces differ, or this proves nothing");
-        let same = |a: FontMetrics, b: FontMetrics| (a.ascent, a.descent, a.line_gap) == (b.ascent, b.descent, b.line_gap);
+        assert!(
+            (builtin.ascent - dejavu.ascent).abs() > 0.1
+                || (builtin.descent - dejavu.descent).abs() > 0.1,
+            "the two faces differ, or this proves nothing"
+        );
+        let same = |a: FontMetrics, b: FontMetrics| {
+            (a.ascent, a.descent, a.line_gap) == (b.ascent, b.descent, b.line_gap)
+        };
         // Only the first face's letters: its box. Only the fallback's: the fallback's.
         assert!(same(font.metrics_of("abc", size), builtin));
         assert!(same(font.metrics_of("αβγ", size), dejavu));
@@ -2985,7 +3081,10 @@ mod tests {
         assert_eq!(both.descent, builtin.descent.max(dejavu.descent));
         assert_eq!(both.line_gap, builtin.line_gap.max(dejavu.line_gap));
         // Without a chain, nothing changes.
-        assert!(same(CaptionFont::builtin().metrics_of("αβγ", size), builtin));
+        assert!(same(
+            CaptionFont::builtin().metrics_of("αβγ", size),
+            builtin
+        ));
         assert!(same(font.metrics_of("", size), builtin));
     }
 
@@ -2997,12 +3096,20 @@ mod tests {
         let plain = CaptionFont::from_family_files(bytes, None, None, None).unwrap();
         // The same bytes stand in for the bold file: what is checked is which route the style takes.
         let with_bold = CaptionFont::from_family_files(bytes, Some(bytes), None, None).unwrap();
-        let (mut grown, mut real) = (plain.styled(700, false).unwrap(), with_bold.styled(700, false).unwrap());
+        let (mut grown, mut real) = (
+            plain.styled(700, false).unwrap(),
+            with_bold.styled(700, false).unwrap(),
+        );
         let synthetic = |f: &CaptionFont| matches!(&f.face, Face::Ttf(t) if t.synthetic_bold);
         assert!(synthetic(&grown), "no bold file: the upright is grown");
         assert!(!synthetic(&real), "a bold file: used as it is");
         // Growing widens each advance; the family's own bold does not.
-        assert!(grown.advance('n', 16.0) > real.advance('n', 16.0) + 0.3, "{} vs {}", grown.advance('n', 16.0), real.advance('n', 16.0));
+        assert!(
+            grown.advance('n', 16.0) > real.advance('n', 16.0) + 0.3,
+            "{} vs {}",
+            grown.advance('n', 16.0),
+            real.advance('n', 16.0)
+        );
         // Regular stays regular, and a request for bold keeps its weight.
         assert_eq!(real.weight(), Some(700));
         assert!(!synthetic(&with_bold.styled(400, false).unwrap()));
@@ -3015,11 +3122,15 @@ mod tests {
         let synthetic = |f: &CaptionFont| matches!(&f.face, Face::Ttf(t) if t.synthetic_bold);
         // Only an italic file: bold italic is that file, grown; italic alone is it as it is.
         let italic_only = CaptionFont::from_family_files(bytes, None, Some(bytes), None).unwrap();
-        let (i, bi) = (italic_only.styled(400, true).unwrap(), italic_only.styled(700, true).unwrap());
+        let (i, bi) = (
+            italic_only.styled(400, true).unwrap(),
+            italic_only.styled(700, true).unwrap(),
+        );
         assert!(!oblique(&i) && !synthetic(&i));
         assert!(!oblique(&bi) && synthetic(&bi));
         // A bold-italic file serves bold italic whole.
-        let all = CaptionFont::from_family_files(bytes, Some(bytes), Some(bytes), Some(bytes)).unwrap();
+        let all =
+            CaptionFont::from_family_files(bytes, Some(bytes), Some(bytes), Some(bytes)).unwrap();
         let bi = all.styled(700, true).unwrap();
         assert!(!oblique(&bi) && !synthetic(&bi));
         // Without any: both made up.
@@ -3027,7 +3138,9 @@ mod tests {
         let bi = none.styled(700, true).unwrap();
         assert!(oblique(&bi) && synthetic(&bi));
         // The family survives a second styling.
-        assert!(!synthetic(&bi.with_weight(400).unwrap()) && oblique(&bi.with_weight(400).unwrap()));
+        assert!(
+            !synthetic(&bi.with_weight(400).unwrap()) && oblique(&bi.with_weight(400).unwrap())
+        );
         assert!(CaptionFont::from_family_files(b"not a font", None, None, None).is_err());
     }
 
@@ -3035,7 +3148,10 @@ mod tests {
     fn a_shared_face_draws_like_an_owned_one() {
         let bytes = include_bytes!("../openscad/DejaVuSans.ttf");
         let shared = std::sync::Arc::new(TtfFont::parse(bytes).unwrap());
-        let (mut a, mut b) = (CaptionFont::from_shared_face(shared.clone()), CaptionFont::from_shared_face(shared));
+        let (mut a, mut b) = (
+            CaptionFont::from_shared_face(shared.clone()),
+            CaptionFont::from_shared_face(shared),
+        );
         let mut owned = CaptionFont::from_ttf(TtfFont::parse(bytes).unwrap());
         assert_eq!(a.advance('g', 20.0), owned.advance('g', 20.0));
         assert_eq!(a.glyph('g', 20.0).coverage, b.glyph('g', 20.0).coverage);

@@ -119,7 +119,7 @@ real one: it owns an `<svg>` element, so you enable it the way you enable any
 three.js renderer.
 
 ```js
-import { SVGRenderer } from 'threers';
+import { SVGRenderer } from '@threers/threers';
 
 const renderer = new SVGRenderer();
 renderer.setSize(800, 600);

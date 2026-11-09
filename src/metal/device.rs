@@ -9,7 +9,7 @@ use super::objc::{
 };
 
 #[link(name = "Metal", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     /// Returns the system's preferred device, +1 retained (a `Create` function).
     fn MTLCreateSystemDefaultDevice() -> Id;
 }
@@ -108,15 +108,15 @@ impl MetalDevice {
     /// value lives.
     pub unsafe fn adopt(device: Id) -> Result<Self, MetalError> {
         let _pool = AutoreleasePool::new();
-        let device = Owned::retain(device).ok_or(MetalError::NoDevice)?;
-        Self::build(device, super::shader_source())
+        let device = unsafe { Owned::retain(device) }.ok_or(MetalError::NoDevice)?;
+        unsafe { Self::build(device, super::shader_source()) }
     }
 
     /// Command queue + shader library on an owned device.
     unsafe fn build(device: Owned, source: &str) -> Result<Self, MetalError> {
-        let queue = Owned::from_retained(msg0(device.id(), sel!("newCommandQueue")))
+        let queue = unsafe { Owned::from_retained(msg0(device.id(), sel!("newCommandQueue"))) }
             .ok_or(MetalError::NoCommandQueue)?;
-        let library = compile_library(device.id(), source)?;
+        let library = unsafe { compile_library(device.id(), source) }?;
         Ok(Self {
             device,
             queue,
@@ -215,13 +215,11 @@ impl MetalDevice {
         }
     }
 
-    /// A command buffer from the queue. Autoreleased — a pool must be live.
-    ///
-    /// # Safety
-    /// The returned pointer is valid until the enclosing [`AutoreleasePool`]
-    /// drains.
-    pub unsafe fn command_buffer(&self) -> Id {
-        msg0(self.queue.id(), sel!("commandBuffer"))
+    /// A command buffer from the queue. Autoreleased: the pointer is valid
+    /// until the enclosing [`AutoreleasePool`] drains, and anything that uses
+    /// it is `unsafe` already, so this need not be.
+    pub fn command_buffer(&self) -> Id {
+        unsafe { msg0(self.queue.id(), sel!("commandBuffer")) }
     }
 
     /// Set an object's `label`, which is what Instruments and the GPU frame
@@ -232,7 +230,7 @@ impl MetalDevice {
     /// `obj` must respond to `setLabel:` (every Metal object does).
     pub unsafe fn set_label(obj: Id, label: &str) {
         let _pool = AutoreleasePool::new();
-        let _: () = msg1(obj, sel!("setLabel:"), nsstring(label));
+        let _: () = unsafe { msg1(obj, sel!("setLabel:"), nsstring(label)) };
     }
 }
 
@@ -259,10 +257,12 @@ const COMMAND_BUFFER_STATUS_ERROR: NSUInteger = 5;
 /// `cmd` must be a committed `MTLCommandBuffer`.
 pub(crate) unsafe fn wait_until_completed(cmd: Id) -> Result<(), MetalError> {
     let _pool = AutoreleasePool::new();
-    let _: () = msg0(cmd, sel!("waitUntilCompleted"));
-    let status: NSUInteger = msg0(cmd, sel!("status"));
+    let _: () = unsafe { msg0(cmd, sel!("waitUntilCompleted")) };
+    let status: NSUInteger = unsafe { msg0(cmd, sel!("status")) };
     if status == COMMAND_BUFFER_STATUS_ERROR {
-        return Err(MetalError::CommandBuffer(error_message(msg0(cmd, sel!("error")))));
+        return Err(MetalError::CommandBuffer(unsafe {
+            error_message(msg0(cmd, sel!("error")))
+        }));
     }
     Ok(())
 }
@@ -279,16 +279,18 @@ pub(crate) unsafe fn compile_library(device: Id, source: &str) -> Result<Owned, 
         ));
     }
     let mut err: Id = NIL;
-    let lib: Id = msg3(
-        device,
-        sel!("newLibraryWithSource:options:error:"),
-        src,
-        NIL, // default MTLCompileOptions
-        &mut err as *mut Id,
-    );
-    match Owned::from_retained(lib) {
+    let lib: Id = unsafe {
+        msg3(
+            device,
+            sel!("newLibraryWithSource:options:error:"),
+            src,
+            NIL, // default MTLCompileOptions
+            &mut err as *mut Id,
+        )
+    };
+    match unsafe { Owned::from_retained(lib) } {
         Some(lib) => Ok(lib),
-        None => Err(MetalError::ShaderCompilation(error_message(err))),
+        None => Err(MetalError::ShaderCompilation(unsafe { error_message(err) })),
     }
 }
 

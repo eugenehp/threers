@@ -3,7 +3,7 @@
 //! The system font is `glyf`, but 59 of the 372 font files macOS ships keep their
 //! outlines here instead — every STIX face, all of Hiragino, Apple SD Gothic Neo,
 //! Kohinoor, ITF Devanagari, Tamil Sangam, Sign Painter, Last Resort and seven of the
-//! Noto faces. None of them is reachable through [`crate::glyf`], so without this the
+//! Noto faces. None of them has a `glyf` table, so without this the
 //! crate reads their metrics and draws nothing.
 //!
 //! # What this format is, as these fonts use it
@@ -39,7 +39,7 @@
 //! **rounded to a multiple of `2^-30`**, which is `Fract`, the 2.30 fixed point of the
 //! Mac OS numerics these fonts' parser long predates. No other power of two fits: `2^-29`
 //! gives `1 - 2^-18`, `2^-31` gives `1 - 3*2^-20`, and `2^-28` gives exactly 1.
-//! [`fract`] is that rounding, and [`Cff::parse`] folds it into the em so there is a
+//! `fract` is that rounding, and `Cff::parse` folds it into the em so there is a
 //! single exact multiply on the way out.
 //!
 //! When the Top DICT has **no** `FontMatrix`, the spec's default is `0.001` — and Core
@@ -75,7 +75,7 @@
 //!
 //! A charstring's `0 vlineto` draws a line to where the pen already is, and a `0 0 0 0
 //! vhcurveto` a curve with all three points there. The interpreter emits both, literally:
-//! what removes them is [`crate::normalise`], the pass Core Graphics runs afterwards, and
+//! what removes them is the normalising pass Core Graphics runs afterwards, and
 //! leaving them in matters because that pass **steps over the element after a removal**.
 //! STIX Two Math's glyph 3501 ends on a zero-length line, a curve that goes nowhere and a
 //! real curve; the pass drops the line, skips the curve, and Core Text reports the curve
@@ -148,11 +148,11 @@ impl Outline for PathSink {
         // A charstring's contours are implicitly closed, and `Path` has no close of its
         // own — a line back to the start is the same thing, and only needed when the
         // contour did not already end there.
-        if let (Some(s), Some(l)) = (self.start, self.last) {
-            if (s.0 - l.0).abs() > 1e-6 || (s.1 - l.1).abs() > 1e-6 {
-                let p = self.to(s.0, s.1);
-                self.path.line_to(p);
-            }
+        if let (Some(s), Some(l)) = (self.start, self.last)
+            && ((s.0 - l.0).abs() > 1e-6 || (s.1 - l.1).abs() > 1e-6)
+        {
+            let p = self.to(s.0, s.1);
+            self.path.line_to(p);
         }
     }
 }

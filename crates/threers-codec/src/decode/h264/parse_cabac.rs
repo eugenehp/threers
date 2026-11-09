@@ -568,10 +568,10 @@ impl SliceDec<'_> {
         cbf_inc: Option<usize>,
         out: &mut [i32],
     ) -> Result<usize> {
-        if let Some(inc) = cbf_inc {
-            if self.bin(c, 85 + CBF_OFF[cat] + inc) == 0 {
-                return Ok(0);
-            }
+        if let Some(inc) = cbf_inc
+            && self.bin(c, 85 + CBF_OFF[cat] + inc) == 0
+        {
+            return Ok(0);
         }
         let field = self.field_coded();
         let (sig_base, last_base, abs_base) = match (cat == 5, field) {

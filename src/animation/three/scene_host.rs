@@ -628,17 +628,17 @@ impl AnimationHost<SceneKind> for SceneHost<'_> {
                 }
             }
             SceneTarget::LightColor(n) => {
-                if let Some(o) = self.arena.nodes.get_mut(*n) {
-                    if let ObjectKind::Light(l) = &mut o.kind {
-                        l.set_color(color_of(values));
-                    }
+                if let Some(o) = self.arena.nodes.get_mut(*n)
+                    && let ObjectKind::Light(l) = &mut o.kind
+                {
+                    l.set_color(color_of(values));
                 }
             }
             SceneTarget::LightIntensity(n) => {
-                if let Some(o) = self.arena.nodes.get_mut(*n) {
-                    if let ObjectKind::Light(l) = &mut o.kind {
-                        l.set_intensity(g(0));
-                    }
+                if let Some(o) = self.arena.nodes.get_mut(*n)
+                    && let ObjectKind::Light(l) = &mut o.kind
+                {
+                    l.set_intensity(g(0));
                 }
             }
             SceneTarget::Slot(n, key, width) => {

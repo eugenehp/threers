@@ -227,7 +227,9 @@ fn rotate(geometry: &mut BufferGeometry, axis: Vector3, angle: f32) {
         };
         let turned: Vec<f32> = attribute
             .array
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|c| turn([c[0], c[1], c[2]]))
             .collect();
         geometry.set_attribute(name, BufferAttribute::new(turned, 3));
@@ -253,10 +255,10 @@ pub fn points(prim: &UsdPrim) -> Option<Points> {
 
     let mut material = PointsMaterial::default();
     // `widths` is a diameter per point; a single width applies to all of them.
-    if let Some(widths) = prim.value("widths").map(|v| v.flat_f32()) {
-        if let Some(first) = widths.first() {
-            material.size = *first;
-        }
+    if let Some(widths) = prim.value("widths").map(|v| v.flat_f32())
+        && let Some(first) = widths.first()
+    {
+        material.size = *first;
     }
     Some(Points::new(geometry, Material::Points(material)))
 }
@@ -579,7 +581,7 @@ mod tests {
             // read rather than defaulted.
             let mut lo = [f32::MAX; 3];
             let mut hi = [f32::MIN; 3];
-            for v in position.array.chunks_exact(3) {
+            for v in position.array.as_chunks::<3>().0 {
                 for i in 0..3 {
                     lo[i] = lo[i].min(v[i]);
                     hi[i] = hi[i].max(v[i]);

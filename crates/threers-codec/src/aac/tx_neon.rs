@@ -1079,7 +1079,7 @@ pub fn split_radix_parity_revtab(len: usize, inv: bool) -> Vec<usize> {
         perm(i, len, inv) * 4 + 1 - 2 * (((i & len == 0) as i64) ^ inv as i64)
     }
     #[allow(clippy::too_many_arguments)]
-    fn gen(
+    fn build_revtab(
         rev: &mut [usize],
         n: i64,
         inv: bool,
@@ -1101,9 +1101,9 @@ pub fn split_radix_parity_revtab(len: usize, inv: bool) -> Vec<usize> {
             }
             return;
         }
-        gen(rev, n, inv, offset, false, false, len, basis);
-        gen(rev, n, inv, offset + len, true, false, len >> 1, basis);
-        gen(
+        build_revtab(rev, n, inv, offset, false, false, len, basis);
+        build_revtab(rev, n, inv, offset + len, true, false, len >> 1, basis);
+        build_revtab(
             rev,
             n,
             inv,
@@ -1115,7 +1115,7 @@ pub fn split_radix_parity_revtab(len: usize, inv: bool) -> Vec<usize> {
         );
     }
     let mut rev = vec![0usize; len];
-    gen(&mut rev, len as i64, inv, 0, false, false, len as i64, 4);
+    build_revtab(&mut rev, len as i64, inv, 0, false, false, len as i64, 4);
     rev
 }
 

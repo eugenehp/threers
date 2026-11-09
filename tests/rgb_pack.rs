@@ -91,7 +91,13 @@ fn packs_exactly_the_rgba_frame_without_its_alpha() {
     assert_eq!(rgb.len(), px * 3, "three bytes a pixel, no padding");
 
     let mut mismatched = 0;
-    for (i, (a, b)) in rgba.chunks_exact(4).zip(rgb.chunks_exact(3)).enumerate() {
+    for (i, (a, b)) in rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(rgb.as_chunks::<3>().0)
+        .enumerate()
+    {
         if a[..3] != *b {
             if mismatched < 4 {
                 eprintln!("pixel {i}: rgba {:?} vs rgb {:?}", &a[..3], b);

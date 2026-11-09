@@ -44,9 +44,7 @@ use threers::{Color, PointerEvent, Scene};
 
 use winit::{
     event::{ElementState, Event, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent},
-    event_loop::EventLoop,
     keyboard::{KeyCode, PhysicalKey},
-    window::WindowBuilder,
 };
 
 /// Name, longitude, latitude, population in millions.
@@ -617,28 +615,23 @@ fn snapshot(path: &str, distance: f32, source: Source) {
 }
 
 async fn run(distance: f32, source: Source) {
-    let event_loop = EventLoop::new().expect("event loop");
-    let window = Arc::new(
-        WindowBuilder::new()
-            .with_title("threers — map demo")
-            .with_inner_size(winit::dpi::LogicalSize::new(1200, 800))
-            .build(&event_loop)
-            .expect("window"),
-    );
-    // wgpu, or the native Metal backend under `THREERS_BACKEND=metal`.
-    let mut wr = WindowRenderer::new(window.clone()).expect("a GPU for the window");
-    wr.set_msaa(4);
+    let attributes = winit::window::Window::default_attributes()
+        .with_title("threers — map demo")
+        .with_inner_size(winit::dpi::LogicalSize::new(1200, 800));
+    threers::sketch::run_window(attributes, move |window| {
+        // wgpu, or the native Metal backend under `THREERS_BACKEND=metal`.
+        let mut wr = WindowRenderer::new(window.clone()).expect("a GPU for the window");
+        wr.set_msaa(4);
 
-    let mut scene = scene();
-    let mut map = opening_map(wr.size(), distance);
-    let mut layers = Layers::new(&map, source);
-    let mut marks = MarkRenderer::new_on(&wr.marks_gpu());
-    let mut buttons = (false, false); // (left: pan, right: rotate)
-    let mut cursor = (0.0f32, 0.0f32);
-    let window_for_loop = window.clone();
+        let mut scene = scene();
+        let mut map = opening_map(wr.size(), distance);
+        let mut layers = Layers::new(&map, source);
+        let mut marks = MarkRenderer::new_on(&wr.marks_gpu());
+        let mut buttons = (false, false); // (left: pan, right: rotate)
+        let mut cursor = (0.0f32, 0.0f32);
+        let window_for_loop = window.clone();
 
-    event_loop
-        .run(move |event, target| {
+        move |event, target| {
             let Event::WindowEvent { event, window_id } = event else {
                 return;
             };
@@ -734,6 +727,6 @@ async fn run(distance: f32, source: Source) {
                 }
                 _ => {}
             }
-        })
-        .expect("event loop");
+        }
+    });
 }

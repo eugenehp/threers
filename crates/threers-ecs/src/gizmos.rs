@@ -203,10 +203,10 @@ pub(crate) fn draw_gizmos(w: &mut World) {
     let mut nodes = std::mem::take(&mut gizmos.nodes);
     nodes.retain(|&(_, id)| w.is_alive(id));
     for (color, id) in &nodes {
-        if !by_color.iter().any(|(c, _)| c == color) {
-            if let Some(node) = w.scene.get_mut(*id) {
-                node.visible = false;
-            }
+        if !by_color.iter().any(|(c, _)| c == color)
+            && let Some(node) = w.scene.get_mut(*id)
+        {
+            node.visible = false;
         }
     }
     for (color, positions) in by_color {

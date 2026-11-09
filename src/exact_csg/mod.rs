@@ -24,9 +24,6 @@
 //! seam facets a tiny perturbation would remove) and very large coplanar faces
 //! (bounded by the CDT size guard).
 
-/// Closed-form surface-pair resolution, when both meshes carry provenance.
-/// Strictly an accelerator — see the module docs. Stage 2 of
-/// `docs/brep-nurbs-plan.md`.
 #[cfg(feature = "brep-csg")]
 pub mod analytic;
 mod arrangement;
@@ -35,15 +32,12 @@ mod cdt;
 mod coplanar;
 pub mod metrics;
 
-/// Booleans via the Manifold kernel — see the module docs for why.
 #[cfg(feature = "manifold")]
 pub mod manifold_backend;
 
-/// The tolerance ladder this kernel balances on, in one place.
 pub mod tolerance;
 
 mod predicates;
-/// Mesh diagnostics that report WHERE a solid is broken.
 pub mod report;
 mod split;
 mod tri_intersect;
@@ -172,7 +166,7 @@ pub(crate) fn triangles(g: &BufferGeometry) -> Vec<[V3; 3]> {
     };
     let mut out = Vec::new();
     if let Some(idx) = &g.index {
-        for t in idx.chunks_exact(3) {
+        for t in idx.as_chunks::<3>().0 {
             out.push([v(t[0] as usize), v(t[1] as usize), v(t[2] as usize)]);
         }
     } else {

@@ -2090,15 +2090,16 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                     z1: z + d,
                 };
                 // Never in the water.
-                if let Water::River = plan.water {
-                    if r.x1 > rx0 - 12.0 && r.x0 < rx1 + 12.0 {
-                        continue;
-                    }
+                if let Water::River = plan.water
+                    && r.x1 > rx0 - 12.0
+                    && r.x0 < rx1 + 12.0
+                {
+                    continue;
                 }
-                if let Water::Bay = plan.water {
-                    if r.x0 < shore + 12.0 {
-                        continue;
-                    }
+                if let Water::Bay = plan.water
+                    && r.x0 < shore + 12.0
+                {
+                    continue;
                 }
                 if occ.free([r.x0, r.z0, r.x1, r.z1]) {
                     *next = idx + 1;
@@ -2114,12 +2115,12 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
         // started claiming ground at a similar radius and then it placed
         // nothing at all.
         for _ in 0..4 {
-            if let Some((r, _)) = take(&b.occ, 66.0, 54.0, &sites, &mut next) {
-                if add_stadium(&mut b, r.cx(), r.cz(), rng.range(0.0, TAU), &mut rng) {
-                    works.stadium = Some((r.cx(), r.cz()));
-                    served.push((r.cx(), r.cz()));
-                    break;
-                }
+            if let Some((r, _)) = take(&b.occ, 66.0, 54.0, &sites, &mut next)
+                && add_stadium(&mut b, r.cx(), r.cz(), rng.range(0.0, TAU), &mut rng)
+            {
+                works.stadium = Some((r.cx(), r.cz()));
+                served.push((r.cx(), r.cz()));
+                break;
             }
         }
         // Each of these gets several attempts. They are the largest footprints
@@ -2179,69 +2180,62 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
             }
         }
         for _ in 0..2 {
-            if let Some((r, along_x)) = take(&b.occ, 38.0, 34.0, &sites, &mut next) {
-                if add_grocery(&mut b, &r, along_x, &mut rng) {
-                    works.grocery += 1;
-                    served.push((r.cx(), r.cz()));
-                    // The car park a supermarket always has in front of it.
-                    let lot = if along_x {
-                        Rect {
-                            x0: r.x0,
-                            z0: r.z0,
-                            x1: r.x1,
-                            z1: r.z1 - r.d() * 0.48,
-                        }
-                    } else {
-                        Rect {
-                            x0: r.x0,
-                            z0: r.z0,
-                            x1: r.x1 - r.w() * 0.48,
-                            z1: r.z1,
-                        }
-                    };
-                    works.parked_cars +=
-                        add_parking_lot(&mut b, &lot, along_x, 0.5, &lot_bodies, &paints, &mut rng);
-                }
+            if let Some((r, along_x)) = take(&b.occ, 38.0, 34.0, &sites, &mut next)
+                && add_grocery(&mut b, &r, along_x, &mut rng)
+            {
+                works.grocery += 1;
+                served.push((r.cx(), r.cz()));
+                // The car park a supermarket always has in front of it.
+                let lot = if along_x {
+                    Rect {
+                        x0: r.x0,
+                        z0: r.z0,
+                        x1: r.x1,
+                        z1: r.z1 - r.d() * 0.48,
+                    }
+                } else {
+                    Rect {
+                        x0: r.x0,
+                        z0: r.z0,
+                        x1: r.x1 - r.w() * 0.48,
+                        z1: r.z1,
+                    }
+                };
+                works.parked_cars +=
+                    add_parking_lot(&mut b, &lot, along_x, 0.5, &lot_bodies, &paints, &mut rng);
             }
         }
         for _ in 0..3 {
-            if let Some((r, along_x)) = take(&b.occ, 40.0, 30.0, &sites, &mut next) {
-                if add_strip_mall(&mut b, &r, along_x, &mut rng) {
-                    works.strips += 1;
-                    served.push((r.cx(), r.cz()));
-                    let lot = if along_x {
-                        Rect {
-                            x0: r.x0,
-                            z0: r.z0,
-                            x1: r.x1,
-                            z1: r.z1 - r.d() * 0.36,
-                        }
-                    } else {
-                        Rect {
-                            x0: r.x0,
-                            z0: r.z0,
-                            x1: r.x1 - r.w() * 0.36,
-                            z1: r.z1,
-                        }
-                    };
-                    works.parked_cars += add_parking_lot(
-                        &mut b,
-                        &lot,
-                        along_x,
-                        0.42,
-                        &lot_bodies,
-                        &paints,
-                        &mut rng,
-                    );
-                }
+            if let Some((r, along_x)) = take(&b.occ, 40.0, 30.0, &sites, &mut next)
+                && add_strip_mall(&mut b, &r, along_x, &mut rng)
+            {
+                works.strips += 1;
+                served.push((r.cx(), r.cz()));
+                let lot = if along_x {
+                    Rect {
+                        x0: r.x0,
+                        z0: r.z0,
+                        x1: r.x1,
+                        z1: r.z1 - r.d() * 0.36,
+                    }
+                } else {
+                    Rect {
+                        x0: r.x0,
+                        z0: r.z0,
+                        x1: r.x1 - r.w() * 0.36,
+                        z1: r.z1,
+                    }
+                };
+                works.parked_cars +=
+                    add_parking_lot(&mut b, &lot, along_x, 0.42, &lot_bodies, &paints, &mut rng);
             }
         }
         for _ in 0..2 {
-            if let Some((r, _)) = take(&b.occ, 20.0, 17.0, &sites, &mut next) {
-                if add_parking_deck(&mut b, &r, 3 + rng.below(3), &lot_bodies, &paints, &mut rng) {
-                    works.decks += 1;
-                    served.push((r.cx(), r.cz()));
-                }
+            if let Some((r, _)) = take(&b.occ, 20.0, 17.0, &sites, &mut next)
+                && add_parking_deck(&mut b, &r, 3 + rng.below(3), &lot_bodies, &paints, &mut rng)
+            {
+                works.decks += 1;
+                served.push((r.cx(), r.cz()));
             }
         }
         for _ in 0..2 {
@@ -2310,19 +2304,19 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                 // Tried on the fringe ring like everything else, but from the
                 // inside out: a monument nobody passes is not a monument.
                 for _ in 0..3 {
-                    if let Some((r, _)) = take(&b.occ, f + 6.0, f + 6.0, &sites, &mut next) {
-                        if add_monument(
+                    if let Some((r, _)) = take(&b.occ, f + 6.0, f + 6.0, &sites, &mut next)
+                        && add_monument(
                             &mut b,
                             kind,
                             r.cx(),
                             r.cz(),
                             mon_rng.range(0.0, TAU),
                             &mut mon_rng,
-                        ) {
-                            works.monuments.push(kind.label());
-                            served.push((r.cx(), r.cz()));
-                            break;
-                        }
+                        )
+                    {
+                        works.monuments.push(kind.label());
+                        served.push((r.cx(), r.cz()));
+                        break;
                     }
                 }
             }
@@ -2335,18 +2329,18 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
             if works.data_centre {
                 break;
             }
-            if let Some((r, along_x)) = take(&b.occ, hw, hd, &sites, &mut next) {
-                if add_data_centre(&mut b, &r, along_x, &mut rng) {
-                    works.data_centre = true;
-                    served.push((r.cx(), r.cz()));
-                }
+            if let Some((r, along_x)) = take(&b.occ, hw, hd, &sites, &mut next)
+                && add_data_centre(&mut b, &r, along_x, &mut rng)
+            {
+                works.data_centre = true;
+                served.push((r.cx(), r.cz()));
             }
         }
         for _ in 0..3 {
-            if let Some((r, _)) = take(&b.occ, 12.0, 12.0, &sites, &mut next) {
-                if add_telecom_mast(&mut b, r.cx(), r.cz(), rng.range(42.0, 78.0), &mut rng) {
-                    works.masts += 1;
-                }
+            if let Some((r, _)) = take(&b.occ, 12.0, 12.0, &sites, &mut next)
+                && add_telecom_mast(&mut b, r.cx(), r.cz(), rng.range(42.0, 78.0), &mut rng)
+            {
+                works.masts += 1;
             }
         }
 
@@ -4373,32 +4367,32 @@ impl City {
                 l.shadow.bias = 0.0012 * (1.0 + reach * 1.6);
             }
         }
-        if let Some(obj) = scene.get_mut(self.moon) {
-            if let ObjectKind::Light(Light::Directional(l)) = &mut obj.kind {
-                l.intensity = sky.moon_intensity;
-            }
+        if let Some(obj) = scene.get_mut(self.moon)
+            && let ObjectKind::Light(Light::Directional(l)) = &mut obj.kind
+        {
+            l.intensity = sky.moon_intensity;
         }
-        if let Some(obj) = scene.get_mut(self.hemi) {
-            if let ObjectKind::Light(Light::Hemisphere(l)) = &mut obj.kind {
-                l.sky_color = sky.hemi_sky;
-                l.ground_color = sky.hemi_ground;
-                l.intensity = sky.hemi_intensity;
-            }
+        if let Some(obj) = scene.get_mut(self.hemi)
+            && let ObjectKind::Light(Light::Hemisphere(l)) = &mut obj.kind
+        {
+            l.sky_color = sky.hemi_sky;
+            l.ground_color = sky.hemi_ground;
+            l.intensity = sky.hemi_intensity;
         }
 
         for (id, gain) in &self.windows {
-            if let Some(obj) = scene.get_mut(*id) {
-                if let ObjectKind::Mesh(m) = &mut obj.kind {
-                    // Both arms. The facades are `Physical` — they have a
-                    // clearcoat lobe, which is what a curtain wall is — and
-                    // this matched `Standard` only, so the intensity it was
-                    // setting went nowhere and every window in the city was
-                    // lit by whatever the default happened to be.
-                    match Arc::make_mut(&mut m.material) {
-                        Material::Standard(s) => s.emissive_intensity = sky.lights * gain,
-                        Material::Physical(p) => p.emissive_intensity = sky.lights * gain,
-                        _ => {}
-                    }
+            if let Some(obj) = scene.get_mut(*id)
+                && let ObjectKind::Mesh(m) = &mut obj.kind
+            {
+                // Both arms. The facades are `Physical` — they have a
+                // clearcoat lobe, which is what a curtain wall is — and
+                // this matched `Standard` only, so the intensity it was
+                // setting went nowhere and every window in the city was
+                // lit by whatever the default happened to be.
+                match Arc::make_mut(&mut m.material) {
+                    Material::Standard(s) => s.emissive_intensity = sky.lights * gain,
+                    Material::Physical(p) => p.emissive_intensity = sky.lights * gain,
+                    _ => {}
                 }
             }
         }
@@ -4415,16 +4409,16 @@ impl City {
                 // — that is what they are for. Head and tail lamps and the
                 // beam on the road are not.
                 obj.visible = signal || sky.lights > 0.05;
-                if let ObjectKind::InstancedMesh(im) = &mut obj.kind {
-                    if let Material::Standard(sm) = Arc::make_mut(&mut im.material) {
-                        sm.emissive_intensity = if signal {
-                            // Bright enough to read against a sunlit road, and
-                            // brighter still once the light goes.
-                            glow * mix(0.42, 1.0, sky.lights)
-                        } else {
-                            sky.lights * glow
-                        };
-                    }
+                if let ObjectKind::InstancedMesh(im) = &mut obj.kind
+                    && let Material::Standard(sm) = Arc::make_mut(&mut im.material)
+                {
+                    sm.emissive_intensity = if signal {
+                        // Bright enough to read against a sunlit road, and
+                        // brighter still once the light goes.
+                        glow * mix(0.42, 1.0, sky.lights)
+                    } else {
+                        sky.lights * glow
+                    };
                 }
             }
         }
@@ -4440,41 +4434,40 @@ impl City {
             }
         }
 
-        if let Some(id) = self.shafts {
-            if let Some(obj) = scene.get_mut(id) {
-                obj.visible = sky.lights > 0.05;
-                if let ObjectKind::Mesh(m) = &mut obj.kind {
-                    if let Material::Basic(bm) = Arc::make_mut(&mut m.material) {
-                        bm.color = scale_color(Color::WHITE, sky.lights);
-                        // Barely there at dusk, and never enough to hide the
-                        // road: a visible cone is a hint, not a fog bank.
-                        bm.opacity = 0.058 * sky.lights;
-                    }
-                }
+        if let Some(id) = self.shafts
+            && let Some(obj) = scene.get_mut(id)
+        {
+            obj.visible = sky.lights > 0.05;
+            if let ObjectKind::Mesh(m) = &mut obj.kind
+                && let Material::Basic(bm) = Arc::make_mut(&mut m.material)
+            {
+                bm.color = scale_color(Color::WHITE, sky.lights);
+                // Barely there at dusk, and never enough to hide the
+                // road: a visible cone is a hint, not a fog bank.
+                bm.opacity = 0.058 * sky.lights;
             }
         }
         for (id, _) in &self.neon {
-            if let Some(obj) = scene.get_mut(*id) {
-                if let ObjectKind::Mesh(m) = &mut obj.kind {
-                    if let Material::Basic(bm) = Arc::make_mut(&mut m.material) {
-                        // Full brightness: neon is the brightest thing on the
-                        // street and the hue is carried per vertex.
-                        bm.color = scale_color(Color::WHITE, sky.lights);
-                    }
-                }
+            if let Some(obj) = scene.get_mut(*id)
+                && let ObjectKind::Mesh(m) = &mut obj.kind
+                && let Material::Basic(bm) = Arc::make_mut(&mut m.material)
+            {
+                // Full brightness: neon is the brightest thing on the
+                // street and the hue is carried per vertex.
+                bm.color = scale_color(Color::WHITE, sky.lights);
             }
         }
         for id in &self.night_only {
             if let Some(obj) = scene.get_mut(*id) {
                 obj.visible = sky.lights > 0.02;
-                if let ObjectKind::Mesh(m) = &mut obj.kind {
-                    if let Material::Basic(bm) = Arc::make_mut(&mut m.material) {
-                        // White: the hue is baked per vertex, so lamp orange
-                        // and shopfront warm-white share one material. Pulled
-                        // down since the four nearest lamps got real spot
-                        // lights — where both apply they were doubling up.
-                        bm.color = scale_color(Color::WHITE, sky.lights * 0.62);
-                    }
+                if let ObjectKind::Mesh(m) = &mut obj.kind
+                    && let Material::Basic(bm) = Arc::make_mut(&mut m.material)
+                {
+                    // White: the hue is baked per vertex, so lamp orange
+                    // and shopfront warm-white share one material. Pulled
+                    // down since the four nearest lamps got real spot
+                    // lights — where both apply they were doubling up.
+                    bm.color = scale_color(Color::WHITE, sky.lights * 0.62);
                 }
             }
         }
@@ -4488,89 +4481,84 @@ impl City {
         if let Some(obj) = scene.get_mut(self.dome) {
             obj.visible = dome_on;
         }
-        if let Some(id) = self.clouds {
-            if let Some(obj) = scene.get_mut(id) {
-                if let ObjectKind::Mesh(m) = &mut obj.kind {
-                    if let Material::Standard(sm) = Arc::make_mut(&mut m.material) {
-                        // The underside of a cloud faces the ground, so the
-                        // only light reaching it in this scene is the
-                        // hemisphere's ground colour — which is grass. Left
-                        // alone the shadow side of every cloud came out olive.
-                        // Real undersides are lit by the rest of the sky, so
-                        // that is what this puts back: a dim wash of the
-                        // horizon colour, which also carries them through
-                        // sunset and lets them go properly dark at night.
-                        sm.emissive = scale_color(sky.hemi_sky, 0.30 + 0.26 * sky.day);
-                        // Overcast whites blow out under a full sun; pulling
-                        // the albedo down keeps the tops inside the range the
-                        // tone map can still show shape in.
-                        sm.color = scale_color(Color::from_hex(0xf4f6fa), 0.80);
-                    }
-                }
+        if let Some(id) = self.clouds
+            && let Some(obj) = scene.get_mut(id)
+            && let ObjectKind::Mesh(m) = &mut obj.kind
+            && let Material::Standard(sm) = Arc::make_mut(&mut m.material)
+        {
+            // The underside of a cloud faces the ground, so the
+            // only light reaching it in this scene is the
+            // hemisphere's ground colour — which is grass. Left
+            // alone the shadow side of every cloud came out olive.
+            // Real undersides are lit by the rest of the sky, so
+            // that is what this puts back: a dim wash of the
+            // horizon colour, which also carries them through
+            // sunset and lets them go properly dark at night.
+            sm.emissive = scale_color(sky.hemi_sky, 0.30 + 0.26 * sky.day);
+            // Overcast whites blow out under a full sun; pulling
+            // the albedo down keeps the tops inside the range the
+            // tone map can still show shape in.
+            sm.color = scale_color(Color::from_hex(0xf4f6fa), 0.80);
+        }
+        if let Some(id) = self.plumes
+            && let Some(obj) = scene.get_mut(id)
+            && let ObjectKind::Mesh(m) = &mut obj.kind
+            && let Material::Standard(sm) = Arc::make_mut(&mut m.material)
+        {
+            // Exactly the clouds' treatment, and for exactly the
+            // same reason: without it the shadow side of a column
+            // of steam is lit only by grass.
+            sm.emissive = scale_color(sky.hemi_sky, 0.34 + 0.30 * sky.day);
+            sm.color = scale_color(Color::from_hex(0xf2f4f6), 0.86);
+        }
+        if let Some(id) = self.night_sky
+            && let Some(obj) = scene.get_mut(id)
+        {
+            // Fade in as the dome retires, and stay at full brightness
+            // after: stars do not get dimmer as the night goes on.
+            let show = smoothstep(0.02, -0.16, sky.elevation);
+            obj.visible = show > 0.02;
+            if let ObjectKind::Mesh(m) = &mut obj.kind
+                && let Material::Basic(bm) = Arc::make_mut(&mut m.material)
+            {
+                bm.color = scale_color(Color::WHITE, show);
             }
         }
-        if let Some(id) = self.plumes {
-            if let Some(obj) = scene.get_mut(id) {
-                if let ObjectKind::Mesh(m) = &mut obj.kind {
-                    if let Material::Standard(sm) = Arc::make_mut(&mut m.material) {
-                        // Exactly the clouds' treatment, and for exactly the
-                        // same reason: without it the shadow side of a column
-                        // of steam is lit only by grass.
-                        sm.emissive = scale_color(sky.hemi_sky, 0.34 + 0.30 * sky.day);
-                        sm.color = scale_color(Color::from_hex(0xf2f4f6), 0.86);
-                    }
-                }
-            }
-        }
-        if let Some(id) = self.night_sky {
-            if let Some(obj) = scene.get_mut(id) {
-                // Fade in as the dome retires, and stay at full brightness
-                // after: stars do not get dimmer as the night goes on.
-                let show = smoothstep(0.02, -0.16, sky.elevation);
-                obj.visible = show > 0.02;
-                if let ObjectKind::Mesh(m) = &mut obj.kind {
-                    if let Material::Basic(bm) = Arc::make_mut(&mut m.material) {
-                        bm.color = scale_color(Color::WHITE, show);
-                    }
-                }
-            }
-        }
-        if let Some(obj) = scene.get_mut(self.dome) {
-            if let ObjectKind::Mesh(m) = &mut obj.kind {
-                if let Material::Sky(sm) = Arc::make_mut(&mut m.material) {
-                    // The model wants a position, not a direction, and reads
-                    // its own height off it for the earth-shadow term.
-                    sm.sun_position = sky.sun_dir * 450_000.0;
-                    // Thicker air at the horizon: more haze near sunrise and
-                    // sunset, cleaner overhead.
-                    // Low on purpose. This shader is a port of three.js's Sky,
-                    // which expects an exposure of about 0.5 and ACES after
-                    // it; here it writes straight to the framebuffer, so the
-                    // published defaults (turbidity 10, rayleigh 3) clip to
-                    // white. These are the values that still read as sky.
-                    sm.turbidity = mix(2.4, 1.7, sky.day);
-                    // Rayleigh drives the horizon, and the horizon is where a
-                    // wide shot spends most of its sky. Measured looking along
-                    // the ground at noon: 0.33 clipped 86% of the sky to flat
-                    // white, 0.10 clipped 14%, 0.05 none. The old values were
-                    // tuned on a steep aerial where the camera barely sees the
-                    // horizon at all, and they are hopeless the moment it does.
-                    sm.rayleigh = mix(0.30, 0.12, sky.day);
-                    // Mie was left at the library default of 0.005, and the
-                    // dome clipped to flat white over a sixth of the sky at
-                    // noon and a tenth at sunrise. Raising it is the fix and
-                    // the direction is worth recording, because it is the
-                    // opposite of the intuitive one: more Mie means more
-                    // extinction along the view ray, so the sky gets *darker*,
-                    // not hazier-brighter. Swept: 0.005 -> 10.0%/16.4% clipped
-                    // at sunrise/noon, 0.030 -> 3.0%/0.0%. A little more haze
-                    // low in the sky, where a city has more of it anyway.
-                    sm.mie_coefficient = mix(0.036, 0.026, sky.day);
-                    // Forward scattering, tightening the aureole around the
-                    // sun rather than smearing it across the whole dome.
-                    sm.mie_directional_g = 0.82;
-                }
-            }
+        if let Some(obj) = scene.get_mut(self.dome)
+            && let ObjectKind::Mesh(m) = &mut obj.kind
+            && let Material::Sky(sm) = Arc::make_mut(&mut m.material)
+        {
+            // The model wants a position, not a direction, and reads
+            // its own height off it for the earth-shadow term.
+            sm.sun_position = sky.sun_dir * 450_000.0;
+            // Thicker air at the horizon: more haze near sunrise and
+            // sunset, cleaner overhead.
+            // Low on purpose. This shader is a port of three.js's Sky,
+            // which expects an exposure of about 0.5 and ACES after
+            // it; here it writes straight to the framebuffer, so the
+            // published defaults (turbidity 10, rayleigh 3) clip to
+            // white. These are the values that still read as sky.
+            sm.turbidity = mix(2.4, 1.7, sky.day);
+            // Rayleigh drives the horizon, and the horizon is where a
+            // wide shot spends most of its sky. Measured looking along
+            // the ground at noon: 0.33 clipped 86% of the sky to flat
+            // white, 0.10 clipped 14%, 0.05 none. The old values were
+            // tuned on a steep aerial where the camera barely sees the
+            // horizon at all, and they are hopeless the moment it does.
+            sm.rayleigh = mix(0.30, 0.12, sky.day);
+            // Mie was left at the library default of 0.005, and the
+            // dome clipped to flat white over a sixth of the sky at
+            // noon and a tenth at sunrise. Raising it is the fix and
+            // the direction is worth recording, because it is the
+            // opposite of the intuitive one: more Mie means more
+            // extinction along the view ray, so the sky gets *darker*,
+            // not hazier-brighter. Swept: 0.005 -> 10.0%/16.4% clipped
+            // at sunrise/noon, 0.030 -> 3.0%/0.0%. A little more haze
+            // low in the sky, where a city has more of it anyway.
+            sm.mie_coefficient = mix(0.036, 0.026, sky.day);
+            // Forward scattering, tightening the aureole around the
+            // sun rather than smearing it across the whole dome.
+            sm.mie_directional_g = 0.82;
         }
 
         // Still set, though the dome covers it: it is what shows if the sky
@@ -4633,10 +4621,10 @@ impl City {
             }
         }
         for (i, id) in self.signal_phases.iter().enumerate() {
-            if let Some(id) = id {
-                if let Some(obj) = scene.get_mut(*id) {
-                    obj.visible = i == phase;
-                }
+            if let Some(id) = id
+                && let Some(obj) = scene.get_mut(*id)
+            {
+                obj.visible = i == phase;
             }
         }
     }

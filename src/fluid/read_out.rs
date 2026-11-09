@@ -391,7 +391,9 @@ mod tests {
     fn counted(r: &Rate) -> usize {
         r.frames()
             .row()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[0] > 0)
             .count()
     }

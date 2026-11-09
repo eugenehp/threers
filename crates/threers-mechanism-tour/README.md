@@ -30,10 +30,10 @@ cargo run -p threers-mechanism-tour --example console -- my.scad   # your own
 and four things that ask the models questions the readings cannot answer:
 
 ```bash
-cargo run --release -p threers-mechanism-tour --example probe      # is every joint built?
-cargo run --release -p threers-mechanism-tour --example audit      # does anything pass through anything?
-cargo run --release -p threers-mechanism-tour --example buildtime  # what does the geometry cost?
-cargo run --release -p threers-mechanism-tour --example look       # what does it look like?
+cargo run --release -p threers-mechanism-tour --example joint_probe  # is every joint built?
+cargo run --release -p threers-mechanism-tour --example audit        # does anything pass through anything?
+cargo run --release -p threers-mechanism-tour --example buildtime    # what does the geometry cost?
+cargo run --release -p threers-mechanism-tour --example look         # what does it look like?
 ```
 
 ## The mechanisms
@@ -63,8 +63,8 @@ both halves of a real joint, the pair is excluded from the collision solver and
 from the interference check. The one omission that could have been caught is
 hidden by the same sentence that caused it.
 
-So every reading was right while the metal was missing. `--example probe` asks
-the geometry instead, and found nine of the tour's thirty-two joints to be
+So every reading was right while the metal was missing. `--example
+joint_probe` asks the geometry instead, and found nine of the tour's thirty-two joints to be
 declarations and nothing else:
 
 | | |

@@ -11,7 +11,7 @@
 //! [`MetalRenderer`](crate::metal::MetalRenderer) into a `CAMetalLayer`
 //! instead: a winit window's view under `THREERS_BACKEND=metal` or
 //! [`WindowBackend::Metal`], or an app's own `UIView`, `NSView` or layer
-//! ([`WindowRenderer::from_ui_view`] and friends — the way in on tvOS and
+//! (`WindowRenderer::from_ui_view` and friends — the way in on tvOS and
 //! visionOS, where winit does not run). A program written against this runs on
 //! either backend without a change.
 //!
@@ -57,18 +57,9 @@ pub struct MarksFrame<'a> {
     pub surface: crate::marks::MarkSurface,
 }
 
-/// Which backend [`WindowRenderer::with_backend`] draws with.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum WindowBackend {
-    /// wgpu, unless `THREERS_BACKEND=metal` asks for Metal (falling back to
-    /// wgpu, with a notice, if Metal cannot open).
-    #[default]
-    Auto,
-    Wgpu,
-    /// The native Metal backend, on any Apple platform with the `metal`
-    /// feature.
-    Metal,
-}
+/// Which backend [`WindowRenderer::with_backend`] draws with: the
+/// [`RenderBackend`](super::RenderBackend) a headless renderer takes too.
+pub type WindowBackend = super::RenderBackend;
 
 /// The view or layer a Metal window draws into.
 #[cfg(metal_backend)]
@@ -96,10 +87,14 @@ impl ViewSource {
         use crate::metal::MetalSurface;
         match self {
             #[cfg(target_os = "macos")]
-            ViewSource::NsView(v) => MetalSurface::from_ns_view(device, v, w, h, samples),
+            ViewSource::NsView(v) => unsafe {
+                MetalSurface::from_ns_view(device, v, w, h, samples)
+            },
             #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))]
-            ViewSource::UiView(v) => MetalSurface::from_ui_view(device, v, w, h, samples),
-            ViewSource::Layer(l) => MetalSurface::from_layer(device, l, w, h, samples),
+            ViewSource::UiView(v) => unsafe {
+                MetalSurface::from_ui_view(device, v, w, h, samples)
+            },
+            ViewSource::Layer(l) => unsafe { MetalSurface::from_layer(device, l, w, h, samples) },
         }
     }
 }
@@ -163,11 +158,7 @@ impl WindowRenderer {
         let size = (size.width.max(1), size.height.max(1));
         #[cfg(metal_backend)]
         {
-            let metal = match backend {
-                WindowBackend::Metal => true,
-                WindowBackend::Wgpu => false,
-                WindowBackend::Auto => super::headless_metal::requested(),
-            };
+            let metal = super::headless_metal::requested(backend);
             if metal {
                 match MetalWindow::from_winit(&window, size) {
                     Ok(m) => {
@@ -209,7 +200,7 @@ impl WindowRenderer {
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
-        Self::from_source(ViewSource::UiView(ui_view), (width, height))
+        unsafe { Self::from_source(ViewSource::UiView(ui_view), (width, height)) }
     }
 
     #[cfg(metal_backend)]
@@ -223,7 +214,7 @@ impl WindowRenderer {
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
-        Self::from_source(ViewSource::NsView(ns_view), (width, height))
+        unsafe { Self::from_source(ViewSource::NsView(ns_view), (width, height)) }
     }
 
     #[cfg(metal_backend)]
@@ -237,13 +228,13 @@ impl WindowRenderer {
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
-        Self::from_source(ViewSource::Layer(layer), (width, height))
+        unsafe { Self::from_source(ViewSource::Layer(layer), (width, height)) }
     }
 
     #[cfg(metal_backend)]
     unsafe fn from_source(source: ViewSource, size: (u32, u32)) -> Result<Self, String> {
         let size = (size.0.max(1), size.1.max(1));
-        let m = MetalWindow::new(source, size)?;
+        let m = unsafe { MetalWindow::new(source, size) }?;
         Ok(Self {
             backend: Backend::Metal(Box::new(m)),
             size,
@@ -744,9 +735,7 @@ impl MetalWindow {
         let renderer =
             crate::metal::MetalRenderer::with_device(device.clone()).map_err(|e| e.to_string())?;
         let marks = crate::marks::gpu::Gpu::from(&device);
-        let surface = source
-            .surface(&device, size, 4)
-            .map_err(|e| e.to_string())?;
+        let surface = unsafe { source.surface(&device, size, 4) }.map_err(|e| e.to_string())?;
         eprintln!(
             "threers: drawing the window on the native Metal backend ({})",
             device.name()

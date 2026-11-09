@@ -1031,7 +1031,9 @@ mod tests {
             let o = i as usize * 3;
             [pos[o] as f64, pos[o + 1] as f64, pos[o + 2] as f64]
         };
-        idx.chunks_exact(3)
+        idx.as_chunks::<3>()
+            .0
+            .iter()
             .map(|t| {
                 let (a, b, c) = (v(t[0]), v(t[1]), v(t[2]));
                 v3::dot(a, v3::cross(b, c)) / 6.0

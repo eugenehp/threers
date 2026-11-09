@@ -1,47 +1,4 @@
-//! A fixed set of render threads, reused job after job.
-//!
-//! Spawning a thread per frame, or a renderer per job, throws away the two
-//! things that are expensive to rebuild: the thread and the renderer's caches
-//! (pipelines, uploaded geometry and textures). [`MetalRenderPool`] keeps both.
-//! Its workers live as long as the pool, each with its own
-//! [`MetalRenderer`] on the shared [`MetalDevice`], and a job is a closure
-//! handed whichever worker is free.
-//!
-//! On a phone, a headset or a TV the point is also to *bound* the work: a
-//! couple of performance cores and a thermal budget do not want eight encoding
-//! threads. [`MetalRenderPoolConfig::for_this_device`] sizes the pool from the
-//! performance cores, capped lower on iOS, tvOS and visionOS than on a Mac,
-//! and the queue in front of it is bounded too, so a producer outrunning the
-//! GPU waits ([`MetalRenderPool::submit`]) or is told to drop the frame
-//! ([`MetalRenderPool::try_submit`]) rather than queueing work without end.
-//!
-//! ```no_run
-//! # #[cfg(feature = "metal")]
-//! # fn demo() -> Result<(), Box<dyn std::error::Error>> {
-//! use threers::metal::{enums::pixel_format, MetalDevice, MetalRenderPool, MetalRenderPoolConfig, MetalRenderTarget};
-//! use threers::{PerspectiveCamera, Scene};
-//!
-//! let device = MetalDevice::new()?;
-//! let pool = MetalRenderPool::new(&device, MetalRenderPoolConfig::for_this_device());
-//!
-//! let job = pool.submit(|worker| -> Result<Vec<u8>, threers::metal::MetalError> {
-//!     // Per-worker state survives between jobs: the target is made once per
-//!     // worker, not once per frame.
-//!     let device = worker.device().clone();
-//!     let target: &mut Option<MetalRenderTarget> = worker.local();
-//!     if target.is_none() {
-//!         *target = Some(MetalRenderTarget::new(&device, 256, 256, pixel_format::RGBA8_UNORM_SRGB, 4)?);
-//!     }
-//!     let attachments = target.as_ref().unwrap().attachments();
-//!     let mut scene = Scene::new();
-//!     let camera = PerspectiveCamera::new(50.0, 1.0, 0.1, 100.0);
-//!     worker.renderer()?.render(&mut scene, &camera, &attachments)?;
-//!     let target: &mut Option<MetalRenderTarget> = worker.local();
-//!     target.as_ref().unwrap().read_rgba(&device)
-//! })?;
-//! let rgba = job.wait()??;
-//! # Ok(()) }
-//! ```
+//! A fixed set of render threads, reused job after job: [`MetalRenderPool`].
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -134,7 +91,7 @@ impl Default for MetalRenderPoolConfig {
 /// Apple silicon on every platform reports its performance cluster first; the
 /// efficiency cores behind it are the wrong place for a frame.
 fn performance_cores() -> usize {
-    extern "C" {
+    unsafe extern "C" {
         fn sysctlbyname(
             name: *const c_char,
             oldp: *mut c_void,
@@ -248,8 +205,50 @@ impl<T> MetalJob<T> {
 
 type Task = Box<dyn FnOnce(&mut MetalWorker) + Send>;
 
-/// A bounded set of render threads sharing one device. See the
-/// [module docs](self).
+/// A bounded set of render threads sharing one device, reused job after job.
+///
+/// Spawning a thread per frame, or a renderer per job, throws away the two
+/// things that are expensive to rebuild: the thread and the renderer's caches
+/// (pipelines, uploaded geometry and textures). [`MetalRenderPool`] keeps both.
+/// Its workers live as long as the pool, each with its own
+/// [`MetalRenderer`] on the shared [`MetalDevice`], and a job is a closure
+/// handed whichever worker is free.
+///
+/// On a phone, a headset or a TV the point is also to *bound* the work: a
+/// couple of performance cores and a thermal budget do not want eight encoding
+/// threads. [`MetalRenderPoolConfig::for_this_device`] sizes the pool from the
+/// performance cores, capped lower on iOS, tvOS and visionOS than on a Mac,
+/// and the queue in front of it is bounded too, so a producer outrunning the
+/// GPU waits ([`MetalRenderPool::submit`]) or is told to drop the frame
+/// ([`MetalRenderPool::try_submit`]) rather than queueing work without end.
+///
+/// ```no_run
+/// # #[cfg(feature = "metal")]
+/// # fn demo() -> Result<(), Box<dyn std::error::Error>> {
+/// use threers::metal::{enums::pixel_format, MetalDevice, MetalRenderPool, MetalRenderPoolConfig, MetalRenderTarget};
+/// use threers::{PerspectiveCamera, Scene};
+///
+/// let device = MetalDevice::new()?;
+/// let pool = MetalRenderPool::new(&device, MetalRenderPoolConfig::for_this_device());
+///
+/// let job = pool.submit(|worker| -> Result<Vec<u8>, threers::metal::MetalError> {
+///     // Per-worker state survives between jobs: the target is made once per
+///     // worker, not once per frame.
+///     let device = worker.device().clone();
+///     let target: &mut Option<MetalRenderTarget> = worker.local();
+///     if target.is_none() {
+///         *target = Some(MetalRenderTarget::new(&device, 256, 256, pixel_format::RGBA8_UNORM_SRGB, 4)?);
+///     }
+///     let attachments = target.as_ref().unwrap().attachments();
+///     let mut scene = Scene::new();
+///     let camera = PerspectiveCamera::new(50.0, 1.0, 0.1, 100.0);
+///     worker.renderer()?.render(&mut scene, &camera, &attachments)?;
+///     let target: &mut Option<MetalRenderTarget> = worker.local();
+///     target.as_ref().unwrap().read_rgba(&device)
+/// })?;
+/// let rgba = job.wait()??;
+/// # Ok(()) }
+/// ```
 ///
 /// Dropping the pool lets queued jobs finish, then joins the workers; their
 /// renderers are released on their own threads.
@@ -364,7 +363,7 @@ fn worker_main(
     qos: MetalWorkerQos,
     rx: Arc<Mutex<Receiver<Task>>>,
 ) {
-    extern "C" {
+    unsafe extern "C" {
         fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
     }
     unsafe { pthread_set_qos_class_self_np(qos.raw(), 0) };

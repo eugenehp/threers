@@ -10,6 +10,10 @@ use threers_codec::mkv_demux::parse_ivf;
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
+    if a.len() < 3 {
+        eprintln!("usage: av1_yuv_dump IN.ivf|IN.obu OUT.yuv");
+        std::process::exit(2);
+    }
     let data = std::fs::read(&a[1]).expect("read");
     // Section 5 streams start with a temporal delimiter OBU (0x12 0x00);
     // anything else that is not IVF is taken as Annex B.

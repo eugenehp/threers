@@ -1,0 +1,17 @@
+[package]
+name = "threers-math"
+version.workspace = true
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+authors = ["Eugene Hauptmann"]
+repository = "https://github.com/eugenehp/threers"
+homepage = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-math"
+readme = "README.md"
+description = "The math under threers: vectors, matrices, quaternions, colours and colour scales, bounds, rays, Delaunay and Voronoi, geographic coordinates and tone mapping, with three.js's semantics and no dependencies"
+keywords = ["math", "vector", "matrix", "threejs", "graphics"]
+categories = ["mathematics", "graphics", "game-development", "wasm"]
+
+[lib]
+bench = false

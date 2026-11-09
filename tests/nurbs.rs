@@ -173,7 +173,7 @@ fn a_faceted_sphere_is_measurably_worse_than_the_exact_one() {
     // faces. Measure a face centroid.
     let idx = g.index.as_ref().unwrap();
     let mut worst_faceted = 0.0f64;
-    for tri in idx.chunks_exact(3) {
+    for tri in idx.as_chunks::<3>().0 {
         let mut c = [0.0f64; 3];
         for &i in tri {
             let o = i as usize * 3;
@@ -437,7 +437,7 @@ fn tessellated_geometry_is_well_formed() {
 
     // Every emitted normal is unit — the pole fallback must not leak a zero.
     let nor = &g.get_attribute("normal").unwrap().array;
-    for c in nor.chunks_exact(3) {
+    for c in nor.as_chunks::<3>().0 {
         let l = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
         assert!((l - 1.0).abs() < 1e-4, "non-unit normal, length {l}");
     }

@@ -523,7 +523,9 @@ fn smaa_tables() -> &'static SmaaTables {
             let img = crate::utils::png::decode_png(bytes).expect("SMAA table PNG");
             let texels = img
                 .rgba
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|p| {
                     [
                         p[0] as f32 / 255.0,

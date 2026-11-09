@@ -188,8 +188,8 @@ pub mod prelude {
     pub use crate::car::{car_step, AttachCar, Car, CarSpec, Driven};
     #[cfg(feature = "physics")]
     pub use crate::physics::*;
-    #[cfg(all(feature = "window", not(target_arch = "wasm32")))]
-    pub use crate::window::{run, WindowOptions};
     #[cfg(feature = "video")]
     pub use crate::video::{Video, VideoPlayer, VideoTexture};
+    #[cfg(all(feature = "window", not(target_arch = "wasm32")))]
+    pub use crate::window::{run, WindowOptions};
 }

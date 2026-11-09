@@ -648,10 +648,10 @@ impl GltfParser {
         let mut is_bone = vec![false; n_nodes];
         for skin in doc::array(root, "skins") {
             for j in doc::array(skin, "joints") {
-                if let Some(j) = j.as_number().filter(|j| *j >= 0.0).map(|j| j as usize) {
-                    if j < n_nodes {
-                        is_bone[j] = true;
-                    }
+                if let Some(j) = j.as_number().filter(|j| *j >= 0.0).map(|j| j as usize)
+                    && j < n_nodes
+                {
+                    is_bone[j] = true;
                 }
             }
         }
@@ -910,10 +910,10 @@ impl GltfParser {
                 continue;
             };
             for p in doc::array(mesh, "primitives") {
-                if let Some(m) = doc::index(p, "material") {
-                    if !out.contains(&m) {
-                        out.push(m);
-                    }
+                if let Some(m) = doc::index(p, "material")
+                    && !out.contains(&m)
+                {
+                    out.push(m);
                 }
             }
         }
@@ -985,15 +985,15 @@ impl GltfParser {
             };
             return true;
         }
-        if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
-            if let Ok(png) = crate::utils::png::decode_png(bytes) {
-                self.images[i] = ImageSlot::Decoded(ImageData::Rgba {
-                    width: png.width,
-                    height: png.height,
-                    data: Arc::new(png.rgba),
-                });
-                return true;
-            }
+        if bytes.starts_with(&[0x89, b'P', b'N', b'G'])
+            && let Ok(png) = crate::utils::png::decode_png(bytes)
+        {
+            self.images[i] = ImageSlot::Decoded(ImageData::Rgba {
+                width: png.width,
+                height: png.height,
+                data: Arc::new(png.rgba),
+            });
+            return true;
         }
         false
     }
@@ -1351,10 +1351,10 @@ impl GltfParser {
         if let Some(m) = self.create_node_mesh_plugins(arena, i, &def)? {
             objects.push(m);
         }
-        if let Some(c) = doc::index(&def, "camera") {
-            if let Some(cam) = self.get_camera(arena, c)? {
-                objects.push(self.get_node_ref(arena, RefKind::Camera, c, cam));
-            }
+        if let Some(c) = doc::index(&def, "camera")
+            && let Some(cam) = self.get_camera(arena, c)?
+        {
+            objects.push(self.get_node_ref(arena, RefKind::Camera, c, cam));
         }
         if let Some(l) =
             doc::extension(&def, "KHR_lights_punctual").and_then(|e| doc::index(e, "light"))
@@ -1530,20 +1530,20 @@ impl GltfParser {
             Vector3::new(1.0, 1.0, 1.0),
         );
         for k in 0..count {
-            if let Some(t) = &t {
-                if let Some(v) = t.get(k * 3..k * 3 + 3) {
-                    p = Vector3::new(v[0], v[1], v[2]);
-                }
+            if let Some(t) = &t
+                && let Some(v) = t.get(k * 3..k * 3 + 3)
+            {
+                p = Vector3::new(v[0], v[1], v[2]);
             }
-            if let Some(r) = &r {
-                if let Some(v) = r.get(k * 4..k * 4 + 4) {
-                    q = Quaternion::new(v[0], v[1], v[2], v[3]);
-                }
+            if let Some(r) = &r
+                && let Some(v) = r.get(k * 4..k * 4 + 4)
+            {
+                q = Quaternion::new(v[0], v[1], v[2], v[3]);
             }
-            if let Some(s) = &s {
-                if let Some(v) = s.get(k * 3..k * 3 + 3) {
-                    sc = Vector3::new(v[0], v[1], v[2]);
-                }
+            if let Some(s) = &s
+                && let Some(v) = s.get(k * 3..k * 3 + 3)
+            {
+                sc = Vector3::new(v[0], v[1], v[2]);
             }
             matrices.extend_from_slice(&Matrix4::compose(p, q, sc).elements);
         }
@@ -1555,14 +1555,14 @@ impl GltfParser {
             for (name, acc) in &accessors {
                 if name == "_COLOR_0" {
                     colors = Some((acc.values(), acc.item_size));
-                } else if !matches!(name.as_str(), "TRANSLATION" | "ROTATION" | "SCALE") {
-                    if let Some(g) = src.geometry {
-                        self.set_geometry_attribute(
-                            g,
-                            name,
-                            BufferAttribute::new(acc.values(), acc.item_size),
-                        );
-                    }
+                } else if !matches!(name.as_str(), "TRANSLATION" | "ROTATION" | "SCALE")
+                    && let Some(g) = src.geometry
+                {
+                    self.set_geometry_attribute(
+                        g,
+                        name,
+                        BufferAttribute::new(acc.values(), acc.item_size),
+                    );
                 }
             }
             {
@@ -1911,11 +1911,11 @@ impl GltfParser {
                 geo.attribute_order.push(three);
             }
         }
-        if let Some(ind) = doc::index(prim, "indices") {
-            if geo.geometry.index.is_none() {
-                let idx = self.doc.accessor_u32(ind)?;
-                geo.geometry.set_index(idx);
-            }
+        if let Some(ind) = doc::index(prim, "indices")
+            && geo.geometry.index.is_none()
+        {
+            let idx = self.doc.accessor_u32(ind)?;
+            geo.geometry.set_index(idx);
         }
         assign_extras(&mut geo.user_data, prim, &mut self.warnings);
         let targets = doc::array(prim, "targets").to_vec();
@@ -2330,10 +2330,10 @@ impl GltfParser {
             m.params
                 .insert("ior", Param::Num(num(e, "ior").unwrap_or(1.5)));
         }
-        if let Some(e) = doc::get(exts, "KHR_materials_emissive_strength") {
-            if let Some(v) = num(e, "emissiveStrength") {
-                m.params.insert("emissiveIntensity", Param::Num(v));
-            }
+        if let Some(e) = doc::get(exts, "KHR_materials_emissive_strength")
+            && let Some(v) = num(e, "emissiveStrength")
+        {
+            m.params.insert("emissiveIntensity", Param::Num(v));
         }
         if let Some(e) = doc::get(exts, "KHR_materials_specular").cloned() {
             m.params.insert(
@@ -2416,15 +2416,15 @@ impl GltfParser {
             t = self.textures.len() - 1;
             self.textures[t].channel = tc as u32;
         }
-        if self.known_extensions.contains("KHR_texture_transform") {
-            if let Some(tr) = doc::extension(map_def, "KHR_texture_transform").cloned() {
-                let reference = self.textures[t].association;
-                t = self.extend_texture(t, &tr);
-                self.textures[t].association = match reference {
-                    Assoc::Absent => Assoc::Undefined,
-                    a => a,
-                };
-            }
+        if self.known_extensions.contains("KHR_texture_transform")
+            && let Some(tr) = doc::extension(map_def, "KHR_texture_transform").cloned()
+        {
+            let reference = self.textures[t].association;
+            t = self.extend_texture(t, &tr);
+            self.textures[t].association = match reference {
+                Assoc::Absent => Assoc::Undefined,
+                a => a,
+            };
         }
         if srgb {
             self.textures[t].srgb = true;
@@ -2511,12 +2511,11 @@ impl GltfParser {
                 .or_else(|| doc::string(&sdef, "name").filter(|n| !n.is_empty()))
                 .unwrap_or("")
                 .to_string();
-            if tex.name.is_empty() {
-                if let Some(uri) = doc::string(&sdef, "uri") {
-                    if !uri.starts_with("data:image/") {
-                        tex.name = uri.to_string();
-                    }
-                }
+            if tex.name.is_empty()
+                && let Some(uri) = doc::string(&sdef, "uri")
+                && !uri.starts_with("data:image/")
+            {
+                tex.name = uri.to_string();
             }
             let sampler =
                 doc::index(&tdef, "sampler").and_then(|s| doc::def(&self.doc.root, "samplers", s));
@@ -2872,10 +2871,10 @@ impl GltfParser {
                 Some(n) => {
                     skeleton.bones.push(n);
                     let mut m = Matrix4::identity().elements;
-                    if let Some(ibm) = &ibm {
-                        if let Some(v) = ibm.get(k * 16..k * 16 + 16) {
-                            m.copy_from_slice(v);
-                        }
+                    if let Some(ibm) = &ibm
+                        && let Some(v) = ibm.get(k * 16..k * 16 + 16)
+                    {
+                        m.copy_from_slice(v);
                     }
                     skeleton.inverses.push(m);
                 }
@@ -3160,7 +3159,9 @@ impl GltfParser {
                     let mut im = InstancedMesh::from_arc(g, material, inst.count);
                     im.transforms = inst
                         .matrices
-                        .chunks_exact(16)
+                        .as_chunks::<16>()
+                        .0
+                        .iter()
                         .map(|c| {
                             let mut e = [0.0; 16];
                             e.copy_from_slice(c);

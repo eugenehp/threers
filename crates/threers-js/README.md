@@ -1,4 +1,4 @@
-# threers (npm / Deno / Node ESM)
+# @threers/threers (npm / Deno / Node ESM)
 
 Published JavaScript package for [threers](https://github.com/eugenehp/threers):
 the `THREE.*` shim plus **two** WebAssembly builds so browsers only download
@@ -6,13 +6,13 @@ what they need.
 
 | Entry | Install / import | Wasm contents | Typical use |
 |-------|------------------|---------------|-------------|
-| **`threers`** / **`threers/mini`** | `import … from 'threers'` | Core renderer (`--no-default-features`) | Default — smallest download |
-| **`threers/full`** | `import … from 'threers/full'` | `wasm-full`: OpenSCAD/CSG, NURBS, native codecs, planet, path tracer | CAD, video encode, GI |
+| **`@threers/threers`** / **`@threers/threers/mini`** | `import … from '@threers/threers'` | Core renderer (`--no-default-features`) | Default — smallest download |
+| **`@threers/threers/full`** | `import … from '@threers/threers/full'` | `wasm-full`: OpenSCAD/CSG, NURBS, native codecs, planet, path tracer | CAD, video encode, GI |
 
 | Runtime | Install | Import |
 |---------|---------|--------|
-| **npm / Node 18+** | `npm i threers` | `import THREE, { initThreers } from 'threers'` |
-| **Deno** | — | `import THREE, { initThreers } from 'npm:threers'` |
+| **npm / Node 18+** | `npm i @threers/threers` | `import THREE, { initThreers } from '@threers/threers'` |
+| **Deno** | — | `import THREE, { initThreers } from 'npm:@threers/threers'` |
 | **Browser ESM** | via CDN or bundler | same named exports |
 
 For **native** Node (host GPU / headless without wasm), use
@@ -26,8 +26,8 @@ wasm package. Architecture matrix: [`docs/bindings.md`](../../docs/bindings.md).
 ## Quick start (mini — default)
 
 ```js
-import THREE, { initThreers } from 'threers';
-// or: from 'threers/mini'
+import THREE, { initThreers } from '@threers/threers';
+// or: from '@threers/threers/mini'
 
 await initThreers(); // loads dist/mini/pkg/threers_bg.wasm
 
@@ -39,7 +39,7 @@ const camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 100);
 ## Full (CAD / codecs / path tracer)
 
 ```js
-import THREE, { initThreers } from 'threers/full';
+import THREE, { initThreers } from '@threers/threers/full';
 
 await initThreers(); // loads dist/full/pkg/threers_bg.wasm
 ```
@@ -50,8 +50,8 @@ Build flags for `wasm-full`: `captions`, `openscad` (→ CSG/BVH), `native-codec
 ## Deno
 
 ```ts
-import THREE, { initThreers } from "npm:threers/mini";
-// import THREE, { initThreers } from "npm:threers/full";
+import THREE, { initThreers } from "npm:@threers/threers/mini";
+// import THREE, { initThreers } from "npm:@threers/threers/full";
 
 await initThreers();
 ```

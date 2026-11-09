@@ -23,7 +23,7 @@ use threers::softbody::{Event, SoftBody};
 fn centroid(sim: &SoftBody) -> [f64; 3] {
     let n = sim.topos[0].n;
     let mut c = [0.0f64; 3];
-    for p in sim.x[..3 * n].chunks_exact(3) {
+    for p in sim.x[..3 * n].as_chunks::<3>().0 {
         for (ck, &v) in c.iter_mut().zip(p) {
             *ck += v as f64 / n as f64;
         }

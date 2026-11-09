@@ -126,7 +126,11 @@ unsafe extern "C" {
         value_cb: *const c_void,
     ) -> CFDictionaryRef;
     fn CFDataCreate(alloc: CFAllocatorRef, bytes: *const u8, len: isize) -> *const c_void;
-    fn CFStringCreateWithCString(alloc: CFAllocatorRef, s: *const std::ffi::c_char, encoding: u32) -> CFStringRef;
+    fn CFStringCreateWithCString(
+        alloc: CFAllocatorRef,
+        s: *const std::ffi::c_char,
+        encoding: u32,
+    ) -> CFStringRef;
     static kCFAllocatorNull: CFAllocatorRef;
     static kCFTypeDictionaryKeyCallBacks: c_void;
     static kCFTypeDictionaryValueCallBacks: c_void;
@@ -322,27 +326,41 @@ extern "C" fn on_decoded(
 ///
 /// # Safety
 /// `image` must be a locked bi-planar pixel buffer.
-unsafe fn planes(image: CVPixelBufferRef, w: usize, h: usize, pool: &crate::bytes::FramePool) -> Option<PackedFrame> {
-    if w == 0 || h == 0 || CVPixelBufferGetPlaneCount(image) != 2 {
+unsafe fn planes(
+    image: CVPixelBufferRef,
+    w: usize,
+    h: usize,
+    pool: &crate::bytes::FramePool,
+) -> Option<PackedFrame> {
+    if w == 0 || h == 0 || unsafe { CVPixelBufferGetPlaneCount(image) } != 2 {
         return None;
     }
-    let mut out: [Vec<u8>; 2] = [pool.take(w * h), pool.take(w.div_ceil(2) * 2 * h.div_ceil(2))];
+    let mut out: [Vec<u8>; 2] = [
+        pool.take(w * h),
+        pool.take(w.div_ceil(2) * 2 * h.div_ceil(2)),
+    ];
     for (i, plane) in out.iter_mut().enumerate() {
         // Luma; then Cb and Cr side by side, half as many rows.
-        let (row, rows) = if i == 0 { (w, h) } else { (w.div_ceil(2) * 2, h.div_ceil(2)) };
-        let base = CVPixelBufferGetBaseAddressOfPlane(image, i) as *const u8;
-        let stride = CVPixelBufferGetBytesPerRowOfPlane(image, i);
+        let (row, rows) = if i == 0 {
+            (w, h)
+        } else {
+            (w.div_ceil(2) * 2, h.div_ceil(2))
+        };
+        let base = unsafe { CVPixelBufferGetBaseAddressOfPlane(image, i) } as *const u8;
+        let stride = unsafe { CVPixelBufferGetBytesPerRowOfPlane(image, i) };
         let samples_across = if i == 0 { w } else { w.div_ceil(2) };
         if base.is_null()
-            || CVPixelBufferGetWidthOfPlane(image, i) < samples_across
-            || CVPixelBufferGetHeightOfPlane(image, i) < rows
+            || unsafe { CVPixelBufferGetWidthOfPlane(image, i) } < samples_across
+            || unsafe { CVPixelBufferGetHeightOfPlane(image, i) } < rows
             || stride < row
         {
             return None;
         }
         plane.reserve(row * rows);
         for y in 0..rows {
-            plane.extend_from_slice(std::slice::from_raw_parts(base.add(y * stride), row));
+            plane.extend_from_slice(unsafe {
+                std::slice::from_raw_parts(base.add(y * stride), row)
+            });
         }
     }
     let [y, uv] = out;
@@ -453,7 +471,7 @@ unsafe fn atom_format(track: &VideoTrack, out: &mut CMFormatDescriptionRef) -> O
     let (codec, atom): (u32, &[u8]) = match track.codec {
         TrackCodec::Av1 => (u32::from_be_bytes(*b"av01"), b"av1C\0"),
         _ => {
-            VTRegisterSupplementalVideoDecoderIfAvailable(u32::from_be_bytes(*b"vp09"));
+            unsafe { VTRegisterSupplementalVideoDecoderIfAvailable(u32::from_be_bytes(*b"vp09")) };
             (u32::from_be_bytes(*b"vp09"), b"vpcC\0")
         }
     };
@@ -462,37 +480,51 @@ unsafe fn atom_format(track: &VideoTrack, out: &mut CMFormatDescriptionRef) -> O
         // describe the stream with (VP9 in Matroska carries none).
         return -12710;
     }
-    let key = CFStringCreateWithCString(ptr::null(), atom.as_ptr() as *const std::ffi::c_char, UTF8);
-    let data = CFDataCreate(ptr::null(), track.config.as_ptr(), track.config.len() as isize);
-    let atoms = CFDictionaryCreate(
-        ptr::null(),
-        &key as *const CFStringRef,
-        &data as *const *const c_void,
-        1,
-        &kCFTypeDictionaryKeyCallBacks as *const c_void,
-        &kCFTypeDictionaryValueCallBacks as *const c_void,
-    );
-    let outer_key = kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms;
-    let extensions = CFDictionaryCreate(
-        ptr::null(),
-        &outer_key as *const CFStringRef,
-        &atoms as *const CFDictionaryRef,
-        1,
-        &kCFTypeDictionaryKeyCallBacks as *const c_void,
-        &kCFTypeDictionaryValueCallBacks as *const c_void,
-    );
-    let st = CMVideoFormatDescriptionCreate(
-        ptr::null(),
-        codec,
-        track.width as i32,
-        track.height as i32,
-        extensions,
-        out,
-    );
-    CFRelease(extensions);
-    CFRelease(atoms);
-    CFRelease(data);
-    CFRelease(key);
+    let key = unsafe {
+        CFStringCreateWithCString(ptr::null(), atom.as_ptr() as *const std::ffi::c_char, UTF8)
+    };
+    let data = unsafe {
+        CFDataCreate(
+            ptr::null(),
+            track.config.as_ptr(),
+            track.config.len() as isize,
+        )
+    };
+    let atoms = unsafe {
+        CFDictionaryCreate(
+            ptr::null(),
+            &key as *const CFStringRef,
+            &data as *const *const c_void,
+            1,
+            &kCFTypeDictionaryKeyCallBacks as *const c_void,
+            &kCFTypeDictionaryValueCallBacks as *const c_void,
+        )
+    };
+    let outer_key = unsafe { kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms };
+    let extensions = unsafe {
+        CFDictionaryCreate(
+            ptr::null(),
+            &outer_key as *const CFStringRef,
+            &atoms as *const CFDictionaryRef,
+            1,
+            &kCFTypeDictionaryKeyCallBacks as *const c_void,
+            &kCFTypeDictionaryValueCallBacks as *const c_void,
+        )
+    };
+    let st = unsafe {
+        CMVideoFormatDescriptionCreate(
+            ptr::null(),
+            codec,
+            track.width as i32,
+            track.height as i32,
+            extensions,
+            out,
+        )
+    };
+    unsafe { CFRelease(extensions) };
+    unsafe { CFRelease(atoms) };
+    unsafe { CFRelease(data) };
+    unsafe { CFRelease(key) };
     st
 }
 
@@ -573,7 +605,11 @@ impl VideoToolboxDecoder {
         let mut session: VTDecompressionSessionRef = ptr::null_mut();
         let st = unsafe {
             let key = kCVPixelBufferPixelFormatTypeKey;
-            let val = cfnum(if planar { PIXEL_FORMAT_NV12 } else { PIXEL_FORMAT_BGRA });
+            let val = cfnum(if planar {
+                PIXEL_FORMAT_NV12
+            } else {
+                PIXEL_FORMAT_BGRA
+            });
             let attrs = CFDictionaryCreate(
                 ptr::null(),
                 &key as *const CFStringRef,

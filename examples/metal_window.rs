@@ -27,9 +27,8 @@ use threers::PerspectiveCamera;
 
 use winit::dpi::LogicalSize;
 use winit::event::{Event, WindowEvent};
-use winit::event_loop::{ControlFlow, EventLoop};
+use winit::event_loop::ControlFlow;
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use winit::window::WindowBuilder;
 
 #[cfg(metal_backend)]
 fn main() {
@@ -42,50 +41,50 @@ fn main() {
         }
     }
 
-    let event_loop = EventLoop::new().expect("event loop");
-    let window = WindowBuilder::new()
+    let attributes = winit::window::Window::default_attributes()
         .with_title("threers — Metal")
-        .with_inner_size(LogicalSize::new(1280, 720))
-        .build(&event_loop)
-        .expect("window");
+        .with_inner_size(LogicalSize::new(1280, 720));
+    threers::sketch::run_window(attributes, move |window| {
+        let scale = window.scale_factor();
+        let physical = window.inner_size();
+        let ns_view = match window.window_handle().expect("window handle").as_raw() {
+            RawWindowHandle::AppKit(handle) => handle.ns_view.as_ptr(),
+            other => panic!("expected an AppKit window handle, got {other:?}"),
+        };
 
-    let scale = window.scale_factor();
-    let physical = window.inner_size();
-    let ns_view = match window.window_handle().expect("window handle").as_raw() {
-        RawWindowHandle::AppKit(handle) => handle.ns_view.as_ptr(),
-        other => panic!("expected an AppKit window handle, got {other:?}"),
-    };
+        let device = MetalDevice::new().expect("Metal device");
+        println!("device: {}", device.name());
+        let mut renderer = MetalRenderer::with_device(device.clone()).expect("renderer");
+        // Safety: the handle came from a live winit window, and winit runs its
+        // event loop — and this code — on the main thread.
+        let mut surface = unsafe {
+            MetalSurface::from_ns_view(&device, ns_view, physical.width, physical.height, 4)
+        }
+        .expect("CAMetalLayer");
+        println!(
+            "surface: {}x{} at {scale}x, vsync {}",
+            surface.size().0,
+            surface.size().1,
+            surface.vsync()
+        );
 
-    let device = MetalDevice::new().expect("Metal device");
-    println!("device: {}", device.name());
-    let mut renderer = MetalRenderer::with_device(device.clone()).expect("renderer");
-    // Safety: the handle came from a live winit window, and winit runs its
-    // event loop — and this code — on the main thread.
-    let mut surface =
-        unsafe { MetalSurface::from_ns_view(&device, ns_view, physical.width, physical.height, 4) }
-            .expect("CAMetalLayer");
-    println!(
-        "surface: {}x{} at {scale}x, vsync {}",
-        surface.size().0,
-        surface.size().1,
-        surface.vsync()
-    );
+        let (mut scene, knot) = build_scene();
+        let mut camera = PerspectiveCamera::new(
+            50.0,
+            physical.width as f32 / physical.height.max(1) as f32,
+            0.1,
+            100.0,
+        );
+        camera.position = Vector3::new(0.0, 1.6, 5.5);
+        camera.look_at(Vector3::new(0.0, 0.2, 0.0));
 
-    let (mut scene, knot) = build_scene();
-    let mut camera = PerspectiveCamera::new(
-        50.0,
-        physical.width as f32 / physical.height.max(1) as f32,
-        0.1,
-        100.0,
-    );
-    camera.position = Vector3::new(0.0, 1.6, 5.5);
-    camera.look_at(Vector3::new(0.0, 0.2, 0.0));
-
-    let start = std::time::Instant::now();
-    let mut frames = 0u32;
-    event_loop.set_control_flow(ControlFlow::Poll);
-    event_loop
-        .run(move |event, target| match event {
+        let start = std::time::Instant::now();
+        let mut frames = 0u32;
+        move |event, target| match event {
+            // Draw continuously rather than waiting for input.
+            Event::NewEvents(winit::event::StartCause::Init) => {
+                target.set_control_flow(ControlFlow::Poll)
+            }
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => target.exit(),
                 WindowEvent::Resized(size) => {
@@ -114,20 +113,20 @@ fn main() {
                             .expect("render");
                         frames += 1;
                     }
-                    if let Some(limit) = frame_limit {
-                        if frames >= limit {
-                            let fps = frames as f32 / start.elapsed().as_secs_f32();
-                            println!("{frames} frames in {:.2?} ({fps:.1} fps)", start.elapsed());
-                            target.exit();
-                        }
+                    if let Some(limit) = frame_limit
+                        && frames >= limit
+                    {
+                        let fps = frames as f32 / start.elapsed().as_secs_f32();
+                        println!("{frames} frames in {:.2?} ({fps:.1} fps)", start.elapsed());
+                        target.exit();
                     }
                 }
                 _ => {}
             },
             Event::AboutToWait => window.request_redraw(),
             _ => {}
-        })
-        .expect("event loop");
+        }
+    });
 }
 
 fn build_scene() -> (Scene, threers::core::ObjectId) {

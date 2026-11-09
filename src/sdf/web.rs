@@ -23,7 +23,8 @@ impl WebSdf {
     fn of(inner: Shape) -> WebSdf {
         WebSdf { inner }
     }
-    /// The field, for other bindings that build from it.
+    /// The field, for other bindings that build from it (the soft bodies').
+    #[cfg(feature = "softbody")]
     pub(crate) fn shape(&self) -> &Shape {
         &self.inner
     }
@@ -102,7 +103,9 @@ impl WebSdf {
     /// The field at every point of a flat `[x, y, z, …]` array.
     pub fn distances(&self, points: &[f32]) -> Vec<f32> {
         points
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|p| self.inner.distance(v(p[0], p[1], p[2])))
             .collect()
     }

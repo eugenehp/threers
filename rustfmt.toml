@@ -1,0 +1,3 @@
+# The crates are on edition 2024, which would switch rustfmt to the 2024
+# style edition and reflow most of the tree; keep the formatting it has.
+style_edition = "2021"

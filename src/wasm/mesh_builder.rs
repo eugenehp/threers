@@ -14,14 +14,16 @@ pub struct WebMeshBuilder {
 }
 
 fn points(flat: &[f32]) -> Result<Vec<Vector3>, JsError> {
-    if flat.len() % 3 != 0 {
+    if !flat.len().is_multiple_of(3) {
         return Err(JsError::new(&format!(
             "expected x, y, z triples, got {} numbers",
             flat.len()
         )));
     }
     Ok(flat
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|p| Vector3::new(p[0], p[1], p[2]))
         .collect())
 }

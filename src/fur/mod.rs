@@ -45,7 +45,7 @@
 //! half length. Without one the fur is uniform.
 //!
 //! **What it runs on.** WebGPU, WebGL2 and native wgpu, through
-//! [`ShaderMaterial`](crate::ShaderMaterial), and the Metal renderer through
+//! [`ShaderMaterial`], and the Metal renderer through
 //! its own port of the same shader (`tests/fur.rs`, `tests/fur_metal.rs` and
 //! the browser suites).
 //!
@@ -250,10 +250,10 @@ impl FurMaterial {
     /// twice the distance its `v` does.
     pub fn shader_material_for(&self, geometry: &BufferGeometry) -> ShaderMaterial {
         let mut m = self.shader_material_with_aspect(uv_aspect(geometry));
-        if self.lod {
-            if let Some((c, r)) = bounds(geometry) {
-                m.data[FUR_LOD] = [c.x, c.y, c.z, r];
-            }
+        if self.lod
+            && let Some((c, r)) = bounds(geometry)
+        {
+            m.data[FUR_LOD] = [c.x, c.y, c.z, r];
         }
         m
     }
@@ -413,13 +413,15 @@ fn bounds(geometry: &BufferGeometry) -> Option<(Vector3, f32)> {
         Vector3::new(p[0], p[1], p[2]),
         Vector3::new(p[0], p[1], p[2]),
     );
-    for q in p.chunks_exact(3) {
+    for q in p.as_chunks::<3>().0 {
         lo = Vector3::new(lo.x.min(q[0]), lo.y.min(q[1]), lo.z.min(q[2]));
         hi = Vector3::new(hi.x.max(q[0]), hi.y.max(q[1]), hi.z.max(q[2]));
     }
     let c = (lo + hi) * 0.5;
     let r = p
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|q| (Vector3::new(q[0], q[1], q[2]) - c).length())
         .fold(0.0, f32::max);
     Some((c, r))
@@ -574,10 +576,10 @@ fn fur_caster(geometry: &BufferGeometry, data: &[[f32; 4]], model: &Matrix4) -> 
         let len =
             data[0][1] * alpha.map_or(1.0, |c| c.array.get(v * 4 + 3).copied().unwrap_or(1.0));
         let mut pull = mean + turbulence(data, wp) + brush(data, wp);
-        if let Some(t) = lags {
-            if t.array.len() >= v * 4 + 3 {
-                pull = pull + direction(model, v3(&t.array, v, 4));
-            }
+        if let Some(t) = lags
+            && t.array.len() >= v * 4 + 3
+        {
+            pull = pull + direction(model, v3(&t.array, v, 4));
         }
         let q = (wp + walk(n, pull, height) * len).apply_matrix4(&to_local);
         position.extend_from_slice(&[q.x, q.y, q.z]);
@@ -702,10 +704,10 @@ fn fur_material_mut(object: &mut Object3D) -> Option<&mut ShaderMaterial> {
 /// Advance a fur object's clock — its wind and flutter — to `seconds`. A
 /// no-op on anything that is not fur. ([`FurAnimator::update`] does this.)
 pub fn set_fur_time(object: &mut Object3D, seconds: f32) {
-    if let Some(m) = fur_material_mut(object) {
-        if let Some(slot) = m.data.get_mut(TIME.0) {
-            slot[TIME.1] = seconds;
-        }
+    if let Some(m) = fur_material_mut(object)
+        && let Some(slot) = m.data.get_mut(TIME.0)
+    {
+        slot[TIME.1] = seconds;
     }
 }
 
@@ -723,7 +725,9 @@ fn uv_aspect(geometry: &BufferGeometry) -> f32 {
     let t = |i: usize| (uv.array[i * 2], uv.array[i * 2 + 1]);
     let tris: Vec<[usize; 3]> = match &geometry.index {
         Some(idx) => idx
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| [c[0] as usize, c[1] as usize, c[2] as usize])
             .collect(),
         None => (0..pos.count() / 3)
@@ -1346,10 +1350,10 @@ fn update_caster(scene: &mut Scene, t: &mut Tracked, world: &Matrix4) {
     }
     // A scene graph that sets the object's children whole drops a child it
     // does not know of: put it back.
-    if let Some(id) = t.caster {
-        if scene.get(id).is_some_and(|c| c.parent != Some(t.fur)) {
-            scene.arena.add_child(t.fur, id);
-        }
+    if let Some(id) = t.caster
+        && scene.get(id).is_some_and(|c| c.parent != Some(t.fur))
+    {
+        scene.arena.add_child(t.fur, id);
     }
 }
 

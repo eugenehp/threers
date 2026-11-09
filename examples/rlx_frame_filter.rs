@@ -96,7 +96,7 @@ fn main() {
 
     // The graph is elementwise and does not know which channel is coverage, so
     // it tone-mapped alpha along with the colour. Put it back.
-    for px in filtered.chunks_exact_mut(4) {
+    for px in filtered.as_chunks_mut::<4>().0 {
         px[3] = 255;
     }
 

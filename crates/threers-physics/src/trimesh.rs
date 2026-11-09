@@ -90,7 +90,12 @@ impl TriMesh {
             .collect();
 
         let indices: Vec<[u32; 3]> = match &geometry.index {
-            Some(idx) => idx.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+            Some(idx) => idx
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|c| [c[0], c[1], c[2]])
+                .collect(),
             None => (0..vertices.len() as u32 / 3)
                 .map(|i| [i * 3, i * 3 + 1, i * 3 + 2])
                 .collect(),
@@ -198,7 +203,9 @@ impl TriMesh {
 
 fn decode_nodes(buffer: &[f32]) -> Vec<Node> {
     buffer
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|c| {
             let bounds = Aabb::new(
                 Vector3::new(c[0], c[1], c[2]),

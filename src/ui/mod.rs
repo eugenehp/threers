@@ -33,9 +33,9 @@
 //! ```
 
 pub mod a11y;
-pub mod anim;
 #[cfg(target_arch = "wasm32")]
 pub mod a11y_dom;
+pub mod anim;
 #[cfg(target_arch = "wasm32")]
 pub mod canvas;
 pub mod code;

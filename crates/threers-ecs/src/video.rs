@@ -27,7 +27,7 @@
 use crate::app::Time;
 use crate::world::{Component, World};
 pub use threers::textures::VideoTexture;
-pub use threers::video_player::VideoPlayer;
+pub use threers_video::VideoPlayer;
 
 /// A video playing on this entity. Its texture is wherever it was put; the
 /// app keeps it moving on game time, and plays its sound.
@@ -152,7 +152,10 @@ fn follow(out: &mut crate::audio::AudioOut, video: &mut Video, scale: f64) {
 /// Stop a removed video's sound.
 #[cfg(feature = "audio")]
 pub(crate) fn on_remove(w: &mut World, video: &Video) {
-    if let (Some(voice), true) = (video.voice, w.get_resource::<crate::audio::AudioOut>().is_some()) {
+    if let (Some(voice), true) = (
+        video.voice,
+        w.get_resource::<crate::audio::AudioOut>().is_some(),
+    ) {
         w.resource_mut::<crate::audio::AudioOut>().stop(voice);
     }
 }

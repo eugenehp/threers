@@ -78,7 +78,9 @@ impl MeshBvh {
             data.triangle_order.iter().map(|&i| i as usize).collect(),
             data.positions,
             data.triangle_indices
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|c| (c[0], c[1], c[2]))
                 .collect(),
         )
@@ -382,10 +384,10 @@ impl MeshBvh {
             let (offset, count) = (node.left_or_offset as usize, node.right_or_count as usize);
             let mut best: Option<JsRayHit> = None;
             for &tri in &self.triangle_order[offset..offset + count] {
-                if let Some(hit) = self.intersect_triangle_js(tri, origin, dir, side, near, far) {
-                    if best.is_none_or(|b| hit.distance < b.distance) {
-                        best = Some(hit);
-                    }
+                if let Some(hit) = self.intersect_triangle_js(tri, origin, dir, side, near, far)
+                    && best.is_none_or(|b| hit.distance < b.distance)
+                {
+                    best = Some(hit);
                 }
             }
             return best;
@@ -638,10 +640,11 @@ impl MeshBvh {
             let count = node.right_or_count as usize;
             for i in start..start + count {
                 let tri_idx = self.triangle_order[i];
-                if let Some(hit) = self.intersect_triangle(tri_idx, ray, backface_culling) {
-                    if hit.distance >= near && hit.distance <= far {
-                        hits.push(hit);
-                    }
+                if let Some(hit) = self.intersect_triangle(tri_idx, ray, backface_culling)
+                    && hit.distance >= near
+                    && hit.distance <= far
+                {
+                    hits.push(hit);
                 }
             }
         } else {
@@ -666,15 +669,16 @@ impl MeshBvh {
             let count = node.right_or_count as usize;
             for i in start..start + count {
                 let tri_idx = self.triangle_order[i];
-                if let Some(hit) = self.intersect_triangle(tri_idx, ray, backface_culling) {
-                    if hit.distance >= near && hit.distance <= far {
-                        let replace = match best {
-                            None => true,
-                            Some(b) => hit.distance < b.distance,
-                        };
-                        if replace {
-                            *best = Some(hit);
-                        }
+                if let Some(hit) = self.intersect_triangle(tri_idx, ray, backface_culling)
+                    && hit.distance >= near
+                    && hit.distance <= far
+                {
+                    let replace = match best {
+                        None => true,
+                        Some(b) => hit.distance < b.distance,
+                    };
+                    if replace {
+                        *best = Some(hit);
                     }
                 }
             }
@@ -1026,7 +1030,9 @@ mod tests {
         if let Some(pos) = sphere.get_attribute("position") {
             let moved: Vec<f32> = pos
                 .array
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .flat_map(|p| [p[0] + 0.3, p[1] + 0.3, p[2]])
                 .collect();
             sphere.set_attribute("position", BufferAttribute::new(moved, 3));

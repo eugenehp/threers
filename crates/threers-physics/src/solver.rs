@@ -423,11 +423,12 @@ impl Solver {
 
         // Break joints whose impulse exceeded their tolerance.
         for joint in joints.values_mut() {
-            if let Some(limit) = joint.break_impulse {
-                if !joint.broken && joint.applied_impulse() > limit {
-                    joint.broken = true;
-                    joint.reset_impulses();
-                }
+            if let Some(limit) = joint.break_impulse
+                && !joint.broken
+                && joint.applied_impulse() > limit
+            {
+                joint.broken = true;
+                joint.reset_impulses();
             }
         }
 

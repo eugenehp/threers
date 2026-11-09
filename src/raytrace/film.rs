@@ -6,8 +6,8 @@
 //! the same film without restarting. That is what makes an interactive preview
 //! possible and what lets a long render be checkpointed.
 
+use crate::math::ToneMapping;
 use crate::math::Vector3;
-use crate::renderer::ToneMapping;
 
 use super::settings::{Aov, RaytraceSettings};
 
@@ -502,7 +502,7 @@ impl Film {
     /// own output rather than the raw film.
     pub fn beauty_rgba8(&self, hdr: &[f32], settings: &RaytraceSettings) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.pixels.len() * 4);
-        for px in hdr.chunks_exact(4) {
+        for px in hdr.as_chunks::<4>().0 {
             let c = tone_map(
                 Vector3::new(px[0], px[1], px[2]) * settings.exposure,
                 settings.tone_mapping,

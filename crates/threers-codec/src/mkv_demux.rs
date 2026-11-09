@@ -671,7 +671,10 @@ pub fn parse_ivf(
     data: &[u8],
 ) -> Result<([u8; 4], u32, u32, (u32, u32), Vec<(i64, Vec<u8>)>), String> {
     let (fourcc, w, h, rate, frames) = index_ivf(data)?;
-    let frames = frames.into_iter().map(|(pts, at)| (pts, data[at].to_vec())).collect();
+    let frames = frames
+        .into_iter()
+        .map(|(pts, at)| (pts, data[at].to_vec()))
+        .collect();
     Ok((fourcc, w, h, rate, frames))
 }
 
@@ -679,7 +682,16 @@ pub fn parse_ivf(
 #[allow(clippy::type_complexity)]
 pub fn index_ivf(
     data: &[u8],
-) -> Result<([u8; 4], u32, u32, (u32, u32), Vec<(i64, std::ops::Range<usize>)>), String> {
+) -> Result<
+    (
+        [u8; 4],
+        u32,
+        u32,
+        (u32, u32),
+        Vec<(i64, std::ops::Range<usize>)>,
+    ),
+    String,
+> {
     if data.len() < 32 || &data[0..4] != b"DKIF" {
         return Err("not an IVF file".into());
     }

@@ -598,10 +598,11 @@ impl ThreeCurve {
     /// `getLengths(divisions)`: cumulative chord lengths at `divisions + 1`
     /// even `t`, cached until `needsUpdate` or a different `divisions`.
     pub fn get_lengths(&self, divisions: usize) -> Rc<[f64]> {
-        if let Some(c) = self.cache_arc_lengths.borrow().as_ref() {
-            if c.len() == divisions + 1 && !self.needs_update.get() {
-                return c.clone();
-            }
+        if let Some(c) = self.cache_arc_lengths.borrow().as_ref()
+            && c.len() == divisions + 1
+            && !self.needs_update.get()
+        {
+            return c.clone();
         }
         self.needs_update.set(false);
         let mut cache = Vec::with_capacity(divisions + 1);
@@ -730,10 +731,10 @@ impl ThreeCurve {
         let Some(curves) = self.children() else {
             return Rc::from(Vec::new());
         };
-        if let Some(c) = self.cache_lengths.borrow().as_ref() {
-            if c.len() == curves.len() {
-                return c.clone();
-            }
+        if let Some(c) = self.cache_lengths.borrow().as_ref()
+            && c.len() == curves.len()
+        {
+            return c.clone();
         }
         let mut sums = 0.0;
         let lengths: Rc<[f64]> = curves
@@ -774,10 +775,10 @@ impl ThreeCurve {
         for curve in curves {
             let resolution = curve.def.borrow().path_resolution(divisions);
             for point in curve.get_points(resolution) {
-                if let (Some(l), Some(p)) = (last, point) {
-                    if l == p {
-                        continue;
-                    }
+                if let (Some(l), Some(p)) = (last, point)
+                    && l == p
+                {
+                    continue;
                 }
                 points.push(point);
                 last = point;

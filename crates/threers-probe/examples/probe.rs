@@ -62,10 +62,10 @@ fn nrc_path(hops: bool) -> Option<&'static str> {
 }
 
 fn weights_path(hops: bool) -> String {
-    if let Ok(p) = std::env::var("WEIGHTS") {
-        if !p.is_empty() {
-            return p;
-        }
+    if let Ok(p) = std::env::var("WEIGHTS")
+        && !p.is_empty()
+    {
+        return p;
     }
     if hops {
         "out/probe_hops.bin".into()
@@ -75,10 +75,10 @@ fn weights_path(hops: bool) -> String {
 }
 
 fn nrc_save_path(hops: bool) -> String {
-    if let Ok(p) = std::env::var("NRC_OUT") {
-        if !p.is_empty() {
-            return p;
-        }
+    if let Ok(p) = std::env::var("NRC_OUT")
+        && !p.is_empty()
+    {
+        return p;
     }
     if hops {
         "out/nrc_hops.bin".into()

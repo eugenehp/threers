@@ -1924,10 +1924,10 @@ impl FluidSim3d {
         // stage opened, so a frame that skipped one reports nothing rather
         // than six wrong numbers.
         let complete = self.mark.get() == MARKS;
-        if let Some(p) = &self.profiler {
-            if complete {
-                p.resolve(&mut enc);
-            }
+        if let Some(p) = &self.profiler
+            && complete
+        {
+            p.resolve(&mut enc);
         }
         if c.show_fps {
             self.record_overlay(&mut enc, target, format);

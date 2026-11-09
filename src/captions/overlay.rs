@@ -193,7 +193,12 @@ impl CaptionOverlay {
         if !self.is_visible() || frame.len() != self.rgba.len() {
             return false;
         }
-        for (dst, src) in frame.chunks_exact_mut(4).zip(self.rgba.chunks_exact(4)) {
+        for (dst, src) in frame
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(self.rgba.as_chunks::<4>().0)
+        {
             let sa = src[3] as u32;
             if sa == 0 {
                 continue;
@@ -261,7 +266,7 @@ mod tests {
 
         o.update(0.5);
         assert!(o.is_visible());
-        assert!(o.rgba().chunks_exact(4).any(|px| px[3] > 0));
+        assert!(o.rgba().as_chunks::<4>().0.iter().any(|px| px[3] > 0));
     }
 
     #[test]
@@ -320,18 +325,20 @@ mod tests {
         let mut o = overlay();
         o.update(0.5);
         let mut frame = vec![0u8; o.rgba().len()];
-        for px in frame.chunks_exact_mut(4) {
+        for px in frame.as_chunks_mut::<4>().0 {
             px.copy_from_slice(&[10, 20, 30, 255]);
         }
         assert!(o.composite(&mut frame));
         let untouched = frame
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|px| px[..3] == [10, 20, 30])
             .count();
-        let changed = frame.chunks_exact(4).count() - untouched;
+        let changed = frame.as_chunks::<4>().0.len() - untouched;
         assert!(changed > 0, "expected caption pixels");
         assert!(untouched > changed, "expected most of the frame untouched");
-        assert!(frame.chunks_exact(4).all(|px| px[3] == 255));
+        assert!(frame.as_chunks::<4>().0.iter().all(|px| px[3] == 255));
     }
 
     #[test]

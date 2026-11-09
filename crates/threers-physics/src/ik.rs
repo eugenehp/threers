@@ -543,11 +543,11 @@ impl IkChain {
                 continue;
             };
             let world_rotation = shortest_arc(self.bone_axis, direction);
-            if let Some(id) = self.joints[i].scene_object {
-                if let Some(object) = arena.get_mut(id) {
-                    object.quaternion = parent_rotation.conjugate().multiply(world_rotation);
-                    object.update_matrix();
-                }
+            if let Some(id) = self.joints[i].scene_object
+                && let Some(object) = arena.get_mut(id)
+            {
+                object.quaternion = parent_rotation.conjugate().multiply(world_rotation);
+                object.update_matrix();
             }
             parent_rotation = world_rotation;
         }

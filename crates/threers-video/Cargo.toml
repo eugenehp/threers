@@ -1,0 +1,71 @@
+[package]
+name = "threers-video"
+version.workspace = true
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+authors = ["Eugene Hauptmann"]
+repository = "https://github.com/eugenehp/threers"
+homepage = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-video"
+readme = "README.md"
+description = "Video for threers: export rendered frames to MP4, WebM, MOV, GIF and APNG with captions, render image sequences, and play video on meshes with sound, decoded in pure Rust, in hardware or by the browser"
+keywords = ["video", "threejs", "export", "mp4", "graphics"]
+categories = ["multimedia::video", "graphics", "rendering", "wasm"]
+
+[lib]
+bench = false
+
+[features]
+default = []
+# Every core for the decoders and encoders (a no-op in single-threaded wasm).
+parallel = ["threers/parallel", "threers-codec/parallel"]
+# Hardware video, loaded at run time and inert where it does not exist.
+videotoolbox = ["threers/videotoolbox", "threers-codec/videotoolbox"]
+nvidia = ["threers/nvidia", "threers-codec/nvidia"]
+vaapi = ["threers/vaapi", "threers-codec/vaapi"]
+# `ScadVideo`: `export_video` on an OpenSCAD animation.
+openscad = ["threers/openscad"]
+# What the examples draw with, passed through to threers.
+metal = ["threers/metal"]
+planet = ["threers/planet"]
+raytrace = ["threers/raytrace"]
+learned-denoise = ["threers/learned-denoise"]
+rlx = ["threers/rlx"]
+
+[dependencies]
+threers = { path = "../..", version = "0.0.12", default-features = false, features = ["render", "audio", "captions", "native-codec", "native-decode", "gif"] }
+threers-codec = { path = "../threers-codec", version = "0.0.12", default-features = false, features = ["decode", "gif"] }
+log = "0.4"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["VideoFrame"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# The `video_texture` example's window; the version `threers`'s `sketch` uses.
+winit = "0.30"
+
+[dev-dependencies]
+threers = { path = "../..", features = ["render", "audio", "captions", "native-codec", "native-decode", "gif", "sketch"] }
+
+[[example]]
+name = "scad_animate"
+required-features = ["openscad"]
+
+[[example]]
+name = "path_trace_video"
+required-features = ["raytrace"]
+
+[[example]]
+name = "earth_video"
+required-features = ["planet"]
+
+[[example]]
+name = "rlx_video_grade"
+required-features = ["rlx"]
+
+[[test]]
+name = "scad_video"
+required-features = ["openscad"]

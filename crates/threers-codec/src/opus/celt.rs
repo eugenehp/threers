@@ -1153,10 +1153,10 @@ impl Celt {
                     self.remaining2 -= 1 << 3;
                 }
                 self.mem[px] = 1.0f32 - 2.0f32 * sign as f32;
-                if i == 0 {
-                    if let Some(yy) = y {
-                        px = yy;
-                    }
+                if i == 0
+                    && let Some(yy) = y
+                {
+                    px = yy;
                 }
             }
             if let Some(lo) = lowband_out {
@@ -1170,12 +1170,12 @@ impl Celt {
             if tf_change > 0 {
                 recombine = tf_change;
             }
-            if let Some(lb) = lowband {
-                if recombine != 0 || ((n_b & 1) == 0 && tf_change < 0) || b0 > 1 {
-                    let sc = lowband_scratch.unwrap();
-                    self.mem.copy_within(lb..lb + n, sc);
-                    lowband = Some(sc);
-                }
+            if let Some(lb) = lowband
+                && (recombine != 0 || ((n_b & 1) == 0 && tf_change < 0) || b0 > 1)
+            {
+                let sc = lowband_scratch.unwrap();
+                self.mem.copy_within(lb..lb + n, sc);
+                lowband = Some(sc);
             }
             for k in 0..recombine {
                 if let Some(lb) = lowband {
@@ -1198,15 +1198,15 @@ impl Celt {
             }
             b0 = blocks;
             n_b0 = n_b;
-            if b0 > 1 {
-                if let Some(lb) = lowband {
-                    self.deinterleave_hadamard(
-                        lb,
-                        n_b >> recombine,
-                        (b0 << recombine) as usize,
-                        longblocks,
-                    );
-                }
+            if b0 > 1
+                && let Some(lb) = lowband
+            {
+                self.deinterleave_hadamard(
+                    lb,
+                    n_b >> recombine,
+                    (b0 << recombine) as usize,
+                    longblocks,
+                );
             }
         }
 
@@ -1346,10 +1346,10 @@ impl Celt {
                 let mut mbits = ((b - delta) / 2).clamp(0, b);
                 let mut sbits = b - mbits;
                 self.remaining2 -= qalloc;
-                if let Some(lb) = lowband {
-                    if !stereo {
-                        next_lowband2 = Some(lb + n);
-                    }
+                if let Some(lb) = lowband
+                    && !stereo
+                {
+                    next_lowband2 = Some(lb + n);
                 }
                 if stereo {
                     next_lowband_out1 = lowband_out;

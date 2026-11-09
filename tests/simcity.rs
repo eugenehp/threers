@@ -568,7 +568,7 @@ fn parks_stay_inside_their_block() {
             // The trim batch holds the fences, railings and furniture — the
             // pieces most likely to walk off the edge.
             let mut worst = 0.0f32;
-            for p in b.trim.pos.chunks_exact(3) {
+            for p in b.trim.pos.as_chunks::<3>().0 {
                 worst = worst
                     .max(p[0].abs() - side * 0.5)
                     .max(p[2].abs() - side * 0.5);
@@ -828,7 +828,7 @@ fn wheels_are_round() {
         let mut best: Option<(f32, Vec<(f32, f32)>)> = None;
         for r_guess in [0.32f32, 0.34, 0.38, 0.44, 0.46, 0.48] {
             let mut pts = Vec::new();
-            for v in body.pos.chunks_exact(3) {
+            for v in body.pos.as_chunks::<3>().0 {
                 let (x, y, z) = (v[0], v[1], v[2]);
                 // Outboard, low, and near a plausible axle.
                 if x < 0.55 || y > r_guess * 2.2 {
@@ -959,7 +959,7 @@ fn tall_roofs_get_helipads() {
         add_building(&mut b, &plan, lot, 0.0, false, &mut rng);
         // The H and the touchdown circle are the only paint that ever gets
         // above the ground floor, so paint up high means a pad.
-        if b.paint.pos.chunks_exact(3).any(|p| p[1] > 25.0) {
+        if b.paint.pos.as_chunks::<3>().0.iter().any(|p| p[1] > 25.0) {
             found += 1;
         }
     }
@@ -1014,14 +1014,18 @@ fn cars_have_mirrors_plates_and_a_driver() {
         let body = kind.body();
         let half = body
             .pos
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .fold(0.0f32, |m, v| m.max(v[0].abs()));
         // A wing mirror is the widest thing on a car, and it is up at glass
         // height rather than down at the sills — which is what distinguishes
         // it from a wheel or a wide arch.
         let mirrors = body
             .pos
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .filter(|v| v[0].abs() > half - 0.02 && v[1] > 0.55)
             .count();
         assert!(
@@ -1033,7 +1037,9 @@ fn cars_have_mirrors_plates_and_a_driver() {
         // centreline and up near the roof.
         let head = body
             .pos
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .filter(|v| v[1] > 0.95 && v[0] < -0.15 && v[0] > -0.6)
             .count();
         assert!(head >= 8, "{}: nobody driving it", kind.label());

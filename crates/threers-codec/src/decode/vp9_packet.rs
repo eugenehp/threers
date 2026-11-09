@@ -25,32 +25,32 @@ pub fn packet_shows(data: &[u8]) -> bool {
 
 /// Split a VP9 superframe (ffmpeg `vp9_superframe_split`) into its frames.
 pub fn split_superframe(data: &[u8]) -> Vec<&[u8]> {
-    if let Some(&marker) = data.last() {
-        if marker & 0xE0 == 0xC0 {
-            let nbytes = 1 + ((marker >> 3) & 3) as usize;
-            let n = 1 + (marker & 7) as usize;
-            let idx_size = 2 + nbytes * n;
-            if data.len() >= idx_size && data[data.len() - idx_size] == marker {
-                let mut sizes = Vec::with_capacity(n);
-                let mut p = data.len() - idx_size + 1;
-                for _ in 0..n {
-                    let mut s = 0usize;
-                    for b in 0..nbytes {
-                        s |= (data[p + b] as usize) << (8 * b);
-                    }
-                    p += nbytes;
-                    sizes.push(s);
+    if let Some(&marker) = data.last()
+        && marker & 0xE0 == 0xC0
+    {
+        let nbytes = 1 + ((marker >> 3) & 3) as usize;
+        let n = 1 + (marker & 7) as usize;
+        let idx_size = 2 + nbytes * n;
+        if data.len() >= idx_size && data[data.len() - idx_size] == marker {
+            let mut sizes = Vec::with_capacity(n);
+            let mut p = data.len() - idx_size + 1;
+            for _ in 0..n {
+                let mut s = 0usize;
+                for b in 0..nbytes {
+                    s |= (data[p + b] as usize) << (8 * b);
                 }
-                let total: usize = sizes.iter().sum();
-                if total <= data.len() - idx_size {
-                    let mut out = Vec::new();
-                    let mut off = 0;
-                    for s in sizes {
-                        out.push(&data[off..off + s]);
-                        off += s;
-                    }
-                    return out;
+                p += nbytes;
+                sizes.push(s);
+            }
+            let total: usize = sizes.iter().sum();
+            if total <= data.len() - idx_size {
+                let mut out = Vec::new();
+                let mut off = 0;
+                for s in sizes {
+                    out.push(&data[off..off + s]);
+                    off += s;
                 }
+                return out;
             }
         }
     }

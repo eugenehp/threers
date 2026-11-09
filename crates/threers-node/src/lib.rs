@@ -3162,10 +3162,10 @@ fn with_shadows<R>(scene: &mut Scene, enabled: bool, f: impl FnOnce(&mut Scene) 
     }
     let mut casters = Vec::new();
     scene.arena.traverse(scene.root, &mut |id, o| {
-        if let ObjectKind::Light(l) = &o.kind {
-            if light_casts(l) {
-                casters.push(id);
-            }
+        if let ObjectKind::Light(l) = &o.kind
+            && light_casts(l)
+        {
+            casters.push(id);
         }
     });
     let set = |scene: &mut Scene, on: bool| {

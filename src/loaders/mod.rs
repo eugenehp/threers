@@ -25,7 +25,6 @@ pub mod usd;
 // attachments is for `captions`.
 #[cfg_attr(not(feature = "captions"), allow(dead_code))]
 pub mod mark;
-/// Which composite a run of a face's glyphs gets. See [`overlap`].
 mod overlap;
 
 /// `GDEF`'s item variation store, from the table's own bytes at a normalized location.

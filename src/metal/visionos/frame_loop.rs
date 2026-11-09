@@ -20,7 +20,7 @@ use crate::math::Matrix4;
 use crate::scene::Scene;
 
 #[link(name = "CompositorServices", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn cp_layer_renderer_get_state(layer_renderer: CpLayerRenderer) -> u32;
     fn cp_layer_renderer_wait_until_running(layer_renderer: CpLayerRenderer);
     fn cp_layer_renderer_query_next_frame(layer_renderer: CpLayerRenderer) -> CpFrame;
@@ -66,7 +66,7 @@ extern "C" {
 }
 
 #[link(name = "ARKit", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn ar_session_create() -> ArSession;
     fn ar_session_run(session: ArSession, data_providers: ArDataProviders);
     fn ar_world_tracking_configuration_create() -> ArWorldTrackingConfiguration;
@@ -204,8 +204,8 @@ impl ImmersiveRenderer {
         if layer_renderer.is_null() {
             return Err(MetalError::Unsupported("null cp_layer_renderer_t".into()));
         }
-        let mtl_device = cp_layer_renderer_get_device(layer_renderer);
-        let device = MetalDevice::adopt(mtl_device)?;
+        let mtl_device = unsafe { cp_layer_renderer_get_device(layer_renderer) };
+        let device = unsafe { MetalDevice::adopt(mtl_device) }?;
         let renderer = MetalRenderer::with_device(device.clone())?;
         // Tracking is not fatal to lose: without it the scene is head-locked,
         // which still draws.
@@ -357,15 +357,15 @@ impl ImmersiveRenderer {
         let Some(tracking) = &self.tracking else {
             return Matrix4::identity();
         };
-        let timing = cp_drawable_get_frame_timing(drawable);
+        let timing = unsafe { cp_drawable_get_frame_timing(drawable) };
         if timing.is_null() {
             return Matrix4::identity();
         }
         let presentation =
-            cp_time_to_cf_time_interval(cp_frame_timing_get_presentation_time(timing));
+            unsafe { cp_time_to_cf_time_interval(cp_frame_timing_get_presentation_time(timing)) };
         match tracking.device_pose(presentation) {
             Some(pose) => {
-                cp_drawable_set_device_anchor(drawable, tracking.anchor_ptr());
+                unsafe { cp_drawable_set_device_anchor(drawable, tracking.anchor_ptr()) };
                 pose
             }
             None => Matrix4::identity(),
@@ -378,30 +378,33 @@ impl ImmersiveRenderer {
     /// `origin_from_device * device_from_eye`, and the view matrix — world into
     /// eye — is its inverse.
     unsafe fn views(&self, drawable: CpDrawable, origin_from_device: &Matrix4) -> Vec<RenderView> {
-        let count = cp_drawable_get_view_count(drawable).min(super::super::MAX_VIEWS);
+        let count = unsafe { cp_drawable_get_view_count(drawable) }.min(super::super::MAX_VIEWS);
         let mut views = Vec::with_capacity(count);
         for index in 0..count {
-            let view = cp_drawable_get_view(drawable, index);
+            let view = unsafe { cp_drawable_get_view(drawable, index) };
             if view.is_null() {
                 continue;
             }
-            let device_from_eye: Matrix4 = cp_view_get_transform(view).into();
+            let device_from_eye: Matrix4 = unsafe { cp_view_get_transform(view) }.into();
             let world_from_eye = origin_from_device.multiply(&device_from_eye);
             let projection: Matrix4 =
-                cp_drawable_compute_projection(drawable, self.convention as u8, index).into();
+                unsafe { cp_drawable_compute_projection(drawable, self.convention as u8, index) }
+                    .into();
 
             let mut render_view = RenderView::from_matrices(world_from_eye.invert(), projection);
-            let map = cp_view_get_view_texture_map(view);
+            let map = unsafe { cp_view_get_view_texture_map(view) };
             if !map.is_null() {
-                render_view.slice = cp_view_texture_map_get_slice_index(map) as u32;
-                let viewport = cp_view_texture_map_get_viewport(map);
+                render_view.slice = unsafe { cp_view_texture_map_get_slice_index(map) } as u32;
+                let viewport = unsafe { cp_view_texture_map_get_viewport(map) };
                 render_view.viewport = Some(viewport);
                 // A texture index of its own means the dedicated layout: each
                 // eye has its own texture rather than a slice of one.
-                let texture_index = cp_view_texture_map_get_texture_index(map);
+                let texture_index = unsafe { cp_view_texture_map_get_texture_index(map) };
                 if texture_index != 0 {
-                    render_view.color = cp_drawable_get_color_texture(drawable, texture_index);
-                    render_view.depth = cp_drawable_get_depth_texture(drawable, texture_index);
+                    render_view.color =
+                        unsafe { cp_drawable_get_color_texture(drawable, texture_index) };
+                    render_view.depth =
+                        unsafe { cp_drawable_get_depth_texture(drawable, texture_index) };
                 }
             }
             views.push(render_view);
@@ -411,20 +414,22 @@ impl ImmersiveRenderer {
 
     /// The pass the eyes render into: texture 0 of the drawable, reverse-Z.
     unsafe fn attachments(&self, drawable: CpDrawable) -> PassAttachments {
-        let color = cp_drawable_get_color_texture(drawable, 0);
-        let depth = cp_drawable_get_depth_texture(drawable, 0);
-        let (width, height) = texture_size(color);
-        PassAttachments::from_raw(
-            color,
-            NIL,
-            depth,
-            NIL,
-            width,
-            height,
-            texture_pixel_format(color),
-            texture_pixel_format(depth),
-            1,
-        )
+        let color = unsafe { cp_drawable_get_color_texture(drawable, 0) };
+        let depth = unsafe { cp_drawable_get_depth_texture(drawable, 0) };
+        let (width, height) = unsafe { texture_size(color) };
+        unsafe {
+            PassAttachments::from_raw(
+                color,
+                NIL,
+                depth,
+                NIL,
+                width,
+                height,
+                texture_pixel_format(color),
+                texture_pixel_format(depth),
+                1,
+            )
+        }
         .with_reverse_z(true)
     }
 
@@ -439,8 +444,8 @@ unsafe fn texture_size(texture: Id) -> (u32, u32) {
     if texture.is_null() {
         return (0, 0);
     }
-    let width: NSUInteger = msg0(texture, sel!("width"));
-    let height: NSUInteger = msg0(texture, sel!("height"));
+    let width: NSUInteger = unsafe { msg0(texture, sel!("width")) };
+    let height: NSUInteger = unsafe { msg0(texture, sel!("height")) };
     (width as u32, height as u32)
 }
 
@@ -449,5 +454,5 @@ unsafe fn texture_pixel_format(texture: Id) -> NSUInteger {
     if texture.is_null() {
         return 0;
     }
-    msg0(texture, sel!("pixelFormat"))
+    unsafe { msg0(texture, sel!("pixelFormat")) }
 }

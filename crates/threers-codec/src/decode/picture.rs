@@ -428,7 +428,14 @@ impl DecodedFrame {
             let luma = &self.y[y * w..][..w];
             let line = &mut out[row * w * 4..][..w * 4];
             let to8 = |v: i32| ((v + (1 << 15)) >> 16).clamp(0, 255) as u32;
-            for (((px, &l), &cb), &cr) in line.chunks_exact_mut(4).zip(luma).zip(&cb).zip(&cr) {
+            for (((px, &l), &cb), &cr) in line
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(luma)
+                .zip(&cb)
+                .zip(&cr)
+            {
                 let yv = k.y * (l as i32 - k.y_off);
                 let r = to8(yv + k.rv * cr);
                 let g = to8(yv - k.gu * cb - k.gv * cr);
@@ -549,7 +556,7 @@ mod tests {
                 vec![yuv.2; 4],
                 Matrix::Bt601,
             );
-            for px in f.to_rgba().chunks_exact(4) {
+            for px in f.to_rgba().as_chunks::<4>().0 {
                 for c in 0..3 {
                     assert!(
                         (px[c] as i32 - rgb[c]).abs() <= 1,

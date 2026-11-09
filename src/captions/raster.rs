@@ -961,7 +961,7 @@ mod tests {
 
     fn opaque_frame() -> Vec<u8> {
         let mut f = vec![0u8; (W * H * 4) as usize];
-        for px in f.chunks_exact_mut(4) {
+        for px in f.as_chunks_mut::<4>().0 {
             px.copy_from_slice(&[0, 0, 0, 255]);
         }
         f
@@ -1167,7 +1167,7 @@ mod tests {
         assert!(y0 > H / 2, "y0={y0}");
         assert!(y1 < H, "y1={y1}");
         // Fully opaque frames stay opaque.
-        assert!(frame.chunks_exact(4).all(|px| px[3] == 255));
+        assert!(frame.as_chunks::<4>().0.iter().all(|px| px[3] == 255));
     }
 
     #[test]
@@ -1206,8 +1206,18 @@ mod tests {
         let mut p = painter(CaptionAnchor::Bottom);
         let overlay = p.render_overlay(W, H, &track, 0.5);
         assert_eq!(overlay.len(), (W * H * 4) as usize);
-        let opaque = overlay.chunks_exact(4).filter(|px| px[3] > 200).count();
-        let clear = overlay.chunks_exact(4).filter(|px| px[3] == 0).count();
+        let opaque = overlay
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|px| px[3] > 200)
+            .count();
+        let clear = overlay
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|px| px[3] == 0)
+            .count();
         assert!(opaque > 0, "expected caption pixels");
         assert!(clear > opaque, "expected mostly-transparent overlay");
 
@@ -1221,7 +1231,9 @@ mod tests {
         let mut plain = opaque_frame();
         painter(CaptionAnchor::Bottom).draw_text(&mut plain, W, H, "Hi");
         let plain_ink = plain
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|px| px[0] > 8 || px[1] > 8 || px[2] > 8)
             .count();
 
@@ -1230,7 +1242,9 @@ mod tests {
         p.style = p.style.clone().background([40, 40, 200, 255]);
         p.draw_text(&mut boxed, W, H, "Hi");
         let boxed_ink = boxed
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|px| px[0] > 8 || px[1] > 8 || px[2] > 8)
             .count();
         assert!(boxed_ink > plain_ink, "{boxed_ink} vs {plain_ink}");

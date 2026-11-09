@@ -1,7 +1,7 @@
 [package]
 name = "threers-py"
 version.workspace = true
-edition = "2021"
+edition = "2024"
 authors = ["Eugene Hauptmann"]
 description = "Python bindings for threers — headless render, math, animation, and physics (PyO3 / maturin)"
 license = "MIT"
@@ -36,13 +36,13 @@ usd = ["threers/usd"]
 threers = { path = "../..", version = "0.0.12" }
 threers-physics = { path = "../threers-physics", version = "0.0.12", optional = true }
 threers-animation = { path = "../threers-animation", version = "0.0.12", optional = true, default-features = false }
-pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
+pyo3 = { version = "0.30", features = ["extension-module", "abi3-py39"] }
 
 # `add_extension_module_link_args`: on macOS an extension module leaves the
 # Python symbols for the interpreter to supply at load time, which maturin
 # arranges and a plain `cargo build --workspace` does not.
 [build-dependencies]
-pyo3-build-config = "0.29"
+pyo3-build-config = "0.30"
 
 [package.metadata.maturin]
 name = "threers"

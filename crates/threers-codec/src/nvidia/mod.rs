@@ -37,7 +37,7 @@ mod sys {
     use std::ffi::{c_char, c_int, c_void};
     pub const RTLD_NOW: c_int = 2;
     #[link(name = "dl")]
-    extern "C" {
+    unsafe extern "C" {
         pub fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
         pub fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
     }
@@ -47,7 +47,7 @@ mod sys {
 mod sys {
     use std::ffi::{c_char, c_void};
     #[link(name = "kernel32")]
-    extern "system" {
+    unsafe extern "system" {
         pub fn LoadLibraryA(name: *const c_char) -> *mut c_void;
         pub fn GetProcAddress(module: *mut c_void, name: *const c_char) -> *mut c_void;
     }
@@ -74,10 +74,10 @@ impl Lib {
         assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<*mut c_void>());
         let c = CString::new(name).ok()?;
         #[cfg(unix)]
-        let p = sys::dlsym(self.0, c.as_ptr());
+        let p = unsafe { sys::dlsym(self.0, c.as_ptr()) };
         #[cfg(windows)]
-        let p = sys::GetProcAddress(self.0, c.as_ptr());
-        (!p.is_null()).then(|| std::mem::transmute_copy(&p))
+        let p = unsafe { sys::GetProcAddress(self.0, c.as_ptr()) };
+        (!p.is_null()).then(|| unsafe { std::mem::transmute_copy(&p) })
     }
 }
 

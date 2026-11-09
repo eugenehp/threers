@@ -20,10 +20,18 @@
 //!
 //! The pieces this exercises together:
 //!
-//! - [`IkChain::solve_ccd`] to turn a tool-tip target into a chain pose. CCD
-//!   rather than FABRIK because it rotates about one hinge at a time, which is
-//!   what a machine with real hinges actually does.
-//! - [`IkConstraint::Hinge`] limits, so the elbow cannot bend backwards.
+//! - [`IkChain::solve_ccd`] to turn a target into a chain pose. CCD rather
+//!   than FABRIK because it rotates about one hinge at a time, which is what a
+//!   machine with real hinges actually does.
+//! - A decoupled wrist, as industrial arms have: the tool hangs straight down
+//!   from the wrist, so the solver places the *wrist* above the target and
+//!   the tool's attitude never depends on how the solve happened to go.
+//!   Solving for the tip alone lets the chain reach it from any side, and the
+//!   nearest such pose was the elbow under the table and the forearm through
+//!   the payload.
+//! - [`IkConstraint::Hinge`] limits, so the elbow bends one way only (up).
+//!   The hinge axis turns with the arm's heading, since the arm swings about
+//!   its base and a world-fixed axis would only be right facing one way.
 //! - Kinematic [`RigidBody`]s driven by [`RigidBody::set_kinematic_target`], one
 //!   per link, posed from the solved chain.
 //! - A [`Joint::fixed_at_point`] created and destroyed at runtime, which is how
@@ -53,8 +61,12 @@ const BASE: Vector3 = Vector3::new(0.0, 0.0, 0.0);
 const COLUMN: f32 = 0.55;
 /// Upper arm, forearm, and the tool sticking out of the wrist.
 const LINKS: [f32; 3] = [0.80, 0.70, 0.22];
+/// How far the elbow may bend, from straight, in radians: never backwards, and
+/// never folded flat onto the upper arm.
+const ELBOW: (f32, f32) = (0.15, 2.6);
 
-/// The arm's pose: one world-space point per joint, tool tip last.
+/// The arm's pose: the shoulder–elbow–wrist chain the solver moves, and a tool
+/// hanging straight down from the wrist.
 struct Arm {
     chain: IkChain,
     /// Kinematic bodies, one per segment.
@@ -76,26 +88,18 @@ impl Arm {
         );
 
         // Joints run up the column and then out along +X, which puts the arm in
-        // a sensible starting pose rather than folded through itself.
+        // a sensible starting pose rather than folded through itself. The
+        // elbow starts slightly bent, so its hinge has a side to bend to.
         let shoulder = BASE + Vector3::new(0.0, COLUMN, 0.0);
-        let mut points = vec![shoulder];
-        let mut reach = shoulder;
-        for length in LINKS {
-            reach = reach + Vector3::new(length, 0.0, 0.0);
-            points.push(reach);
-        }
+        let elbow = shoulder + Vector3::new(LINKS[0] * 0.8, LINKS[0] * 0.6, 0.0);
+        let wrist = elbow + Vector3::new(LINKS[1], 0.0, 0.0);
 
-        let mut chain = IkChain::from_points(&points);
-        chain.max_iterations = 40;
+        let mut chain = IkChain::from_points(&[shoulder, elbow, wrist]);
+        chain.max_iterations = 60;
         chain.tolerance = 0.002;
-        // The shoulder swings freely; the elbow is a hinge that bends one way
-        // only, like every elbow. Without the limit the solver is free to fold
-        // the arm through itself and call it a solution.
-        chain.set_constraint(1, IkConstraint::cone(2.2));
-        chain.set_constraint(
-            2,
-            IkConstraint::hinge_limited(Vector3::new(0.0, 0.0, 1.0), 0.15, 2.6),
-        );
+        // The shoulder swings within a cone about the column.
+        chain.base_direction = Some(Vector3::new(0.0, 1.0, 0.0));
+        chain.set_constraint(0, IkConstraint::cone(2.2));
 
         // One kinematic body per segment. Capsules, because a robot link is a
         // rounded bar and a capsule is the cheapest shape that behaves like one.
@@ -129,7 +133,29 @@ impl Arm {
 
     /// Point the tool at `target`, and report what the solver managed.
     fn aim(&mut self, target: Vector3) -> IkResult {
-        self.chain.solve_ccd(target)
+        let wrist = target + Vector3::new(0.0, LINKS[2], 0.0);
+        // The elbow's hinge is horizontal and across the arm's heading, so it
+        // bends in the vertical plane the arm points along.
+        let heading = Vector3::new(wrist.x, 0.0, wrist.z);
+        if heading.length() > 1e-4 {
+            let axis = Vector3::new(0.0, 1.0, 0.0).cross(heading.normalize());
+            self.chain
+                .set_constraint(1, IkConstraint::hinge_limited(axis, ELBOW.0, ELBOW.1));
+        }
+        let mut result = self.chain.solve_ccd(wrist);
+        result.error = (self.tip() - target).length();
+        result
+    }
+
+    /// Every joint, tool tip last.
+    fn points(&self) -> [Vector3; 4] {
+        let j = &self.chain.joints;
+        [j[0].position, j[1].position, j[2].position, self.tip()]
+    }
+
+    /// The tool tip, straight below the wrist.
+    fn tip(&self) -> Vector3 {
+        self.chain.tip() - Vector3::new(0.0, LINKS[2], 0.0)
     }
 
     /// Push the current chain pose into the kinematic bodies.
@@ -140,9 +166,9 @@ impl Arm {
     /// velocity it must have travelled at, and that velocity is what a contact
     /// sees.
     fn drive(&mut self, world: &mut World) {
+        let points = self.points();
         for (i, body) in self.links.iter().enumerate() {
-            let a = self.chain.joints[i].position;
-            let b = self.chain.joints[i + 1].position;
+            let (a, b) = (points[i], points[i + 1]);
             let centre = (a + b) * 0.5;
             // Capsules are Y-aligned, so the link's rotation is whatever takes
             // +Y onto the segment.
@@ -151,7 +177,7 @@ impl Arm {
                 link.set_kinematic_target(Isometry::new(centre, rotation));
             }
         }
-        let tip = self.chain.tip();
+        let tip = self.tip();
         if let Some(tool) = world.body_mut(self.tool) {
             tool.set_kinematic_target(Isometry::new(tip, Quaternion::identity()));
         }
@@ -160,15 +186,15 @@ impl Arm {
     /// Teleport into place, for the initial pose only. Using this mid-run would
     /// move the arm without any velocity, so it would pass through things.
     fn snap(&mut self, world: &mut World) {
+        let points = self.points();
         for (i, body) in self.links.iter().enumerate() {
-            let a = self.chain.joints[i].position;
-            let b = self.chain.joints[i + 1].position;
+            let (a, b) = (points[i], points[i + 1]);
             if let Some(link) = world.body_mut(*body) {
                 link.set_translation((a + b) * 0.5);
                 link.set_rotation(rotation_from_to(Vector3::new(0.0, 1.0, 0.0), b - a));
             }
         }
-        let tip = self.chain.tip();
+        let tip = self.tip();
         if let Some(tool) = world.body_mut(self.tool) {
             tool.set_translation(tip);
         }
@@ -184,7 +210,7 @@ impl Arm {
         if self.grip.is_some() {
             return true;
         }
-        let tip = self.chain.tip();
+        let tip = self.tip();
         let Some(target) = world.body(payload) else {
             return false;
         };
@@ -206,8 +232,9 @@ impl Arm {
     fn angles(&self) -> Vec<f32> {
         let mut out = Vec::new();
         let mut previous = Vector3::new(0.0, 1.0, 0.0); // up the column
-        for i in 0..self.chain.joints.len() - 1 {
-            let segment = self.chain.joints[i + 1].position - self.chain.joints[i].position;
+        let points = self.points();
+        for i in 0..points.len() - 1 {
+            let segment = points[i + 1] - points[i];
             let (a, b) = (previous.normalize(), segment.normalize());
             out.push(a.dot(b).clamp(-1.0, 1.0).acos().to_degrees());
             previous = segment;
@@ -222,9 +249,9 @@ impl Arm {
     /// something has gone wrong that a reach error would not reveal.
     fn stretch(&self) -> f32 {
         let mut worst: f32 = 0.0;
+        let points = self.points();
         for (i, expected) in LINKS.iter().enumerate() {
-            let actual =
-                (self.chain.joints[i + 1].position - self.chain.joints[i].position).length();
+            let actual = (points[i + 1] - points[i]).length();
             worst = worst.max((actual - expected).abs());
         }
         worst
@@ -312,13 +339,14 @@ fn main() {
         },
         Move {
             name: "descend",
-            target: Vector3::new(0.95, 0.115, 0.0),
+            // The tool's 5 cm ball resting on the payload's top (y 0.10).
+            target: Vector3::new(0.95, 0.155, 0.0),
             frames: 60,
             grip: None,
         },
         Move {
             name: "grip",
-            target: Vector3::new(0.95, 0.115, 0.0),
+            target: Vector3::new(0.95, 0.155, 0.0),
             frames: 20,
             grip: Some(true),
         },
@@ -379,7 +407,7 @@ fn main() {
     let mut home_poses: Vec<Vec<f32>> = Vec::new();
 
     for step in &programme {
-        let from = arm.chain.tip();
+        let from = arm.tip();
         for frame in 0..step.frames {
             // Ease in and out, so the payload is never jerked.
             let t = (frame + 1) as f32 / step.frames as f32;
@@ -391,7 +419,7 @@ fn main() {
             world.step(DT);
 
             worst_stretch = worst_stretch.max(arm.stretch());
-            let elbow = arm.angles()[2];
+            let elbow = arm.angles()[1];
             elbow_min = elbow_min.min(elbow);
             elbow_max = elbow_max.max(elbow);
 
@@ -405,17 +433,13 @@ fn main() {
         match step.grip {
             Some(true) => {
                 let got = arm.close_gripper(&mut world, payload);
-                assert!(
-                    got,
-                    "the gripper closed on nothing at {:?}",
-                    arm.chain.tip()
-                );
+                assert!(got, "the gripper closed on nothing at {:?}", arm.tip());
             }
             Some(false) => arm.open_gripper(&mut world),
             None => {}
         }
 
-        let error = (arm.chain.tip() - step.target).length();
+        let error = (arm.tip() - step.target).length();
         worst_error = worst_error.max(error);
         let angles = arm.angles();
         if step.name == "home" {
@@ -473,7 +497,8 @@ fn main() {
         "the arm stretched by {worst_stretch} m — the solver is not holding link lengths"
     );
     assert!(
-        elbow_min > 5.0 && elbow_max < 160.0,
+        // Half a degree of slack: the angle is measured from joint positions.
+        elbow_min > ELBOW.0.to_degrees() - 0.5 && elbow_max < ELBOW.1.to_degrees() + 0.5,
         "the elbow reached {elbow_min:.0}°..{elbow_max:.0}°, outside its hinge limits"
     );
     let in_bin = (landed.x - bin.x).abs() < 0.2 && (landed.z - bin.z).abs() < 0.2;

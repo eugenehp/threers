@@ -27,7 +27,7 @@
 //! registers `rlig` twice: under `arab` with three ligature lookups, and under `DFLT`
 //! with those three plus a single substitution. Taking the union applies that extra
 //! lookup, which rewrites the lam-alef ligature 965 into 1414 — a different glyph, drawn
-//! correctly, in the wrong place for this script. So [`Gsub::lookups_for`] takes a script
+//! correctly, in the wrong place for this script. So [`Gsub::lookups_for_script`] takes a script
 //! tag and reads the `ScriptList` for it, falling back to `DFLT`.
 //!
 //! Language systems are **not** selected: a script's default is used, never a
@@ -174,10 +174,10 @@ impl<'a> Gsub<'a> {
                 continue;
             };
             for j in 0..usize::from(n) {
-                if let Some(idx) = u16_at(self.data, feature + 4 + 2 * j) {
-                    if !out.contains(&idx) {
-                        out.push(idx);
-                    }
+                if let Some(idx) = u16_at(self.data, feature + 4 + 2 * j)
+                    && !out.contains(&idx)
+                {
+                    out.push(idx);
                 }
             }
         }

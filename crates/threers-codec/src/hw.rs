@@ -365,15 +365,16 @@ impl NativeMp4 {
         }
         let frame = Yuv420Frame::from_rgba(self.width, self.height, &rgba[..need]);
         // The first frame tells a bitrate target what this content costs.
-        if let Some(r) = self.rc.as_mut() {
-            if self.samples.is_empty() && self.pending.is_empty() {
-                r.seed(
-                    PROBE_QP,
-                    self.enc.encode_slice_au_at(&frame, PROBE_QP).len(),
-                );
-                if let Some(q2) = r.probe_again() {
-                    r.seed_pair(q2, self.enc.encode_slice_au_at(&frame, q2).len());
-                }
+        if let Some(r) = self.rc.as_mut()
+            && self.samples.is_empty()
+            && self.pending.is_empty()
+        {
+            r.seed(
+                PROBE_QP,
+                self.enc.encode_slice_au_at(&frame, PROBE_QP).len(),
+            );
+            if let Some(q2) = r.probe_again() {
+                r.seed_pair(q2, self.enc.encode_slice_au_at(&frame, q2).len());
             }
         }
         self.pending.push(frame);

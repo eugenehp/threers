@@ -1977,11 +1977,11 @@ fn flatten_points(obj: &Bound<'_, PyAny>, dim: usize, what: &str) -> PyResult<Ve
         }
     } else {
         for (i, p) in items.iter().enumerate() {
-            if dim == 3 {
-                if let Ok(v) = p.extract::<PyVector3>() {
-                    flat.extend([v.inner.x as f64, v.inner.y as f64, v.inner.z as f64]);
-                    continue;
-                }
+            if dim == 3
+                && let Ok(v) = p.extract::<PyVector3>()
+            {
+                flat.extend([v.inner.x as f64, v.inner.y as f64, v.inner.z as f64]);
+                continue;
             }
             let v: Vec<f64> = p.extract().map_err(|_| {
                 PyTypeError::new_err(format!(
@@ -3504,10 +3504,10 @@ fn with_shadows<R>(scene: &mut Scene, enabled: bool, f: impl FnOnce(&mut Scene) 
     }
     let mut casters = Vec::new();
     scene.arena.traverse(scene.root, &mut |id, o| {
-        if let ObjectKind::Light(l) = &o.kind {
-            if light_casts(l) {
-                casters.push(id);
-            }
+        if let ObjectKind::Light(l) = &o.kind
+            && light_casts(l)
+        {
+            casters.push(id);
         }
     });
     let set = |scene: &mut Scene, on: bool| {

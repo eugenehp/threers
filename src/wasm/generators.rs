@@ -18,7 +18,11 @@ fn web(g: crate::core::BufferGeometry) -> WebGeometry {
 }
 
 fn triples(flat: &[f64]) -> Vec<[f64; 3]> {
-    flat.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect()
+    flat.as_chunks::<3>()
+        .0
+        .iter()
+        .map(|c| [c[0], c[1], c[2]])
+        .collect()
 }
 
 #[wasm_bindgen]
@@ -127,7 +131,12 @@ impl WebGeometry {
     /// `points` flattened `[x0, y0, x1, y1, …]`.
     #[wasm_bindgen(js_name = lathe)]
     pub fn lathe(points: &[f64], segments: usize, phi_start: f64, phi_length: f64) -> WebGeometry {
-        let pts: Vec<[f64; 2]> = points.chunks_exact(2).map(|p| [p[0], p[1]]).collect();
+        let pts: Vec<[f64; 2]> = points
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|p| [p[0], p[1]])
+            .collect();
         web(LatheGeometry::with_f64(
             &pts, segments, phi_start, phi_length,
         ))
@@ -261,7 +270,7 @@ impl WebBufferGeometry {
     pub fn set_groups(&mut self, groups: &[u32]) {
         let g = Arc::make_mut(&mut self.inner);
         g.clear_groups();
-        for c in groups.chunks_exact(3) {
+        for c in groups.as_chunks::<3>().0 {
             g.add_group(c[0], c[1], c[2]);
         }
     }

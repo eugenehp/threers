@@ -119,12 +119,12 @@ impl<T: Animatable> Tween<T> {
             Repeat::Forever => None,
         };
 
-        if let Some(limit) = total_cycles {
-            if cycle >= limit {
-                cycle = limit - 1;
-                t = 1.0;
-                self.finished = true;
-            }
+        if let Some(limit) = total_cycles
+            && cycle >= limit
+        {
+            cycle = limit - 1;
+            t = 1.0;
+            self.finished = true;
         }
         self.cycles_done = cycle;
 

@@ -757,15 +757,15 @@ impl Decoder {
         let mut decoded_samples = usize::MAX;
         let mut at = 0usize;
         for i in 0..nb {
-            if let Some(buf) = pkt {
-                if i > 0 {
-                    let p = parse_packet(&buf[at..], i != nb - 1)?;
-                    if coded_samples != p.frame_count * p.frame_duration {
-                        return Err(format!("Mismatching coded sample count in substream {i}."));
-                    }
-                    self.streams[i].silk_samplerate = silk_samplerate(p.config);
-                    self.streams[i].packet = p;
+            if let Some(buf) = pkt
+                && i > 0
+            {
+                let p = parse_packet(&buf[at..], i != nb - 1)?;
+                if coded_samples != p.frame_count * p.frame_duration {
+                    return Err(format!("Mismatching coded sample count in substream {i}."));
                 }
+                self.streams[i].silk_samplerate = silk_samplerate(p.config);
+                self.streams[i].packet = p;
             }
             let s = &mut self.streams[i];
             let ret = s.decode_subpacket(pkt.map(|b| &b[at..]))?;

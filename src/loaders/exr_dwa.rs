@@ -158,7 +158,7 @@ fn half_bits(f: f32) -> u16 {
 }
 
 fn half_float(h: u16) -> f32 {
-    crate::renderer::gpu_texture::f16_bits_to_f32(h)
+    crate::math::float::f16_to_f32(h)
 }
 
 /// Decoded non-linear half to linear half: a gamma of 2.2 up to 1 and an
@@ -244,9 +244,8 @@ fn inverse_dct(data: &mut [f32; 64]) {
             gamma[0] - beta[0],
         ]
     };
-    for row in data.chunks_exact_mut(8) {
-        let v: [f32; 8] = (&*row).try_into().unwrap();
-        row.copy_from_slice(&line(v));
+    for row in data.as_chunks_mut::<8>().0 {
+        *row = line(*row);
     }
     for x in 0..8 {
         let v = std::array::from_fn(|y| data[y * 8 + x]);
@@ -335,7 +334,9 @@ fn decode_dct(
 
 fn words(bytes: &[u8]) -> Vec<u16> {
     bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|b| u16::from_le_bytes([b[0], b[1]]))
         .collect()
 }

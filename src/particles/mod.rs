@@ -270,7 +270,7 @@ impl SurfaceSampler {
                 Some(ix) => ix.iter().map(|&i| i as usize).collect(),
                 None => (0..count).collect(),
             };
-            for t in index.chunks_exact(3) {
+            for t in index.as_chunks::<3>().0 {
                 triangles.push([v(t[0]), v(t[1]), v(t[2])]);
             }
         }
@@ -912,12 +912,11 @@ impl ParticleSystem {
 
             // Collisions: the first surface crossed.
             let mut hit: Option<(Vector3, Vector3)> = None; // (contact point, normal)
-            if let Some(field) = ground {
-                if let Some(top) = field.height_at(np.x, np.z) {
-                    if np.y < top {
-                        hit = Some((Vector3::new(np.x, top, np.z), field.normal_at(np.x, np.z)));
-                    }
-                }
+            if let Some(field) = ground
+                && let Some(top) = field.height_at(np.x, np.z)
+                && np.y < top
+            {
+                hit = Some((Vector3::new(np.x, top, np.z), field.normal_at(np.x, np.z)));
             }
             if hit.is_none() {
                 for c in &self.colliders {

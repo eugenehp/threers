@@ -4,7 +4,7 @@
  * For the **drop-in THREE.* API** (same code as three.js in the browser), use
  * the `threers` wasm package instead of `threers-node`:
  *
- *   import THREE, { initThreers } from 'threers';
+ *   import THREE, { initThreers } from '@threers/threers';
  *   await initThreers();
  *   const scene = new THREE.Scene();
  *   …

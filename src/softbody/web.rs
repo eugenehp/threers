@@ -57,7 +57,12 @@ impl WebSoftBuilder {
     /// body) to the tip, radius `r0` to `r1`, and how firmly it keeps shape.
     #[wasm_bindgen(js_name = addChain)]
     pub fn add_chain(&mut self, points: &[f64], r0: f64, r1: f64, stiff: f64) {
-        let points = points.chunks_exact(3).map(|p| [p[0], p[1], p[2]]).collect();
+        let points = points
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|p| [p[0], p[1], p[2]])
+            .collect();
         self.chains.push(ChainSpec {
             points,
             r0,

@@ -242,7 +242,7 @@ fn clip(v0: DecalVertex, v1: DecalVertex, p: V3, s: f64) -> DecalVertex {
 fn clip_geometry(input: &[DecalVertex], plane: V3, size: V3) -> Vec<DecalVertex> {
     let mut out = Vec::with_capacity(input.len());
     let s = 0.5 * dot(size, plane).abs();
-    for tri in input.chunks_exact(3) {
+    for tri in input.as_chunks::<3>().0 {
         let d = [
             dot(tri[0].position, plane) - s,
             dot(tri[1].position, plane) - s,
@@ -391,7 +391,9 @@ impl DecalGeometry {
     ) -> BufferGeometry {
         let tris: Vec<[usize; 3]> = match base_indices {
             Some(idx) => idx
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|c| [c[0] as usize, c[1] as usize, c[2] as usize])
                 .collect(),
             None => (0..base_positions.len() / 3)

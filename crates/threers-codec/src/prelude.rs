@@ -56,5 +56,5 @@ pub use crate::nvidia::{NvdecDecoder, NvencEncoder};
 pub use crate::vaapi::VaapiDecoder;
 #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
 pub use crate::videotoolbox::VideoToolboxEncoder;
-#[cfg(all(feature = "videotoolbox", target_os = "macos"))]
+#[cfg(all(feature = "videotoolbox", feature = "decode", target_os = "macos"))]
 pub use crate::videotoolbox_decode::VideoToolboxDecoder;

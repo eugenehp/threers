@@ -167,8 +167,8 @@ mod frame;
 // A `wgpu::Device` is neither `Send` nor `Sync` in the browser — it holds an
 // `Rc` — so the process-wide device this keeps cannot exist there. `Solver::Gpu`
 // falls back to the CPU on wasm, which is what it does anywhere without an
-// adapter.
-#[cfg(not(target_arch = "wasm32"))]
+// adapter, and so does a build without the `render` feature.
+#[cfg(all(feature = "render", not(target_arch = "wasm32")))]
 mod gpu_solve;
 mod homogenize;
 mod infill;
@@ -2204,7 +2204,7 @@ mod tests {
             .unwrap_or_else(|| panic!("{what}: no index"));
         assert!(!index.is_empty(), "{what}: no triangles");
         let mut edges: HashMap<(u32, u32), i32> = HashMap::new();
-        for t in index.chunks_exact(3) {
+        for t in index.as_chunks::<3>().0 {
             for e in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
                 let (key, dir) = if e.0 < e.1 {
                     ((e.0, e.1), 1)
@@ -3062,7 +3062,7 @@ mod tests {
     fn geometry_stays_inside_the_bounds() {
         let geom = geom_of(LatticeKind::Tpms(Tpms::Gyroid));
         let pos = geom.get_attribute("position").unwrap();
-        for v in pos.array.chunks_exact(3) {
+        for v in pos.array.as_chunks::<3>().0 {
             for a in v {
                 assert!(a.abs() <= 1.0 + 1e-3, "{a} escapes the box");
             }
@@ -3196,7 +3196,7 @@ mod tests {
             .build();
         assert_watertight(&geom, "solid in a sphere with a skin");
         let pos = geom.get_attribute("position").unwrap();
-        for v in pos.array.chunks_exact(3) {
+        for v in pos.array.as_chunks::<3>().0 {
             let r = Vector3::new(v[0], v[1], v[2]).length();
             assert!(r <= 3.05, "{r} escaped the sphere");
         }
@@ -3450,7 +3450,7 @@ mod tests {
         let geom = lattice.build();
         assert_watertight(&geom, "sphere fill");
         let pos = geom.get_attribute("position").unwrap();
-        for v in pos.array.chunks_exact(3) {
+        for v in pos.array.as_chunks::<3>().0 {
             let r = (Vector3::new(v[0], v[1], v[2]) - Vector3::new(1.0, 0.0, -0.5)).length();
             assert!(r <= radius + 1e-2, "{r} escaped the sphere");
         }
@@ -3490,7 +3490,7 @@ mod tests {
         // curve, give or take the polyline's own corner-cutting.
         let samples: Vec<Vector3> = (0..=64).map(|i| curve.get_point(i as f32 / 64.0)).collect();
         let pos = geom.get_attribute("position").unwrap();
-        for v in pos.array.chunks_exact(3) {
+        for v in pos.array.as_chunks::<3>().0 {
             let p = Vector3::new(v[0], v[1], v[2]);
             let near = samples
                 .iter()
@@ -3650,7 +3650,7 @@ mod tests {
             .build();
         assert_watertight(&geom, "mesh fill");
         let pos = geom.get_attribute("position").unwrap();
-        for v in pos.array.chunks_exact(3) {
+        for v in pos.array.as_chunks::<3>().0 {
             let r = Vector3::new(v[0], v[1], v[2]).length();
             assert!(r <= 2.05, "{r} escaped the mesh");
         }
@@ -3687,7 +3687,7 @@ mod tests {
             .build();
         assert_watertight(&geom, "trimmed");
         let pos = geom.get_attribute("position").unwrap();
-        for v in pos.array.chunks_exact(3) {
+        for v in pos.array.as_chunks::<3>().0 {
             let r = Vector3::new(v[0], v[1], v[2]).length();
             assert!(r <= radius + 1e-2, "{r} outside the trim sphere");
         }
@@ -3700,7 +3700,7 @@ mod tests {
         let crossings = |geom: &BufferGeometry, axis: usize| {
             let pos = geom.get_attribute("position").unwrap();
             let mut lo = 0;
-            for v in pos.array.chunks_exact(3) {
+            for v in pos.array.as_chunks::<3>().0 {
                 if v[axis] < 0.0 {
                     lo += 1;
                 }

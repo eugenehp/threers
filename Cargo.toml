@@ -1,6 +1,10 @@
 [workspace]
 members = [
     ".",
+    "crates/threers-math",
+    "crates/threers-audio",
+    "crates/threers-video",
+    "crates/threers-captions",
     "crates/threers-codec",
     "crates/threers-softbody",
     "crates/threers-probe",
@@ -31,11 +35,11 @@ version = "0.0.12"
 [package]
 name = "threers"
 version.workspace = true
-edition = "2021"
+edition = "2024"
 # wgpu 30 requires 1.87, and this crate uses `is_multiple_of`, stabilised in the
 # same release. Declared so cargo says so up front rather than letting the build
 # fail somewhere inside a dependency.
-rust-version = "1.87"
+rust-version = "1.99"
 authors = ["Eugene Hauptmann"]
 description = "Drop-in three.js replacement for Rust and WebAssembly (wgpu) — THREE.* API, scene graph, PBR, post-fx, mesh BVH, CSG, an OpenSCAD front end with a watertight exact-CSG kernel, headless render, and native media codecs"
 license = "MIT"
@@ -120,7 +124,10 @@ opt-level = "z"
 lto = "fat"
 codegen-units = 1
 panic = "abort"
-strip = true
+# Debug info only: `true` also strips the `target_features` custom section,
+# which wasm-bindgen reads to learn which wasm features the module uses. The
+# symbol names go at the wasm-bindgen step instead (web/build.sh).
+strip = "debuginfo"
 
 # The soft-body solver is hot loops of float arithmetic, which `z` leaves
 # un-inlined: in the browser it ran 50–80 ms a step against 9 ms for the
@@ -138,20 +145,28 @@ opt-level = 3
 opt-level = 3
 
 [features]
-default = ["captions", "sketch"]
+default = ["render", "audio", "captions", "sketch"]
+# Audio sources, listeners and positional audio as scene-graph nodes: the
+# `threers-audio` crate, re-exported as `threers::audio`.
+audio = ["dep:threers-audio"]
+# The wgpu renderer and everything that draws: `Renderer`, headless and
+# windowed rendering, post-processing, marks, volumes, GPU textures. Off, the
+# crate is math, the scene graph, geometry, materials, loaders and exporters,
+# and builds no GPU stack at all.
+render = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 # `sketch()` and the winit-window `WindowRenderer`: pulls in winit 0.29. Turn it
 # off (`default-features = false`) for a headless renderer or when the host
 # owns its own window / winit version (`SurfaceRenderer` needs neither).
-sketch = ["dep:winit"]
+sketch = ["render", "dep:winit"]
 # Subtitles — SRT + WebVTT, on-screen and burned in.
-captions = []
+captions = ["dep:threers-captions"]
 # A retained UI: CSS-subset styles, flexbox layout, painting and hit-testing
 # (implies captions, for text).
 ui = ["captions"]
 # Accelerated raycast / shapecast.
 mesh-bvh = []
 # Path tracer: global illumination, area lights, refraction, DoF; CPU + wgpu-compute.
-raytrace = []
+raytrace = ["render"]
 # Constructive solid geometry (implies mesh-bvh).
 bvh-csg = ["mesh-bvh"]
 # `.scad` front end + `Solid` DSL + exact-CSG kernel (implies bvh-csg).
@@ -162,20 +177,20 @@ manifold = ["dep:manifold-rust", "openscad"]
 planet = []
 # Interactive 2D fluid simulation (Stam's stable fluids on the GPU, as render
 # passes only — no compute stage, so it runs on WebGL2 as well as WebGPU).
-fluid = []
+fluid = ["render"]
+# Soft bodies that tear and regrow: the `threers-softbody` solver and its
+# creatures, with a WebGPU compute solver.
+softbody = ["render", "dep:threers-softbody"]
 # Universal Scene Description — `.usda`, `.usdc` and `.usdz`, read and written.
 # Pure Rust with no dependencies of its own, so this costs compile time and
 # nothing else; it is opt-in because most scenes never touch USD.
 usd = []
-# Native frame-sequence export via ffmpeg (implies captions).
-video = ["captions", "threers-codec/decode"]
 # Pure-Rust GIF, APNG, VP9/WebM, H.264/MP4, HEVC (wasm-safe).
-# The muxers write caption tracks, so this needs `captions` the same way
-# `video` does. It is a pure-code feature with no dependencies of its own,
-# so this costs compile time and nothing else.
-native-codec = ["captions"]
-# The pure-Rust H.264/HEVC decoders (`codec::decode`) without the ffmpeg-backed
-# `video` export module.
+# The muxers write caption tracks, so this needs `captions`. Video export,
+# image sequences and video on meshes are the `threers-video` crate.
+native-codec = ["captions", "dep:threers-codec"]
+# The pure-Rust H.264/HEVC/VP9/AV1 decoders (`codec::decode`); playing them on
+# a mesh is `threers-video`'s `VideoPlayer`.
 # Decoding uses every core and every hardware decoder there is: the codec
 # crate's threads (inert in single-threaded wasm), VideoToolbox (macOS),
 # NVDEC (NVIDIA on Linux and Windows) and VAAPI (Linux). The hardware ones
@@ -193,7 +208,7 @@ native-decode = [
 # exporters. Off, choosing GIF there is an error rather than a missing variant.
 gif = ["native-codec", "threers-codec/gif"]
 # Second renderer on Metal via the Objective-C runtime (macOS/iOS).
-metal = []
+metal = ["render"]
 # CompositorServices + ARKit (implies metal).
 visionos = ["metal"]
 # In-process VideoToolbox encode + MP4 mux (macOS).
@@ -205,7 +220,7 @@ nvidia = ["native-decode", "threers-codec/nvidia"]
 # libva loaded at run time).
 vaapi = ["native-decode", "threers-codec/vaapi"]
 # rayon-backed CSG/BVH work (native; a no-op on wasm32).
-parallel = ["dep:rayon", "threers-codec/parallel"]
+parallel = ["dep:rayon", "threers-codec?/parallel"]
 # Threads in the browser: `parallel` on wasm, with `initThreadPool` exported to
 # start the pool. Needs a build with atomics, which is `THREADS=1 web/build.sh`.
 wasm-threads = ["parallel", "dep:wasm-bindgen-rayon"]
@@ -232,7 +247,7 @@ assembly-check = []
 # WebGPU is still preferred wherever the browser has it; this only widens what
 # runs. WebGL2 has no compute shaders and no storage buffers, so the passes that
 # need them fall back to their raster or CPU paths — see `docs/webgl.md`.
-webgl = ["wgpu/webgl"]
+webgl = ["render", "wgpu/webgl"]
 # Trained U-Net denoiser beside the À-Trous filter (native inference).
 learned-denoise = ["raytrace"]
 learned-denoise-metal = ["learned-denoise"]
@@ -242,7 +257,7 @@ learned-denoise-gpu = ["learned-denoise"]
 # CAD / solid modelling stack.
 cad = ["openscad", "nurbs", "brep", "brep-csg", "parallel"]
 # Video, captions, and pure-Rust codecs.
-media = ["video", "native-codec", "gif", "captions"]
+media = ["native-decode", "native-codec", "gif", "captions"]
 # Path tracing + trained denoise.
 gi = ["raytrace", "learned-denoise"]
 # Apple-platform backends (inert on other OSes).
@@ -264,19 +279,25 @@ full = [
 ]
 # Browser / wasm kitchen sink — no native-only flags (video, metal, async, …).
 # Used by `VARIANT=full web/build.sh` and the npm `threers/full` package entry.
-wasm-full = ["captions", "openscad", "native-codec", "gif", "nurbs", "planet", "raytrace", "fluid", "usd"]
+wasm-full = ["captions", "openscad", "native-codec", "gif", "nurbs", "planet", "raytrace", "fluid", "usd", "softbody"]
 
 [dependencies]
-# The codecs and the caption data model (pure Rust, no wgpu/winit).
-threers-codec = { path = "crates/threers-codec", version = "0.0.12", default-features = false }
+# Vectors, matrices, colours and the rest of `threers::math`; no dependencies.
+threers-math = { path = "crates/threers-math", version = "0.0.12" }
+# Audio sources, listeners and positional audio as scene nodes (`audio`).
+threers-audio = { path = "crates/threers-audio", version = "0.0.12", optional = true }
+# The caption data model (`captions`): tracks, cues, SRT/WebVTT; no dependencies.
+threers-captions = { path = "crates/threers-captions", version = "0.0.12", optional = true }
+# The codecs (`native-codec`, `native-decode`, `gif`, ...): pure Rust, no wgpu/winit.
+threers-codec = { path = "crates/threers-codec", version = "0.0.12", default-features = false, optional = true }
 # Soft bodies that tear and regrow (`softbody`): the solver, on its own so the
 # wasm build can optimise it for speed (see `profile.release-wasm` below).
-threers-softbody = { path = "crates/threers-softbody", version = "0.0.12", features = ["gpu"] }
-wgpu = "30"
-bytemuck = { version = "1.16", features = ["derive"] }
+threers-softbody = { path = "crates/threers-softbody", version = "0.0.12", features = ["gpu"], optional = true }
+wgpu = { version = "30", optional = true }
+bytemuck = { version = "1.16", features = ["derive"], optional = true }
 log = "0.4"
 slotmap = "1.0"
-web-time = "0.2"
+web-time = "1"
 rayon = { version = "1.10", optional = true }
 tokio = { version = "1", optional = true, default-features = false, features = ["rt-multi-thread", "macros"] }
 # `gpu` on every target, wasm32 included. It used to be native-only: rlx's GPU
@@ -289,17 +310,16 @@ tokio = { version = "1", optional = true, default-features = false, features = [
 # (`^0.2.17` alone would float `rlx-runtime` up to the broken 0.2.18).
 rlx = { version = "0.2.17", optional = true, default-features = false, features = ["cpu", "tensor", "gpu"] }
 rlx-geo = { version = "0.2.17", optional = true }
-manifold-rust = { version = "0.13", optional = true }
+manifold-rust = { version = "0.19", optional = true }
 
-# Native-only deps (winit + env_logger + pollster only make sense outside wasm).
+# Native-only deps (pollster only makes sense outside wasm).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-pollster = "0.3"
-env_logger = "0.11"
+pollster = { version = "1", optional = true }
 
 # winit 0.29 knows neither tvOS nor visionOS and builds its Wayland backend
 # there, which does not compile; those apps' windows are the system's.
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "tvos", target_os = "visionos")))'.dependencies]
-winit = { version = "0.29", optional = true }
+winit = { version = "0.30", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
@@ -345,6 +365,14 @@ features = [
     "HtmlVideoElement",
     "VideoFrame",
 ]
+
+[[example]]
+name = "gummy"
+required-features = ["softbody"]
+
+[[example]]
+name = "softbody_bench"
+required-features = ["softbody"]
 
 [[example]]
 name = "usd_animation"
@@ -409,38 +437,6 @@ required-features = ["captions", "sketch"]
 [[example]]
 name = "map_demo"
 required-features = ["captions", "sketch"]
-
-[[example]]
-name = "headless_video"
-required-features = ["video"]
-
-[[example]]
-name = "export_h264"
-required-features = ["video"]
-
-[[example]]
-name = "export_hevc"
-required-features = ["video"]
-
-[[example]]
-name = "export_hevc_vt"
-required-features = ["video"]
-
-[[example]]
-name = "export_vp9"
-required-features = ["video"]
-
-[[example]]
-name = "export_vp9_alpha"
-required-features = ["video"]
-
-[[example]]
-name = "export_gif"
-required-features = ["video", "gif"]
-
-[[example]]
-name = "export_apng"
-required-features = ["video", "native-codec"]
 
 [[example]]
 name = "export_webm_native"
@@ -577,10 +573,6 @@ name = "scad_profile"
 required-features = ["openscad"]
 
 [[example]]
-name = "scad_animate"
-required-features = ["openscad", "video", "native-codec"]
-
-[[example]]
 name = "bottle_window_dataset"
 required-features = ["raytrace"]
 
@@ -595,10 +587,6 @@ required-features = ["raytrace"]
 [[example]]
 name = "path_trace_gpu"
 required-features = ["raytrace"]
-
-[[example]]
-name = "path_trace_video"
-required-features = ["raytrace", "video"]
 
 [[example]]
 name = "denoise_dataset"
@@ -641,10 +629,6 @@ name = "hdri_lighting"
 required-features = ["raytrace"]
 
 [[example]]
-name = "video_texture"
-required-features = ["native-decode", "sketch"]
-
-[[example]]
 name = "metal_headless"
 required-features = ["metal"]
 
@@ -669,10 +653,6 @@ name = "bake_planet_maps"
 required-features = ["planet"]
 
 [[example]]
-name = "earth_video"
-required-features = ["planet", "video"]
-
-[[example]]
 name = "starfield_probe"
 required-features = ["planet"]
 
@@ -687,10 +667,6 @@ required-features = ["planet"]
 [[example]]
 name = "frame_profile"
 required-features = ["planet"]
-
-[[example]]
-name = "captions_video"
-required-features = ["video", "native-codec"]
 
 [[example]]
 name = "brep_part"
@@ -711,10 +687,6 @@ required-features = ["rlx"]
 [[example]]
 name = "rlx_fit_grade"
 required-features = ["rlx"]
-
-[[example]]
-name = "rlx_video_grade"
-required-features = ["rlx", "video", "native-codec", "gif"]
 
 [[example]]
 name = "rlx_palette"
@@ -741,7 +713,9 @@ required-features = ["rlx-geo"]
 # Native only: criterion pulls in rayon, which refuses to build for wasm32 and
 # takes the whole browser test suite down with it.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
+# The examples log; the library only uses the `log` facade.
+env_logger = "0.11"
 # wgpu's own naga, with the GLSL writer WebGL2 goes through, so
 # `tests/shader_validation.rs` can translate every shader variant as the
 # browser will — ANGLE rejects what naga's WGSL validator accepts.
@@ -754,6 +728,9 @@ name = "pipeline"
 harness = false
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+# The browser suites' video player test (`tests/web_video`); a dev-dependency
+# back on this crate, which integration tests allow.
+threers-video = { path = "crates/threers-video" }
 wasm-bindgen-test = "0.3"
 # The WebGL test has to make a canvas: wgpu's GL backend takes its context from
 # one, so without a surface there is no adapter to request.
@@ -772,6 +749,14 @@ features = ["Window", "Document", "Element", "HtmlCanvasElement"]
 # module is not there.
 
 [[test]]
+name = "softbody_parity"
+required-features = ["softbody"]
+
+[[test]]
+name = "softbody_gpu"
+required-features = ["softbody"]
+
+[[test]]
 name = "usd_wasm"
 required-features = ["usd"]
 
@@ -784,10 +769,6 @@ required-features = ["bvh-csg"]
 [[test]]
 name = "backend_parity"
 required-features = ["metal"]
-
-[[test]]
-name = "video_texture"
-required-features = ["native-decode"]
 
 [[test]]
 name = "metal_backend"
@@ -840,14 +821,6 @@ required-features = ["native-codec"]
 [[test]]
 name = "captions_overlay_gpu"
 required-features = ["captions"]
-
-[[test]]
-name = "captions_video"
-required-features = ["native-codec", "video"]
-
-[[test]]
-name = "video_export_streaming"
-required-features = ["native-codec", "video"]
 
 [[test]]
 name = "rlx_bridge"

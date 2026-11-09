@@ -13,7 +13,9 @@ fn triangles(objects: &[ExportObject]) -> impl Iterator<Item = [[f64; 3]; 3]> + 
             let corners: Vec<[usize; 3]> = match (&g.index, count(g, "position")) {
                 (_, None) => Vec::new(),
                 (Some(index), Some(_)) => index
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .map(|t| [t[0] as usize, t[1] as usize, t[2] as usize])
                     .collect(),
                 (None, Some(n)) => (0..n / 3).map(|t| [t * 3, t * 3 + 1, t * 3 + 2]).collect(),

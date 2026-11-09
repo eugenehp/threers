@@ -59,7 +59,9 @@ pub fn triangulate_shape(contour: &mut Vec<Vec2d>, holes: &mut [Vec<Vec2d>]) -> 
         }
     }
     earcut::triangulate(&vertices, &hole_indices, 2)
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|t| [t[0], t[1], t[2]])
         .collect()
 }

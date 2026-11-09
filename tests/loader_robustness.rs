@@ -35,10 +35,10 @@ fn bundled_assets() -> Vec<(String, Vec<u8>)> {
         };
         for e in entries.flatten() {
             let p = e.path();
-            if p.is_file() {
-                if let Ok(b) = std::fs::read(&p) {
-                    out.push((p.display().to_string(), b));
-                }
+            if p.is_file()
+                && let Ok(b) = std::fs::read(&p)
+            {
+                out.push((p.display().to_string(), b));
             }
         }
     }

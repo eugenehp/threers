@@ -1724,19 +1724,19 @@ where
     // frame whether or not there is a controller to feed it to — the tuple is
     // built before the pattern is tried — and a fixed-quantizer encode would
     // silently lose its first frame.
-    if let Some(r) = rc.as_mut() {
-        if let Some(first) = frames.next() {
-            let probe = enc.encode_slice_au_at(&first, PROBE_QP);
-            r.seed(PROBE_QP, probe.len());
-            // If the answer looks far from the probe, measure there too: one
-            // extra frame buys a local slope instead of a chord across the
-            // curve's bend.
-            if let Some(q2) = r.probe_again() {
-                let again = enc.encode_slice_au_at(&first, q2);
-                r.seed_pair(q2, again.len());
-            }
-            pending.push(first);
+    if let Some(r) = rc.as_mut()
+        && let Some(first) = frames.next()
+    {
+        let probe = enc.encode_slice_au_at(&first, PROBE_QP);
+        r.seed(PROBE_QP, probe.len());
+        // If the answer looks far from the probe, measure there too: one
+        // extra frame buys a local slope instead of a chord across the
+        // curve's bend.
+        if let Some(q2) = r.probe_again() {
+            let again = enc.encode_slice_au_at(&first, q2);
+            r.seed_pair(q2, again.len());
         }
+        pending.push(first);
     }
 
     loop {

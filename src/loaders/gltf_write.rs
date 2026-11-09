@@ -509,23 +509,23 @@ fn write_mesh(
         let a = w.floats(&position.array, 3, true);
         attributes.push(("POSITION".to_string(), Value::number(a as f64)));
     }
-    if options.normals {
-        if let Some(normal) = geometry.get_attribute("normal") {
-            let a = w.floats(&normal.array, 3, options.three_js);
-            attributes.push(("NORMAL".to_string(), Value::number(a as f64)));
-        }
+    if options.normals
+        && let Some(normal) = geometry.get_attribute("normal")
+    {
+        let a = w.floats(&normal.array, 3, options.three_js);
+        attributes.push(("NORMAL".to_string(), Value::number(a as f64)));
     }
-    if options.uvs {
-        if let Some(uv) = geometry.get_attribute("uv") {
-            let a = w.floats(&uv.array, 2, options.three_js);
-            attributes.push(("TEXCOORD_0".to_string(), Value::number(a as f64)));
-        }
+    if options.uvs
+        && let Some(uv) = geometry.get_attribute("uv")
+    {
+        let a = w.floats(&uv.array, 2, options.three_js);
+        attributes.push(("TEXCOORD_0".to_string(), Value::number(a as f64)));
     }
-    if options.vertex_colours {
-        if let Some(colour) = geometry.get_attribute("color") {
-            let a = w.floats(&colour.array, 3, options.three_js);
-            attributes.push(("COLOR_0".to_string(), Value::number(a as f64)));
-        }
+    if options.vertex_colours
+        && let Some(colour) = geometry.get_attribute("color")
+    {
+        let a = w.floats(&colour.array, 3, options.three_js);
+        attributes.push(("COLOR_0".to_string(), Value::number(a as f64)));
     }
 
     // Morph targets, as displacements.
@@ -678,15 +678,14 @@ fn write_material(
         ),
     ];
 
-    if options.textures {
-        if let Some(texture) = base_colour_map(material) {
-            if let Some(index) = write_texture(w, &texture) {
-                pbr.push((
-                    "baseColorTexture".to_string(),
-                    Value::object([("index", Value::number(index as f64))]),
-                ));
-            }
-        }
+    if options.textures
+        && let Some(texture) = base_colour_map(material)
+        && let Some(index) = write_texture(w, &texture)
+    {
+        pbr.push((
+            "baseColorTexture".to_string(),
+            Value::object([("index", Value::number(index as f64))]),
+        ));
     }
 
     let mut pairs: Vec<(String, Value)> = vec![(
@@ -760,15 +759,14 @@ fn write_material_three_js(
         "roughnessFactor".to_string(),
         Value::number(roughness as f64),
     ));
-    if options.textures {
-        if let Some(texture) = base_colour_map(material) {
-            if let Some(index) = write_texture(w, &texture) {
-                pbr.push((
-                    "baseColorTexture".to_string(),
-                    Value::object([("index", Value::number(index as f64))]),
-                ));
-            }
-        }
+    if options.textures
+        && let Some(texture) = base_colour_map(material)
+        && let Some(index) = write_texture(w, &texture)
+    {
+        pbr.push((
+            "baseColorTexture".to_string(),
+            Value::object([("index", Value::number(index as f64))]),
+        ));
     }
     let mut pairs: Vec<(String, Value)> = vec![(
         "pbrMetallicRoughness".to_string(),

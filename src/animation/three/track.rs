@@ -534,12 +534,12 @@ impl KeyframeTrack {
                 valid = false;
                 break;
             }
-            if let Some(p) = prev_time {
-                if p > curr_time {
-                    log::error!("THREE.KeyframeTrack: Out of order keys. {} {i}", self.name);
-                    valid = false;
-                    break;
-                }
+            if let Some(p) = prev_time
+                && p > curr_time
+            {
+                log::error!("THREE.KeyframeTrack: Out of order keys. {} {i}", self.name);
+                valid = false;
+                break;
             }
             prev_time = Some(curr_time);
         }

@@ -208,8 +208,13 @@ impl WebParticleSystem {
     /// (fire, embers). Empty to stop.
     #[wasm_bindgen(js_name = setTemperatureOverLife)]
     pub fn set_temperature_over_life(&mut self, keys: &[f32]) {
-        let k: Vec<(f32, f32)> = keys.chunks_exact(2).map(|c| (c[0], c[1])).collect();
-        self.inner.temperature_over_life = (!k.is_empty()).then(|| crate::particles::Curve(k));
+        let k: Vec<(f32, f32)> = keys
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| (c[0], c[1]))
+            .collect();
+        self.inner.temperature_over_life = (!k.is_empty()).then_some(crate::particles::Curve(k));
     }
     /// Flutter, m/s²: falling flakes and leaves zig-zag (0: none).
     #[wasm_bindgen(js_name = setFlutter)]
@@ -454,7 +459,9 @@ impl WebParticleSystem {
     #[wasm_bindgen(js_name = setColorOverLife)]
     pub fn set_color_over_life(&mut self, keys: &[f32]) {
         let k: Vec<(f32, [f32; 4])> = keys
-            .chunks_exact(5)
+            .as_chunks::<5>()
+            .0
+            .iter()
             .map(|c| (c[0], [c[1], c[2], c[3], c[4]]))
             .collect();
         if !k.is_empty() {
@@ -469,7 +476,12 @@ impl WebParticleSystem {
     /// Size over life as a multiple of each particle's own: `[t, s, t, s, …]`.
     #[wasm_bindgen(js_name = setSizeOverLife)]
     pub fn set_size_over_life(&mut self, keys: &[f32]) {
-        let k: Vec<(f32, f32)> = keys.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+        let k: Vec<(f32, f32)> = keys
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| (c[0], c[1]))
+            .collect();
         if !k.is_empty() {
             self.inner.size_over_life = Curve(k);
         }
@@ -686,10 +698,9 @@ impl WebScene {
         let material = b.object();
         if let (Some(o), crate::core::ObjectKind::Mesh(m)) =
             (self.inner.get_mut(bed.id), material.kind)
+            && let crate::core::ObjectKind::Mesh(mesh) = &mut o.kind
         {
-            if let crate::core::ObjectKind::Mesh(mesh) = &mut o.kind {
-                mesh.material = m.material;
-            }
+            mesh.material = m.material;
         }
     }
 
@@ -859,10 +870,10 @@ impl WebScene {
     /// Change sky dome `sky` to the time of day `name`.
     #[wasm_bindgen(js_name = setDesertSky)]
     pub fn set_desert_sky(&mut self, sky: &WebObjectHandle, name: &str) {
-        if let Some(o) = self.inner.get_mut(sky.id) {
-            if let crate::core::ObjectKind::Mesh(m) = &mut o.kind {
-                m.material = std::sync::Arc::new(desert(name).sky_material());
-            }
+        if let Some(o) = self.inner.get_mut(sky.id)
+            && let crate::core::ObjectKind::Mesh(m) = &mut o.kind
+        {
+            m.material = std::sync::Arc::new(desert(name).sky_material());
         }
     }
 

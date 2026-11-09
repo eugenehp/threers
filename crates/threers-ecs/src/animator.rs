@@ -275,14 +275,16 @@ pub fn animator_step(w: &mut World) {
         animator.triggers.clear();
 
         animator.time += delta;
-        if let Some(state) = animator.current.map(|index| &animator.states[index]) {
-            if !state.looping && !animator.finished && animator.time >= state.duration {
-                animator.finished = true;
-                finished.push(AnimationFinished {
-                    entity: id,
-                    state: state.name.clone(),
-                });
-            }
+        if let Some(state) = animator.current.map(|index| &animator.states[index])
+            && !state.looping
+            && !animator.finished
+            && animator.time >= state.duration
+        {
+            animator.finished = true;
+            finished.push(AnimationFinished {
+                entity: id,
+                state: state.name.clone(),
+            });
         }
 
         // Out while the mixer has the scene: the component lives in the world too.

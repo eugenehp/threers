@@ -225,10 +225,8 @@ impl MetalHeadlessRenderer {
             .map(|(_, t, r)| (t, r) != (threshold, radius))
             .unwrap_or(true);
         self.bloom_cfg = Some((strength, threshold, radius));
-        if rebuild {
-            if let Some(p) = self.postfx.as_mut() {
-                p.invalidate();
-            }
+        if rebuild && let Some(p) = self.postfx.as_mut() {
+            p.invalidate();
         }
     }
 
@@ -327,25 +325,25 @@ impl MetalHeadlessRenderer {
         // Under MSAA the main pass resolves its depth into the target's
         // single-sampled one while depth is stored, which SSAO turns on.
         postfx.ensure_ssao(&self.device, rw, rh, format, self.ssao_cfg)?;
-        if let Some((strength, threshold, radius)) = self.bloom_cfg {
-            if strength > 0.0 {
-                let (bw, bh) = if self.config.supersample > 1 {
-                    (
-                        rw / self.config.supersample.max(1),
-                        rh / self.config.supersample.max(1),
-                    )
-                } else {
-                    (rw, rh)
-                };
-                postfx.set_bloom(&self.device, bw, bh, strength, threshold, radius)?;
-            }
+        if let Some((strength, threshold, radius)) = self.bloom_cfg
+            && strength > 0.0
+        {
+            let (bw, bh) = if self.config.supersample > 1 {
+                (
+                    rw / self.config.supersample.max(1),
+                    rh / self.config.supersample.max(1),
+                )
+            } else {
+                (rw, rh)
+            };
+            postfx.set_bloom(&self.device, bw, bh, strength, threshold, radius)?;
         }
 
         let src = self.target.color_texture();
         // Keep the pool live only while building encoders; retain the CB after.
         let cmd = {
             let _pool = AutoreleasePool::new();
-            let cmd = unsafe { self.device.command_buffer() };
+            let cmd = self.device.command_buffer();
             if cmd.is_null() {
                 return Err(MetalError::NoCommandQueue);
             }

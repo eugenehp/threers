@@ -111,7 +111,7 @@ impl ShapeMarks {
         let (verts, index) = &self.mesh;
         let mut g = crate::BufferGeometry::new();
         let (mut pos, mut nor) = (Vec::new(), Vec::new());
-        for v in verts.chunks_exact(6) {
+        for v in verts.as_chunks::<6>().0 {
             pos.extend_from_slice(&v[..3]);
             nor.extend_from_slice(&v[3..]);
         }
@@ -175,7 +175,9 @@ impl ShapeMarks {
             Some(a) if a.item_size == 4 => a.array.clone(),
             Some(a) if a.item_size == 3 => a
                 .array
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .flat_map(|c| [c[0], c[1], c[2], 1.0])
                 .collect(),
             _ => Vec::new(),
@@ -291,24 +293,24 @@ impl Mark for ShapeMarks {
         super::Lighting::material(self.lighting.as_ref())
     }
     fn prepare(&mut self, ctx: &PrepareContext) {
-        if let Some((view, generation)) = &self.gpu_texture {
-            if self.texture_gpu.as_ref().is_none_or(|g| g.0 != *generation) {
-                let bg = ctx.device.create_bind_group(&gpu::BindGroupDescriptor {
-                    label: Some("threers shape gpu texture"),
-                    layout: &ctx.resources.texture_layout,
-                    entries: &[
-                        gpu::BindGroupEntry {
-                            binding: 0,
-                            resource: gpu::BindingResource::TextureView(view),
-                        },
-                        gpu::BindGroupEntry {
-                            binding: 1,
-                            resource: gpu::BindingResource::Sampler(&ctx.resources.mip_sampler),
-                        },
-                    ],
-                });
-                self.texture_gpu = Some((*generation, bg));
-            }
+        if let Some((view, generation)) = &self.gpu_texture
+            && self.texture_gpu.as_ref().is_none_or(|g| g.0 != *generation)
+        {
+            let bg = ctx.device.create_bind_group(&gpu::BindGroupDescriptor {
+                label: Some("threers shape gpu texture"),
+                layout: &ctx.resources.texture_layout,
+                entries: &[
+                    gpu::BindGroupEntry {
+                        binding: 0,
+                        resource: gpu::BindingResource::TextureView(view),
+                    },
+                    gpu::BindGroupEntry {
+                        binding: 1,
+                        resource: gpu::BindingResource::Sampler(&ctx.resources.mip_sampler),
+                    },
+                ],
+            });
+            self.texture_gpu = Some((*generation, bg));
         }
         // The texture's place in its atlas, which may have moved.
         if let Some((atlas, name)) = &self.texture {
@@ -360,12 +362,12 @@ impl Mark for ShapeMarks {
         // The same shape moved (a posed model's next frame): write into the
         // buffers it has.
         let bytes = (data.len() * 4) as u64;
-        if let Some((vb, _, _)) = &self.mesh_gpu {
-            if vb.size() == bytes {
-                ctx.queue.write_buffer(vb, 0, bytemuck::cast_slice(&data));
-                self.mesh_dirty = false;
-                return;
-            }
+        if let Some((vb, _, _)) = &self.mesh_gpu
+            && vb.size() == bytes
+        {
+            ctx.queue.write_buffer(vb, 0, bytemuck::cast_slice(&data));
+            self.mesh_dirty = false;
+            return;
         }
         let vb = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("threers shape marks vertices"),

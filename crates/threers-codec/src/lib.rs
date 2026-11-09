@@ -116,8 +116,10 @@ pub mod audio_file;
 pub mod av1;
 pub mod bitstream;
 pub mod bytes;
-pub mod captions;
-pub mod contrast;
+/// The caption data model, from [`threers_captions`].
+pub use threers_captions as captions;
+/// WCAG luminance and contrast, from [`threers_captions`].
+pub use threers_captions::contrast;
 pub mod decode;
 pub mod ffcompat;
 pub mod flac;
@@ -147,7 +149,8 @@ pub mod swr;
 pub mod vaapi;
 #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
 pub mod videotoolbox;
-#[cfg(all(feature = "videotoolbox", target_os = "macos"))]
+// The decoder hands pictures over in `decode`'s types, so it needs `decode` too.
+#[cfg(all(feature = "videotoolbox", feature = "decode", target_os = "macos"))]
 pub mod videotoolbox_decode;
 pub mod vorbis;
 pub mod vp9;

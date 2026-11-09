@@ -32,7 +32,7 @@ fn cpu_seconds() -> f64 {
         sec: i64,
         nsec: i64,
     }
-    extern "C" {
+    unsafe extern "C" {
         fn clock_gettime(clock: i32, t: *mut Timespec) -> i32;
     }
     const THREAD_CPU: i32 = if cfg!(target_os = "macos") { 16 } else { 3 };
@@ -281,10 +281,10 @@ fn draw() {
                 o.visible = !hidden.contains(id);
             }
         }
-        if let Some(o) = scene.get_mut(sun) {
-            if let threers::ObjectKind::Light(Light::Directional(d)) = &mut o.kind {
-                d.cast_shadow = shadow;
-            }
+        if let Some(o) = scene.get_mut(sun)
+            && let threers::ObjectKind::Light(Light::Directional(d)) = &mut o.kind
+        {
+            d.cast_shadow = shadow;
         }
     };
     // One frame read back: on the Metal backend, until a program has read
@@ -296,10 +296,10 @@ fn draw() {
     for round in 0..150 {
         for (k, (_, hidden, shadow)) in configs.iter().enumerate() {
             set(&mut scene, hidden, *shadow);
-            if std::env::var("PB").is_ok_and(|v| v.contains("nocast")) {
-                if let Some(o) = scene.get_mut(cover) {
-                    o.cast_shadow = false;
-                }
+            if std::env::var("PB").is_ok_and(|v| v.contains("nocast"))
+                && let Some(o) = scene.get_mut(cover)
+            {
+                o.cast_shadow = false;
             }
             anim.update(&mut scene, 1.0 / 60.0, Some(eye));
             let t = Instant::now();

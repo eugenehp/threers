@@ -80,10 +80,9 @@ pub fn update_skeletons(arena: &mut super::ObjectArena) {
     for (id, palette) in palettes {
         if let Some(super::ObjectKind::SkinnedMesh(sm)) =
             arena.nodes.get_mut(id).map(|n| &mut n.kind)
+            && sm.skeleton.bone_matrices != palette
         {
-            if sm.skeleton.bone_matrices != palette {
-                Arc::make_mut(&mut sm.skeleton).bone_matrices = palette;
-            }
+            Arc::make_mut(&mut sm.skeleton).bone_matrices = palette;
         }
     }
 }
@@ -266,7 +265,7 @@ impl SkinnedMesh {
         }
         if geometry.get_attribute("weight").is_none() {
             let mut weights = vec![0.0; count * 4];
-            for chunk in weights.chunks_exact_mut(4) {
+            for chunk in weights.as_chunks_mut::<4>().0 {
                 chunk[0] = 1.0;
             }
             geometry.set_attribute("weight", BufferAttribute::new(weights, 4));
@@ -292,7 +291,6 @@ impl SkinnedMesh {
 
     /// The geometry in its current pose — morphed, then skinned — in the
     /// mesh's local space, for a CPU renderer to draw under `matrix_world`.
-    /// See [`posed_geometry`].
     pub fn posed_geometry(&self, matrix_world: &Matrix4) -> Arc<BufferGeometry> {
         posed_geometry(
             &self.geometry,

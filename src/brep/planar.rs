@@ -92,10 +92,10 @@ pub fn clip_to_region(boundary: &[[f64; 2]], path: &[[f64; 2]]) -> Vec<Vec<[f64;
         let mut here: Vec<(f64, [f64; 2])> = Vec::new();
         for j in 0..boundary.len() {
             let (q, q2) = (boundary[j], boundary[(j + 1) % boundary.len()]);
-            if let Some((t, _, at)) = segment_cross(path[i], path[i + 1], q, q2) {
-                if !here.iter().any(|(_, p)| dist(*p, at) <= SNAP) {
-                    here.push((t, at));
-                }
+            if let Some((t, _, at)) = segment_cross(path[i], path[i + 1], q, q2)
+                && !here.iter().any(|(_, p)| dist(*p, at) <= SNAP)
+            {
+                here.push((t, at));
             }
         }
         here.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));

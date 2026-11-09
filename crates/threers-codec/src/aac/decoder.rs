@@ -812,7 +812,7 @@ impl AacDecoder {
                         };
                         match cbt_m1 >> 1 {
                             0 => {
-                                for q in cf.chunks_exact_mut(4) {
+                                for q in cf.as_chunks_mut::<4>().0 {
                                     let ix = read(br)? as usize;
                                     q[0] = vq[ix & 3] * sfv;
                                     q[1] = vq[ix >> 2 & 3] * sfv;
@@ -821,7 +821,7 @@ impl AacDecoder {
                                 }
                             }
                             1 => {
-                                for q in cf.chunks_exact_mut(4) {
+                                for q in cf.as_chunks_mut::<4>().0 {
                                     let ix = read(br)?;
                                     let nnz = ix >> 8 & 15;
                                     let mut sign = if nnz != 0 { br.peek32() } else { 0 };
@@ -842,14 +842,14 @@ impl AacDecoder {
                                 }
                             }
                             2 => {
-                                for q in cf.chunks_exact_mut(2) {
+                                for q in cf.as_chunks_mut::<2>().0 {
                                     let ix = read(br)? as usize;
                                     q[0] = vq[ix & 15] * sfv;
                                     q[1] = vq[ix >> 4 & 15] * sfv;
                                 }
                             }
                             3 | 4 => {
-                                for q in cf.chunks_exact_mut(2) {
+                                for q in cf.as_chunks_mut::<2>().0 {
                                     let ix = read(br)?;
                                     let nnz = ix >> 8 & 15;
                                     let sign = if nnz != 0 {
@@ -866,7 +866,7 @@ impl AacDecoder {
                                 }
                             }
                             _ => {
-                                for q in cf.chunks_exact_mut(2) {
+                                for q in cf.as_chunks_mut::<2>().0 {
                                     let mut ix = read(br)?;
                                     if ix == 0 {
                                         q[0] = 0.0;

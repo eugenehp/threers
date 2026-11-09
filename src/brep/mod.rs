@@ -39,8 +39,6 @@ pub mod boolean;
 pub mod curve3d;
 #[cfg(feature = "brep-csg")]
 pub mod intersect;
-/// Subdividing a face's parameter region by the curves drawn on it — the
-/// planar arrangement a face split by *open* curves needs.
 #[cfg(feature = "brep-kernel")]
 pub mod planar;
 pub mod primitives;

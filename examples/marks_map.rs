@@ -22,7 +22,6 @@
 //!
 //! See `docs/marks.md`.
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use threers::cameras::Camera;
@@ -41,9 +40,7 @@ use threers::{
 
 use winit::{
     event::{ElementState, Event, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent},
-    event_loop::EventLoop,
     keyboard::{KeyCode, PhysicalKey},
-    window::WindowBuilder,
 };
 
 /// The city centre, in Web Mercator metres with Y up and north toward −Z. An
@@ -501,41 +498,35 @@ fn opening_camera(aspect: f32) -> (PerspectiveCamera, MapControls) {
 }
 
 async fn run() {
-    let event_loop = EventLoop::new().expect("event loop");
-    let window = Arc::new(
-        WindowBuilder::new()
-            .with_title("threers — marks map")
-            .with_inner_size(winit::dpi::LogicalSize::new(1200, 800))
-            .build(&event_loop)
-            .expect("window"),
-    );
+    let attributes = winit::window::Window::default_attributes()
+        .with_title("threers — marks map")
+        .with_inner_size(winit::dpi::LogicalSize::new(1200, 800));
+    threers::sketch::run_window(attributes, move |window| {
+        // wgpu, or the native Metal backend under `THREERS_BACKEND=metal`.
+        let mut wr = WindowRenderer::new(window.clone()).expect("a GPU for the window");
+        // Single-sampled, so a pick can test against the frame's depth.
+        wr.set_msaa(1);
 
-    // wgpu, or the native Metal backend under `THREERS_BACKEND=metal`.
-    let mut wr = WindowRenderer::new(window.clone()).expect("a GPU for the window");
-    // Single-sampled, so a pick can test against the frame's depth.
-    wr.set_msaa(1);
+        let origin = Origin::new(CENTRE[0], CENTRE[1], CENTRE[2]);
+        let mut scene = scene(&origin);
 
-    let origin = Origin::new(CENTRE[0], CENTRE[1], CENTRE[2]);
-    let mut scene = scene(&origin);
+        let data = pickups();
+        let mut layers = layers(&data);
+        let mut marks = MarkRenderer::new_on(&wr.marks_gpu());
 
-    let data = pickups();
-    let mut layers = layers(&data);
-    let mut marks = MarkRenderer::new_on(&wr.marks_gpu());
+        let (mut camera, mut controls) = opening_camera(wr.aspect());
 
-    let (mut camera, mut controls) = opening_camera(wr.aspect());
+        let mut buttons = (false, false); // (left: pan, right: rotate)
+        let mut cursor = (0.0f32, 0.0f32);
+        let mut cursor_moved = false;
+        let mut pick: Option<PickRequest> = None;
+        let mut hovered: Option<u32> = None;
+        let mut paused = false;
+        let mut hour = 0.0f32;
+        let mut last = Instant::now();
+        let window_for_loop = window.clone();
 
-    let mut buttons = (false, false); // (left: pan, right: rotate)
-    let mut cursor = (0.0f32, 0.0f32);
-    let mut cursor_moved = false;
-    let mut pick: Option<PickRequest> = None;
-    let mut hovered: Option<u32> = None;
-    let mut paused = false;
-    let mut hour = 0.0f32;
-    let mut last = Instant::now();
-    let window_for_loop = window.clone();
-
-    event_loop
-        .run(move |event, target| {
+        move |event, target| {
             let Event::WindowEvent { event, window_id } = event else {
                 return;
             };
@@ -666,8 +657,8 @@ async fn run() {
                 }
                 _ => {}
             }
-        })
-        .expect("event loop");
+        }
+    });
 }
 
 /// Restore the previously hovered row and enlarge the new one. Only those two

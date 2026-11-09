@@ -116,7 +116,7 @@
 //!
 //! Two calls want the main thread, because they touch a view:
 //! [`crate::metal::MetalSurface::from_ns_view`] and, on UIKit platforms,
-//! [`crate::metal::MetalSurface::from_ui_view`]. Both say so with an error
+//! `MetalSurface::from_ui_view`. Both say so with an error
 //! rather than leaving it to AppKit or UIKit. Everything after — `resize`,
 //! `next_frame`, `render` — runs on the render thread, the way `MTKView`-free
 //! engines drive a `CAMetalLayer`.
@@ -147,11 +147,6 @@ pub mod objc;
 pub mod enums;
 pub mod resources;
 
-/// visionOS: the CompositorServices frame loop and ARKit world tracking.
-///
-/// Behind the `visionos` feature. The value types compile for every Apple
-/// target; `ImmersiveRenderer` and
-/// `WorldTracking` exist only on visionOS itself.
 #[cfg(feature = "visionos")]
 pub mod visionos;
 
@@ -263,7 +258,6 @@ pub fn fluid_shader_source() -> String {
     format!("{}\n{passes}\n{FLUID_SHADER_SOURCE}", shader_source())
 }
 
-/// The fluid, on the Metal backend. See [`fluid`].
 #[cfg(feature = "fluid")]
 pub mod fluid;
 #[cfg(feature = "fluid")]

@@ -748,7 +748,9 @@ fn fs_main(@builtin(position) pos : vec4<f32>) -> @builtin(frag_depth) f32 {
             let end = start + (side * 4) as usize;
             out.extend(
                 data[start..end]
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])),
             );
         }

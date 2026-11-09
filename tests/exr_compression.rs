@@ -81,8 +81,10 @@ fn dwa_decodes_what_openexr_decodes_to_rounding() {
         let half = |b: &[u8]| u16::from_le_bytes([b[0], b[1]]) as i32;
         let steps: Vec<i32> = tex
             .data
-            .chunks_exact(2)
-            .zip(want.chunks_exact(2))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(want.as_chunks::<2>().0)
             .map(|(a, b)| (half(a) - half(b)).abs())
             .collect();
         let differ = steps.iter().filter(|&&d| d != 0).count();

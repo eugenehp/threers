@@ -315,7 +315,9 @@ fn bloom_reaches_the_rgba_readback() {
 
     // Everything outside the quad, which is black without bloom.
     let halo = |px: &[u8]| -> u32 {
-        px.chunks_exact(4)
+        px.as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[0] < 200)
             .map(|p| p[0] as u32)
             .sum()
@@ -375,7 +377,9 @@ fn depth_of_field_blurs_the_far_plane_and_not_the_near_one() {
     // differences, which counts sampling noise as detail and went *up* when the
     // first version of the gather was undersampled.
     let soft = |px: &[u8]| -> u32 {
-        px.chunks_exact(4)
+        px.as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| (24..232).contains(&p[0]))
             .count() as u32
     };
@@ -456,12 +460,19 @@ fn depth_of_field_reads_the_clip_planes_from_the_frame() {
         return;
     };
     let long = frame(400.0, 6.0).expect("render");
-    let lit = short.chunks_exact(4).filter(|p| p[0] > 40).count();
+    let lit = short
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| p[0] > 40)
+        .count();
     assert!(lit > 200, "the subject did not draw: {lit} lit pixels");
 
     let differing = |a: &[u8], b: &[u8]| {
-        a.chunks_exact(4)
-            .zip(b.chunks_exact(4))
+        a.as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<4>().0)
             .filter(|(x, y)| (x[0] as i32 - y[0] as i32).abs() > 6)
             .count()
     };

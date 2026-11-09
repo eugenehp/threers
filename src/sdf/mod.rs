@@ -331,16 +331,16 @@ pub trait Sdf3 {
         let mut geometry = MarchingCubes::new(resolution, size).extract(0.0, |x, y, z| {
             -self.distance(Vector3::new(x, y, z) + centre)
         });
-        if centre != Vector3::ZERO {
-            if let Some(position) = geometry.get_attribute("position") {
-                let mut array = position.array.clone();
-                for v in array.chunks_exact_mut(3) {
-                    v[0] += centre.x;
-                    v[1] += centre.y;
-                    v[2] += centre.z;
-                }
-                geometry.set_attribute("position", BufferAttribute::new(array, 3));
+        if centre != Vector3::ZERO
+            && let Some(position) = geometry.get_attribute("position")
+        {
+            let mut array = position.array.clone();
+            for v in array.as_chunks_mut::<3>().0 {
+                v[0] += centre.x;
+                v[1] += centre.y;
+                v[2] += centre.z;
             }
+            geometry.set_attribute("position", BufferAttribute::new(array, 3));
         }
         geometry
     }
@@ -494,7 +494,7 @@ pub trait Sdf3 {
             }
         }
         // Counter-clockwise from outside: against the mean normal.
-        for t in index.chunks_exact_mut(3) {
+        for t in index.as_chunks_mut::<3>().0 {
             let (a, b, c) = (t[0] as usize, t[1] as usize, t[2] as usize);
             let face = (position[b] - position[a]).cross(position[c] - position[a]);
             if face.dot(normal[a] + normal[b] + normal[c]) < 0.0 {

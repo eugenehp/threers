@@ -329,7 +329,9 @@ fn extrude_geometry_matches_three() {
 fn extrude_along_path_matches_three() {
     let f = fixture();
     let to3 = |a: Vec<f64>| {
-        a.chunks_exact(3)
+        a.as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| [c[0], c[1], c[2]])
             .collect::<Vec<_>>()
     };

@@ -565,11 +565,11 @@ impl Vehicle {
         }
         // Newton's third law: push back on whatever the wheel is standing on, so
         // a car parked on a raft sinks it and a car driving off a plank tips it.
-        if let Some(other) = world.body_mut(contact.body) {
-            if other.is_dynamic() {
-                other.wake_up();
-                other.apply_impulse_at_point(impulse * -1.0, contact.point);
-            }
+        if let Some(other) = world.body_mut(contact.body)
+            && other.is_dynamic()
+        {
+            other.wake_up();
+            other.apply_impulse_at_point(impulse * -1.0, contact.point);
         }
     }
 }

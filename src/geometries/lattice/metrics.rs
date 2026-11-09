@@ -334,7 +334,9 @@ impl<'a> Lattice<'a> {
         };
         let verts: Vec<Vector3> = positions
             .array
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| Vector3::new(c[0], c[1], c[2]))
             .collect();
         let indices: Vec<usize> = match &geometry.index {
@@ -345,7 +347,7 @@ impl<'a> Lattice<'a> {
         let near = step.x.max(step.y).max(step.z);
         let mut total = 0.0f32;
         let mut wetted = 0.0f32;
-        for tri in indices.chunks_exact(3) {
+        for tri in indices.as_chunks::<3>().0 {
             let (a, b, c) = (verts[tri[0]], verts[tri[1]], verts[tri[2]]);
             let area = (b - a).cross(c - a).length() * 0.5;
             if !area.is_finite() {

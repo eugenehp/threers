@@ -252,7 +252,11 @@ impl Mixer {
                 if let Some(voice) = self.voices.iter_mut().find(|voice| voice.id == id) {
                     let frames = voice.frames() as f64;
                     let at = seconds.max(0.0) * voice.step * rate;
-                    voice.position = if voice.looping { at % frames.max(1.0) } else { at.min(frames) };
+                    voice.position = if voice.looping {
+                        at % frames.max(1.0)
+                    } else {
+                        at.min(frames)
+                    };
                 }
             }
             Command::FadeOut { id, seconds } => {
@@ -385,40 +389,48 @@ pub fn tone(frequency: f32, seconds: f32, volume: f32) -> Audio {
 ///
 /// If the bytes are not one of those.
 pub fn decode(bytes: &[u8]) -> Result<Audio, String> {
-    use symphonia::core::audio::SampleBuffer;
-    use symphonia::core::codecs::DecoderOptions;
+    use symphonia::core::codecs::audio::AudioDecoderOptions;
+    use symphonia::core::codecs::CodecParameters;
     use symphonia::core::errors::Error;
-    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::formats::probe::Hint;
+    use symphonia::core::formats::{FormatOptions, TrackType};
     use symphonia::core::io::MediaSourceStream;
     use symphonia::core::meta::MetadataOptions;
-    use symphonia::core::probe::Hint;
 
     let source = std::io::Cursor::new(bytes.to_vec());
     let stream = MediaSourceStream::new(Box::new(source), Default::default());
-    let probed = symphonia::default::get_probe()
-        .format(
+    let mut format = symphonia::default::get_probe()
+        .probe(
             &Hint::new(),
             stream,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
+            FormatOptions::default(),
+            MetadataOptions::default(),
         )
         .map_err(|e| format!("not a sound file: {e}"))?;
-    let mut format = probed.format;
-    let track = format.default_track().ok_or("no audio track")?;
+    let track = format
+        .default_track(TrackType::Audio)
+        .ok_or("no audio track")?;
     let track_id = track.id;
+    let Some(CodecParameters::Audio(params)) = &track.codec_params else {
+        return Err("no audio track".to_owned());
+    };
     let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
+        .make_audio_decoder(params, &AudioDecoderOptions::default())
         .map_err(|e| format!("unsupported sound: {e}"))?;
 
     let mut samples = Vec::new();
+    // Each packet's samples, interleaved; the copy resizes it to fit.
+    let mut packet_samples: Vec<f32> = Vec::new();
     let (mut rate, mut channels) = (0, 0);
     loop {
         let packet = match format.next_packet() {
-            Ok(packet) => packet,
+            Ok(Some(packet)) => packet,
+            Ok(None) => break,
+            // A file cut short ends where it was cut.
             Err(Error::IoError(_)) => break,
             Err(e) => return Err(format!("bad sound file: {e}")),
         };
-        if packet.track_id() != track_id {
+        if packet.track_id != track_id {
             continue;
         }
         let decoded = match decoder.decode(&packet) {
@@ -427,12 +439,11 @@ pub fn decode(bytes: &[u8]) -> Result<Audio, String> {
             Err(Error::DecodeError(_)) => continue,
             Err(e) => return Err(format!("bad sound file: {e}")),
         };
-        let spec = *decoded.spec();
-        rate = spec.rate;
-        channels = spec.channels.count() as u16;
-        let mut buffer = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
-        buffer.copy_interleaved_ref(decoded);
-        samples.extend_from_slice(buffer.samples());
+        let spec = decoded.spec();
+        rate = spec.rate();
+        channels = spec.channels().count() as u16;
+        decoded.copy_to_vec_interleaved(&mut packet_samples);
+        samples.extend_from_slice(&packet_samples);
     }
     if samples.is_empty() {
         return Err("sound file is empty".to_owned());
@@ -451,6 +462,39 @@ pub struct SoundAsset(pub Audio);
 impl Asset for SoundAsset {
     fn parse(bytes: &[u8]) -> Result<Self, String> {
         decode(bytes).map(SoundAsset)
+    }
+}
+
+/// What an output stream's callback owns: the mixer, the commands sent to
+/// it, and a buffer to mix into when the device does not take `f32`.
+#[cfg(not(target_arch = "wasm32"))]
+struct Feed {
+    mixer: Mixer,
+    inbox: std::sync::mpsc::Receiver<Command>,
+    channels: usize,
+    scratch: Vec<f32>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Feed {
+    fn apply_commands(&mut self) {
+        while let Ok(command) = self.inbox.try_recv() {
+            self.mixer.apply(command);
+        }
+    }
+
+    /// Mix the next `out.len()` samples into `out`.
+    fn mix_into(&mut self, out: &mut [f32]) {
+        self.apply_commands();
+        self.mixer.render(out, self.channels);
+    }
+
+    /// Mix the next `len` samples into the scratch buffer, and lend it.
+    fn mix(&mut self, len: usize) -> &[f32] {
+        self.apply_commands();
+        self.scratch.resize(len, 0.0);
+        self.mixer.render(&mut self.scratch, self.channels);
+        &self.scratch
     }
 }
 
@@ -500,36 +544,27 @@ impl AudioOut {
         let format = config.sample_format();
         let config: cpal::StreamConfig = config.into();
         let channels = config.channels as usize;
-        let mut mixer = Mixer::new(config.sample_rate.0 as f32);
         let (commands, inbox) = std::sync::mpsc::channel();
-        let mut scratch: Vec<f32> = Vec::new();
-        let mut fill = move |len: usize| -> *const f32 {
-            while let Ok(command) = inbox.try_recv() {
-                mixer.apply(command);
-            }
-            scratch.resize(len, 0.0);
-            mixer.render(&mut scratch, channels);
-            scratch.as_ptr()
+        let mut feed = Feed {
+            mixer: Mixer::new(config.sample_rate as f32),
+            inbox,
+            channels,
+            scratch: Vec::new(),
         };
         let report = |error| eprintln!("audio output: {error}");
         let stream = match format {
+            // The device takes f32: mix straight into its buffer.
             SampleFormat::F32 => device.build_output_stream(
-                &config,
-                move |out: &mut [f32], _| {
-                    let len = out.len();
-                    // SAFETY: `fill` returns a buffer of `len` samples it keeps alive.
-                    out.copy_from_slice(unsafe { std::slice::from_raw_parts(fill(len), len) });
-                },
+                config,
+                move |out: &mut [f32], _| feed.mix_into(out),
                 report,
                 None,
             ),
             SampleFormat::I16 => device.build_output_stream(
-                &config,
+                config,
                 move |out: &mut [i16], _| {
                     let len = out.len();
-                    // SAFETY: as above.
-                    let mixed = unsafe { std::slice::from_raw_parts(fill(len), len) };
-                    for (out, sample) in out.iter_mut().zip(mixed) {
+                    for (out, sample) in out.iter_mut().zip(feed.mix(len)) {
                         *out = (*sample * i16::MAX as f32) as i16;
                     }
                 },
@@ -783,7 +818,8 @@ impl Plugin for AudioPlugin {
             }
         });
         #[cfg(feature = "video")]
-        app.world.on_remove::<crate::video::Video>(|w, _, video| crate::video::on_remove(w, video));
+        app.world
+            .on_remove::<crate::video::Video>(|w, _, video| crate::video::on_remove(w, video));
         app.world.on_remove::<Speakers>(|w, _, speakers| {
             for voice in speakers.0.iter().filter_map(|s| s.voice) {
                 w.resource_mut::<AudioOut>().stop(voice);

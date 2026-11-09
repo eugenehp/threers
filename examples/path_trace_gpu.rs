@@ -108,7 +108,12 @@ fn main() {
         println!("speedup: {:.1}x", cpu_ms / gpu_ms.max(1e-6));
         let cpu_hdr = r.resolve_hdr();
         let mean = |v: &[f32], c: usize| {
-            v.chunks_exact(4).map(|p| p[c] as f64).sum::<f64>() / (v.len() / 4) as f64
+            v.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p[c] as f64)
+                .sum::<f64>()
+                / (v.len() / 4) as f64
         };
         println!("frame means (linear, should match to a percent or so):");
         for (c, name) in ["red", "green", "blue"].iter().enumerate() {

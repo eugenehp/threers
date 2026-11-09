@@ -438,7 +438,7 @@ fn unpack_staging_buffer(
         }
     }
     if pixel_format::is_bgra(color_format) {
-        for px in out.chunks_exact_mut(4) {
+        for px in out.as_chunks_mut::<4>().0 {
             px.swap(0, 2);
         }
     }

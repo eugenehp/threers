@@ -694,10 +694,10 @@ impl TextLabels {
                 let f = self.font_for(c);
                 self.atlas.ensure(&mut self.fonts[f as usize], f, c);
             }
-            if let Some(icon) = &self.labels[li].icon {
-                if let Some((w, h, alpha)) = self.icons.get(&icon.name) {
-                    self.atlas.ensure_icon(&icon.name, *w, *h, alpha);
-                }
+            if let Some(icon) = &self.labels[li].icon
+                && let Some((w, h, alpha)) = self.icons.get(&icon.name)
+            {
+                self.atlas.ensure_icon(&icon.name, *w, *h, alpha);
             }
         }
         let ah = self.atlas.height as f32;
@@ -772,10 +772,10 @@ impl TextLabels {
                     // set with its 32-pixel spacing at 14 is visibly tight.
                     // In raster units, as the pen is.
                     let size = self.font_size.max(1.0);
-                    if let Some((pf, p)) = prev {
-                        if pf == f {
-                            pen += font.kerning(p, c, size) * raster / size;
-                        }
+                    if let Some((pf, p)) = prev
+                        && pf == f
+                    {
+                        pen += font.kerning(p, c, size) * raster / size;
                     }
                     if let Some(Some((x, y, w, h, ox, oy))) =
                         self.atlas.glyphs.get(&GlyphKey::Char(f, c)).copied()

@@ -110,12 +110,11 @@ fn follow<'a>(layer: &'a UsdLayer, path: &str, depth: usize) -> Option<(&'a UsdP
     let prim = layer.prim_at(prim_path)?;
 
     // A node graph forwards; a shader answers.
-    if prim.type_name == "NodeGraph" || prim.value("info:id").is_none() {
-        if let Some(next) = prim.value(output).and_then(|v| v.as_str()) {
-            if next != path {
-                return follow(layer, next, depth + 1);
-            }
-        }
+    if (prim.type_name == "NodeGraph" || prim.value("info:id").is_none())
+        && let Some(next) = prim.value(output).and_then(|v| v.as_str())
+        && next != path
+    {
+        return follow(layer, next, depth + 1);
     }
     Some((prim, output.to_string()))
 }
@@ -123,10 +122,10 @@ fn follow<'a>(layer: &'a UsdLayer, path: &str, depth: usize) -> Option<(&'a UsdP
 /// The surface shader of a material.
 pub fn surface_shader<'a>(material: &'a UsdPrim, layer: &'a UsdLayer) -> Option<&'a UsdPrim> {
     // The connection is the answer when there is one.
-    if let Some(path) = material.value("outputs:surface").and_then(|v| v.as_str()) {
-        if let Some((shader, _)) = follow(layer, path, 0) {
-            return Some(shader);
-        }
+    if let Some(path) = material.value("outputs:surface").and_then(|v| v.as_str())
+        && let Some((shader, _)) = follow(layer, path, 0)
+    {
+        return Some(shader);
     }
     // Failing that, the child that says it is one.
     fn search(prim: &UsdPrim) -> Option<&UsdPrim> {

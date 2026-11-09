@@ -154,7 +154,9 @@ pub(crate) struct StrandRoot {
 fn triangles(geometry: &BufferGeometry, vertices: usize) -> Vec<[usize; 3]> {
     match &geometry.index {
         Some(idx) => idx
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| [c[0] as usize, c[1] as usize, c[2] as usize])
             .collect(),
         None => (0..vertices / 3)
@@ -704,12 +706,12 @@ pub(crate) fn hair_caster(
         tubes.get_attribute("normal")?,
     );
     let mut position = Vec::with_capacity(tp.array.len());
-    for q in tp.array.chunks_exact(3) {
+    for q in tp.array.as_chunks::<3>().0 {
         let l = Vector3::new(q[0], q[1], q[2]).apply_matrix4(&to_local);
         position.extend_from_slice(&[l.x, l.y, l.z]);
     }
     let mut normal = Vec::with_capacity(tnm.array.len());
-    for q in tnm.array.chunks_exact(3) {
+    for q in tnm.array.as_chunks::<3>().0 {
         let l = super::direction(&to_local, Vector3::new(q[0], q[1], q[2]));
         let l = l * (1.0 / l.length().max(1e-9));
         normal.extend_from_slice(&[l.x, l.y, l.z]);

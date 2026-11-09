@@ -52,7 +52,7 @@ OpenSCAD animates by re-evaluating the whole program with `$t` stepped from 0 to
 renders it.
 
 ```bash
-cargo run --release --example scad_animate --features "openscad,video,native-codec"
+cargo run --release -p threers-video --example scad_animate --features openscad
 ```
 
 ```rust

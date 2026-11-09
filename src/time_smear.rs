@@ -328,8 +328,8 @@ impl TimeSmear {
 
     /// Wrap a frame closure (RGBA8, `width × height`, `frames` long) into one
     /// returning smeared frames. Call it with `0, 1, 2, …` in order — exactly
-    /// what [`render_sequence`](crate::render_sequence) and, with the `video`
-    /// feature, `VideoExporter::export` do. It renders up to 63
+    /// what `threers_video::render_sequence` and `VideoExporter::export`
+    /// do. It renders up to 63
     /// frames ahead and keeps those source frames in memory.
     pub fn wrap<F>(
         &self,
@@ -337,7 +337,7 @@ impl TimeSmear {
         height: u32,
         frames: usize,
         render: F,
-    ) -> impl FnMut(usize) -> Vec<u8>
+    ) -> impl FnMut(usize) -> Vec<u8> + use<F>
     where
         F: FnMut(usize) -> Vec<u8>,
     {
@@ -571,7 +571,7 @@ impl<F: FnMut(usize) -> Vec<u8>> Stream<F> {
 // ---------------------------------------------------------------------------
 // Resampling and looks
 
-fn luma_of(px: &[u8]) -> f32 {
+fn luma_of(px: &[u8; 4]) -> f32 {
     0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32
 }
 
@@ -594,7 +594,7 @@ pub(crate) fn downsample_luma(
                 let mut sum = 0f32;
                 for yy in y0..y1 {
                     let row = &rgba[(yy * width + x0) * 4..(yy * width + x1) * 4];
-                    sum += row.chunks_exact(4).map(luma_of).sum::<f32>();
+                    sum += row.as_chunks::<4>().0.iter().map(luma_of).sum::<f32>();
                 }
                 sum / ((y1 - y0) * (x1 - x0)) as f32
             })
@@ -660,7 +660,7 @@ pub(crate) fn composite(
     let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
     let rows = par_map_range(height, |y| {
         let mut row = source[y * width * 4..(y + 1) * width * 4].to_vec();
-        for (x, px) in row.chunks_exact_mut(4).enumerate() {
+        for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let e = sample(echo, x, ty[y]);
             match smear.look {
                 SmearLook::Faithful => {

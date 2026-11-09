@@ -297,7 +297,7 @@ fn mp4_reports_h264_video_stream() {
 
 fn solid_rgba(width: u32, height: u32, r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
     let mut out = vec![0; (width * height * 4) as usize];
-    for px in out.chunks_exact_mut(4) {
+    for px in out.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&[r, g, b, a]);
     }
     out
@@ -449,7 +449,7 @@ fn rgba_gradient_and_low_bitness_survive_the_ffmpeg_roundtrip() {
     let width = 128;
     let height = 72;
     let mut low = solid_rgba(width, height, 0, 0, 0, 255);
-    for (i, px) in low.chunks_exact_mut(4).enumerate() {
+    for (i, px) in low.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let q = ((i % 4) * 64) as u8;
         px[0] = q;
         px[1] = q.wrapping_add(16);

@@ -1050,13 +1050,13 @@ impl SoftBody {
         fb.grow = 1.0;
         fb.twitch = 1.0;
         fb.born = time;
-        if let Some(g) = &mut self.grab {
-            if g.block == a {
-                for node in &mut g.nodes {
-                    *node = *node - ao + fo;
-                }
-                g.block = f;
+        if let Some(g) = &mut self.grab
+            && g.block == a
+        {
+            for node in &mut g.nodes {
+                *node = *node - ao + fo;
             }
+            g.block = f;
         }
         // a burst of goo from the stump
         let p = self.pivot_now(i);

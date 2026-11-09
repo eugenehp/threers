@@ -72,10 +72,10 @@ impl World {
             if line_of_sight {
                 let ray = threers::math::Ray::new(centre, direction);
                 let filter = QueryFilter::default().only_fixed();
-                if let Some(hit) = self.raycast(&ray, distance, filter) {
-                    if hit.toi < distance - 0.01 {
-                        continue; // something solid is in the way
-                    }
+                if let Some(hit) = self.raycast(&ray, distance, filter)
+                    && hit.toi < distance - 0.01
+                {
+                    continue; // something solid is in the way
                 }
             }
             let falloff = 1.0 - distance / radius;

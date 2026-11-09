@@ -90,7 +90,6 @@ pub mod materials;
 pub mod plant;
 pub mod servo;
 pub mod sim;
-/// Three-bearing swivel nozzles: obliquely-cut rotary joints that vector a jet.
 pub mod swivel;
 pub mod transmission;
 pub mod world;

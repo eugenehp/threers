@@ -168,27 +168,25 @@ fn build_scene(tree: &Node) -> FbxScene {
     // a `Geometry` or `Material` reaches the graph only through the model that
     // connects to it.
     for &id in children_of.get(&0).into_iter().flatten() {
-        if let Some(node) = by_id.get(&id) {
-            if node.name == "Model" {
-                if let Some(object) =
-                    build_model(node, id, &by_id, &children_of, &mut arena, &mut materials)
-                {
-                    roots.push(object);
-                }
-            }
+        if let Some(node) = by_id.get(&id)
+            && node.name == "Model"
+            && let Some(object) =
+                build_model(node, id, &by_id, &children_of, &mut arena, &mut materials)
+        {
+            roots.push(object);
         }
     }
 
     // A file with no usable connections still has meshes in it, and returning
     // an empty scene for one would be a worse answer than a flat list.
-    if roots.is_empty() {
-        if let Some(objects) = tree.child("Objects") {
-            for g in objects.children_named("Geometry") {
-                if let Some((mesh, _)) = geometry::build(g) {
-                    let mut object = Object3D::mesh(Mesh::new(mesh, default_material()));
-                    object.name = node_name(g);
-                    roots.push(arena.insert(object));
-                }
+    if roots.is_empty()
+        && let Some(objects) = tree.child("Objects")
+    {
+        for g in objects.children_named("Geometry") {
+            if let Some((mesh, _)) = geometry::build(g) {
+                let mut object = Object3D::mesh(Mesh::new(mesh, default_material()));
+                object.name = node_name(g);
+                roots.push(arena.insert(object));
             }
         }
     }
@@ -265,11 +263,11 @@ fn build_model(
         let Some(child_node) = by_id.get(&child) else {
             continue;
         };
-        if child_node.name == "Model" && child != id {
-            if let Some(kid) = build_model(child_node, child, by_id, children_of, arena, materials)
-            {
-                arena.add_child(object_id, kid);
-            }
+        if child_node.name == "Model"
+            && child != id
+            && let Some(kid) = build_model(child_node, child, by_id, children_of, arena, materials)
+        {
+            arena.add_child(object_id, kid);
         }
     }
     Some(object_id)
@@ -468,7 +466,7 @@ mod tests {
         assert!(g.morph_targets_relative);
         let pos = &g.get_attribute("position").unwrap().array;
         let delta = &g.morph_attributes["position"][0].array;
-        for (p, d) in pos.chunks_exact(3).zip(delta.chunks_exact(3)) {
+        for (p, d) in pos.as_chunks::<3>().0.iter().zip(delta.as_chunks::<3>().0) {
             let want: [f32; 3] = match (p[0], p[1]) {
                 (1.0, 0.0) => [0.0, 0.0, 1.0],
                 (2.0, 1.0) => [0.0, 0.5, 0.0],
@@ -600,7 +598,7 @@ mod tests {
         }
         // And the normals are unit length, which a mis-strided read would not be.
         let normals = &mesh.geometry.get_attribute("normal").unwrap().array;
-        for n in normals.chunks_exact(3) {
+        for n in normals.as_chunks::<3>().0 {
             let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
             assert!((length - 1.0).abs() < 1e-3, "{n:?} is not a unit normal");
         }
@@ -630,8 +628,8 @@ mod tests {
         // `AllSame` is one value for every corner of the mesh.
         let uv = &mesh.geometry.get_attribute("uv").unwrap().array;
         assert_eq!(uv.len(), 12, "6 corners, 2 numbers each");
-        for pair in uv.chunks_exact(2) {
-            assert_eq!(pair, [0.25, 0.75]);
+        for pair in uv.as_chunks::<2>().0 {
+            assert_eq!(*pair, [0.25, 0.75]);
         }
     }
 

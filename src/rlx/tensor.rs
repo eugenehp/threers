@@ -360,7 +360,9 @@ pub fn texture_to_tensor(
     let bytes = &texture.data;
     // The wider floats decoded once (half floats are read in place).
     let floats = match texture.format {
-        TextureFormat::R16Float | TextureFormat::R32Float | TextureFormat::Rgba32Float => texture.format.texels_f32(bytes),
+        TextureFormat::R16Float | TextureFormat::R32Float | TextureFormat::Rgba32Float => {
+            texture.format.texels_f32(bytes)
+        }
         _ => None,
     };
     Ok(pack(width, height, channels, layout, |i, c| {
@@ -426,10 +428,22 @@ pub fn tensor_to_texture(
             }
             pack_rgba16f(&rgba)
         }
-        TextureFormat::R16Float => crate::math::float::pack_f16(&(0..pixels).map(|i| sample(i, 0)).collect::<Vec<_>>()),
-        TextureFormat::R32Float => crate::math::float::pack_f32(&(0..pixels).map(|i| sample(i, 0)).collect::<Vec<_>>()),
+        TextureFormat::R16Float => {
+            crate::math::float::pack_f16(&(0..pixels).map(|i| sample(i, 0)).collect::<Vec<_>>())
+        }
+        TextureFormat::R32Float => {
+            crate::math::float::pack_f32(&(0..pixels).map(|i| sample(i, 0)).collect::<Vec<_>>())
+        }
         TextureFormat::Rgba32Float => {
-            let rgba: Vec<f32> = (0..pixels * 4).map(|k| if k % 4 < channels { sample(k / 4, k % 4) } else { 1.0 }).collect();
+            let rgba: Vec<f32> = (0..pixels * 4)
+                .map(|k| {
+                    if k % 4 < channels {
+                        sample(k / 4, k % 4)
+                    } else {
+                        1.0
+                    }
+                })
+                .collect();
             crate::math::float::pack_f32(&rgba)
         }
         _ => {
@@ -535,7 +549,7 @@ fn quantize(v: f32) -> u8 {
 
 /// IEEE half → f32. The encode direction is [`pack_rgba16f`]'s.
 fn f16_to_f32(bits: u16) -> f32 {
-    crate::renderer::readback::f16_to_f32(bits)
+    crate::math::float::f16_to_f32(bits)
 }
 
 #[cfg(test)]

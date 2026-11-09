@@ -216,7 +216,7 @@ mod tests {
         };
         let mut total = 0.0;
         if let Some(idx) = &g.index {
-            for t in idx.chunks_exact(3) {
+            for t in idx.as_chunks::<3>().0 {
                 total += tri(v(t[0] as usize), v(t[1] as usize), v(t[2] as usize));
             }
         } else {

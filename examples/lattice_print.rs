@@ -88,7 +88,7 @@ fn overhangs(g: &BufferGeometry, up: Vector3) -> Object3D {
     let index = g.index.as_ref().expect("indexed");
     let (mut pos, mut nrm, mut col) = (Vec::new(), Vec::new(), Vec::new());
     let limit = OVERHANG.to_radians();
-    for t in index.chunks_exact(3) {
+    for t in index.as_chunks::<3>().0 {
         let at = |i: u32| {
             let i = i as usize * 3;
             Vector3::new(p[i], p[i + 1], p[i + 2])

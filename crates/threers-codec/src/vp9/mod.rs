@@ -10,7 +10,7 @@
 //!
 //! WebM is the only broadly browser-native *video* container that carries an
 //! alpha channel (VP9 + a second VP9 stream in `BlockAdditional`). The existing
-//! `threers::video` path reaches it through the system `ffmpeg`/`libvpx`, which
+//! `threers_video::export` path reaches it through the system `ffmpeg`/`libvpx`, which
 //! can't run in the browser. A native encoder removes that dependency — at the
 //! cost of reimplementing a large codec.
 //!
