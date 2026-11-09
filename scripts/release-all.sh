@@ -101,6 +101,20 @@ version_from_cargo() {
 VERSION="$(version_from_cargo)"
 log "threers release helper — action=$ACTION targets=$TARGETS version=$VERSION profile=$PROFILE"
 
+# Rust target → the @threers/node-<platform> package that carries its addon.
+# (A case, not an associative array: macOS ships bash 3.2.)
+NODE_TARGET_LIST=(aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu
+  aarch64-unknown-linux-gnu x86_64-pc-windows-msvc)
+node_platform() {
+  case "$1" in
+    aarch64-apple-darwin) echo darwin-arm64 ;;
+    x86_64-apple-darwin) echo darwin-x64 ;;
+    x86_64-unknown-linux-gnu) echo linux-x64-gnu ;;
+    aarch64-unknown-linux-gnu) echo linux-arm64-gnu ;;
+    x86_64-pc-windows-msvc) echo win32-x64-msvc ;;
+  esac
+}
+
 # What a publish did, for the table at the end: "state  what".
 SUMMARY=()
 note() {
@@ -232,7 +246,7 @@ release_npm_esm() {
 # npm native (napi-rs) — host triple locally; full matrix in CI
 # ---------------------------------------------------------------------------
 release_npm_node() {
-  log "npm native: threers-node (host triple; CI builds all arches on tag)"
+  log "npm native: threers-node (PLATFORMS=${PLATFORMS:-host})"
   if [[ "$ACTION" == "publish" ]] && npm_has threers-node; then
     echo "    threers-node@$VERSION is already on npm, platform packages first; nothing to do"
     note skipped "npm threers-node and @threers/node-* $VERSION (already up)"
@@ -241,34 +255,37 @@ release_npm_node() {
   if [[ ! -d "$ROOT/crates/threers-node/node_modules" ]]; then
     (cd "$ROOT/crates/threers-node" && run npm install)
   fi
-  if [[ "$DRY_RUN" != "1" ]]; then
-    (cd "$ROOT/crates/threers-node" && npm run build)
-  else
-    echo "[dry-run] (cd crates/threers-node && npm run build)"
-  fi
 
-  # Copy host .node into the matching platform stub if present.
-  local node_file=""
-  for f in "$ROOT/crates/threers-node"/*.node; do
-    [[ -f "$f" ]] || continue
-    node_file="$f"
-    break
-  done
-  if [[ -n "$node_file" ]]; then
-    local base dest_dir
-    base=$(basename "$node_file")
-    case "$base" in
-      *darwin-arm64*) dest_dir=npm/darwin-arm64 ;;
-      *darwin-x64*) dest_dir=npm/darwin-x64 ;;
-      *linux-x64-gnu*) dest_dir=npm/linux-x64-gnu ;;
-      *linux-arm64-gnu*) dest_dir=npm/linux-arm64-gnu ;;
-      *win32-x64-msvc*) dest_dir=npm/win32-x64-msvc ;;
-      *) dest_dir="" ;;
-    esac
-    if [[ -n "$dest_dir" && -d "$ROOT/crates/threers-node/$dest_dir" ]]; then
-      log "staging $base → $dest_dir/"
-      run cp "$node_file" "$ROOT/crates/threers-node/$dest_dir/"
+  # PLATFORMS=host (default) builds this machine's addon; PLATFORMS=all builds
+  # all five from here, cross-compiling the others: macOS x64 with rustc
+  # alone, Linux through cargo-zigbuild (needs `zig`) and Windows MSVC through
+  # cargo-xwin, both via `napi build -x`. A platform whose package is already
+  # on npm is not rebuilt.
+  local t plat built=()
+  for t in $(build_targets); do
+    plat=$(node_platform "$t")
+    [[ -n "$plat" ]] || { echo "    no npm package for $t; skipping" >&2; continue; }
+    if [[ "$ACTION" == "publish" ]] && npm_has "@threers/node-$plat"; then
+      echo "    @threers/node-$plat@$VERSION is already on npm; not rebuilding it"
+      continue
     fi
+    local cross=()
+    [[ "$t" == "$(rustc -vV | sed -n 's/^host: //p')" || "$t" == *-apple-darwin ]] || cross=(-x)
+    (cd "$ROOT/crates/threers-node" && run npx napi build --platform --release --target "$t" ${cross[@]+"${cross[@]}"} \
+       --features headless,physics,animation)
+    built+=("$plat")
+  done
+
+  # Stage what this run built, and nothing older that happens to be lying here.
+  for plat in ${built[@]+"${built[@]}"}; do
+    local file="$ROOT/crates/threers-node/threers-node.$plat.node"
+    if [[ -f "$file" || "$DRY_RUN" == "1" ]]; then
+      log "staging threers-node.$plat.node → npm/$plat/"
+      run cp "$file" "$ROOT/crates/threers-node/npm/$plat/"
+    fi
+  done
+  if [[ "$ACTION" == "publish" ]] && printf '%s\n' ${built[@]+"${built[@]}"} | grep -q '^linux-'; then
+    linux_gate addons
   fi
 
   if [[ "$ACTION" == "pack" || "$ACTION" == "publish" ]]; then
@@ -299,7 +316,7 @@ release_npm_node() {
     done
     if (( ${#missing[@]} )); then
       echo "    not publishing threers-node yet: ${missing[*]} @ $VERSION not on npm" >&2
-      note pending "npm threers-node $VERSION — waits for ${#missing[@]} platform package(s); push the v$VERSION tag"
+      note pending "npm threers-node $VERSION — waits for ${#missing[@]} platform package(s): PLATFORMS=all, or push the v$VERSION tag"
       return 0
     fi
     npm_publish "$ROOT/crates/threers-node" threers-node
@@ -309,43 +326,115 @@ release_npm_node() {
 # ---------------------------------------------------------------------------
 # PyPI (maturin) — host wheel locally; full matrix in CI
 # ---------------------------------------------------------------------------
-# Does PyPI have a threers $VERSION wheel for this OS and CPU already?
-pypi_has_host_wheel() {
-  local json
+# The Rust targets this run builds native packages for: this machine's
+# (PLATFORMS=host, the default), or all five (PLATFORMS=all).
+build_targets() {
+  if [[ "${PLATFORMS:-host}" == all ]]; then
+    echo "${NODE_TARGET_LIST[@]}"
+  else
+    rustc -vV | sed -n 's/^host: //p'
+  fi
+}
+
+# Run the Linux builds just made, in Docker, before any of them is uploaded:
+# a cross-compiled build nobody ran is how an arm64 addon that crashed on its
+# first frame nearly shipped. SKIP_LINUX_TEST=1 skips it (and says so).
+linux_gate() {
+  local what="$1"
+  [[ "$DRY_RUN" == "1" ]] && { echo "[dry-run] scripts/test-linux-builds.sh ($what)"; return; }
+  if [[ "${SKIP_LINUX_TEST:-0}" == "1" ]]; then
+    echo "    SKIP_LINUX_TEST=1: uploading Linux $what nobody has run" >&2
+    note untested "Linux $what (SKIP_LINUX_TEST=1)"
+    return
+  fi
+  log "testing the Linux $what in Docker before uploading them"
+  if [[ "$what" == addons ]]; then
+    WHEELS=/nonexistent "$ROOT/scripts/test-linux-builds.sh"
+  else
+    ADDONS=/nonexistent WHEELS="$ROOT/crates/threers-py/dist" "$ROOT/scripts/test-linux-builds.sh"
+  fi || {
+    echo "Linux $what failed in Docker; nothing of them was uploaded." >&2
+    echo "  (no Docker? start it, or SKIP_LINUX_TEST=1 to upload untested)" >&2
+    exit 1
+  }
+}
+
+# The wheel filename pieces that identify a Rust target's wheel.
+wheel_tag() {
+  case "$1" in
+    aarch64-apple-darwin) echo "macosx_*_arm64" ;;
+    x86_64-apple-darwin) echo "macosx_*_x86_64" ;;
+    x86_64-unknown-linux-gnu) echo "manylinux*_x86_64" ;;
+    aarch64-unknown-linux-gnu) echo "manylinux*_aarch64" ;;
+    x86_64-pc-windows-msvc) echo "win_amd64" ;;
+  esac
+}
+
+# Does PyPI have the threers $VERSION wheel for Rust target $1 already?
+pypi_has_wheel() {
+  local json tag
+  tag=$(wheel_tag "$1")
   json=$(curl -fsS "https://pypi.org/pypi/threers/$VERSION/json" 2>/dev/null) || return 1
   python3 -c '
-import json, platform, sys
-osname = {"Darwin": "macosx", "Linux": "linux", "Windows": "win"}[platform.system()]
-cpu = {"arm64": ("arm64", "aarch64"), "aarch64": ("aarch64", "arm64"),
-       "x86_64": ("x86_64", "amd64"), "AMD64": ("amd64", "x86_64")}[platform.machine()]
-files = [u["filename"].lower() for u in json.load(sys.stdin)["urls"]]
-sys.exit(0 if any(f.endswith(".whl") and osname in f and any(c in f for c in cpu) for f in files) else 1)
-' <<<"$json"
+import fnmatch, json, sys
+files = [u["filename"] for u in json.load(sys.stdin)["urls"]]
+sys.exit(0 if any(fnmatch.fnmatch(f, "*-" + sys.argv[1] + ".whl") for f in files) else 1)
+' "$tag" <<<"$json"
+}
+
+# maturin 1.16 or newer: older ones link Linux arm64 with a zig that rejects
+# rustc's --fix-cortex-a53-843419. MATURIN=path picks another binary.
+maturin_ok() {
+  local v
+  v=$("${MATURIN:-maturin}" --version 2>/dev/null | awk '{print $2}') || return 1
+  python3 -c "import sys; sys.exit(0 if tuple(map(int, '$v'.split('.')[:2])) >= (1, 16) else 1)"
 }
 
 release_pypi() {
-  log "PyPI: threers (maturin, host triple)"
-  if ! command -v maturin >/dev/null 2>&1; then
-    echo "maturin not found — pip install maturin" >&2
+  log "PyPI: threers (maturin, PLATFORMS=${PLATFORMS:-host})"
+  if ! maturin_ok; then
+    echo "need maturin 1.16 or newer (have: $("${MATURIN:-maturin}" --version 2>/dev/null || echo none));" \
+         "pip install -U maturin, or MATURIN=path" >&2
     exit 1
   fi
-  # shellcheck disable=SC2054  # one cargo feature list, not three elements
-  local flags=(--release --features headless,physics,animation -o dist)
-  mkdir -p "$ROOT/crates/threers-py/dist"
-  if [[ "$ACTION" == "publish" ]]; then
-    if pypi_has_host_wheel; then
-      echo "    threers $VERSION already has a wheel for this platform on PyPI; not rebuilding it"
-      note skipped "PyPI threers $VERSION, $(uname -s) $(uname -m) wheel (already up)"
-      return
+  local dist="$ROOT/crates/threers-py/dist" t tag wheel nbuilt=0 wheels=()
+  mkdir -p "$dist"
+  # Wheels of this version from earlier runs are not this build: drop them, so
+  # nothing older is tested or uploaded by mistake.
+  [[ "$DRY_RUN" == "1" ]] || rm -f "$dist"/threers-"$VERSION"-*.whl
+  for t in $(build_targets); do
+    tag=$(wheel_tag "$t")
+    if [[ "$ACTION" == "publish" ]] && pypi_has_wheel "$t"; then
+      echo "    threers $VERSION already has its $tag wheel on PyPI; not rebuilding it"
+      note skipped "PyPI threers $VERSION $tag (already up)"
+      continue
     fi
-    # --skip-existing too: a rerun after a partial upload is not an error.
-    (cd "$ROOT/crates/threers-py" && run maturin publish --skip-existing --non-interactive "${flags[@]}")
-    note published "PyPI threers $VERSION, $(uname -s) $(uname -m) wheel"
-    note pending "PyPI wheels for the other platforms — CI builds them on the v$VERSION tag"
-  else
-    (cd "$ROOT/crates/threers-py" && run maturin build "${flags[@]}")
-    ls -la "$ROOT/crates/threers-py/dist/" 2>/dev/null || true
+    local zig=()
+    [[ "$t" == *-linux-* ]] && zig=(--zig)
+    # shellcheck disable=SC2054  # one cargo feature list, not three elements
+    (cd "$ROOT/crates/threers-py" && run "${MATURIN:-maturin}" build --release --target "$t" ${zig[@]+"${zig[@]}"} \
+       --features headless,physics,animation -o "$dist")
+    nbuilt=$((nbuilt + 1))
+  done
+  ls -la "$dist"/threers-"$VERSION"-*.whl 2>/dev/null || true
+  [[ "$ACTION" == "publish" ]] || return 0
+  (( nbuilt )) || return 0
+
+  if [[ "$DRY_RUN" == "1" ]] || compgen -G "$dist/threers-$VERSION-*linux*.whl" >/dev/null; then
+    linux_gate wheels
   fi
+  for wheel in "$dist"/threers-"$VERSION"-*.whl; do
+    [[ -f "$wheel" ]] && wheels+=("$wheel")
+  done
+  if (( ${#wheels[@]} )); then
+    # --skip-existing: a rerun after a partial upload is not an error.
+    run "${MATURIN:-maturin}" upload --skip-existing --non-interactive "${wheels[@]}"
+    for wheel in "${wheels[@]}"; do note published "PyPI $(basename "$wheel")"; done
+  elif [[ "$DRY_RUN" == "1" ]]; then
+    note published "PyPI threers $VERSION wheels ($nbuilt)"
+  fi
+  [[ "${PLATFORMS:-host}" == all ]] || \
+    note pending "PyPI wheels for the other platforms — PLATFORMS=all, or push the v$VERSION tag"
 }
 
 # ---------------------------------------------------------------------------

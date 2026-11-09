@@ -64,12 +64,14 @@ jobs:
       fail-fast: false
       matrix:
         settings:
-          - host: macos-14
+          # macos-15, not 14: GitHub retired the macOS 14 image, and a job asking
+          # for it is cancelled in a second ("configuration … is not supported").
+          - host: macos-15
             target: aarch64-apple-darwin
           # Cross-compiled on Apple silicon: no macos-13 runner ever picks the job
           # up, it sits queued for 24 hours and cancels, and the publish job that
           # needs the whole matrix is skipped with it.
-          - host: macos-14
+          - host: macos-15
             target: x86_64-apple-darwin
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
@@ -157,10 +159,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
           # Cross-compiled on Apple silicon (abi3 wheel); see the napi matrix.
-          - os: macos-14
+          - os: macos-15
             target: x86_64-apple-darwin
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu

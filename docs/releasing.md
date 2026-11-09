@@ -291,15 +291,45 @@ optional platform packages:
 | `aarch64-unknown-linux-gnu` | `@threers/node-linux-arm64-gnu` |
 | `x86_64-pc-windows-msvc` | `@threers/node-win32-x64-msvc` |
 
+All five build from one Mac, so the whole set can go up without CI; see
+[One machine, every platform](#one-machine-every-platform).
+
+Deno / browser → use `@threers/threers` (wasm), not `threers-node`.
+
+## One machine, every platform
+
+Every native package — the five `@threers/node-*` addons and the five PyPI
+wheels — builds and is tested on one Mac, with no CI:
+
 ```bash
-cd crates/threers-node
-npm i
-npm run build          # local host triple
-npx napi prepublish -t npm
-npm publish
+PLATFORMS=all PUBLISH=1 ./scripts/release-all.sh publish
 ```
 
-Deno / browser → use `threers` (wasm), not `threers-node`.
+| Platform | Node addon | Wheel | Run before upload |
+|---|---|---|---|
+| macOS arm64 | native | native | — (this machine) |
+| macOS x64 | `--target x86_64-apple-darwin` | same | — (runs under Rosetta) |
+| Linux x64 | `napi build -x` (cargo-zigbuild) | `maturin --zig` | Docker, emulated |
+| Linux arm64 | `napi build -x` (cargo-zigbuild) | `maturin --zig` | Docker, native |
+| Windows x64 | `napi build -x` (cargo-xwin) | maturin + cargo-xwin | — |
+
+Needs: `zig`, `cargo-zigbuild`, `cargo-xwin` and `lld-link` on PATH, the five
+targets from `rustup target add`, **maturin 1.16 or newer** (1.13's zig
+linker rejects rustc's `--fix-cortex-a53-843419` on Linux arm64; `MATURIN=path`
+picks another binary), and Docker Desktop running. The Windows wheel
+cross-builds because `threers-py` turns on pyo3's `generate-import-lib`.
+
+Before anything for Linux is uploaded, `scripts/test-linux-builds.sh` loads
+each addon and installs each wheel in a container of its architecture
+(Node 24, Python 3, Mesa's software Vulkan) and renders a frame, checking the
+pixels. A failure stops the upload. Run it on its own any time after a build;
+`SKIP_LINUX_TEST=1` uploads untested, and the summary says so. It is not
+theoretical: for 0.0.12 it found the post-processing shader crashing on
+llvmpipe arm64, which every other check had passed.
+
+What is already up is skipped per platform, before it is built, so the command
+can be rerun after a failure. Without `PLATFORMS=all` only this machine's addon
+and wheel are built, and the rest wait for CI (push the `v*` tag).
 
 ## PyPI (`crates/threers-py`)
 

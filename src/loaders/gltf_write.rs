@@ -201,6 +201,9 @@ struct Writer {
     interned: HashMap<(usize, Option<usize>), usize>,
     /// The same for images: a texture shared by ten materials is one PNG.
     interned_textures: HashMap<usize, usize>,
+    /// Roughness and metalness maps packed into one image, by the pair's
+    /// `Arc` pointers (0 for an absent one).
+    interned_packed: HashMap<(usize, usize), usize>,
     /// Materials already written, by `Arc` pointer (three.js mode only).
     interned_materials: HashMap<usize, usize>,
     extensions_used: std::collections::BTreeSet<String>,
@@ -687,11 +690,16 @@ fn write_material(
             Value::object([("index", Value::number(index as f64))]),
         ));
     }
+    let mut maps = Vec::new();
+    if options.textures {
+        maps = write_other_maps(w, material, &mut pbr);
+    }
 
     let mut pairs: Vec<(String, Value)> = vec![(
         "pbrMetallicRoughness".to_string(),
         Value::Object(pbr.into_iter().collect()),
     )];
+    pairs.extend(maps);
     let emissive = material.emissive();
     if emissive.r > 0.0 || emissive.g > 0.0 || emissive.b > 0.0 {
         pairs.push((
@@ -768,10 +776,15 @@ fn write_material_three_js(
             Value::object([("index", Value::number(index as f64))]),
         ));
     }
+    let mut maps = Vec::new();
+    if options.textures {
+        maps = write_other_maps(w, material, &mut pbr);
+    }
     let mut pairs: Vec<(String, Value)> = vec![(
         "pbrMetallicRoughness".to_string(),
         Value::Object(pbr.into_iter().collect()),
     )];
+    pairs.extend(maps);
     let e = info.emissive;
     if e[0].max(e[1]).max(e[2]) > 0.0 {
         pairs.push((
@@ -841,17 +854,21 @@ fn base_colour_map(material: &Material) -> Option<std::sync::Arc<crate::textures
     }
 }
 
-/// An image, embedded as a PNG in the binary buffer.
-fn write_texture(
-    w: &mut Writer,
-    texture: &std::sync::Arc<crate::textures::Texture>,
-) -> Option<usize> {
-    let key = std::sync::Arc::as_ptr(texture) as usize;
-    if let Some(found) = w.interned_textures.get(&key) {
-        return Some(*found);
-    }
+/// A texture's pixels in glTF's order: the first row is at v = 0.
+///
+/// [`Texture::to_rgba8`] gives rows top-first, the picture's top at v = 1 —
+/// USD's and OpenGL's convention, and three.js's with `flipY`. glTF counts v
+/// down from the first row instead, so the rows go in reversed. (A texture
+/// loaded from glTF, `flip_y` off, comes back to its own rows this way.)
+fn gltf_rows(texture: &crate::textures::Texture) -> Option<Vec<u8>> {
     let pixels = texture.to_rgba8()?;
-    let png = crate::utils::png::encode_png(texture.width, texture.height, &pixels);
+    let stride = texture.width as usize * 4;
+    Some(pixels.chunks_exact(stride).rev().flatten().copied().collect())
+}
+
+/// RGBA pixels in glTF row order, embedded as a PNG, and a texture over them.
+fn write_png(w: &mut Writer, width: u32, height: u32, pixels: &[u8]) -> usize {
+    let png = crate::utils::png::encode_png(width, height, pixels);
     let view = w.view(&png, None);
     w.images.push(Value::object([
         ("bufferView", Value::number(view as f64)),
@@ -872,9 +889,106 @@ fn write_texture(
         ("source", Value::number(image as f64)),
         ("sampler", Value::number(0.0)),
     ]));
-    let at = w.textures.len() - 1;
+    w.textures.len() - 1
+}
+
+/// An image, embedded as a PNG in the binary buffer.
+fn write_texture(
+    w: &mut Writer,
+    texture: &std::sync::Arc<crate::textures::Texture>,
+) -> Option<usize> {
+    let key = std::sync::Arc::as_ptr(texture) as usize;
+    if let Some(found) = w.interned_textures.get(&key) {
+        return Some(*found);
+    }
+    let pixels = gltf_rows(texture)?;
+    let at = write_png(w, texture.width, texture.height, &pixels);
     w.interned_textures.insert(key, at);
     Some(at)
+}
+
+/// glTF's one metallic-roughness image: roughness in green and metalness in
+/// blue, the channels the renderer samples. One texture serving both, as a
+/// glTF file's does, is written as it is; two are packed into one, the
+/// larger's size, either missing standing at 1 (the factor alone).
+fn write_metal_rough(
+    w: &mut Writer,
+    rough: Option<&std::sync::Arc<crate::textures::Texture>>,
+    metal: Option<&std::sync::Arc<crate::textures::Texture>>,
+) -> Option<usize> {
+    if let (Some(r), Some(m)) = (rough, metal)
+        && std::sync::Arc::ptr_eq(r, m)
+    {
+        return write_texture(w, r);
+    }
+    let ptr = |t: Option<&std::sync::Arc<crate::textures::Texture>>| t.map_or(0, |t| std::sync::Arc::as_ptr(t) as usize);
+    let key = (ptr(rough), ptr(metal));
+    if let Some(found) = w.interned_packed.get(&key) {
+        return Some(*found);
+    }
+    let read = |t: Option<&std::sync::Arc<crate::textures::Texture>>| t.and_then(|t| Some((t.width, t.height, gltf_rows(t)?)));
+    let (r, m) = (read(rough), read(metal));
+    if r.is_none() && m.is_none() {
+        return None;
+    }
+    let width = r.iter().chain(&m).map(|t| t.0).max()?;
+    let height = r.iter().chain(&m).map(|t| t.1).max()?;
+    // nearest texel of a source at the packed image's (x, y)
+    let at = |src: &Option<(u32, u32, Vec<u8>)>, x: u32, y: u32, c: usize| match src {
+        Some((sw, sh, px)) => {
+            let (sx, sy) = ((x as u64 * *sw as u64 / width as u64) as usize, (y as u64 * *sh as u64 / height as u64) as usize);
+            px[(sy * *sw as usize + sx) * 4 + c]
+        }
+        None => 255,
+    };
+    let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+    for y in 0..height {
+        for x in 0..width {
+            pixels.extend([255, at(&r, x, y, 1), at(&m, x, y, 2), 255]);
+        }
+    }
+    let index = write_png(w, width, height, &pixels);
+    w.interned_packed.insert(key, index);
+    Some(index)
+}
+
+/// The maps past the base colour — normal, metallic-roughness, occlusion and
+/// emissive — for a lit material: the metallic-roughness one into `pbr`, the
+/// rest returned for the material itself.
+fn write_other_maps(w: &mut Writer, material: &Material, pbr: &mut Vec<(String, Value)>) -> Vec<(String, Value)> {
+    let (normal, scale, rough, metal, ao, ao_strength, emissive) = match material {
+        Material::Standard(m) => (&m.normal_map, m.normal_scale.x, &m.roughness_map, &m.metalness_map, &m.ao_map, m.ao_intensity, &m.emissive_map),
+        Material::Physical(m) => (&m.normal_map, m.normal_scale.x, &m.roughness_map, &m.metalness_map, &m.ao_map, m.ao_intensity, &m.emissive_map),
+        _ => return Vec::new(),
+    };
+    if let Some(index) = write_metal_rough(w, rough.as_ref(), metal.as_ref()) {
+        pbr.push((
+            "metallicRoughnessTexture".to_string(),
+            Value::object([("index", Value::number(index as f64))]),
+        ));
+    }
+    let mut pairs = Vec::new();
+    if let Some(index) = normal.as_ref().and_then(|t| write_texture(w, t)) {
+        let mut info = vec![("index".to_string(), Value::number(index as f64))];
+        if scale != 1.0 {
+            info.push(("scale".to_string(), Value::number(scale as f64)));
+        }
+        pairs.push(("normalTexture".to_string(), Value::Object(info.into_iter().collect())));
+    }
+    if let Some(index) = ao.as_ref().and_then(|t| write_texture(w, t)) {
+        let mut info = vec![("index".to_string(), Value::number(index as f64))];
+        if ao_strength != 1.0 {
+            info.push(("strength".to_string(), Value::number(ao_strength as f64)));
+        }
+        pairs.push(("occlusionTexture".to_string(), Value::Object(info.into_iter().collect())));
+    }
+    if let Some(index) = emissive.as_ref().and_then(|t| write_texture(w, t)) {
+        pairs.push((
+            "emissiveTexture".to_string(),
+            Value::object([("index", Value::number(index as f64))]),
+        ));
+    }
+    pairs
 }
 
 /// Wrap JSON and binary in the GLB container.
@@ -1072,6 +1186,90 @@ mod tests {
         // Four nodes, but one mesh and one image between them.
         assert_eq!(json.matches("\"primitives\"").count(), 1, "one mesh");
         assert_eq!(json.matches("image/png").count(), 1, "one image");
+    }
+
+    /// The first loaded mesh's standard material, after a GLB round trip.
+    fn reloaded_material(material: Material) -> StandardMaterial {
+        let mut arena = ObjectArena::new();
+        let root = arena.insert(Object3D::mesh(Mesh::new(quad(), material)));
+        let glb = scene_to_glb(&arena, &[root]);
+        let back = GltfLoader::parse_glb(&glb).expect("reloads");
+        let mut stack = back.roots.clone();
+        while let Some(id) = stack.pop() {
+            let o = back.arena.get(id).unwrap();
+            if let crate::core::ObjectKind::Mesh(m) = &o.kind {
+                match &*m.material {
+                    Material::Standard(s) => return s.clone(),
+                    other => panic!("not a standard material: {other:?}"),
+                }
+            }
+            stack.extend(o.children.iter().copied());
+        }
+        panic!("no mesh came back")
+    }
+
+    /// One column, two rows: red then blue, as stored.
+    fn red_over_blue(flip_y: bool) -> Arc<crate::textures::Texture> {
+        let mut t = crate::textures::Texture::new(
+            1,
+            2,
+            crate::textures::TextureFormat::Rgba8UnormSrgb,
+            vec![255, 0, 0, 255, 0, 0, 255, 255],
+        );
+        t.flip_y = flip_y;
+        Arc::new(t)
+    }
+
+    /// Which texel each v lands on is kept. A `flip_y` texture (rows
+    /// top-first, the picture's bottom row at v = 0, as USD's and three.js's
+    /// are) is written bottom row first, since glTF puts v = 0 at the first
+    /// row; one loaded from glTF (`flip_y` off) goes back out as it came in.
+    #[test]
+    fn a_texture_keeps_which_texel_is_at_which_v() {
+        for (flip_y, first) in [(true, [0u8, 0, 255, 255]), (false, [255, 0, 0, 255])] {
+            let back = reloaded_material(
+                StandardMaterial {
+                    map: Some(red_over_blue(flip_y)),
+                    ..StandardMaterial::new(Color::new(1.0, 1.0, 1.0))
+                }
+                .into(),
+            );
+            let map = back.map.expect("the map came back");
+            assert!(!map.flip_y);
+            assert_eq!(&map.data[..4], &first, "flip_y {flip_y}: the texel at v = 0");
+        }
+    }
+
+    /// Normal, occlusion and emissive maps are written, and separate
+    /// roughness and metalness maps are packed into glTF's one image: green
+    /// roughness, blue metalness, the channels the renderer samples.
+    #[test]
+    fn the_other_maps_are_written_and_metal_rough_packed() {
+        let grey = |v: u8| {
+            Arc::new(crate::textures::Texture::new(
+                1,
+                1,
+                crate::textures::TextureFormat::Rgba8Unorm,
+                vec![v, v, v, 255],
+            ))
+        };
+        let back = reloaded_material(
+            StandardMaterial {
+                normal_map: Some(grey(128)),
+                roughness_map: Some(grey(0x40)),
+                metalness_map: Some(grey(0x80)),
+                ao_map: Some(grey(0xc0)),
+                emissive_map: Some(grey(0xff)),
+                ..StandardMaterial::new(Color::new(1.0, 1.0, 1.0))
+            }
+            .into(),
+        );
+        assert!(back.normal_map.is_some(), "normal map");
+        assert!(back.ao_map.is_some(), "occlusion map");
+        assert!(back.emissive_map.is_some(), "emissive map");
+        let (r, m) = (back.roughness_map.expect("roughness"), back.metalness_map.expect("metalness"));
+        assert!(Arc::ptr_eq(&r, &m), "one image serves both");
+        assert_eq!((r.data[1], r.data[2]), (0x40, 0x80));
     }
 
     /// A `.gltf` names its buffer, so the pair resolves.

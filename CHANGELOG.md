@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `PLATFORMS=all ./scripts/release-all.sh publish` builds every Node addon and
+  PyPI wheel on one Mac (zig for Linux, xwin for Windows) and runs the Linux
+  ones in Docker (`scripts/test-linux-builds.sh`) before uploading them.
+
+### Fixed
+
+- Post-processing crashed on GPUs without f16 support in f32 shaders (Mesa's
+  Vulkan drivers without shader f16, such as llvmpipe on arm64): the module
+  used `pack2x16float`, which needs `SHADER_F16_IN_F32`, so it failed to build
+  and the renderer panicked on its first frame. Its f16 rounding is plain f32
+  arithmetic now, bit-exact with IEEE f16 (`tests/f16_round.rs`). The
+  0.0.12 crates, `@threers/threers` and `@threers/node-darwin-arm64` were
+  published before the fix; the rest of the 0.0.12 Node addons and wheels
+  are built with it.
+
 ## [0.0.12] — 2026-11-10
 
 ### Breaking

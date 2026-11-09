@@ -3703,6 +3703,7 @@ dependencies = [
  "criterion",
  "env_logger",
  "futures-channel",
+ "half",
  "js-sys",
  "log",
  "manifold-rust",

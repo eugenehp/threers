@@ -36,7 +36,10 @@ usd = ["threers/usd"]
 threers = { path = "../..", version = "0.0.12" }
 threers-physics = { path = "../threers-physics", version = "0.0.12", optional = true }
 threers-animation = { path = "../threers-animation", version = "0.0.12", optional = true, default-features = false }
-pyo3 = { version = "0.30", features = ["extension-module", "abi3-py39"] }
+# `generate-import-lib`: a Windows wheel links against python3.dll, and with
+# this pyo3 writes the import library itself, so the wheel cross-builds from
+# macOS or Linux with no Windows Python (scripts/release-all.sh, PLATFORMS=all).
+pyo3 = { version = "0.30", features = ["extension-module", "abi3-py39", "generate-import-lib"] }
 
 # `add_extension_module_link_args`: on macOS an extension module leaves the
 # Python symbols for the interpreter to supply at load time, which maturin

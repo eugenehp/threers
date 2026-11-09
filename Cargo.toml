@@ -720,6 +720,8 @@ env_logger = "0.11"
 # `tests/shader_validation.rs` can translate every shader variant as the
 # browser will — ANGLE rejects what naga's WGSL validator accepts.
 naga = { version = "30.0.0", features = ["wgsl-in", "glsl-out"] }
+# IEEE f16 rounding as the reference `tests/f16_round.rs` holds the shader to.
+half = "2"
 
 # What the CPU side of a frame costs. Everything in it runs without an adapter,
 # so it is a number CI can watch rather than one somebody remembers to take.

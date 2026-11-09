@@ -536,8 +536,31 @@ fn postfx_glitch_out(col: vec4<f32>) -> vec4<f32> {
 }
 
 // Round through IEEE f16 — matches WebGL HalfFloat RT read precision.
+//
+// Plain f32 arithmetic, not `unpack2x16float(pack2x16float(x))`: those need
+// the SHADER_F16_IN_F32 capability, which Mesa's Vulkan drivers lack without
+// shader f16 (llvmpipe on arm64, for one), and a module that asks for it fails
+// to build at all. Round to nearest, ties to even, as the hardware does.
 fn f16_round(x: f32) -> f32 {
-    return unpack2x16float(pack2x16float(vec2<f32>(x, 0.0))).x;
+    let bits = bitcast<u32>(x);
+    let sign = bits & 0x80000000u;
+    let mag = bits & 0x7fffffffu;
+    if mag >= 0x7f800000u {
+        return x; // inf and NaN
+    }
+    if mag < 0x38800000u {
+        // Below f16's smallest normal, 2^-14: a multiple of 2^-24. The scaling
+        // is exact, and WGSL's round() breaks ties to even.
+        return bitcast<f32>(sign | bitcast<u32>(round(bitcast<f32>(mag) * 16777216.0) / 16777216.0));
+    }
+    // Keep 10 of the 23 mantissa bits: add just under half of the dropped
+    // part, plus the kept lowest bit so that a tie goes to even. A carry
+    // moves into the exponent, which is correct rounding too.
+    let rounded = (mag + 0xfffu + ((mag >> 13u) & 1u)) & 0xffffe000u;
+    if rounded >= 0x47800000u {
+        return bitcast<f32>(sign | 0x7f800000u); // past 65504: infinity
+    }
+    return bitcast<f32>(sign | rounded);
 }
 
 fn f16_round_rgb(c: vec3<f32>) -> vec3<f32> {
