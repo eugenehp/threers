@@ -36,9 +36,11 @@ impl Renderer {
         self.cube_cache.clear();
     }
 
-    /// How many frames a texture nothing draws keeps its GPU copy before it
-    /// is let go (default [`DEFAULT_CACHE_RETENTION`](super::DEFAULT_CACHE_RETENTION));
-    /// `u64::MAX` keeps every texture ever drawn. The Metal backend's
+    /// How many frames a texture or a geometry nothing draws keeps its GPU
+    /// copy before it is let go (default
+    /// [`DEFAULT_CACHE_RETENTION`](super::DEFAULT_CACHE_RETENTION)); `0` drops
+    /// whatever the last render did not draw, and `u64::MAX` keeps everything
+    /// ever drawn. The Metal backend's
     /// `MetalRenderer::set_cache_retention` is the same setting.
     pub fn set_cache_retention(&mut self, frames: u64) {
         self.cache_retention = frames;

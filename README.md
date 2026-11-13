@@ -94,6 +94,7 @@ self-contained subsystem, behind a Cargo feature where it says so.
 | [USD](docs/usd.md) (`usd`) · [glTF](docs/gltf.md) · [Draco](docs/draco.md) · [KTX2](docs/ktx2.md) · [Alembic](docs/alembic.md) | Interchange, read and written where the format allows |
 | [Video](docs/codecs.md) ([`threers-video`](crates/threers-video); `native-codec`, `native-decode`, `gif`, `nvidia`, `vaapi`) · [Captions](docs/captions.md) · [SVG](docs/svg.md) | Video playing on meshes at up to 8K, colour converted on the GPU, with its soundtrack ([`VideoPlayer`](docs/codecs.md#video-on-a-mesh)); GIF, APNG, WebM, H.264 and HEVC encoders, H.264/HEVC/VP9/AV1 and AAC/MP3/Opus/Vorbis/FLAC decoders in pure Rust (also standalone as [`threers-codec`](crates/threers-codec)), hardware through VideoToolbox (macOS), NVENC/NVDEC (NVIDIA) and VAAPI (AMD, Intel); SRT/WebVTT; vector output |
 | [Metal and visionOS](docs/apple-platforms.md) (`metal`, `visionos`) | A second renderer on Metal, and the CompositorServices loop |
+| [XR](docs/xr.md) (`xr`, `xr-visionos`) | Headsets: any scene per eye, a UI on a panel, controllers, hands and look-and-pinch, on WebXR and natively on Apple Vision Pro; a new Vision Pro app with `scripts/new-visionos-app.sh` |
 | [RLX](docs/rlx.md) (`rlx`, `rlx-geo`) · [Physics](docs/physics.md) | Tensors and learned grading; rigid bodies in `threers-physics` |
 | [Games](docs/ecs.md) · [tutorial](docs/ecs-tutorial.md) | `threers-ecs`: entities, components and systems over the scene graph, parallel systems, input, sound, physics and cars, dev tools, rewind and replays; runs in a window (wgpu or Metal), a browser or a Tauri app |
 
@@ -105,8 +106,8 @@ The core builds on its own: `default-features = false` is math, the scene
 graph, geometry, materials and loaders, with no GPU stack, and `render` adds
 the renderer. The pieces that stand alone are crates of their own —
 [`threers-math`](crates/threers-math), [`threers-captions`](crates/threers-captions),
-[`threers-audio`](crates/threers-audio) and [`threers-codec`](crates/threers-codec)
-underneath, [`threers-video`](crates/threers-video), `threers-physics` and
+[`threers-audio`](crates/threers-audio), [`threers-codec`](crates/threers-codec)
+and [`threers-ui`](crates/threers-ui) underneath, [`threers-video`](crates/threers-video), `threers-physics` and
 `threers-animation` on top.
 
 ## Examples

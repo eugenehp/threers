@@ -707,6 +707,55 @@ impl Renderer {
             })
         });
 
+        // The custom shadow pipelines' group 0: the frame uniforms at a
+        // dynamic offset, so each shadow pass binds its own copy (its light as
+        // the camera). Only the vertex stage runs there, and it reads
+        // nothing else from the group.
+        let custom_shadow_frame_bgl =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("threers custom shadow frame bgl"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<FrameUniforms>() as u64,
+                        ),
+                    },
+                    count: None,
+                }],
+            });
+        let custom_shadow_frame_stride = {
+            let align = device.limits().min_uniform_buffer_offset_alignment as u64;
+            (std::mem::size_of::<FrameUniforms>() as u64).div_ceil(align) * align
+        };
+        let custom_shadow_layout = custom_pipeline_layout.as_ref().map(|_| {
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("threers custom shadow layout"),
+                bind_group_layouts: &[
+                    Some(&custom_shadow_frame_bgl),
+                    Some(&custom_mesh_bgl),
+                    Some(&custom_tex_bgl),
+                    Some(custom_env_bgl.as_ref().unwrap_or(&env_bgl)),
+                ],
+                immediate_size: 0,
+            })
+        });
+        let custom_lit_shadow_layout = custom_lit_mesh_bgl.as_ref().map(|mesh_bgl| {
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("threers custom (lit) shadow layout"),
+                bind_group_layouts: &[
+                    Some(&custom_shadow_frame_bgl),
+                    Some(mesh_bgl),
+                    Some(&custom_tex_bgl),
+                    Some(&env_bgl),
+                ],
+                immediate_size: 0,
+            })
+        });
+
         let vertex_buffers = [wgpu::VertexBufferLayout {
             array_stride: GpuMesh::VERTEX_STRIDE as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -3603,6 +3652,7 @@ impl Renderer {
             msaa_targets: None,
             msaa_targets_spare: None,
             overlay_msaa: false,
+            last_overlay: None,
             last_frame_msaa: false,
             fxaa_scratch: None,
             pipeline_tri_f16,
@@ -3680,12 +3730,19 @@ impl Renderer {
             custom_mesh_bgl,
             custom_pipeline_layout,
             custom_ss_pipeline_layout,
+            custom_shadow_frame_bgl,
+            custom_shadow_layout,
+            custom_lit_shadow_layout,
+            custom_shadow_pipelines: HashMap::new(),
+            custom_shadow_frames: None,
+            custom_shadow_frame_stride,
             custom_lit_pipeline_layout,
             custom_lit_mesh_bgl,
             custom_lit: HashMap::new(),
             custom_pipelines: HashMap::new(),
             custom_encoded_pipelines: HashMap::new(),
             custom_msaa_pipelines: HashMap::new(),
+            custom_cache: Default::default(),
             custom_failed: std::collections::HashSet::new(),
             depth_view,
             depth_texture,
@@ -3779,6 +3836,7 @@ impl Renderer {
             default_white_linear,
             default_data_tex_view,
             default_volume_view,
+            volume_maps: Default::default(),
             sampler_volume,
             last_camera_planes: (0.1, 1000.0),
             last_camera_lens: (0.414, 1.0),

@@ -1,4 +1,4 @@
-//! WGSL with its comments taken out at compile time.
+//! WGSL with its comments and spare blanks taken out at compile time.
 //!
 //! threers' shaders are written with their comments — what a pass reads, why
 //! a constant has the value it does — and kept that way in the sources. The
@@ -9,8 +9,10 @@
 //! run time, so only it is emitted into the binary.
 //!
 //! Line comments go with any blanks before them, and block comments (which
-//! nest, in WGSL) with the blanks before them; the line breaks stay, so a
-//! compile error's line number still points at the source's line. Code that
+//! nest, in WGSL) with the blanks before them. Indentation goes too, and a
+//! run of blanks inside a line (the alignment of `const A    : u32`) is one
+//! space: WGSL only needs blanks to keep tokens apart. The line breaks stay,
+//! so a compile error's line number still points at the source's line. Code that
 //! splices into a shader looks for a token that is not a comment
 //! (`@@SHARED_FUNCTIONS@@`, say), since comments do not survive.
 
@@ -33,33 +35,28 @@ pub const fn strip<const N: usize>(src: &str) -> [u8; N] {
 const fn run(s: &[u8], out: &mut [u8], write: bool) -> usize {
     let mut i = 0;
     let mut n = 0;
-    // The start of a run of spaces or tabs not yet written: blanks before a
-    // comment or a line break are dropped, any others written as they were.
-    let mut blank: Option<usize> = None;
+    // A run of spaces or tabs not yet written: dropped before a comment, a
+    // line break or at the start of a line, one space anywhere else.
+    let mut blank = false;
+    // The last byte kept: a space is only needed between two tokens.
+    let mut last = b'\n';
     while i < s.len() {
         let c = s[i];
         if c == b' ' || c == b'\t' {
-            if blank.is_none() {
-                blank = Some(i);
-            }
+            blank = true;
             i += 1;
             continue;
         }
         let line = c == b'/' && i + 1 < s.len() && s[i + 1] == b'/';
         let block = c == b'/' && i + 1 < s.len() && s[i + 1] == b'*';
-        if let Some(b) = blank {
-            if !(line || block || c == b'\n' || c == b'\r') {
-                let mut k = b;
-                while k < i {
-                    if write {
-                        out[n] = s[k];
-                    }
-                    n += 1;
-                    k += 1;
-                }
+        if blank && !(line || block || c == b'\n' || c == b'\r' || is_blank(last)) {
+            if write {
+                out[n] = b' ';
             }
-            blank = None;
+            n += 1;
+            last = b' ';
         }
+        blank = false;
         if line {
             while i < s.len() && s[i] != b'\n' && s[i] != b'\r' {
                 i += 1;
@@ -82,26 +79,34 @@ const fn run(s: &[u8], out: &mut [u8], write: bool) -> usize {
                             out[n] = b'\n';
                         }
                         n += 1;
+                        last = b'\n';
                     }
                     i += 1;
                 }
             }
             // `a/* … */b` is two tokens: keep them apart.
-            if !breaks {
+            if !breaks && !is_blank(last) {
                 if write {
                     out[n] = b' ';
                 }
                 n += 1;
+                last = b' ';
             }
         } else {
             if write {
                 out[n] = c;
             }
             n += 1;
+            last = c;
             i += 1;
         }
     }
     n
+}
+
+/// A space, or the start of a line: no blank needed after it.
+const fn is_blank(c: u8) -> bool {
+    c == b' ' || c == b'\n' || c == b'\r'
 }
 
 /// A constant WGSL source — a literal, `include_str!`, `concat!` of those, or
@@ -152,7 +157,8 @@ mod tests {
     #[test]
     fn block_comments_nest_and_keep_line_breaks() {
         assert_eq!(strip("a/* x */b"), "a b");
-        assert_eq!(strip("a /* x /* y */ z */ b"), "a  b");
+        assert_eq!(strip("a /* x /* y */ z */ b"), "a b");
+        assert_eq!(strip("/* x */fn f"), "fn f");
         assert_eq!(strip("a /* one\ntwo */b"), "a\nb");
     }
 
@@ -160,7 +166,15 @@ mod tests {
     fn code_is_untouched() {
         let src = "@group(0) @binding(0) var<uniform> u : vec4<f32>;\nfn f(x : f32) -> f32 { return x / 2.0 * 3.0; }\n";
         assert_eq!(strip(src), src);
-        assert_eq!(strip("  indented\n\ttabbed\n"), "  indented\n\ttabbed\n");
+    }
+
+    #[test]
+    fn indentation_goes_and_runs_of_blanks_are_one_space() {
+        assert_eq!(strip("  indented\n\ttabbed\n"), "indented\ntabbed\n");
+        assert_eq!(
+            strip("const A    : u32 = 0u;\nfn f(a :\t f32) {\n    return;\n}\n"),
+            "const A : u32 = 0u;\nfn f(a : f32) {\nreturn;\n}\n"
+        );
     }
 
     #[test]

@@ -5,6 +5,9 @@ mod buffer_geometry_utils;
 
 pub mod png;
 
+#[cfg(feature = "jpeg")]
+pub mod jpeg;
+
 pub mod parallel;
 
 #[cfg(feature = "captions")]

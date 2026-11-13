@@ -6,7 +6,7 @@ use super::device::{MetalDevice, MetalError};
 use super::enums::*;
 use super::objc::{
     alloc_init, class, error_message, msg0, msg1, msg2, msg4, msg6, sel, AutoreleasePool, Bool, Id,
-    Owned, NIL, NO, YES,
+    Owned, Sel, NIL, NO, YES,
 };
 use crate::textures::{Texture, TextureFilter, TextureFormat, TextureWrap};
 
@@ -405,25 +405,48 @@ pub fn new_texture_array_levels(
     }
 }
 
-/// The Metal pixel format for a threers texture format, and whether the GPU can
-/// filter it.
-fn pixel_format_for(format: TextureFormat, bc_supported: bool) -> Result<NSUInteger, MetalError> {
-    Ok(match format {
-        TextureFormat::Rgba8UnormSrgb => pixel_format::RGBA8_UNORM_SRGB,
-        TextureFormat::Rgba8Unorm => pixel_format::RGBA8_UNORM,
-        TextureFormat::R8Unorm => pixel_format::R8_UNORM,
-        TextureFormat::Rgba16Float => pixel_format::RGBA16_FLOAT,
-        TextureFormat::R16Float => pixel_format::R16_FLOAT,
-        TextureFormat::R32Float => pixel_format::R32_FLOAT,
-        TextureFormat::Rgba32Float => pixel_format::RGBA32_FLOAT,
-        TextureFormat::Bc1RgbaUnormSrgb if bc_supported => pixel_format::BC1_RGBA_SRGB,
-        TextureFormat::Bc7RgbaUnormSrgb if bc_supported => pixel_format::BC7_RGBA_SRGB,
-        other => {
-            return Err(MetalError::Unsupported(format!(
-                "texture format {other:?} — this GPU reports no BC texture compression"
-            )))
+/// The Metal pixel format for a threers texture format. Whether this device
+/// can sample it is [`support`]'s question, answered before this is asked.
+fn pixel_format_for(format: TextureFormat) -> NSUInteger {
+    use TextureFormat::*;
+    match format {
+        Rgba8UnormSrgb => pixel_format::RGBA8_UNORM_SRGB,
+        Rgba8Unorm => pixel_format::RGBA8_UNORM,
+        R8Unorm => pixel_format::R8_UNORM,
+        Rg8Unorm => pixel_format::RG8_UNORM,
+        R16Unorm => pixel_format::R16_UNORM,
+        Rgba16Unorm => pixel_format::RGBA16_UNORM,
+        Rgb10a2Unorm => pixel_format::RGB10A2_UNORM,
+        Rgba16Float => pixel_format::RGBA16_FLOAT,
+        R16Float => pixel_format::R16_FLOAT,
+        Rg16Float => pixel_format::RG16_FLOAT,
+        R32Float => pixel_format::R32_FLOAT,
+        Rg32Float => pixel_format::RG32_FLOAT,
+        Rgba32Float => pixel_format::RGBA32_FLOAT,
+        Rg11b10Ufloat => pixel_format::RG11B10_FLOAT,
+        Rgb9e5Ufloat => pixel_format::RGB9E5_FLOAT,
+        Bc1RgbaUnormSrgb => pixel_format::BC1_RGBA_SRGB,
+        Bc1RgbaUnorm => pixel_format::BC1_RGBA,
+        Bc3RgbaUnormSrgb => pixel_format::BC3_RGBA_SRGB,
+        Bc3RgbaUnorm => pixel_format::BC3_RGBA,
+        Bc4RUnorm => pixel_format::BC4_R_UNORM,
+        Bc5RgUnorm => pixel_format::BC5_RG_UNORM,
+        Bc6hRgbUfloat => pixel_format::BC6H_RGB_UFLOAT,
+        Bc6hRgbFloat => pixel_format::BC6H_RGB_FLOAT,
+        Bc7RgbaUnormSrgb => pixel_format::BC7_RGBA_SRGB,
+        Bc7RgbaUnorm => pixel_format::BC7_RGBA,
+        Etc2Rgb8UnormSrgb => pixel_format::ETC2_RGB8_SRGB,
+        Etc2Rgb8Unorm => pixel_format::ETC2_RGB8,
+        Etc2Rgba8UnormSrgb => pixel_format::EAC_RGBA8_SRGB,
+        Etc2Rgba8Unorm => pixel_format::EAC_RGBA8,
+        Astc { block, srgb } => {
+            let i = crate::textures::AstcBlock::ALL
+                .iter()
+                .position(|b| *b == block)
+                .unwrap();
+            pixel_format::astc(i, srgb)
         }
-    })
+    }
 }
 
 /// The storage mode for a texture the CPU writes with `replaceRegion:`.
@@ -452,7 +475,53 @@ pub(crate) fn cpu_writable_storage(device: &MetalDevice) -> NSUInteger {
     }
 }
 
-/// Whether this device can sample BC1/BC7. False on Apple GPUs before M3.
+/// What this device samples natively. Formats it does not are converted on
+/// the CPU at upload, exactly as on the wgpu backend
+/// ([`codec::for_device`](crate::textures::codec::for_device)).
+pub fn support(device: &MetalDevice) -> crate::textures::codec::Support {
+    let apple = supports_family(device, GPU_FAMILY_APPLE2);
+    crate::textures::codec::Support {
+        bc: supports_bc(device),
+        // ETC2/EAC and ASTC are Apple-family features: every Apple silicon
+        // GPU, none of the Intel or AMD ones in older Macs.
+        etc2: apple,
+        astc: apple,
+        unorm16: true,
+        float32_filterable: responds_and(device, sel!("supports32BitFloatFiltering")),
+    }
+}
+
+/// `MTLGPUFamilyApple2`, the first Apple GPU with ASTC.
+const GPU_FAMILY_APPLE2: isize = 1002;
+
+fn supports_family(device: &MetalDevice, family: isize) -> bool {
+    unsafe {
+        let responds: Bool = msg1(
+            device.device_id(),
+            sel!("respondsToSelector:"),
+            sel!("supportsFamily:"),
+        );
+        if responds == 0 {
+            return false;
+        }
+        let ok: Bool = msg1(device.device_id(), sel!("supportsFamily:"), family);
+        ok != 0
+    }
+}
+
+/// A boolean property, false where the OS does not have it.
+fn responds_and(device: &MetalDevice, property: Sel) -> bool {
+    unsafe {
+        let responds: Bool = msg1(device.device_id(), sel!("respondsToSelector:"), property);
+        if responds == 0 {
+            return false;
+        }
+        let ok: Bool = msg0(device.device_id(), property);
+        ok != 0
+    }
+}
+
+/// Whether this device can sample the BC formats. False on Apple GPUs before M3.
 pub fn supports_bc(device: &MetalDevice) -> bool {
     unsafe {
         let responds: Bool = msg1(
@@ -490,12 +559,17 @@ pub fn upload_texture_as(
     src: &Texture,
     linear: bool,
 ) -> Result<Owned, MetalError> {
+    // In a format this device samples: compressed families it lacks decode,
+    // and so on, as on the wgpu backend.
+    let adapted = crate::textures::codec::for_device(src, support(device));
+    let src = &*adapted;
     let bc = src.format.is_block_compressed();
-    let format = match (linear, src.format) {
-        (true, TextureFormat::Rgba8UnormSrgb) => TextureFormat::Rgba8Unorm,
-        _ => src.format,
+    let format = if linear {
+        src.format.with_srgb(false).unwrap_or(src.format)
+    } else {
+        src.format
     };
-    let pixel_format = pixel_format_for(format, supports_bc(device))?;
+    let pixel_format = pixel_format_for(format);
     if bc && src.flip_y {
         return Err(MetalError::Unsupported(
             "flip_y on a block-compressed texture: rows of 4x4 blocks cannot be reordered \
@@ -506,6 +580,23 @@ pub fn upload_texture_as(
 
     // A block-compressed chain has to arrive already encoded; everything else
     // can be filled in by the GPU.
+    // `generateMipmaps` needs a renderable format, which RGB9E5 is not on
+    // every Apple GPU: its chain is worked out on the CPU instead.
+    let cpu_mips = if src.format == TextureFormat::Rgb9e5Ufloat && src.mips.is_empty() {
+        crate::renderer::gpu_texture::cpu_mip_chain(src)
+    } else {
+        Vec::new()
+    };
+    let src = &*if cpu_mips.is_empty() {
+        std::borrow::Cow::Borrowed(src)
+    } else {
+        let mut t = src.clone();
+        t.mips = cpu_mips
+            .into_iter()
+            .map(|(_, _, d)| std::sync::Arc::new(d))
+            .collect();
+        std::borrow::Cow::Owned(t)
+    };
     let supplied_mips = src.mips.len() as u32;
     let mip_levels = if supplied_mips > 0 {
         supplied_mips + 1

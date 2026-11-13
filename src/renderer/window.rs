@@ -581,7 +581,7 @@ impl WgpuWindow {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("threers window"),
-                required_features: wgpu::Features::empty(),
+                required_features: adapter.features() & crate::gpu::TEXTURE_FEATURES,
                 required_limits: limits,
                 ..Default::default()
             })

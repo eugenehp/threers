@@ -46,6 +46,8 @@
 //! | `nurbs` | NURBS curve/surface + geometry (`nurbs`) |
 //! | `raytrace` | Path tracer entry points (`raytrace`) |
 //! | [`captions`] | Cue tracks / overlay (`captions`) |
+//! | `ui` | A retained UI: threers-ui's prelude (the tree, styles, input, gauges and charts), its CPU painter, and its GPU pass with `render` (`ui`) |
+//! | `xr` | Headsets: an app, its frame and GPU, a UI on a panel and the areas the system highlights (`xr`) |
 //! | `metal` | The Metal backend's full working set — surfaces, the reusable render-thread pool, attachments, post chain, pixel formats (`metal`; macOS, iOS, tvOS, visionOS) |
 //! | `video` | GIF/APNG/WebM/H.264/HEVC encoders, MP4, the hardware-first `Mp4Encoder`, and the decoders (`native-codec`; decoders also `video` or `native-decode`) |
 //!
@@ -244,6 +246,38 @@ cfg_metal! {
     }
 }
 
+/// A retained UI (`ui`): threers-ui's own prelude — the tree, `style!`,
+/// layout, input and bindings, semantics, theme tokens, painters, gauges
+/// and charts — with the painter onto an [`Overlay`] and, with `render`,
+/// the GPU pass.
+///
+/// ```ignore
+/// use threers::prelude::ui::*;
+///
+/// let mut ui = Ui::new();
+/// let root = ui.root();
+/// let mut g = gauge(&mut ui, root, "Battery", 0.0..=100.0, GaugeKind::Ring);
+/// g.set(&mut ui, 72.0);
+/// ```
+#[cfg(feature = "ui")]
+pub mod ui {
+    pub use crate::ui::prelude::*;
+    pub use crate::ui::{paint_to_rgba, OverlayPainter};
+    #[cfg(feature = "render")]
+    pub use crate::renderer::UiPass;
+}
+
+/// Headsets (`xr`): an [`App`](crate::xr::App) and the [`Frame`](crate::xr::Frame)
+/// and [`Gpu`](crate::xr::Gpu) it is given, a UI on a [`Panel`](crate::xr::Panel)
+/// drawn by a [`PanelPass`](crate::xr::PanelPass) (with the areas the system
+/// highlights when looked at), and what a headset reports.
+#[cfg(feature = "xr")]
+pub mod xr {
+    pub use crate::xr::{
+        App, Frame, Gpu, Handedness, HoverArea, HoverTarget, Panel, PanelInput, PanelPass, PanelPlane, Pointer, TargetRayMode, XrEvent, XrEventKind, XrEye, XrInput, XrSource,
+    };
+}
+
 /// Subtitle cues and on-screen overlay (`captions`).
 #[cfg(feature = "captions")]
 pub mod captions {
@@ -345,6 +379,34 @@ mod tests {
             let _ = (pixel_format::BGRA8_UNORM_SRGB, MetalWorkerQos::UserInteractive);
             let _ = std::mem::size_of::<(MetalSurface, MetalRenderPool, PassAttachments, PostFxChain)>();
         }
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn nested_ui_module_builds_a_ui() {
+        use super::ui::*;
+        let mut ui = Ui::new();
+        let root = ui.root();
+        let card = ui.add_box(root, style! { padding: 8px; });
+        ui.token_style(card, &[("background", Token::Surface)]);
+        let mut g = gauge_styled(&mut ui, card, "Load", 0.0..=1.0, GaugeKind::Circular, GaugeStyle { tint: GaugeTint::levels(), animate: false, ..Default::default() });
+        g.set(&mut ui, 0.9);
+        ui.layout(200.0, 200.0, &mut FixedWidthText(7.0));
+        let rgba = paint_to_rgba(&ui, 1.0, 200, 200);
+        assert_eq!(rgba.len(), 200 * 200 * 4);
+        assert_eq!(ui.hover_regions().len(), 0, "a gauge is not pressed");
+        let _: Option<ArcShape> = ArcShape::from_svg("M50 10 A40 40 0 0 1 90 50");
+    }
+
+    #[cfg(feature = "xr")]
+    #[test]
+    fn nested_xr_module_places_a_panel() {
+        use super::xr::*;
+        let mut panel = Panel::new(1280.0, 800.0);
+        panel.place_facing(&Matrix4::translation(Vector3::new(0.0, 1.6, 0.0)).elements);
+        let plane: PanelPlane = panel.plane().unwrap();
+        assert!(plane.half.0 > 0.0);
+        let _ = (HoverArea { id: 1, rect: [0.0; 4], radius: 0.0 }, TargetRayMode::Gaze, XrEventKind::Select);
     }
 
     #[test]

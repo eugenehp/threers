@@ -11,18 +11,13 @@ pub struct WebTexture {
 impl WebTexture {
     /// three.js `texture.colorSpace`: `true` for `SRGBColorSpace` (the bytes
     /// are sRGB-encoded and the sampler decodes them), `false` for none or
-    /// linear. Applies to the 8-bit RGBA formats; others are left as they are.
+    /// linear. Applies to every format with an sRGB twin (8-bit RGBA and the
+    /// BC1, BC3, BC7, ETC2 and ASTC colour formats); others are left as they are.
     /// A material bound to the texture before the change keeps the old one
     /// until it is bound again.
     #[wasm_bindgen(js_name = setSrgb)]
     pub fn set_srgb(&mut self, srgb: bool) {
-        use crate::TextureFormat as F;
-        let want = if srgb {
-            F::Rgba8UnormSrgb
-        } else {
-            F::Rgba8Unorm
-        };
-        if matches!(self.inner.format, F::Rgba8Unorm | F::Rgba8UnormSrgb)
+        if let Some(want) = self.inner.format.with_srgb(srgb)
             && self.inner.format != want
         {
             Arc::make_mut(&mut self.inner).format = want;
@@ -270,18 +265,13 @@ impl WebDataTexture {
 impl WebDataTexture {
     /// three.js `texture.colorSpace`: `true` for `SRGBColorSpace` (the bytes
     /// are sRGB-encoded and the sampler decodes them), `false` for none or
-    /// linear. Applies to the 8-bit RGBA formats; others are left as they are.
+    /// linear. Applies to every format with an sRGB twin (8-bit RGBA and the
+    /// BC1, BC3, BC7, ETC2 and ASTC colour formats); others are left as they are.
     /// A material bound to the texture before the change keeps the old one
     /// until it is bound again.
     #[wasm_bindgen(js_name = setSrgb)]
     pub fn set_srgb(&mut self, srgb: bool) {
-        use crate::TextureFormat as F;
-        let want = if srgb {
-            F::Rgba8UnormSrgb
-        } else {
-            F::Rgba8Unorm
-        };
-        if matches!(self.inner.format, F::Rgba8Unorm | F::Rgba8UnormSrgb)
+        if let Some(want) = self.inner.format.with_srgb(srgb)
             && self.inner.format != want
         {
             Arc::make_mut(&mut self.inner).format = want;

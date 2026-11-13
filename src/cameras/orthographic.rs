@@ -18,9 +18,25 @@ pub struct OrthographicCamera {
     /// When set, the view matrix as given (see
     /// [`PerspectiveCamera::view_override`](crate::PerspectiveCamera::view_override)).
     pub view_override: Option<super::ViewOverride>,
+    /// When set, only this patch of the full picture is rendered (see
+    /// [`ViewOffset`](super::ViewOffset)).
+    pub view_offset: Option<super::ViewOffset>,
 }
 
 impl OrthographicCamera {
+    /// Renders only the patch `(x, y, width, height)` of a `full_width` ×
+    /// `full_height` picture (see [`ViewOffset`](super::ViewOffset)).
+    pub fn set_view_offset(&mut self, full_width: f32, full_height: f32, x: f32, y: f32, width: f32, height: f32) -> &mut Self {
+        self.view_offset = Some(super::ViewOffset { full_width, full_height, x, y, width, height });
+        self
+    }
+
+    /// The whole picture again.
+    pub fn clear_view_offset(&mut self) -> &mut Self {
+        self.view_offset = None;
+        self
+    }
+
     pub fn new(left: f32, right: f32, top: f32, bottom: f32, near: f32, far: f32) -> Self {
         Self {
             position: Vector3::new(0.0, 0.0, 5.0),
@@ -34,6 +50,7 @@ impl OrthographicCamera {
             far,
             layers: crate::core::Layers::default(),
             view_override: None,
+            view_offset: None,
         }
     }
 
@@ -52,14 +69,11 @@ impl Camera for OrthographicCamera {
             .unwrap_or_else(|| Matrix4::look_at(self.position, self.target, self.up))
     }
     fn projection_matrix(&self) -> Matrix4 {
-        Matrix4::orthographic(
-            self.left,
-            self.right,
-            self.top,
-            self.bottom,
-            self.near,
-            self.far,
-        )
+        let m = Matrix4::orthographic(self.left, self.right, self.top, self.bottom, self.near, self.far);
+        match self.view_offset {
+            Some(v) => v.apply(m),
+            None => m,
+        }
     }
     fn position(&self) -> Vector3 {
         self.position

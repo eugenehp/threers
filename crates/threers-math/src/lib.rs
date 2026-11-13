@@ -14,6 +14,9 @@ mod color_scale;
 mod color_schemes;
 mod color_space;
 mod cylindrical;
+pub mod easing;
+/// A flame's flicker and sway, shared by everything near a flame.
+pub mod flicker;
 mod euler;
 pub mod float;
 mod frustum;

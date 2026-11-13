@@ -1,6 +1,81 @@
 use crate::math::Vector2;
 use std::sync::Arc;
 
+/// The ASTC block footprints: pixels a 128-bit block covers, from 4x4 (8 bits
+/// a pixel) to 12x12 (0.89).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AstcBlock {
+    B4x4,
+    B5x4,
+    B5x5,
+    B6x5,
+    B6x6,
+    B8x5,
+    B8x6,
+    B8x8,
+    B10x5,
+    B10x6,
+    B10x8,
+    B10x10,
+    B12x10,
+    B12x12,
+}
+
+impl AstcBlock {
+    /// Every footprint, smallest first.
+    pub const ALL: [AstcBlock; 14] = [
+        Self::B4x4,
+        Self::B5x4,
+        Self::B5x5,
+        Self::B6x5,
+        Self::B6x6,
+        Self::B8x5,
+        Self::B8x6,
+        Self::B8x8,
+        Self::B10x5,
+        Self::B10x6,
+        Self::B10x8,
+        Self::B10x10,
+        Self::B12x10,
+        Self::B12x12,
+    ];
+
+    /// `(width, height)` in pixels.
+    pub fn dims(self) -> (u32, u32) {
+        match self {
+            Self::B4x4 => (4, 4),
+            Self::B5x4 => (5, 4),
+            Self::B5x5 => (5, 5),
+            Self::B6x5 => (6, 5),
+            Self::B6x6 => (6, 6),
+            Self::B8x5 => (8, 5),
+            Self::B8x6 => (8, 6),
+            Self::B8x8 => (8, 8),
+            Self::B10x5 => (10, 5),
+            Self::B10x6 => (10, 6),
+            Self::B10x8 => (10, 8),
+            Self::B10x10 => (10, 10),
+            Self::B12x10 => (12, 10),
+            Self::B12x12 => (12, 12),
+        }
+    }
+
+    /// The footprint with these dimensions, if ASTC has one.
+    pub fn from_dims(width: u32, height: u32) -> Option<Self> {
+        Self::ALL.into_iter().find(|b| b.dims() == (width, height))
+    }
+}
+
+/// Which family of block compression a format belongs to. A GPU supports a
+/// family as a whole or not at all: BC on desktops, ETC2 and ASTC on phones
+/// and headsets, all three on Apple silicon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Compression {
+    Bc,
+    Etc2,
+    Astc,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextureFormat {
     /// Standard 8-bit sRGB color (e.g. baseColor / albedo).
@@ -9,6 +84,22 @@ pub enum TextureFormat {
     Rgba8Unorm,
     /// Single-channel 8-bit.
     R8Unorm,
+    /// Two 8-bit channels (2 bytes/px): a two-channel normal map's X and Y, or
+    /// any pair of quantities.
+    Rg8Unorm,
+    /// One 16-bit unsigned normalized channel (2 bytes/px): what a 16-bit
+    /// greyscale PNG holds, such as a height map, at 65536 levels rather than
+    /// 256. Native where the GPU has 16-bit norm formats; elsewhere uploaded as
+    /// 32-bit float where that can be filtered, else as 16-bit float, which
+    /// keeps 11 bits.
+    R16Unorm,
+    /// Four 16-bit unsigned normalized channels (8 bytes/px): a 16-bit RGBA
+    /// PNG. Uploaded like [`R16Unorm`](Self::R16Unorm) where the GPU lacks it.
+    Rgba16Unorm,
+    /// 10 bits each for R, G and B and 2 for alpha, packed in a little-endian
+    /// u32 (R in the low bits): four times the levels of 8-bit colour in the
+    /// same 4 bytes, for linear data that bands at 8 bits.
+    Rgb10a2Unorm,
     /// Linear 16-bit float RGBA (8 bytes/px), stored as raw half-float bytes.
     ///
     /// This is the HDR path: unlike the 8-bit formats it can carry values above
@@ -19,26 +110,52 @@ pub enum TextureFormat {
     /// One 16-bit float channel (2 bytes/px): a height or density field at
     /// half the memory of `R32Float`, filterable everywhere.
     R16Float,
+    /// Two 16-bit float channels (4 bytes/px): a flow or velocity field.
+    Rg16Float,
     /// One 32-bit float channel (4 bytes/px): data that must keep f32
     /// precision — heights, distances, ids up to 2^24. Filtering it needs
     /// `wgpu::Features::FLOAT32_FILTERABLE`; without it, sample it nearest.
     R32Float,
+    /// Two 32-bit float channels (8 bytes/px). Filtering needs
+    /// `FLOAT32_FILTERABLE`, as for [`R32Float`](Self::R32Float).
+    Rg32Float,
     /// Four 32-bit float channels (16 bytes/px): positions, or HDR colour
     /// that must not round to half. Filterable as `R32Float`.
     Rgba32Float,
-    /// BC1 ("DXT1"), sRGB. 4x4 blocks in 8 bytes — half a byte a pixel, an
-    /// eighth of `Rgba8UnormSrgb`.
-    ///
-    /// Two RGB565 endpoints and a 2-bit index per pixel, so a block can express
-    /// four colours along one line in RGB. That is plenty for photographic
-    /// ground and poor for smooth wide gradients, where the four steps become
-    /// visible banding. Alpha is 1 throughout: BC1's punch-through mode is not
-    /// used here.
-    ///
-    /// The point of it is size. Blue Marble at its native 500 m is 86400x43200,
-    /// which is 13.9 GB as RGBA and will not fit anything; as BC1 it is 1.74 GB,
+    /// Three unsigned floats in a little-endian u32: 11 bits for R and G, 10
+    /// for B (6 bits of mantissa, 5 of exponent each, no sign). HDR colour in
+    /// half the bytes of `Rgba16Float`, opaque.
+    Rg11b10Ufloat,
+    /// Three 9-bit mantissas sharing one 5-bit exponent, in a little-endian
+    /// u32: HDR colour at 4 bytes a pixel, filterable everywhere, which makes it
+    /// the compact format for environment maps. Opaque; channels much darker
+    /// than the brightest lose precision, as they share its exponent.
+    Rgb9e5Ufloat,
     /// or 2.32 with a full mip chain.
     Bc1RgbaUnormSrgb,
+    /// BC1, linear: for data rather than colour. Same blocks as
+    /// [`Bc1RgbaUnormSrgb`](Self::Bc1RgbaUnormSrgb), read without the sRGB
+    /// curve.
+    Bc1RgbaUnorm,
+    /// BC3 ("DXT5"), sRGB. 16 bytes a block: BC1 colour (always four colours)
+    /// plus a BC4 block for alpha, so alpha is smooth rather than on or off.
+    Bc3RgbaUnormSrgb,
+    /// BC3, linear.
+    Bc3RgbaUnorm,
+    /// BC4: one channel, 8 bytes a block — half a byte a pixel. Two 8-bit
+    /// endpoints and eight steps between them, for roughness, occlusion or
+    /// height.
+    Bc4RUnorm,
+    /// BC5: two BC4 channels, 16 bytes a block — the format for tangent-space
+    /// normal maps (X and Y; Z is rebuilt in the shader).
+    Bc5RgUnorm,
+    /// BC6H, unsigned: HDR RGB at one byte a pixel, an eighth of
+    /// `Rgba16Float`. For environment maps and skies. Opaque. Decodes to
+    /// `Rgba16Float` where the GPU has no BC.
+    Bc6hRgbUfloat,
+    /// BC6H, signed: as [`Bc6hRgbUfloat`](Self::Bc6hRgbUfloat), with negative
+    /// values.
+    Bc6hRgbFloat,
     /// BC7, sRGB. 4x4 blocks in 16 bytes — one byte a pixel, a quarter of
     /// `Rgba8UnormSrgb`.
     ///
@@ -47,34 +164,194 @@ pub enum TextureFormat {
     /// but the format, upload path and mip handling all work, so an externally
     /// encoded map can be used as-is.
     Bc7RgbaUnormSrgb,
+    /// BC7, linear: normal, roughness and occlusion maps at BC7 quality.
+    Bc7RgbaUnorm,
+    /// ETC2 RGB, sRGB: 8 bytes a 4x4 block, opaque. The compressed format every
+    /// OpenGL ES 3 / WebGL2-with-ETC phone decodes in hardware.
+    Etc2Rgb8UnormSrgb,
+    /// ETC2 RGB, linear.
+    Etc2Rgb8Unorm,
+    /// ETC2 RGBA (ETC2 colour plus an EAC alpha block), sRGB: 16 bytes a block.
+    Etc2Rgba8UnormSrgb,
+    /// ETC2 RGBA, linear.
+    Etc2Rgba8Unorm,
+    /// ASTC (LDR profile): 16 bytes a block at any [`AstcBlock`] footprint, so
+    /// one format spans 8 bits a pixel (4x4) down to 0.89 (12x12). What iOS,
+    /// visionOS and Android hardware decode natively. HDR blocks decode to the
+    /// error colour, as the LDR profile requires.
+    Astc { block: AstcBlock, srgb: bool },
 }
 
 impl TextureFormat {
+    /// Every format: the ASTC ones at each footprint, sRGB and linear.
+    pub fn all() -> Vec<TextureFormat> {
+        use TextureFormat::*;
+        let mut v = vec![
+            Rgba8UnormSrgb,
+            Rgba8Unorm,
+            R8Unorm,
+            Rg8Unorm,
+            R16Unorm,
+            Rgba16Unorm,
+            Rgb10a2Unorm,
+            Rgba16Float,
+            R16Float,
+            Rg16Float,
+            R32Float,
+            Rg32Float,
+            Rgba32Float,
+            Rg11b10Ufloat,
+            Rgb9e5Ufloat,
+            Bc1RgbaUnormSrgb,
+            Bc1RgbaUnorm,
+            Bc3RgbaUnormSrgb,
+            Bc3RgbaUnorm,
+            Bc4RUnorm,
+            Bc5RgUnorm,
+            Bc6hRgbUfloat,
+            Bc6hRgbFloat,
+            Bc7RgbaUnormSrgb,
+            Bc7RgbaUnorm,
+            Etc2Rgb8UnormSrgb,
+            Etc2Rgb8Unorm,
+            Etc2Rgba8UnormSrgb,
+            Etc2Rgba8Unorm,
+        ];
+        for block in AstcBlock::ALL {
+            v.push(Astc { block, srgb: true });
+            v.push(Astc { block, srgb: false });
+        }
+        v
+    }
+
+    /// A number for this format that never changes between versions: cache
+    /// keys and the `.tex` blob both store it. New formats get new codes.
+    pub fn code(self) -> u16 {
+        use TextureFormat::*;
+        match self {
+            Rgba8Unorm => 0,
+            Rgba8UnormSrgb => 1,
+            R8Unorm => 2,
+            Rgba16Float => 3,
+            Bc1RgbaUnormSrgb => 4,
+            Bc7RgbaUnormSrgb => 5,
+            R16Float => 6,
+            R32Float => 7,
+            Rgba32Float => 8,
+            Rg8Unorm => 9,
+            R16Unorm => 10,
+            Rgba16Unorm => 11,
+            Rgb10a2Unorm => 12,
+            Rg16Float => 13,
+            Rg32Float => 14,
+            Rg11b10Ufloat => 15,
+            Rgb9e5Ufloat => 16,
+            Bc1RgbaUnorm => 17,
+            Bc3RgbaUnormSrgb => 18,
+            Bc3RgbaUnorm => 19,
+            Bc4RUnorm => 20,
+            Bc5RgUnorm => 21,
+            Bc6hRgbUfloat => 22,
+            Bc6hRgbFloat => 23,
+            Bc7RgbaUnorm => 24,
+            Etc2Rgb8UnormSrgb => 25,
+            Etc2Rgb8Unorm => 26,
+            Etc2Rgba8UnormSrgb => 27,
+            Etc2Rgba8Unorm => 28,
+            // 0x100 | footprint << 1 | srgb.
+            Astc { block, srgb } => {
+                let i = AstcBlock::ALL.iter().position(|b| *b == block).unwrap() as u16;
+                0x100 | (i << 1) | srgb as u16
+            }
+        }
+    }
+
+    /// The format with this [`code`](Self::code).
+    pub fn from_code(code: u16) -> Option<Self> {
+        Self::all().into_iter().find(|f| f.code() == code)
+    }
+
+    /// The block-compression family, `None` for uncompressed formats.
+    pub fn compression(self) -> Option<Compression> {
+        use TextureFormat::*;
+        match self {
+            Bc1RgbaUnormSrgb | Bc1RgbaUnorm | Bc3RgbaUnormSrgb | Bc3RgbaUnorm | Bc4RUnorm
+            | Bc5RgUnorm | Bc6hRgbUfloat | Bc6hRgbFloat | Bc7RgbaUnormSrgb | Bc7RgbaUnorm => {
+                Some(Compression::Bc)
+            }
+            Etc2Rgb8UnormSrgb | Etc2Rgb8Unorm | Etc2Rgba8UnormSrgb | Etc2Rgba8Unorm => {
+                Some(Compression::Etc2)
+            }
+            Astc { .. } => Some(Compression::Astc),
+            _ => None,
+        }
+    }
+
     /// Block-compressed formats store a `w x h` block of pixels as one fixed
     /// unit and cannot be addressed per pixel at all.
     pub fn is_block_compressed(self) -> bool {
-        matches!(self, Self::Bc1RgbaUnormSrgb | Self::Bc7RgbaUnormSrgb)
+        self.compression().is_some()
+    }
+
+    /// Whether the GPU decodes texels through the sRGB curve.
+    pub fn is_srgb(self) -> bool {
+        use TextureFormat::*;
+        match self {
+            Rgba8UnormSrgb | Bc1RgbaUnormSrgb | Bc3RgbaUnormSrgb | Bc7RgbaUnormSrgb
+            | Etc2Rgb8UnormSrgb | Etc2Rgba8UnormSrgb => true,
+            Astc { srgb, .. } => srgb,
+            _ => false,
+        }
+    }
+
+    /// The same bytes read with (`srgb`) or without the sRGB curve: three.js's
+    /// `colorSpace` for this format. `None` when the format has no such twin
+    /// (floats, and one- and two-channel data).
+    pub fn with_srgb(self, srgb: bool) -> Option<Self> {
+        use TextureFormat::*;
+        let pair = match self {
+            Rgba8UnormSrgb | Rgba8Unorm => (Rgba8UnormSrgb, Rgba8Unorm),
+            Bc1RgbaUnormSrgb | Bc1RgbaUnorm => (Bc1RgbaUnormSrgb, Bc1RgbaUnorm),
+            Bc3RgbaUnormSrgb | Bc3RgbaUnorm => (Bc3RgbaUnormSrgb, Bc3RgbaUnorm),
+            Bc7RgbaUnormSrgb | Bc7RgbaUnorm => (Bc7RgbaUnormSrgb, Bc7RgbaUnorm),
+            Etc2Rgb8UnormSrgb | Etc2Rgb8Unorm => (Etc2Rgb8UnormSrgb, Etc2Rgb8Unorm),
+            Etc2Rgba8UnormSrgb | Etc2Rgba8Unorm => (Etc2Rgba8UnormSrgb, Etc2Rgba8Unorm),
+            Astc { block, .. } => return Some(Astc { block, srgb }),
+            _ => return None,
+        };
+        Some(if srgb { pair.0 } else { pair.1 })
     }
 
     /// Pixels per block, `(1, 1)` for uncompressed formats.
     pub fn block_dim(self) -> (u32, u32) {
         match self {
-            Self::Bc1RgbaUnormSrgb | Self::Bc7RgbaUnormSrgb => (4, 4),
+            Self::Astc { block, .. } => block.dims(),
+            f if f.is_block_compressed() => (4, 4),
             _ => (1, 1),
         }
     }
 
     /// Bytes per block — per pixel, for the uncompressed formats.
     pub fn bytes_per_block(self) -> usize {
+        use TextureFormat::*;
         match self {
-            Self::Rgba8UnormSrgb | Self::Rgba8Unorm => 4,
-            Self::R8Unorm => 1,
-            Self::Rgba16Float => 8,
-            Self::R16Float => 2,
-            Self::R32Float => 4,
-            Self::Rgba32Float => 16,
-            Self::Bc1RgbaUnormSrgb => 8,
-            Self::Bc7RgbaUnormSrgb => 16,
+            R8Unorm => 1,
+            Rg8Unorm | R16Unorm | R16Float => 2,
+            Rgba8UnormSrgb | Rgba8Unorm | Rgb10a2Unorm | Rg16Float | R32Float | Rg11b10Ufloat
+            | Rgb9e5Ufloat => 4,
+            Rgba16Unorm | Rgba16Float | Rg32Float => 8,
+            Rgba32Float => 16,
+            Bc1RgbaUnormSrgb | Bc1RgbaUnorm | Bc4RUnorm | Etc2Rgb8UnormSrgb | Etc2Rgb8Unorm => 8,
+            Bc3RgbaUnormSrgb
+            | Bc3RgbaUnorm
+            | Bc5RgUnorm
+            | Bc6hRgbUfloat
+            | Bc6hRgbFloat
+            | Bc7RgbaUnormSrgb
+            | Bc7RgbaUnorm
+            | Etc2Rgba8UnormSrgb
+            | Etc2Rgba8Unorm
+            | Astc { .. } => 16,
         }
     }
 
@@ -101,19 +378,32 @@ impl TextureFormat {
         height.max(1).div_ceil(bh)
     }
 
-    /// Whether texels are floats (any width), which hold values outside
-    /// `[0, 1]` and are not colour-encoded.
+    /// Whether texels are floats (any width, packed ones included), which hold
+    /// values outside `[0, 1]` and are not colour-encoded.
     pub fn is_float(self) -> bool {
+        use TextureFormat::*;
         matches!(
             self,
-            Self::Rgba16Float | Self::R16Float | Self::R32Float | Self::Rgba32Float
+            Rgba16Float
+                | R16Float
+                | Rg16Float
+                | R32Float
+                | Rg32Float
+                | Rgba32Float
+                | Rg11b10Ufloat
+                | Rgb9e5Ufloat
+                | Bc6hRgbUfloat
+                | Bc6hRgbFloat
         )
     }
 
-    /// Channels a texel holds.
+    /// Channels a texel holds. The packed three-channel formats and BC6H
+    /// count as four, alpha reading 1, as the GPU samples them.
     pub fn channels(self) -> usize {
+        use TextureFormat::*;
         match self {
-            Self::R8Unorm | Self::R16Float | Self::R32Float => 1,
+            R8Unorm | R16Unorm | R16Float | R32Float | Bc4RUnorm => 1,
+            Rg8Unorm | Rg16Float | Rg32Float | Bc5RgUnorm => 2,
             _ => 4,
         }
     }
@@ -121,20 +411,80 @@ impl TextureFormat {
     /// Whether linear filtering needs `wgpu::Features::FLOAT32_FILTERABLE`
     /// (32-bit floats; WebGL2 needs `OES_texture_float_linear` for it).
     pub fn needs_float32_filterable(self) -> bool {
-        matches!(self, Self::R32Float | Self::Rgba32Float)
+        matches!(self, Self::R32Float | Self::Rg32Float | Self::Rgba32Float)
+    }
+
+    /// Whether the GPU needs `wgpu::Features::TEXTURE_FORMAT_16BIT_NORM`.
+    pub fn needs_16bit_norm(self) -> bool {
+        matches!(self, Self::R16Unorm | Self::Rgba16Unorm)
     }
 
     /// Texels of uncompressed `data` in this format as f32s, every channel
-    /// (`R8Unorm` and the 8-bit formats as `byte / 255`, sRGB not decoded).
-    /// `None` for the block formats.
+    /// (the unorm formats as `value / max`, sRGB not decoded; the packed
+    /// three-channel ones as RGBA with alpha 1). `None` for the block formats:
+    /// [`decode`](crate::textures::codec::decode) them first.
     pub fn texels_f32(self, data: &[u8]) -> Option<Vec<f32>> {
+        use crate::textures::codec::packed;
+        use TextureFormat::*;
         Some(match self {
-            Self::Rgba8UnormSrgb | Self::Rgba8Unorm | Self::R8Unorm => {
+            Rgba8UnormSrgb | Rgba8Unorm | R8Unorm | Rg8Unorm => {
                 data.iter().map(|b| *b as f32 / 255.0).collect()
             }
-            Self::Rgba16Float | Self::R16Float => crate::math::float::unpack_f16(data),
-            Self::R32Float | Self::Rgba32Float => crate::math::float::unpack_f32(data),
-            Self::Bc1RgbaUnormSrgb | Self::Bc7RgbaUnormSrgb => return None,
+            R16Unorm | Rgba16Unorm => data
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| u16::from_le_bytes(*b) as f32 / 65535.0)
+                .collect(),
+            Rgb10a2Unorm => packed::words(data)
+                .flat_map(packed::unpack_rgb10a2)
+                .collect(),
+            Rg11b10Ufloat => packed::words(data)
+                .flat_map(packed::unpack_rg11b10)
+                .collect(),
+            Rgb9e5Ufloat => packed::words(data)
+                .flat_map(packed::unpack_rgb9e5)
+                .collect(),
+            Rgba16Float | R16Float | Rg16Float => crate::math::float::unpack_f16(data),
+            R32Float | Rg32Float | Rgba32Float => crate::math::float::unpack_f32(data),
+            _ => return None,
+        })
+    }
+
+    /// Pack f32 texels (in [`channels`](Self::channels) order) into this
+    /// uncompressed format, rounding each to the nearest value it can hold.
+    /// `None` for the block formats, which need an encoder.
+    pub fn pack_f32(self, texels: &[f32]) -> Option<Vec<u8>> {
+        use crate::textures::codec::packed;
+        use TextureFormat::*;
+        let unorm8 = |v: &f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        Some(match self {
+            Rgba8UnormSrgb | Rgba8Unorm | R8Unorm | Rg8Unorm => texels.iter().map(unorm8).collect(),
+            R16Unorm | Rgba16Unorm => texels
+                .iter()
+                .flat_map(|v| ((v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).to_le_bytes())
+                .collect(),
+            Rgb10a2Unorm => texels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|c| packed::pack_rgb10a2(*c).to_le_bytes())
+                .collect(),
+            Rg11b10Ufloat => texels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|c| packed::pack_rg11b10([c[0], c[1], c[2]]).to_le_bytes())
+                .collect(),
+            Rgb9e5Ufloat => texels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|c| packed::pack_rgb9e5([c[0], c[1], c[2]]).to_le_bytes())
+                .collect(),
+            Rgba16Float | R16Float | Rg16Float => crate::math::float::pack_f16(texels),
+            R32Float | Rg32Float | Rgba32Float => crate::math::float::pack_f32(texels),
+            _ => return None,
         })
     }
 }
@@ -254,7 +604,23 @@ impl Texture {
     /// offset.x, offset.y, repeat.x, repeat.y, rotation, center.x, center.y)`,
     /// which three.js recomputes in `refreshTransformUniform`; otherwise the
     /// user's [`matrix`](Self::matrix).
+    ///
+    /// A render target's texture is read upside down after that: its first
+    /// row is the top of the picture, where a material's `v` runs up from
+    /// the bottom, so without it a camera's picture on a plane stood on its
+    /// head. (three.js's WebGL targets are stored bottom row first, and need
+    /// nothing.)
     pub fn uv_transform_rows(&self) -> [[f32; 3]; 2] {
+        let [r0, r1] = self.user_uv_rows();
+        if self.external_rt_id.is_some() {
+            return [r0, [-r1[0], -r1[1], 1.0 - r1[2]]];
+        }
+        [r0, r1]
+    }
+
+    /// [`uv_transform_rows`](Self::uv_transform_rows) as the texture's own
+    /// settings give it.
+    fn user_uv_rows(&self) -> [[f32; 3]; 2] {
         if !self.matrix_auto_update {
             let e = &self.matrix;
             // Column-major: element (row r, column c) is e[c * 3 + r].
@@ -544,5 +910,24 @@ impl Texture {
     /// when a material slot is unused.
     pub fn solid(rgba: [u8; 4], format: TextureFormat) -> Self {
         Self::new(1, 1, format, rgba.to_vec())
+    }
+}
+
+#[cfg(test)]
+mod uv_tests {
+    use super::*;
+
+    /// A render target's texture is read upside down (its first row is the
+    /// picture's top), after the texture's own transform.
+    #[test]
+    fn render_target_textures_are_read_upright() {
+        let plain = Texture::new(4, 4, TextureFormat::Rgba8Unorm, vec![0; 64]);
+        assert_eq!(plain.uv_transform_rows(), [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+        let mut rt = Texture::from_render_target(7, 4, 4, TextureFormat::Rgba8Unorm);
+        assert_eq!(rt.uv_transform_rows(), [[1.0, 0.0, 0.0], [-0.0, -1.0, 1.0]]);
+        // Its own offset first: v' = 1 - (v + 0.25).
+        rt.offset = Vector2::new(0.0, 0.25);
+        let [_, r1] = rt.uv_transform_rows();
+        assert_eq!(r1[1] * 0.5 + r1[2], 1.0 - 0.75);
     }
 }

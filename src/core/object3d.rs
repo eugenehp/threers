@@ -384,6 +384,25 @@ impl ObjectArena {
         }
     }
 
+    /// Detach `id` from its parent and delete it and all its descendants from
+    /// the arena, dropping what they hold (geometry, material). Returns how
+    /// many objects were deleted.
+    ///
+    /// This is three.js's `parent.remove(obj)` for an object nothing will add
+    /// back by id: the ids are invalid afterwards (lookups return `None`).
+    pub fn remove_subtree(&mut self, id: ObjectId) -> usize {
+        self.remove_child(id);
+        let mut stack = vec![id];
+        let mut n = 0;
+        while let Some(i) = stack.pop() {
+            if let Some(obj) = self.nodes.remove(i) {
+                stack.extend(obj.children);
+                n += 1;
+            }
+        }
+        n
+    }
+
     /// Detach `child` from its parent.
     pub fn remove_child(&mut self, child: ObjectId) {
         let parent = self.nodes.get(child).and_then(|c| c.parent);

@@ -49,6 +49,22 @@ impl Quaternion {
         }
     }
 
+    /// The rotation taking unit vector `from` to unit vector `to` (three.js
+    /// `setFromUnitVectors`): the shortest one, and for opposite vectors a
+    /// half turn about an axis across them.
+    pub fn from_unit_vectors(from: Vector3, to: Vector3) -> Self {
+        let mut r = from.dot(to) + 1.0;
+        let (x, y, z) = if r < 1e-8 {
+            // opposite: any axis at right angles to `from`
+            r = 0.0;
+            if from.x.abs() > from.z.abs() { (-from.y, from.x, 0.0) } else { (0.0, -from.z, from.y) }
+        } else {
+            let c = from.cross(to);
+            (c.x, c.y, c.z)
+        };
+        Self { x, y, z, w: r }.normalize()
+    }
+
     /// Three.js XYZ Euler-to-quaternion order.
     pub fn from_euler_xyz(x: f32, y: f32, z: f32) -> Self {
         let (c1, s1) = ((x / 2.0).cos(), (x / 2.0).sin());
@@ -271,6 +287,17 @@ impl std::ops::Mul<Vector3> for Quaternion {
 #[cfg(test)]
 mod op_tests {
     use super::*;
+
+    #[test]
+    fn from_unit_vectors_turns_one_onto_the_other() {
+        let q = Quaternion::from_unit_vectors(Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 0.0, 0.0));
+        let v = Vector3::new(0.0, 1.0, 0.0).apply_quaternion(q);
+        assert!((v.x - 1.0).abs() < 1e-6 && v.y.abs() < 1e-6 && v.z.abs() < 1e-6, "{v:?}");
+        // opposite: a half turn
+        let q = Quaternion::from_unit_vectors(Vector3::new(1.0, 0.0, 0.0), Vector3::new(-1.0, 0.0, 0.0));
+        let v = Vector3::new(1.0, 0.0, 0.0).apply_quaternion(q);
+        assert!((v.x + 1.0).abs() < 1e-6, "{v:?}");
+    }
 
     #[test]
     fn mul_is_multiply_and_composes_right_to_left() {

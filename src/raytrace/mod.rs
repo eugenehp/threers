@@ -113,6 +113,7 @@ pub mod denoise_net;
 mod distribution;
 mod film;
 mod fingerprint;
+mod hybrid;
 mod integrator;
 #[cfg(all(feature = "learned-denoise", not(target_arch = "wasm32")))]
 pub mod learned;
@@ -140,6 +141,7 @@ pub use distribution::{
 };
 pub use film::{tone_map, Film, Pixel};
 pub use fingerprint::SceneFingerprint;
+pub use hybrid::{HybridCompositor, HybridError, HybridParams};
 pub use integrator::{Integrator, PathResult, Scratch};
 pub use lights::{
     distance_attenuation, emissive_pdf, sample_analytic, sample_emissive, sample_world, world_pdf,

@@ -1,0 +1,38 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+# A RealityKit shader-graph material that shows a mesh's vertex colours
+# (RealityKit's own materials ignore them): the geometry colour into the PBR
+# surface, with opacity, roughness and metalness as parameters the shell
+# sets per mesh (`setParameter`). Loaded by Harness.swift for a volume.
+def Xform "Root"
+{
+    def Material "VertexColor"
+    {
+        float inputs:Opacity = 1
+        float inputs:Roughness = 0.8
+        float inputs:Metallic = 0
+        token outputs:mtlx:surface.connect = </Root/VertexColor/Surface.outputs:out>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "ND_realitykit_pbr_surfaceshader"
+            color3f inputs:baseColor.connect = </Root/VertexColor/Color.outputs:out>
+            float inputs:roughness.connect = </Root/VertexColor.inputs:Roughness>
+            float inputs:metallic.connect = </Root/VertexColor.inputs:Metallic>
+            float inputs:opacity.connect = </Root/VertexColor.inputs:Opacity>
+            token outputs:out
+        }
+
+        def Shader "Color"
+        {
+            uniform token info:id = "ND_geomcolor_color3"
+            int inputs:index = 0
+            color3f outputs:out
+        }
+    }
+}

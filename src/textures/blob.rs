@@ -27,6 +27,11 @@ use std::sync::Arc;
 const MAGIC: &[u8; 8] = b"THREERSX";
 const VERSION: u32 = 1;
 
+/// Codes 1..=8 are the formats version 1 shipped with and never change.
+/// Every format added since is `NEW_BASE + TextureFormat::code`, so a new one
+/// needs no entry here.
+const NEW_BASE: u32 = 1000;
+
 fn format_code(f: TextureFormat) -> Option<u32> {
     Some(match f {
         TextureFormat::Bc1RgbaUnormSrgb => 1,
@@ -40,8 +45,10 @@ fn format_code(f: TextureFormat) -> Option<u32> {
         TextureFormat::Rgba32Float => 8,
         // No code for Rgba16Float: HDR sources here are environment maps and
         // get built in memory, so writing one would be a mistake worth
-        // reporting rather than a case worth supporting.
+        // reporting rather than a case worth supporting. (An HDR map baked
+        // offline has BC6H, which is an eighth of the size.)
         TextureFormat::Rgba16Float => return None,
+        f => NEW_BASE + f.code() as u32,
     })
 }
 
@@ -55,6 +62,11 @@ fn format_from(code: u32) -> Option<TextureFormat> {
         6 => TextureFormat::R16Float,
         7 => TextureFormat::R32Float,
         8 => TextureFormat::Rgba32Float,
+        c if c > NEW_BASE => {
+            let f = TextureFormat::from_code(u16::try_from(c - NEW_BASE).ok()?)?;
+            // Only what `format_code` would have written for it.
+            return (format_code(f) == Some(c)).then_some(f);
+        }
         _ => return None,
     })
 }

@@ -17,8 +17,12 @@ function, key/value metadata (`KTXorientation` and friends), and **zlib**
 supercompression. Levels come out of the file largest-first, which is the order
 the mip chain wants.
 
-Formats mapped: `R8_UNORM`, `R8G8B8A8_UNORM`/`_SRGB`, `R16G16B16A16_SFLOAT`,
-`BC1_RGBA_SRGB_BLOCK`, `BC7_SRGB_BLOCK`.
+Formats mapped: every `VkFormat` that has a [`TextureFormat`](texture-formats.md)
+— the 8-, 16- and 32-bit uncompressed ones, the packed `A2B10G10R10`,
+`B10G11R11` and `E5B9G9R9`, BC1, BC3, BC4, BC5, BC6H and BC7 (sRGB and linear),
+ETC2 RGB and RGBA, and ASTC at all fourteen footprints. `B8G8R8A8` is swizzled
+to RGBA on load. A format the GPU cannot sample is decoded at upload (see
+[Texture formats](texture-formats.md)), so a KTX2 file draws everywhere.
 
 ## What is refused, and why by name
 
@@ -26,11 +30,10 @@ Formats mapped: `R8_UNORM`, `R8G8B8A8_UNORM`/`_SRGB`, `R16G16B16A16_SFLOAT`,
   to whatever the GPU takes. That is a codec, not a container; ETC1S has its own
   entropy coder and codebooks.
 - **zstd** supercompression — this crate has an inflate and no zstd.
-- **Linear BC** payloads (`BC1_RGBA_UNORM_BLOCK`, `BC7_UNORM_BLOCK`) — the block
-  formats here are all sRGB. A normal map is stored linear, and reading one
-  through an sRGB curve is wrong in a way that looks like bad lighting rather
-  than like a bug, so it is refused instead of mislabelled. Adding a linear BC
-  variant to `TextureFormat` is what would fix it.
+- **BC2**, **ETC2 RGB8A1** (punch-through alpha), **EAC R11/RG11** and the
+  **signed BC4/BC5** — formats with no `TextureFormat` equivalent yet.
 
 Each of those errors names the thing it could not do, because "unsupported" on
-its own leaves a caller guessing what to reach for.
+its own leaves a caller guessing what to reach for. sRGB and linear payloads
+stay apart: a normal map stored linear and read through an sRGB curve is wrong
+in a way that looks like bad lighting rather than like a bug.

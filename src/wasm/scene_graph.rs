@@ -73,6 +73,59 @@ impl WebScene {
 
 #[wasm_bindgen]
 impl WebScene {
+    /// A candle (`threers::extras::candle`): a new detached node whose
+    /// children are its wax, wick, flame and light — see `candleParts` —
+    /// flickered by `stepCandles`. `realistic` picks the volumetric flame;
+    /// sizes are metres, `wax` a hex colour; `cast_shadow` whether its light
+    /// casts shadows.
+    #[wasm_bindgen(js_name = createCandle)]
+    pub fn create_candle(
+        &mut self,
+        realistic: bool,
+        height: f32,
+        radius: f32,
+        wax: u32,
+        flame_height: f32,
+        light_intensity: f32,
+        steps: u32,
+        seed: f32,
+        cast_shadow: bool,
+    ) -> WebObjectHandle {
+        use crate::extras::candle::{Candle, FlameStyle};
+        let mut c = Candle::new(if realistic { FlameStyle::Realistic } else { FlameStyle::Simple }).with_size(height, radius).with_wax(crate::math::Color::from_hex(wax)).with_seed(seed);
+        c.flame_height = flame_height;
+        c.light_intensity = light_intensity;
+        c.steps = steps.clamp(8, 256);
+        c.cast_shadow = cast_shadow;
+        let candle = c.add_to(&mut self.inner, Vector3::ZERO);
+        // Detached, for the page to parent it where it likes.
+        self.inner.arena.remove_child(candle.root);
+        let root = candle.root;
+        self.candles.push(candle);
+        handle(root)
+    }
+
+    /// The parts under a candle's node (`createCandle`), as node ids: the
+    /// page keeps them among the node's children.
+    #[wasm_bindgen(js_name = candleParts)]
+    pub fn candle_parts(&self, node: &WebObjectHandle) -> Vec<f64> {
+        self.inner.get(node.id).map(|o| o.children.iter().map(|c| object_id_to_f64(*c)).collect()).unwrap_or_default()
+    }
+
+    /// Flickers every candle's flame and light for `time` seconds.
+    #[wasm_bindgen(js_name = stepCandles)]
+    pub fn step_candles(&mut self, time: f32) {
+        for c in &self.candles {
+            c.update(&mut self.inner, time);
+        }
+    }
+
+    /// Forgets a candle (its node is deleted by the page).
+    #[wasm_bindgen(js_name = dropCandle)]
+    pub fn drop_candle(&mut self, node: &WebObjectHandle) {
+        self.candles.retain(|c| c.root != node.id);
+    }
+
     /// The scene root (three.js's `Scene` itself), for `setChildren`.
     #[wasm_bindgen(js_name = rootHandle)]
     pub fn root_handle(&self) -> WebObjectHandle {

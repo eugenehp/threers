@@ -26,7 +26,8 @@ document.getElementById('intro').innerHTML = desert
     : `Snow falls at about a metre a second, carried by every eddy of the wind, and <b>settles</b>
        where it lands — on the crates, the log and the ground, found by casting rays into the scene —
        slumping off edges steeper than snow holds. A campfire burns beside it: flame and smoke rise
-       because they are lighter than the air, sparks fly in arcs and bounce. <b>Click the ground</b>
+       because they are lighter than the air, sparks fly in arcs and bounce, and candles flicker on
+       the crate. <b>Click the ground</b>
        for a burst of sparks there. Drag to orbit, scroll to zoom.`;
 
 async function main() {
@@ -43,7 +44,8 @@ async function main() {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     const scene = new THREE.Scene();
 
-    const sun = new THREE.DirectionalLight(0xfff1e0, desert ? 2.8 : 1.3);
+    // The winter camp at dusk, the fire carrying the light; the desert at midday.
+    const sun = new THREE.DirectionalLight(desert ? 0xfff1e0 : 0xffc9a0, desert ? 2.8 : 0.35);
     sun.position.set(-5, 8, 4);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -71,10 +73,17 @@ async function main() {
     let sparks = null;
 
     if (!desert) {
-        scene.background = new THREE.Color(0x9aa7b8);
-        scene.fog = new THREE.FogExp2(0x9aa7b8, 0.045);
-        scene.add(new THREE.HemisphereLight(0xdfe8f5, 0x6a6f78, 1.0));
+        scene.background = new THREE.Color(0x2c3446);
+        scene.fog = new THREE.FogExp2(0x2c3446, 0.05);
+        scene.add(new THREE.HemisphereLight(0x8d9bb8, 0x3a3832, 0.45));
         solid(new THREE.BoxGeometry(1.4, 0.9, 1.0), 0x7a4a32, [-2.4, 0.45, -1.2]);
+        // Candles on the crate (threers' own, built in Rust): two with the
+        // volumetric flame, one with the simple one, of three heights.
+        for (const [x, z, height, realistic] of [[-2.55, -1.0, 0.16, true], [-2.35, -1.12, 0.11, false], [-2.2, -0.95, 0.08, true]]) {
+            const candle = new THREE.Candle({ realistic, height, radius: 0.03, intensity: 0.5 });
+            candle.position.set(x, 0.9, z);
+            scene.add(candle);
+        }
         solid(new THREE.BoxGeometry(0.9, 0.6, 0.9), 0x5a6b78, [-1.2, 0.3, -2.4]);
         const log = solid(new THREE.CylinderGeometry(0.22, 0.22, 2.2, 24), 0x5b4330, [2.2, 0.22, -1.4]);
         log.rotation.z = Math.PI / 2;
@@ -119,10 +128,10 @@ async function main() {
         haze.position.set(0, 0.5, 1);
         scene.add(haze);
         // The fire lights the camp, flickering with its flames.
-        const glow = new THREE.PointLight(0xff8a3c, 6, 10, 2);
+        const glow = new THREE.PointLight(0xff8a3c, 9, 12, 2);
         glow.position.set(0, 0.6, 1);
         scene.add(glow);
-        fire.lights(glow, 7);
+        fire.lights(glow, 10);
     } else {
         document.getElementById('ratel').style.display = 'none';
         scene.background = new THREE.Color(0xa9c3dd);
@@ -190,9 +199,17 @@ async function main() {
     const stopAfter = Number(params.get('frames') ?? 0);
     const start = performance.now();
     let frames = 0, last = start, drawn = 0;
+    // Drawn into a float target and tone-mapped at the end, as the native
+    // campfire is: glowing particles add up in linear light there (onto an
+    // 8-bit canvas they add encoded values, and a flame goes white), and the
+    // brightest of them bloom.
+    const composer = new THREE.EffectComposer(renderer);
+    composer.addPass(new THREE.RenderPass(scene, camera));
+    composer.addPass(new THREE.UnrealBloomPass(new THREE.Vector2(canvas.width, canvas.height), 0.45, 0.4, 0.85));
+    composer.addPass(new THREE.OutputPass());
     function frame(now) {
         controls.update();
-        renderer.render(scene, camera);
+        composer.render();
         frames++;
         drawn++;
         if (drawn === 1) beacon({ first: Math.round(now - start), backend: statusEl.textContent });

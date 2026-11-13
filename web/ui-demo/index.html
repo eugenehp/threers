@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- The demo zooms and scrolls itself: the browser's own gestures would
+     cancel its touches midway. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>threers-ui demo</title>
+<link rel="icon" href="data:,">
+<style>
+  /* No touch-action here: it applies to everything inside too, and the
+     text input needs the phone's double tap and selection handles. The
+     canvas turns the browser's gestures off for itself. */
+  html, body {
+    margin: 0; height: 100%; background: #12151b; overflow: hidden;
+    overscroll-behavior: none;
+  }
+  /* iOS enlarges text it thinks is too small to read; the text input's
+     text has to stay the size the field draws. */
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  /* Pinned, so iOS cannot rubber-band the page out from under a finger. */
+  body { position: fixed; inset: 0; }
+  #stage { position: absolute; inset: 0; }
+  #view { position: absolute; left: 0; top: 0; touch-action: none; outline: none; -webkit-user-select: none; user-select: none; }
+  /* The text field's real input: kept at the caret, invisible, holding the
+     field's text, so a phone's keyboard, autocorrect and input methods edit
+     it. 16px, so iOS does not zoom when it takes focus. */
+  #ime {
+    position: absolute; left: 0; top: 0; width: 2px; height: 20px; padding: 0; border: 0;
+    font-size: 16px; opacity: 0;
+    color: transparent; background: transparent; caret-color: transparent; pointer-events: none;
+    -webkit-user-select: text; user-select: text; outline: none; -webkit-tap-highlight-color: transparent;
+    /* No look of its own: iOS insets a text box's text by a few pixels
+       inside its native appearance, off from where the field draws it. */
+    -webkit-appearance: none; appearance: none; margin: 0; border-radius: 0; text-indent: 0;
+    letter-spacing: normal; word-spacing: normal; text-align: left; box-shadow: none;
+  }
+  #build { position: fixed; right: 4px; bottom: 2px; font: 9px system-ui; color: #4b5263; pointer-events: none; }
+  #loading { position: absolute; inset: 0; display: grid; place-items: center; color: #8b93a5; font: 14px system-ui; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="view" tabindex="0" aria-label="threers-ui demo"></canvas>
+  <!-- One line, as the field is: a textarea wraps long text onto a second
+       line and scrolls it out of the field. -->
+  <input id="ime" type="text" aria-hidden="true" tabindex="-1" autocapitalize="off" autocomplete="off" enterkeyhint="done">
+  <div id="loading">Loading…</div>
+  <div id="build"></div>
+</div>
+<script type="module">
+import init, { Demo } from "../pkg-ui-demo/threers_ui_demo.js";
+
+await init();
+// Which build this is: a device that kept an old one shows its time.
+fetch("../pkg-ui-demo/build.txt").then((r) => r.ok ? r.text() : "").then((t) => {
+  const b = document.getElementById("build");
+  b.textContent = [b.dataset.backend, t.trim() && `build ${t.trim()}`].filter(Boolean).join(" · ");
+}).catch(() => {});
+let canvas = document.getElementById("view");
+const ime = document.getElementById("ime");
+document.getElementById("loading").remove();
+
+// The canvas covers the visible viewport. On a phone that shrinks when the
+// keyboard opens, and the browser may also pan it down the page to show
+// the input that has focus: the canvas goes where it is, at its size.
+// The accessibility mirror reads the canvas's box from its style attribute.
+function size() {
+  const vv = window.visualViewport;
+  const w = Math.round(vv ? vv.width : window.innerWidth);
+  const h = Math.round(vv ? vv.height : window.innerHeight);
+  const [x, y] = vv ? [Math.round(vv.offsetLeft), Math.round(vv.offsetTop)] : [0, 0];
+  const dpr = window.devicePixelRatio || 1;
+  canvas.setAttribute("style", `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px`);
+  canvasAt = [x, y];
+  // Setting a canvas's size clears it, even to the size it has.
+  if (canvas.width !== Math.round(w * dpr)) canvas.width = Math.round(w * dpr);
+  if (canvas.height !== Math.round(h * dpr)) canvas.height = Math.round(h * dpr);
+  return [w, h, dpr];
+}
+// Where `size` put the canvas in the stage. The text input sits in the same
+// stage, placed from these same numbers: a phone pans the page for its
+// keyboard, and then reads positions on screen against another origin than
+// it lays fixed boxes out against, which put the text above the field.
+let canvasAt = [0, 0];
+let [w, h, dpr] = size();
+// On the GPU (WebGPU, else WebGL2) unless the page asks for the 2D canvas
+// with ?renderer=canvas, or WebGL2 with ?renderer=webgl. A canvas the GPU tried keeps the context it got, so
+// the 2D fallback draws on a fresh one.
+async function open() {
+  const asked = new URLSearchParams(location.search).get("renderer");
+  if (asked !== "canvas") {
+    try {
+      const font = await fetch("../pkg-ui-demo/DejaVuSans.ttf");
+      if (font.ok) Demo.set_gpu_font(new Uint8Array(await font.arrayBuffer()));
+      // Its bold: headings and values read as bold, not a grown regular.
+      const bold = await fetch("../pkg-ui-demo/DejaVuSans-Bold.ttf");
+      if (bold.ok) Demo.set_gpu_font_bold(new Uint8Array(await bold.arrayBuffer()));
+      return await Demo.new_gpu(canvas, asked !== "webgl");
+    } catch (e) {
+      console.warn("no GPU renderer, drawing on a 2D canvas:", e);
+      const fresh = canvas.cloneNode(false);
+      canvas.replaceWith(fresh);
+      canvas = fresh;
+      [w, h, dpr] = size();
+    }
+  }
+  return new Demo(canvas);
+}
+const demo = await open();
+{
+  const b = document.getElementById("build");
+  b.dataset.backend = demo.backend();
+  // Keys labelled as this machine names them.
+  demo.set_mac(/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent));
+  // A headset session draws on its own frames: they call the page's.
+  demo.set_ticker(tick);
+  // The 3D model draws on Web Workers, unless the page asks not to with
+  // ?workers=0.
+  if (new URLSearchParams(location.search).get("workers") !== "0") {
+    try {
+      const n = demo.use_workers(new URL("../pkg-ui-demo/threers_ui_demo.js", import.meta.url).href);
+      b.dataset.backend += ` · ${n} worker${n === 1 ? "" : "s"}`;
+    } catch (e) {
+      console.warn("no workers, drawing on the page's thread:", e);
+    }
+  }
+  b.textContent = [b.dataset.backend, b.textContent].filter(Boolean).join(" · ");
+}
+// The system's light or dark, now and when it changes: the demo's System
+// theme (its default) follows it.
+const darkScheme = matchMedia("(prefers-color-scheme: dark)");
+demo.set_system_dark(darkScheme.matches);
+darkScheme.addEventListener("change", (e) => { demo.set_system_dark(e.matches); kick(); });
+// The edges a phone draws over (its notch, its home indicator), read from
+// CSS's env() through a probe element, for the UI to keep clear of.
+const safeProbe = document.createElement("div");
+safeProbe.style.cssText = "position:fixed;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)";
+document.body.appendChild(safeProbe);
+function readSafeArea() {
+  const c = getComputedStyle(safeProbe);
+  demo.set_safe_area(parseFloat(c.paddingTop) || 0, parseFloat(c.paddingRight) || 0, parseFloat(c.paddingBottom) || 0, parseFloat(c.paddingLeft) || 0);
+}
+// Before the first frame; on a resize (a rotation), with a frame after.
+readSafeArea();
+addEventListener("resize", () => { readSafeArea(); kick(); });
+// How the phone is held, for the card that leans with it. iOS asks the
+// user first, and only from a tap: asked on the first one.
+let tiltAsked = false;
+function listenTilt() {
+  addEventListener("deviceorientation", (e) => {
+    if (e.beta == null || e.gamma == null) return;
+    demo.set_device_tilt(e.beta, e.gamma);
+    kick();
+  });
+}
+if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
+  addEventListener("touchend", () => {
+    if (tiltAsked) return;
+    tiltAsked = true;
+    DeviceOrientationEvent.requestPermission().then((r) => { if (r === "granted") listenTilt(); }).catch(() => {});
+  }, { once: false });
+} else {
+  listenTilt();
+}
+window.__demo = demo; // for measuring from tools
+
+// The browser's "more contrast" (an OS's Increase Contrast): the theme's
+// quiet colours stronger, now and when it changes.
+const contrast = matchMedia("(prefers-contrast: more)");
+demo.set_increase_contrast(contrast.matches);
+contrast.addEventListener("change", (e) => { demo.set_increase_contrast(e.matches); kick(); });
+const calm = matchMedia("(prefers-reduced-motion: reduce)");
+demo.set_reduce_motion(calm.matches);
+calm.addEventListener("change", (e) => { demo.set_reduce_motion(e.matches); kick(); });
+
+// Links into the demo: `#page/section` (`#toolkit/gauges-and-charts`).
+// Followed on load and as the address changes; the address follows the
+// demo as pages change and focus moves (replaced, not pushed: going back
+// leaves the demo, as with any page's scrolling).
+let shownLink = null;
+function followHash() {
+  if (location.hash.length > 1) {
+    demo.follow_link(decodeURIComponent(location.hash.slice(1)));
+    shownLink = location.hash;
+  }
+}
+followHash();
+addEventListener("hashchange", () => { followHash(); kick(); });
+function showLink() {
+  const link = "#" + demo.link();
+  if (link !== shownLink) {
+    shownLink = link;
+    if (decodeURIComponent(location.hash) !== link) history.replaceState(null, "", link);
+  }
+}
+
+// The text field's input: mirrors the field while it has focus.
+// What the input was last given, or gave: the field is written into it
+// only when it changed on the demo's side. Writing an input's value while
+// someone types into it breaks autocorrect and input methods mid-word.
+let mirrored = null;
+let composing = false;
+let focusedAt = -1e9;
+const fieldKey = () => `${demo.field_text()}\u0000${demo.field_selection().join("\u0000")}`;
+function mirror() {
+  const text = demo.field_text();
+  const [a, c] = demo.field_selection();
+  const key = fieldKey();
+  if (key !== mirrored && !composing) {
+    mirrored = key;
+    ime.value = text;
+    ime.setSelectionRange(Math.min(a, c), Math.max(a, c), c < a ? "backward" : "forward");
+  }
+  if (touchScreen) return;
+  const area = demo.ime_area();
+  if (area.length === 4) {
+    ime.style.left = `${canvasAt[0] + area[0]}px`;
+    ime.style.top = `${canvasAt[1] + area[1]}px`;
+    ime.style.height = `${Math.max(area[3], 16)}px`;
+  }
+}
+// On a touch screen the input lies over the field, so a tap on the field
+// lands on the input itself. A browser opens its keyboard for that tap
+// whatever else happens; focus given from a script opens it only under
+// rules iOS keeps to itself.
+//
+// It is there, unseen, under every touch on the field. The first tap is
+// the browser's: a phone opens its keyboard for a tap on a text input, not
+// for focus given from a script. After that, touches on it go to the demo
+// like the canvas's: the field's caret, selection, handles and edit menu are
+// the demo's own (the app owns the text; the input only carries
+// what is typed, autocorrect and input methods into it). It stays under the
+// finger because iOS, while a text input has focus, watches for double taps
+// itself, and one on anything not editable gives up the focus, and the
+// keyboard with it.
+const touchScreen = matchMedia("(pointer: coarse)").matches;
+let covered = null;
+let restyledAt = 0;
+function cover() {
+  if (!touchScreen) return;
+  // Left exactly where it is while it has focus: iOS gives up the focus,
+  // and the keyboard, when a focused input is moved or restyled as the
+  // keyboard comes up (the page scrolls the field into view then). Touches
+  // on it go to the demo by where they land, not by where it is.
+  if (document.activeElement === ime) return;
+  const b = demo.field_boxes();
+  if (b.length !== 8) {
+    // Never while it has focus: iOS takes focus from a hidden input, and
+    // the keyboard with it, and the field can be out of sight for a frame
+    // while the keyboard comes up.
+    if (document.activeElement !== ime) {
+      Object.assign(ime.style, { visibility: "hidden", pointerEvents: "none" });
+      covered = null;
+    }
+    return;
+  }
+  // It draws the text, so it holds it, focused or not.
+  mirror();
+  const [font, color] = demo.field_font();
+  const [bx, by, bw, bh, tx, ty, , th] = b;
+  // Only when something changed: restyling the input under a selection
+  // being dragged can disturb it.
+  const focused = demo.wants_text();
+  const key = [canvasAt, b, font, focused].join();
+  if (key === covered) return;
+  covered = key;
+  restyledAt = performance.now();
+  Object.assign(ime.style, {
+    left: `${canvasAt[0] + bx}px`, top: `${canvasAt[1] + by}px`, width: `${bw}px`, height: `${bh}px`,
+    paddingLeft: `${tx - bx}px`, paddingRight: `${tx - bx}px`, paddingTop: `${ty - by}px`, paddingBottom: "0px",
+    boxSizing: "border-box", font, lineHeight: `${th}px`, color: "transparent", caretColor: "transparent",
+    opacity: "0", visibility: "visible", pointerEvents: "auto",
+  });
+}
+// Focus has to be given while the user's tap is being handled, or a phone
+// will not open its keyboard: so after every press, not in a later frame.
+// Never taken away and given back: on iOS that closes the keyboard, and
+// focus from a script does not open it again.
+function focusText() {
+  if (demo.wants_text()) {
+    mirror();
+    if (document.activeElement !== ime) {
+      ime.focus({ preventScroll: true });
+      focusedAt = performance.now();
+      // Focusing moves an input's selection (iOS puts it at the end): the
+      // caret stays where the tap put it in the field.
+      mirrored = null;
+      mirror();
+    }
+  } else if (document.activeElement === ime) {
+    canvas.focus({ preventScroll: true });
+  }
+}
+function fromInput() {
+  const back = ime.selectionDirection === "backward";
+  const [s, e] = [ime.selectionStart, ime.selectionEnd];
+  demo.set_field(ime.value, back ? e : s, back ? s : e);
+  mirrored = fieldKey();
+  kick();
+}
+// However it got focus, the input starts out holding the field as it is.
+// On a touch screen the input is the field: its focus is the field's, and
+// where the phone put the caret stands.
+ime.addEventListener("focus", () => {
+  if (touchScreen) {
+    demo.focus_field(true);
+    kick();
+    return;
+  }
+  focusedAt = performance.now();
+  mirrored = null;
+  mirror();
+});
+ime.addEventListener("blur", () => {
+  if (touchScreen) {
+    demo.focus_field(false);
+    kick();
+  }
+});
+ime.addEventListener("compositionstart", () => { composing = true; });
+ime.addEventListener("compositionend", () => { composing = false; fromInput(); });
+ime.addEventListener("input", fromInput);
+// The input's selection moved. Just after a tap or focus that is the
+// browser placing it, by its own reading of the text: the field's goes
+// back. Later, it is the user (the keyboard's arrows, a selection handle).
+function onSelection() {
+  if (document.activeElement !== ime) return;
+  if (!touchScreen && performance.now() - focusedAt < 400) {
+    mirrored = null;
+    mirror();
+  } else {
+    fromInput();
+  }
+}
+ime.addEventListener("select", onSelection);
+document.addEventListener("selectionchange", onSelection);
+
+// Draw on demand: after events, and on while the demo wants frames.
+let pending = false;
+function kick() {
+  if (!pending) {
+    pending = true;
+    requestAnimationFrame(tick);
+  }
+}
+let wantedText = false;
+function tick(t) {
+  pending = false;
+  const more = demo.frame(t, w, h, dpr);
+  showLink();
+  canvas.style.cursor = demo.cursor();
+  cover();
+  if (demo.wants_text()) {
+    if (document.activeElement === ime) mirror();
+    // A text control took focus some other way than a tap (Tab, the app
+    // moving it): the keyboard comes up for it too. Android and desktop
+    // browsers allow this from a frame; iOS only during a tap, which
+    // focusText() handles.
+    else if (!wantedText) focusText();
+  } else if (document.activeElement === ime) {
+    canvas.focus({ preventScroll: true });
+  }
+  wantedText = demo.wants_text();
+  if (more) kick();
+}
+// The text input moves with the canvas at once: waiting for the next frame
+// leaves it a frame behind when the phone pans the page for its keyboard.
+const resize = () => { [w, h, dpr] = size(); cover(); kick(); };
+window.addEventListener("resize", resize);
+window.visualViewport?.addEventListener("resize", resize);
+window.visualViewport?.addEventListener("scroll", resize);
+
+// The edit menu's cut, copy and paste, while the tap that chose them is
+// being handled (a browser lets the clipboard be written only then). The
+// clipboard API is only there on a secure page (https); without it, copying
+// falls back on the text input, which holds the selection, and pasting
+// cannot be done.
+// Without the clipboard API: the browser's copy command, on a scratch text
+// box holding the text (read only, so no keyboard comes up for it); focus
+// goes back where it was.
+function copyByCommand(text) {
+  const had = document.activeElement;
+  const t = document.createElement("textarea");
+  t.value = text;
+  t.readOnly = true;
+  Object.assign(t.style, { position: "fixed", left: "0", top: "0", opacity: "0" });
+  document.body.appendChild(t);
+  t.select();
+  t.setSelectionRange(0, text.length);
+  document.execCommand("copy");
+  t.remove();
+  had?.focus?.({ preventScroll: true });
+}
+function clipboard() {
+  const text = demo.take_copy();
+  if (text != null) {
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).catch(() => copyByCommand(text));
+    else copyByCommand(text);
+  }
+  // A link followed: opened now, while the click is handled (a browser
+  // opens windows only then).
+  const url = demo.take_open();
+  if (url) window.open(url, "_blank", "noopener");
+  const share = demo.take_share();
+  if (share != null) {
+    if (navigator.share) navigator.share({ text: share }).catch(() => {});
+    else demo.notify("Sharing needs the page over https");
+  }
+  if (demo.take_paste()) {
+    if (navigator.clipboard?.readText) {
+      navigator.clipboard.readText().then((t) => { demo.paste(t); kick(); }).catch(() => {});
+    } else {
+      demo.notify("Paste needs the page over https");
+    }
+  }
+}
+const local = (e) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+// The mouse and pens by pointer events; fingers by touch events, below.
+canvas.addEventListener("pointermove", (e) => {
+  if (e.pointerType === "touch") return;
+  demo.pointer_move(...local(e));
+  kick();
+});
+canvas.addEventListener("pointerdown", (e) => {
+  if (e.pointerType === "touch") return;
+  canvas.setPointerCapture(e.pointerId);
+  const [x, y] = local(e);
+  demo.pointer_down(x, y, e.button, e.shiftKey);
+  if (!demo.wants_text()) canvas.focus({ preventScroll: true });
+  focusText();
+  kick();
+  e.preventDefault();
+});
+for (const type of ["pointerup", "pointercancel"]) {
+  canvas.addEventListener(type, (e) => {
+    if (e.pointerType === "touch") return;
+    demo.pointer_up(...local(e), e.button);
+    focusText();
+    clipboard();
+    kick();
+  });
+}
+// Fingers. Each touch event lists every finger still down, so one whose
+// end the browser lost (iOS Safari can, mid-flick) is cancelled here
+// rather than left down forever, which would make every later touch a
+// second finger.
+//
+// iOS opens its keyboard for focus given in `touchend`, not in
+// `touchstart`. So the text input is focused only on a lift.
+const fingers = new Set();
+const forceKnown = new Map();
+// `native`: the browser keeps the touch too (the tap that focuses the text
+// input, which opens the keyboard); the demo hears it all the same.
+function onTouch(phase, native = false) {
+  return (e) => {
+    const live = new Set([...e.touches].map((t) => t.identifier));
+    for (const t of e.changedTouches) live.add(t.identifier);
+    for (const id of fingers) {
+      if (!live.has(id)) {
+        demo.touch(id, "cancel", 0, 0, e.timeStamp, 0);
+        fingers.delete(id);
+      }
+    }
+    for (const t of e.changedTouches) {
+      const [x, y] = local(t);
+      // A screen that cannot measure force reports 0, or on some phones 1
+      // for every touch: only a force that varies is one.
+      if (phase === "start") forceKnown.set(t.identifier, t.force > 0 && t.force < 1);
+      const force = forceKnown.get(t.identifier) ? t.force : 0;
+      demo.touch(t.identifier, phase, x, y, e.timeStamp, force);
+      if (phase === "end" || phase === "cancel") forceKnown.delete(t.identifier);
+      if (phase === "start") {
+        fingers.add(t.identifier);
+      } else if (phase !== "move") {
+        fingers.delete(t.identifier);
+        if (phase === "end") focusText();
+      }
+    }
+    if (phase === "start" && !demo.wants_text()) canvas.focus({ preventScroll: true });
+    if (phase === "end") clipboard();
+    kick();
+    // The browser must not take a finger for its own scrolling or zooming.
+    if (!native) e.preventDefault();
+  };
+}
+// On the text input: the demo's once the field has focus; before, the
+// browser's too (the tap that opens the keyboard), and the demo hears it as
+// the first of a double tap.
+const demoTouches = new Set();
+for (const phase of ["start", "move", "end", "cancel"]) {
+  const handle = onTouch(phase), shared = onTouch(phase, true);
+  ime.addEventListener(`touch${phase}`, (e) => {
+    if (phase === "start" && document.activeElement === ime) {
+      for (const t of e.changedTouches) demoTouches.add(t.identifier);
+    }
+    const ours = [...e.changedTouches].some((t) => demoTouches.has(t.identifier));
+    if (phase === "end" || phase === "cancel") for (const t of e.changedTouches) demoTouches.delete(t.identifier);
+    (ours ? handle : shared)(e);
+  }, { passive: false });
+}
+canvas.addEventListener("touchstart", onTouch("start"), { passive: false });
+canvas.addEventListener("touchmove", onTouch("move"), { passive: false });
+canvas.addEventListener("touchend", onTouch("end"), { passive: false });
+canvas.addEventListener("touchcancel", onTouch("cancel"), { passive: false });
+canvas.addEventListener("wheel", (e) => {
+  const [x, y] = local(e);
+  // Lines and pages in pixels, as the page would scroll them.
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? h * 0.9 : 1;
+  demo.wheel(x, y, e.deltaX * unit, e.deltaY * unit);
+  kick();
+  e.preventDefault();
+}, { passive: false });
+window.addEventListener("keydown", (e) => {
+  if (e.isComposing || e.keyCode === 229) return;
+  // In the field, its input does the editing (typing, deleting, moving the
+  // caret, undo and the clipboard); the demo hears the rest: Tab, Escape,
+  // Enter and its own shortcuts.
+  if (document.activeElement === ime) {
+    const editing = (e.key.length === 1 && !e.ctrlKey && !e.metaKey)
+      || ["Backspace", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)
+      || ((e.ctrlKey || e.metaKey) && ["a", "c", "v", "x", "z", "y"].includes(e.key.toLowerCase()));
+    if (editing) return;
+  }
+  if (demo.key(e.key, e.shiftKey, e.ctrlKey, e.altKey, e.metaKey)) e.preventDefault();
+  clipboard();
+  focusText();
+  kick();
+});
+// Debug reports: after each touch and focus change, what the field and its text
+// input are doing, sent to the server as a request it logs.
+// On by default while touch editing is being made to work on phones;
+// `?nodebug` turns it off.
+const debugging = !new URLSearchParams(location.search).has("nodebug");
+function report(what) {
+  if (!debugging) return;
+  setTimeout(() => {
+    const s = {
+      what, build: document.getElementById("build").textContent,
+      active: document.activeElement?.id || document.activeElement?.tagName,
+      input: { pointer: getComputedStyle(ime).pointerEvents, visible: getComputedStyle(ime).visibility, value: ime.value.length, sel: [ime.selectionStart, ime.selectionEnd] },
+      boxes: demo.field_boxes().length,
+      rect: (() => { const r = ime.getBoundingClientRect(); return [r.x, r.y, r.width, r.height].map(Math.round); })(),
+      since_restyle: Math.round(performance.now() - restyledAt),
+      wants: demo.wants_text(), field: demo.field_selection(), app: JSON.parse(demo.debug_state()),
+      vv: window.visualViewport ? [visualViewport.offsetTop, visualViewport.height] : null,
+    };
+    fetch(`/debug?${encodeURIComponent(JSON.stringify(s))}`).catch(() => {});
+  }, 100);
+}
+for (const t of ["touchstart", "touchend"]) document.addEventListener(t, (e) => report(`${t} on ${e.target.id || e.target.tagName}`), { capture: true, passive: true });
+addEventListener("error", (e) => report(`error: ${e.message} at ${e.filename}:${e.lineno}`));
+addEventListener("unhandledrejection", (e) => report(`rejection: ${e.reason}`));
+for (const t of ["click", "dblclick", "mousedown"]) document.addEventListener(t, (e) => report(`${t} on ${e.target.id || e.target.tagName}`), { capture: true });
+ime.addEventListener("focus", () => report("input focus"));
+ime.addEventListener("blur", (e) => report(`input blur to ${e.relatedTarget?.id || e.relatedTarget?.tagName || "nothing"}`));
+// Who moves focus to the canvas, and when the field's focus changes.
+if (debugging) {
+  const focus = canvas.focus.bind(canvas);
+  canvas.focus = (...a) => {
+    if (document.activeElement === ime) report(`canvas.focus from ${(new Error().stack || "").split("\n").slice(1, 5).map((l) => l.trim().slice(0, 60)).join(" < ")}`);
+    return focus(...a);
+  };
+  let wanted = null;
+  setInterval(() => {
+    const w = demo.wants_text();
+    if (w !== wanted) { report(`wants_text ${wanted} -> ${w}`); wanted = w; }
+  }, 50);
+}
+// `?beacon`: every two seconds, how the frames went, sent to the server as a
+// request it logs (and answers 404), for measuring on a phone.
+if (new URLSearchParams(location.search).has("beacon")) {
+  let gaps = [];
+  let last = performance.now();
+  const watch = (t) => { gaps.push(t - last); last = t; requestAnimationFrame(watch); };
+  requestAnimationFrame(watch);
+  setInterval(() => {
+    const t = JSON.parse(demo.take_timings());
+    const q = (v, p) => (v.length ? v.slice().sort((a, b) => a - b)[Math.min(v.length - 1, Math.floor(p * v.length))] : 0).toFixed(1);
+    const col = (i) => t.frames.map((f) => f[i]);
+    const report = {
+      n: t.frames.length,
+      app: [q(col(0), 0.5), q(col(0), 0.9), q(col(0), 1)],
+      paint: [q(col(1), 0.5), q(col(1), 0.9), q(col(1), 1)],
+      mirror: [q(col(2), 0.5), q(col(2), 0.9), q(col(2), 1)],
+      gaps: [q(gaps, 0.5), q(gaps, 0.9), q(gaps, 0.99), gaps.filter((g) => g > 25).length, gaps.length],
+      dpr, w, h,
+    };
+    gaps = [];
+    if (report.n > 0) fetch(`/beacon?${encodeURIComponent(JSON.stringify(report))}`).catch(() => {});
+  }, 2000);
+}
+// Nothing is drawn while nothing happens: a waiting tooltip or long press
+// keeps `frame` asking for more until it has fired.
+kick();
+</script>
+</body>
+</html>

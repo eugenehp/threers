@@ -18,6 +18,10 @@ pub mod caps;
 // *this* scope instead of the module's. The warning for that names no file.
 pub mod bloom;
 mod caption_pass;
+#[cfg(feature = "ui")]
+pub mod ui_pass;
+#[cfg(feature = "ui")]
+pub use ui_pass::{UiPass, UiPassStats};
 pub mod colorspace;
 pub mod downsample;
 pub mod fullscreen;
@@ -38,6 +42,9 @@ mod renderer;
 // Material depth/colour-write state as pipeline variants.
 pub mod material_maps;
 mod pipeline_state;
+// `ShaderMaterial` buffers and bind groups, kept across frames.
+mod custom_cache;
+pub use custom_cache::CustomShaderStats;
 // Shader-material assembly and validation, for `ShaderMaterial::validate`.
 // Not part of the public surface: the module layout is an implementation
 // detail and the only supported entry point is that method.
@@ -163,7 +170,7 @@ pub use render_target::{CubeRenderTarget, RenderTarget};
 pub(crate) use renderer::stored_clear;
 pub use renderer::{halton, stratified_jitter, DEFAULT_CACHE_RETENTION};
 pub use renderer::{PostFxBlend, PostFxNoise, PostFxOp, PostFxOutput};
-pub use renderer::{PostFxCamera, Renderer, RendererOptions, ToneMapping};
+pub use renderer::{OverlayInfo, PostFxCamera, Renderer, RendererOptions, ToneMapping};
 pub use viewport::{PixelRect, ShadowMap, ViewportRect};
 
 /// Which backend a renderer draws with: [`HeadlessBuilder::backend`] and

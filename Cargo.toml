@@ -5,6 +5,9 @@ members = [
     "crates/threers-audio",
     "crates/threers-video",
     "crates/threers-captions",
+    "crates/threers-ui",
+    "crates/threers-ui-demo",
+    "crates/threers-ui-demo-visionos",
     "crates/threers-codec",
     "crates/threers-softbody",
     "crates/threers-probe",
@@ -22,9 +25,21 @@ members = [
     "crates/threers-py",
     "crates/threers-node",
     "crates/threers-fluid-ios",
+    "crates/threers-ios",
 ]
+# vendor/: local copies of upstream crates, patched in below
+exclude = ["vendor"]
 
 resolver = "2"
+
+# wgpu-core and wgpu-hal 30.0.1 with one local change: Metal shaders recorded
+# once and replayed without naga (the `msl-record` and `msl-replay` features,
+# threers-ios's `precompiled-shaders`; vendor/README.md). With neither
+# feature on they are wgpu as released. Not published: a crate depending on
+# threers from crates.io gets stock wgpu.
+[patch.crates-io]
+wgpu-core = { path = "vendor/wgpu-core" }
+wgpu-hal = { path = "vendor/wgpu-hal" }
 
 # One version for every crate in the repo. Members inherit it; the excluded
 # crates and the version pins between crates repeat it literally, and
@@ -145,7 +160,7 @@ opt-level = 3
 opt-level = 3
 
 [features]
-default = ["render", "audio", "captions", "sketch"]
+default = ["render", "audio", "captions", "sketch", "jpeg"]
 # Audio sources, listeners and positional audio as scene-graph nodes: the
 # `threers-audio` crate, re-exported as `threers::audio`.
 audio = ["dep:threers-audio"]
@@ -162,7 +177,11 @@ sketch = ["render", "dep:winit"]
 captions = ["dep:threers-captions"]
 # A retained UI: CSS-subset styles, flexbox layout, painting and hit-testing
 # (implies captions, for text).
-ui = ["captions"]
+ui = ["captions", "dep:threers-ui"]
+# No WGSL compiler at run time, for an app whose shaders were recorded ahead
+# (threers-ios's `precompiled-shaders`, on the patched wgpu in vendor/):
+# custom shaders are not validated or analysed, as in a WebGPU browser build.
+precompiled-shaders = []
 # Accelerated raycast / shapecast.
 mesh-bvh = []
 # Path tracer: global illumination, area lights, refraction, DoF; CPU + wgpu-compute.
@@ -185,6 +204,10 @@ softbody = ["render", "dep:threers-softbody"]
 # Pure Rust with no dependencies of its own, so this costs compile time and
 # nothing else; it is opt-in because most scenes never touch USD.
 usd = []
+# JPEG decoding (`threers::utils::jpeg`), pure Rust and wasm-safe: a
+# `.usdz`'s JPEG textures load with the PNG ones instead of being left to the
+# caller. Most packaged assets use JPEG.
+jpeg = ["dep:zune-jpeg"]
 # Pure-Rust GIF, APNG, VP9/WebM, H.264/MP4, HEVC (wasm-safe).
 # The muxers write caption tracks, so this needs `captions`. Video export,
 # image sequences and video on meshes are the `threers-video` crate.
@@ -207,10 +230,28 @@ native-decode = [
 # GIF89a encode and decode (`codec::gif`), and GIF in the animation and video
 # exporters. Off, choosing GIF there is an error rather than a missing variant.
 gif = ["native-codec", "threers-codec/gif"]
+# WebXR: headset stereo (`threers::xr`, per-eye cameras from a device's
+# views) and, on wasm, the browser session that draws both eyes into a
+# headset (`WebXr`, three.js's `renderer.xr`). The WebGL2 types are for the
+# layer a headset takes its frames from; the renderer itself may be WebGPU.
+xr = [
+    "render",
+    "web-sys/WebGl2RenderingContext",
+    "web-sys/WebGlFramebuffer",
+    "web-sys/WebGlProgram",
+    "web-sys/WebGlShader",
+    "web-sys/WebGlTexture",
+    "web-sys/WebGlUniformLocation",
+]
 # Second renderer on Metal via the Objective-C runtime (macOS/iOS).
 metal = ["render"]
 # CompositorServices + ARKit (implies metal).
 visionos = ["metal"]
+# A native visionOS immersive space as an `xr::XrSource` (`xr::visionos`),
+# drawn by the wgpu renderer into the compositor's own textures: any threers
+# scene, and UIs on panels, as on the web. objc2 and objc2-metal (already in
+# the build, through wgpu) wrap those textures and reach wgpu's queue.
+xr-visionos = ["xr", "visionos", "dep:objc2", "dep:objc2-metal"]
 # In-process VideoToolbox encode + MP4 mux (macOS).
 videotoolbox = ["native-codec", "threers-codec/videotoolbox"]
 # NVENC encode and NVDEC decode on NVIDIA GPUs (Linux/Windows; the driver is
@@ -288,6 +329,8 @@ threers-math = { path = "crates/threers-math", version = "0.0.12" }
 threers-audio = { path = "crates/threers-audio", version = "0.0.12", optional = true }
 # The caption data model (`captions`): tracks, cues, SRT/WebVTT; no dependencies.
 threers-captions = { path = "crates/threers-captions", version = "0.0.12", optional = true }
+# The retained UI (`ui`), re-exported as `threers::ui`.
+threers-ui = { path = "crates/threers-ui", version = "0.0.12", optional = true }
 # The codecs (`native-codec`, `native-decode`, `gif`, ...): pure Rust, no wgpu/winit.
 threers-codec = { path = "crates/threers-codec", version = "0.0.12", default-features = false, optional = true }
 # Soft bodies that tear and regrow (`softbody`): the solver, on its own so the
@@ -311,6 +354,8 @@ tokio = { version = "1", optional = true, default-features = false, features = [
 rlx = { version = "0.2.17", optional = true, default-features = false, features = ["cpu", "tensor", "gpu"] }
 rlx-geo = { version = "0.2.17", optional = true }
 manifold-rust = { version = "0.19", optional = true }
+# Pure Rust, no C: builds for wasm32 as for native (the `jpeg` feature).
+zune-jpeg = { version = "0.5", optional = true }
 
 # Native-only deps (pollster only makes sense outside wasm).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -320,6 +365,11 @@ pollster = { version = "1", optional = true }
 # there, which does not compile; those apps' windows are the system's.
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "tvos", target_os = "visionos")))'.dependencies]
 winit = { version = "0.30", optional = true }
+
+# `xr-visionos`: the compositor's Metal textures and wgpu's command queue.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+objc2-metal = { version = "0.3", optional = true, default-features = false, features = ["std", "MTLTexture", "MTLResource", "MTLPixelFormat", "MTLTypes", "MTLCommandQueue", "MTLCommandBuffer", "MTLDevice", "MTLAllocation"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
@@ -337,12 +387,9 @@ features = [
     "Element",
     "HtmlCanvasElement",
     "HtmlElement",
-    # `ui::canvas`: the 2D canvas painter and its DOM text.
+    # WebGL2 video: a `VideoFrame` drawn into a 2D canvas to be copied.
+    # (`ui::canvas` and `ui::a11y_dom` are `threers-ui`'s, with their own.)
     "CanvasRenderingContext2d",
-    "CanvasGradient",
-    "DomRect",
-    "TextMetrics",
-    "Path2d",
     # `THREE.TimeSmear.imageData`: frames straight to a 2D canvas.
     "ImageData",
     "Node",
@@ -355,10 +402,7 @@ features = [
     "MouseEvent",
     "KeyboardEvent",
     "WheelEvent",
-    # `ui::a11y_dom`: the accessibility mirror's focus and activation.
     "Event",
-    "FocusEvent",
-    "KeyboardEventInit",
     # Video: a `<video>` or WebCodecs `VideoFrame` copied into a texture on
     # the GPU (`textures::BrowserImage`).
     "HtmlMediaElement",
@@ -773,6 +817,10 @@ name = "backend_parity"
 required-features = ["metal"]
 
 [[test]]
+name = "metal_texture_formats"
+required-features = ["metal"]
+
+[[test]]
 name = "metal_backend"
 required-features = ["metal"]
 
@@ -840,13 +888,26 @@ required-features = ["webgl"]
 name = "fluid_webgl"
 required-features = ["fluid", "webgl"]
 
+
 [[test]]
-name = "ui_canvas_text"
+name = "ui_pass_gpu"
 required-features = ["ui"]
 
 [[test]]
-name = "ui_a11y_dom"
+name = "ui_indicators_gpu"
 required-features = ["ui"]
+
+[[test]]
+name = "render_patches"
+required-features = ["render"]
+
+[[test]]
+name = "ui_bold_face"
+required-features = ["ui"]
+
+[[test]]
+name = "xr_gpu"
+required-features = ["xr"]
 
 [[test]]
 name = "assembly_real_geometry"

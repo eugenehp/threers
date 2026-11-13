@@ -21,28 +21,31 @@ fn up() -> Vector3 {
 /// A fire on a disc `radius` metres across at `at`: hot, rising, flickering,
 /// added light that cools from white-yellow to red and fades.
 pub fn fire(at: Vector3, radius: f32) -> ParticleSystem {
+    // Fed from the middle of the bed: most gas rises from where the fuel
+    // is thickest.
     let mut e = Emitter::new(
         EmitterShape::Disc {
-            radius,
+            radius: radius * 0.8,
             normal: up(),
         },
         at,
     );
-    e.rate = 150.0 * (radius / 0.3).powi(2).max(0.2);
+    e.rate = 260.0 * (radius / 0.3).powi(2).max(0.2);
     e.direction = Direction::Cone {
         axis: up(),
-        angle: 0.25,
+        angle: 0.2,
     };
-    e.speed = Range::new(0.3, 0.9);
-    e.lifetime = Range::new(0.5, 1.1);
-    e.size = Range::new(radius * 0.7, radius * 1.2);
-    e.terminal_speed = Range::new(1.6, 2.4);
+    e.speed = Range::new(0.4, 1.0);
+    e.lifetime = Range::new(0.35, 0.85);
+    e.size = Range::new(radius * 0.5, radius * 0.9);
+    e.terminal_speed = Range::new(2.2, 3.2);
     e.spin = Range::new(-1.5, 1.5);
     let mut s = ParticleSystem::new(ParticleLook {
-        intensity: 0.35,
+        // Many overlapping in a narrow plume: each one dim.
+        intensity: 0.18,
         // Flame breaks into tongues and wisps, drawn out as it licks up.
         detail: 1.0,
-        stretch: 0.25,
+        stretch: 0.6,
         ..ParticleLook::new(
             ParticleKind::Billboard { softness: 1.0 },
             ParticleBlend::Additive,
@@ -51,33 +54,42 @@ pub fn fire(at: Vector3, radius: f32) -> ParticleSystem {
     .with_emitter(e);
     s.forces = Forces {
         // Hot gas: strongly buoyant at first, cooling as it mixes.
-        gravity: Vector3::new(0.0, 7.0, 0.0),
+        gravity: Vector3::new(0.0, 9.0, 0.0),
         cooling: Some(Cooling {
-            time: 0.45,
-            cold_gravity: Vector3::new(0.0, 1.0, 0.0),
+            time: 0.35,
+            cold_gravity: Vector3::new(0.0, 1.5, 0.0),
         }),
+        // Fine, fast eddies: they break the plume into licks.
         turbulence: Turbulence {
-            strength: 0.6,
-            scale: radius * 1.5,
-            churn: 1.2,
+            strength: 1.3,
+            scale: radius * 0.6,
+            churn: 2.8,
             anisotropy: 0.0,
         },
+        // Air drawn in round the base squeezes the rising plume to a point:
+        // the flame's cone.
+        fields: vec![super::Field::Attractor {
+            position: at + up() * (radius * 3.0),
+            strength: 2.4,
+            radius: radius * 3.5,
+        }],
         ..Forces::default()
     };
-    s.size_over_life = Curve(vec![(0.0, 0.55), (0.25, 1.0), (1.0, 0.35)]);
-    // Glowing soot: a black body cooling from about 1900 K at the base —
-    // yellow-white — through orange to a dull red as it rises and mixes,
-    // its brightness falling as T⁴.
+    // Full low down, tapering as the tongues thin out at the top.
+    s.size_over_life = Curve(vec![(0.0, 0.6), (0.2, 1.0), (0.6, 0.7), (1.0, 0.15)]);
+    // Glowing soot: a black body at about 1650 K at the base — yellow-orange,
+    // holding its colour through tone mapping rather than going white — staying hot through the body of the flame and
+    // cooling to deep orange at the tips, its brightness falling as T⁴.
     s.temperature_over_life = Some(Curve(vec![
-        (0.0, 1900.0),
-        (0.25, 1650.0),
-        (0.6, 1300.0),
-        (1.0, 1000.0),
+        (0.0, 1650.0),
+        (0.3, 1580.0),
+        (0.65, 1400.0),
+        (1.0, 1120.0),
     ]));
     s.color_over_life = Gradient(vec![
         (0.0, [1.0, 1.0, 1.0, 0.0]),
-        (0.06, [1.0, 1.0, 1.0, 0.7]),
-        (0.5, [1.0, 1.0, 1.0, 0.5]),
+        (0.05, [1.0, 1.0, 1.0, 0.75]),
+        (0.55, [1.0, 1.0, 1.0, 0.55]),
         (1.0, [1.0, 1.0, 1.0, 0.0]),
     ]);
     s

@@ -168,6 +168,28 @@ impl Matrix4 {
         m
     }
 
+    /// This projection narrowed to a patch of the picture it makes: the
+    /// rectangle `(x, y, width, height)` (pixels, from the top left) of a
+    /// `full` `(width, height)` picture, stretched to fill the whole of
+    /// clip space. Rendered into a target of the patch's size, it gives
+    /// exactly those pixels of the full picture (three.js `setViewOffset`).
+    /// Perspective and orthographic alike; depth is unchanged.
+    pub fn sub_view(&self, full: (f32, f32), rect: (f32, f32, f32, f32)) -> Self {
+        let (fw, fh) = (full.0.max(1e-6), full.1.max(1e-6));
+        let (x, y, w, h) = rect;
+        let (x0, x1) = (2.0 * x / fw - 1.0, 2.0 * (x + w) / fw - 1.0);
+        let (yt, yb) = (1.0 - 2.0 * y / fh, 1.0 - 2.0 * (y + h) / fh);
+        let (sx, tx) = (2.0 / (x1 - x0), -(x1 + x0) / (x1 - x0));
+        let (sy, ty) = (2.0 / (yt - yb), -(yt + yb) / (yt - yb));
+        let mut e = self.elements;
+        for c in 0..4 {
+            let wc = e[c * 4 + 3];
+            e[c * 4] = sx * e[c * 4] + tx * wc;
+            e[c * 4 + 1] = sy * e[c * 4 + 1] + ty * wc;
+        }
+        Self { elements: e }
+    }
+
     pub fn orthographic(left: f32, right: f32, top: f32, bottom: f32, near: f32, far: f32) -> Self {
         let w = 1.0 / (right - left);
         let h = 1.0 / (top - bottom);

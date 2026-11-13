@@ -171,6 +171,7 @@ impl MetalRenderer {
                     instance_color_offset: 0,
                     view_depth: center.distance_to(eye),
                     render_order: obj.render_order,
+                    clip: obj.clip_plane.as_ref().map_or([0.0; 4], |p| [p.normal.x, p.normal.y, p.normal.z, p.constant]),
                     // `Refract` draws as three.js's transmission here: the same
                     // volume model over the capture, which is what that mode
                     // refines on the wgpu path.

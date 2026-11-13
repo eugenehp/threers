@@ -1522,12 +1522,12 @@ fn bound_material_at(path: &str, layer: &UsdLayer) -> (Material, Vec<shade::Text
 /// [`UsdScene::textures`] exists because a scene-description reader has no
 /// business decoding images or reaching for files beside the layer. A `.usdz`
 /// is the case where neither objection holds: the package is required to be
-/// self-contained, so the bytes are already in hand, and this crate has a PNG
-/// decoder. So a packaged asset arrives ready to draw instead of arriving with
-/// a list of homework.
+/// self-contained, so the bytes are already in hand, and this crate decodes
+/// PNG, and JPEG with the `jpeg` feature (on by default). So a packaged asset
+/// arrives ready to draw instead of arriving with a list of homework.
 ///
-/// Requests this cannot satisfy — a JPEG, which needs a decoder that is not
-/// here, or a file the archive does not carry — are left in
+/// Requests this cannot satisfy — a JPEG without the `jpeg` feature, another
+/// format, or a file the archive does not carry — are left in
 /// [`UsdScene::textures`] for the caller, so nothing is lost by asking.
 ///
 /// Returns how many images were attached.
@@ -1619,9 +1619,10 @@ fn decode_from(archive: &UsdzArchive, request: &shade::TextureRequest) -> Option
     decode(&entry.data, request)
 }
 
-/// Image bytes as the texture the request describes.
+/// Image bytes as the texture the request describes: PNG, or JPEG with the
+/// `jpeg` feature, told apart by their signatures rather than the file name.
 fn decode(bytes: &[u8], request: &shade::TextureRequest) -> Option<Texture> {
-    let image = crate::utils::png::decode_png(bytes).ok()?;
+    let (width, height, rgba) = decode_rgba(bytes)?;
     // A data map must not be read through an sRGB curve, and a colour map
     // must. The request carries which, because USD authors it.
     let format = if request.color_space == "raw" {
@@ -1632,8 +1633,19 @@ fn decode(bytes: &[u8], request: &shade::TextureRequest) -> Option<Texture> {
     Some(Texture {
         wrap_s: wrap_from(&request.wrap_s),
         wrap_t: wrap_from(&request.wrap_t),
-        ..Texture::new(image.width, image.height, format, image.rgba)
+        ..Texture::new(width, height, format, rgba)
     })
+}
+
+/// PNG or JPEG bytes as RGBA, or `None` for anything this build cannot read.
+fn decode_rgba(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    #[cfg(feature = "jpeg")]
+    if crate::utils::jpeg::is_jpeg(bytes) {
+        let image = crate::utils::jpeg::decode_jpeg(bytes).ok()?;
+        return Some((image.width, image.height, image.rgba));
+    }
+    let image = crate::utils::png::decode_png(bytes).ok()?;
+    Some((image.width, image.height, image.rgba))
 }
 
 /// USD's wrap mode as this crate's.

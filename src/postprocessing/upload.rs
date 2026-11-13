@@ -9,61 +9,48 @@ use super::target::{Target, INTERMEDIATE_FORMAT};
 use super::PostBackend;
 use crate::textures::{CubeTexture, Texture, TextureFormat};
 
-/// `data` (`format`) as linear RGBA texels. `None` for a block-compressed
-/// format, which has no texels to read here.
-pub fn texels(format: TextureFormat, data: &[u8], count: usize) -> Option<Vec<[f32; 4]>> {
-    let mut out = Vec::with_capacity(count);
-    match format {
-        TextureFormat::Rgba8UnormSrgb => {
-            for p in data.as_chunks::<4>().0.iter().take(count) {
-                let d = crate::utils::srgb::srgb_to_linear;
-                out.push([d(p[0]), d(p[1]), d(p[2]), p[3] as f32 / 255.0]);
-            }
-        }
-        TextureFormat::Rgba8Unorm => {
-            for p in data.as_chunks::<4>().0.iter().take(count) {
-                out.push([
-                    p[0] as f32 / 255.0,
-                    p[1] as f32 / 255.0,
-                    p[2] as f32 / 255.0,
-                    p[3] as f32 / 255.0,
-                ]);
-            }
-        }
-        TextureFormat::R8Unorm => {
-            for &v in data.iter().take(count) {
-                let v = v as f32 / 255.0;
-                out.push([v, v, v, 1.0]);
-            }
-        }
-        TextureFormat::Rgba16Float => {
-            for p in data.as_chunks::<8>().0.iter().take(count) {
-                let h = |i: usize| {
-                    crate::renderer::gpu_texture::f16_bits_to_f32(u16::from_le_bytes([
-                        p[i],
-                        p[i + 1],
-                    ]))
-                };
-                out.push([h(0), h(2), h(4), h(6)]);
-            }
-        }
-        f @ (TextureFormat::R16Float | TextureFormat::R32Float | TextureFormat::Rgba32Float) => {
-            let v = f.texels_f32(data)?;
-            if f.channels() == 1 {
-                out.extend(v.iter().take(count).map(|&x| [x, x, x, 1.0]));
-            } else {
-                out.extend(
-                    v.as_chunks::<4>()
-                        .0
-                        .iter()
-                        .take(count)
-                        .map(|p| [p[0], p[1], p[2], p[3]]),
-                );
-            }
-        }
-        _ => return None,
+/// `data` (a `width x height` image in `format`) as linear RGBA texels:
+/// block formats decoded, the sRGB curve undone, one channel splat across RGB
+/// and two read as red and green. `None` when the bytes are too few.
+pub fn texels(
+    format: TextureFormat,
+    data: &[u8],
+    width: u32,
+    height: u32,
+) -> Option<Vec<[f32; 4]>> {
+    let count = (width.max(1) * height.max(1)) as usize;
+    let decoded;
+    let (format, data) = if format.is_block_compressed() {
+        decoded = crate::textures::codec::decode(format, data, width, height)?;
+        (crate::textures::codec::decoded_format(format), &decoded[..])
+    } else {
+        (format, data)
+    };
+    let v = format.texels_f32(data)?;
+    let n = format.channels();
+    if v.len() < count * n {
+        return None;
     }
-    (out.len() == count).then_some(out)
+    let srgb = format.is_srgb();
+    let d = |x: f32| {
+        if srgb {
+            crate::utils::srgb::srgb_to_linear((x * 255.0).round() as u8)
+        } else {
+            x
+        }
+    };
+    Some(
+        (0..count)
+            .map(|i| {
+                let t = &v[i * n..i * n + n];
+                match n {
+                    1 => [t[0], t[0], t[0], 1.0],
+                    2 => [t[0], t[1], 0.0, 1.0],
+                    _ => [d(t[0]), d(t[1]), d(t[2]), t[3]],
+                }
+            })
+            .collect(),
+    )
 }
 
 /// A texture as a pass binds it: the render target behind it when it is one
@@ -84,8 +71,7 @@ pub fn texture_target(
     {
         return Some(t.clone());
     }
-    let count = (tex.width * tex.height) as usize;
-    let texels = texels(tex.format, &tex.data, count)?;
+    let texels = texels(tex.format, &tex.data, tex.width, tex.height)?;
     let t = match slot.take() {
         Some((_, t)) if t.size() == (tex.width.max(1), tex.height.max(1)) => t,
         Some((_, t)) => {
@@ -124,7 +110,7 @@ pub fn cube_atlas(
                 .take(n)
                 .map(|c| [c[0], c[1], c[2], c[3]])
                 .collect(),
-            None => texels(cube.format, &cube.faces[f], n)?,
+            None => texels(cube.format, &cube.faces[f], cube.size, cube.size)?,
         };
         if face.len() != n {
             return None;

@@ -141,6 +141,7 @@
 //! | [`crate::metal::resources`] | Textures, samplers, pipeline states |
 //! | — | [`crate::metal::MetalDevice`], [`crate::metal::MetalRenderer`], [`crate::metal::MetalRenderTarget`], [`crate::metal::MetalSurface`] |
 //! | — | [`crate::metal::MetalRenderPool`]: reusable render threads |
+//! | — | [`crate::metal::MetalUi`]: a threers-ui UI over a frame (`ui`) |
 
 pub mod objc;
 
@@ -159,6 +160,8 @@ mod postfx;
 mod renderer;
 mod surface;
 mod target;
+#[cfg(feature = "ui")]
+mod ui;
 mod video;
 pub mod viewport;
 
@@ -176,6 +179,8 @@ pub use renderer::{
 pub use postfx::{MetalBloom, MetalDownsampler, MetalSsao, MetalUpscaler, PostFxChain, SsaoSettings};
 pub use surface::{MetalSurface, SurfaceFrame};
 pub use target::MetalRenderTarget;
+#[cfg(feature = "ui")]
+pub use ui::MetalUi;
 
 // Moving a renderer to another thread.
 //

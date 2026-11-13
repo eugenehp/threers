@@ -152,6 +152,29 @@ impl ViewOverride {
     }
 }
 
+/// A patch of a camera's full picture (three.js `setViewOffset`): the
+/// camera renders only the rectangle `(x, y, width, height)`, in pixels from
+/// the top left of a `full_width` × `full_height` picture, stretched to fill
+/// its target. Render a big picture in tiles, or just the part of it that
+/// changed, or one window of a wall of screens; each patch lands exactly
+/// where it would in the full picture.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewOffset {
+    pub full_width: f32,
+    pub full_height: f32,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl ViewOffset {
+    /// `projection` narrowed to this patch.
+    pub fn apply(&self, projection: Matrix4) -> Matrix4 {
+        projection.sub_view((self.full_width, self.full_height), (self.x, self.y, self.width, self.height))
+    }
+}
+
 /// Unified camera trait used by the Renderer.
 pub trait Camera {
     fn view_matrix(&self) -> Matrix4;

@@ -1,6 +1,9 @@
 //! Extras — algorithms ported from three.js's `examples/jsm/utils`,
 //! `examples/jsm/animation`, etc.
 
+// Candles: a wax body, a wick, a flame (simple or volumetric) and its light.
+pub mod candle;
+pub mod progress;
 mod ccd_ik;
 pub mod cube_uv;
 pub(crate) mod marching_cubes;

@@ -25,4 +25,4 @@ mod texture;
 pub use slice::{
     plane_to_voxel, SliceBinding, SliceParams, SliceRenderer, SliceTarget, LABELS, WINDOW_LEVEL,
 };
-pub use texture::{Data3DTexture, GpuVolume, VolumeFormat, VolumeSample};
+pub use texture::{Data3DTexture, GpuVolume, VolumeFormat, VolumeMaps, VolumeSample};

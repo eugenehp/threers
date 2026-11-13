@@ -1,0 +1,20 @@
+[package]
+name = "threers-ui-demo-visionos"
+version.workspace = true
+edition = "2024"
+authors = ["Eugene Hauptmann"]
+description = "threers-ui's demo as a native Apple Vision Pro app: the UI on a panel in a threers room, in an immersive space"
+license = "MIT"
+repository = "https://github.com/eugenehp/threers"
+# A demo, not a library. See docs/releasing.md.
+publish = false
+
+[lib]
+# Linked into the SwiftUI app (`app/build.sh`).
+crate-type = ["staticlib", "rlib"]
+
+# Only visionOS has anything to build; elsewhere the crate is empty.
+[target.'cfg(target_os = "visionos")'.dependencies]
+threers-ui-demo = { path = "../threers-ui-demo" }
+threers-ui = { path = "../threers-ui" }
+threers = { path = "../..", default-features = false, features = ["ui", "xr-visionos"] }

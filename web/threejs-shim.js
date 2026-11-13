@@ -4862,24 +4862,49 @@ export class ShaderMaterial {
     static validationAvailable() { return WebShaderMaterial.validationAvailable(); }
 
     /**
-     * Re-read the uniform block. The material has to be rebuilt for the
-     * renderer to see it, which is why this exists rather than a plain setter.
+     * Replace the uniform block — a flat array of floats, four to a
+     * `u_data.data[i]`.
+     *
+     * In place: every mesh holding this material sees it on the next frame,
+     * without being handed the material again. It costs one 256-byte write.
      */
     setUniforms(values) {
-        this._sm.setData(Float32Array.from(values));
-        this._w = this._sm.material();
-        this._pushRenderState?.();
-        _materialChanged(this);
+        this._sm.setData(_f32(values));
         return this;
     }
 
-    setStorage(slot, values) {
-        this._sm.setStorage(slot, Float32Array.from(values));
-        this._w = this._sm.material();
-        this._pushRenderState?.();
-        _materialChanged(this);
+    /**
+     * Set float `index` of the uniform block (`index` 5 is `u_data.data[1].y`),
+     * or, given an array, the floats from `index` on. In place, like
+     * `setUniforms`.
+     */
+    setUniform(index, value) {
+        if (typeof value === 'number') this._sm.setUniform(index, value);
+        else this._sm.setDataRange(index, _f32(value));
         return this;
     }
+
+    /** Replace storage slot `slot` (0-2). In place; uploaded whole, once. */
+    setStorage(slot, values) {
+        this._sm.setStorage(slot, _f32(values));
+        return this;
+    }
+
+    /**
+     * Overwrite storage slot `slot` from float `offset` on, uploading only
+     * that range — for changing a few objects out of many. It writes the
+     * state every mesh holding this material shares, so nothing is rebuilt
+     * or handed out again.
+     */
+    setStorageRange(slot, offset, values) {
+        this._sm.setStorageRange(slot, offset, _f32(values));
+        return this;
+    }
+}
+
+/** A `Float32Array` view of `values`, copied only when it is not one already. */
+function _f32(values) {
+    return values instanceof Float32Array ? values : Float32Array.from(values);
 }
 
 /** three.js distinguishes these by whether it injects its own preamble; this
@@ -5548,6 +5573,9 @@ function _mirrorChildren(obj, graph) {
     for (const c of obj.children) take(c);
     const extra = obj._mirrorExtraChildren?.();
     if (extra) for (const c of extra) take(c);
+    // Nodes the object built under itself in Rust (a `Candle`'s parts).
+    const own = obj._mirrorOwnChildren?.();
+    if (own) ids.push(...own);
     if (m.childIds) {
         for (const id of m.childIds) {
             if (ids.includes(id)) continue;
@@ -8136,6 +8164,13 @@ export class Points extends Object3D {
 /// for `mapSize`, `bias`, `normalBias` and `radius`, polled in `_lightState`).
 function _makeLightShadow(light) {
     const store = { left: -5, right: 5, top: 5, bottom: -5, near: 0.1, far: 500 };
+    const params = { mapSize: 4096, bias: 0, normalBias: 0, fitView: 0 };
+    // The scene holds a copy of the light taken at `scene.add`, so a change
+    // made afterwards has to be pushed into that copy too.
+    const syncParams = () => {
+        w?.setShadowParams?.(params.mapSize, params.bias, params.normalBias, params.fitView);
+        if (owner) _pushLightToScene(owner);
+    };
     const sync = () => {
         light?._w?.setShadowCamera?.(store.left, store.right, store.top, store.bottom, store.near, store.far);
         light?._dirty?.(_D_DATA);
@@ -8150,7 +8185,10 @@ function _makeLightShadow(light) {
         });
     }
     const mapSize = { width: 512, height: 512, set(w, h) { this.width = w; this.height = h; } };
-    return { camera, mapSize, bias: 0, normalBias: 0, radius: 1, _sync: sync };
+    // `fitView` is this renderer's, not three.js's: > 0 fits a directional
+    // light's single shadow map to the camera out to that many world units,
+    // instead of the fixed box around the origin.
+    return { camera, mapSize, bias: 0, normalBias: 0, radius: 1, fitView: 0, _sync: sync };
 }
 /// three.js r165 `Light`: `color` and `intensity` on an Object3D. The wasm
 /// light (`_w`) is the node's light; its parameters are compared at each sync.
@@ -8201,7 +8239,7 @@ export class Light extends Object3D {
             this.penumbra ?? 0, this.width ?? 0, this.height ?? 0, g?.r ?? 0, g?.g ?? 0, g?.b ?? 0,
             ...(this._lightDirection() ?? [0, 0, 0]),
             this.shadow?.bias ?? 0, this.shadow?.normalBias ?? 0, this.shadow?.radius ?? 1,
-            this.shadow?.mapSize?.width ?? 0, this.shadow?.mapSize?.height ?? 0];
+            this.shadow?.mapSize?.width ?? 0, this.shadow?.mapSize?.height ?? 0, this.shadow?.fitView ?? 0];
     }
     _mirrorKind() { return this._w instanceof WebLight ? 'light' : 'group'; }
     _mirrorCreate(w) { return this._w instanceof WebLight ? w.createLight(this._w) : w.createGroup(false); }
@@ -8217,7 +8255,7 @@ export class Light extends Object3D {
         if (this.width !== undefined) lw.setRectSize?.(this.width, this.height);
         const d = this._lightDirection();
         if (d) lw.setDirection?.(d[0], d[1], d[2]);
-        if (this.shadow) lw.setShadowParams?.(this.shadow.bias ?? 0, this.shadow.normalBias ?? 0, this.shadow.radius ?? 1);
+        if (this.shadow) lw.setShadowParams?.(this.shadow.bias ?? 0, this.shadow.normalBias ?? 0, this.shadow.radius ?? 1, this.shadow.fitView ?? 0);
         if (this.shadow?.mapSize) lw.setShadowMapSize?.(this.shadow.mapSize.width, this.shadow.mapSize.height);
         w.setNodeLight(h, lw);
         m.light = s;
@@ -11628,6 +11666,9 @@ export class EffectComposer {
             throw new Error('EffectComposer: at most two scenes and four cameras per composer');
         }
         for (const [scene, camera] of pairs) renderer._prepareRender(scene, camera);
+        // Particles, fur and candles move on the renderer's clock, as in
+        // `renderer.render` — once a frame for each scene drawn.
+        for (const scene of scenes) renderer._stepFur(scene._w, pairs.find((p) => p[0] === scene)?.[1]);
         for (const c of cameras) c._sync?.();
         const r = renderer._w;
         if (cameras.length === 0) {
@@ -12913,9 +12954,21 @@ export class WebGLRenderer {
         r._clearColor = new Color(0x000000);
         r._clearAlpha = 1;
         r._clearColorSet = false;
+        r.xr = new WebXRManager(r);
         return r;
     }
     get domElement() { return this._canvas; }
+    /// three.js `setAnimationLoop(callback)`: `callback(time, frame)` every
+    /// display frame, or every headset frame while an XR session runs (the
+    /// window's frames stop then). `null` stops it.
+    setAnimationLoop(callback) {
+        this._loop = callback;
+        if (this.xr._x) { this.xr._x.setAnimationLoop(this.xr._frame(callback)); return; }
+        if (this._raf) cancelAnimationFrame(this._raf);
+        this._raf = null;
+        const tick = (t) => { this._raf = requestAnimationFrame(tick); this._loop?.(t); };
+        if (callback) this._raf = requestAnimationFrame(tick);
+    }
     /// three.js `setSize`: `width`/`height` are CSS pixels; the drawing buffer
     /// becomes `floor(size × pixelRatio)`. `updateStyle` (default true) also
     /// sets the canvas's CSS size. Resets the viewport to the whole canvas.
@@ -13113,6 +13166,10 @@ export class WebGLRenderer {
         return this._w.readRenderTargetF16(target._w.id, x, y, width, height);
     }
     render(scene, camera) {
+        if (this.xr.isPresenting && !this._currentRenderTarget && scene?._w && camera?.isPerspectiveCamera) {
+            this.xr._render(scene, camera);
+            return;
+        }
         if (scene && !scene.isScene && scene instanceof Object3D) {
             this._renderRoot(scene, camera);
             return;
@@ -13136,6 +13193,8 @@ export class WebGLRenderer {
         w.stepFur(now - this._furStart, dt);
         // Particles, snow and sand, on the same clock; alpha-blended
         // particles sorted from the camera.
+        // Candles flicker on the same clock.
+        w.stepCandles?.(now - this._furStart);
         if (w.stepParticles) {
             _linkParticles();
             const e = camera?.matrixWorld?.elements;
@@ -18507,27 +18566,170 @@ export class Lensflare extends Sprite {
 }
 Lensflare.LensflareElement = class LensflareElement { constructor(texture, size = 1, distance = 0, color) { this.texture = texture; this.size = size; this.distance = distance; this.color = color || new Color(0xffffff); } };
 
-// ---- VR/AR (`examples/jsm/webxr/...`) ----
-// Browser API access — the buttons trigger a `navigator.xr.requestSession`,
-// which falls back to a no-op when XR isn't available.
-export class VRButton {
-    static createButton(_renderer, _options) {
-        const btn = (typeof document !== 'undefined') ? document.createElement('button') : { textContent: '' };
-        btn.textContent = 'ENTER VR';
-        btn.onclick = () => navigator.xr?.requestSession?.('immersive-vr').catch(() => {});
-        return btn;
+// ---- VR/AR: three.js `renderer.xr` and `examples/jsm/webxr/...` ----
+/// three.js `WebXRManager` over the wasm `WebXr`, which runs the session,
+/// the frame loop, both eyes and the copy to the headset. This keeps the
+/// three.js objects in step: the camera at the head, controllers and hands
+/// at their poses, and their events.
+export class WebXRManager {
+    constructor(renderer) {
+        this._r = renderer;
+        this._x = null;
+        this.enabled = false;
+        this.isPresenting = false;
+        this.cameraAutoUpdate = true;
+        this._scale = 1;
+        this._space = 'local-floor';
+        this._inputs = [];
+        this._camera = new ArrayCamera([new PerspectiveCamera(), new PerspectiveCamera()]);
+    }
+    setFramebufferScaleFactor(v) { this._scale = Number(v) || 1; }
+    setReferenceSpaceType(t) { this._space = t; }
+    getReferenceSpace() { return this._x?.referenceSpace ?? null; }
+    getSession() { return this._x?.session ?? null; }
+    getEnvironmentBlendMode() { return this._x ? (this._x.mode === 'immersive-ar' ? 'alpha-blend' : 'opaque') : undefined; }
+    getFrame() { return this._f ?? null; }
+    _input(i) { return this._inputs[i] ??= { ray: _xrGroup(), grip: _xrGroup(), hand: Object.assign(_xrGroup(), { joints: {} }) }; }
+    getController(i) { return this._input(i).ray; }
+    getControllerGrip(i) { return this._input(i).grip; }
+    getHand(i) { return this._input(i).hand; }
+    /// The eyes of the last frame, as three.js's `ArrayCamera`.
+    getCamera() {
+        const d = this._x?.eyeData() ?? [];
+        this._camera.cameras.forEach((c, i) => {
+            if (d.length < 36 * (i + 1)) return;
+            c.projectionMatrix.fromArray(d, 36 * i);
+            c.projectionMatrixInverse.copy(c.projectionMatrix).invert();
+            c.matrix.fromArray(d, 36 * i + 16).decompose(c.position, c.quaternion, c.scale);
+            c.viewport = new Vector4(...d.slice(36 * i + 32, 36 * i + 36));
+        });
+        return this._camera;
+    }
+    /// Opens a session (from a click) and presents into it.
+    async start(mode = 'immersive-vr', init = {}) {
+        const f = [...(init.requiredFeatures ?? []), ...(init.optionalFeatures ?? [])];
+        return this._present(await _xr().start(mode, this._r._canvas, this._space, this._scale, f));
+    }
+    /// three.js `setSession`: presents into a session the page opened.
+    async setSession(session) {
+        if (!session) return this._x?.end();
+        return this._present(await _xr().attach(session, this._r._canvas, this._space, this._scale));
+    }
+    _present(x) {
+        this._x = x;
+        this.isPresenting = true;
+        const r = this._r;
+        x.onEnd(() => {
+            this._x = null;
+            this.isPresenting = false;
+            r.setSize(r._width, r._height, false);
+            this.dispatchEvent({ type: 'sessionend' });
+            r.setAnimationLoop(r._loop ?? null);
+        });
+        if (r._raf) cancelAnimationFrame(r._raf);
+        r._raf = null;
+        x.setAnimationLoop(this._frame(r._loop));
+        this.dispatchEvent({ type: 'sessionstart' });
+        return x.session;
+    }
+    /// The app's callback, after the inputs are brought up to date.
+    _frame(callback) {
+        return (time, frame) => {
+            this._f = frame;
+            for (const s of this._x.inputs()) _xrPlace(this._input(s.slot), s);
+            for (const [type, slot, data] of this._x.takeEvents()) {
+                const c = this._input(slot);
+                if (type === 'disconnected') for (const g of [c.ray, c.grip, c.hand]) g.visible = false;
+                for (const g of [c.ray, c.grip, c.hand]) g.dispatchEvent({ type, data });
+            }
+            callback?.(time, frame);
+            this._f = null;
+        };
+    }
+    /// `renderer.render` while presenting: the camera to the head, both eyes
+    /// drawn under the camera's parent.
+    _render(scene, camera) {
+        const head = this._x.headMatrix();
+        if (head && this.cameraAutoUpdate) new Matrix4().fromArray(head).decompose(camera.position, camera.quaternion, camera.scale);
+        const r = this._r;
+        r._prepareRender(scene, camera);
+        r._stepFur(scene._w, camera);
+        r._w.renderXr(scene._w, camera._w, this._x, Float32Array.from(camera.parent?.matrixWorld.elements ?? []));
     }
 }
-export class ARButton {
-    static createButton(_renderer, _options) {
-        const btn = (typeof document !== 'undefined') ? document.createElement('button') : { textContent: '' };
-        btn.textContent = 'START AR';
-        btn.onclick = () => navigator.xr?.requestSession?.('immersive-ar').catch(() => {});
-        return btn;
-    }
+Object.assign(WebXRManager.prototype, EventDispatcherMixin);
+/// The wasm session type; only builds with the `xr` feature have it.
+function _xr() {
+    if (!_optional.WebXr) throw new Error('WebXR: this wasm build has no `xr` feature (XR=1 ./web/build.sh)');
+    return _optional.WebXr;
 }
+function _xrGroup() { const g = new Group(); g.visible = false; return g; }
+function _xrPlace(c, s) {
+    const put = (g, m) => { g.visible = !!m; if (m) new Matrix4().fromArray(m).decompose(g.position, g.quaternion, g.scale); };
+    put(c.ray, s.ray);
+    put(c.grip, s.grip);
+    c.hand.visible = !!s.joints;
+    if (!s.joints) return;
+    _xr().jointNames().forEach((name, i) => {
+        const j = c.hand.joints[name] ??= c.hand.add(_xrGroup()) && c.hand.children[c.hand.children.length - 1];
+        put(j, s.joints.subarray(16 * i, 16 * i + 16));
+        j.jointRadius = s.radii[i];
+    });
+}
+function _xrButton(renderer, mode, label, init) {
+    const btn = (typeof document !== 'undefined') ? document.createElement('button') : { textContent: '', style: {} };
+    btn.textContent = `${label} NOT SUPPORTED`;
+    btn.disabled = true;
+    (_optional.WebXr?.isSessionSupported(mode) ?? Promise.resolve(false)).then((ok) => {
+        if (!ok) return;
+        btn.disabled = false;
+        btn.textContent = `ENTER ${label}`;
+        btn.onclick = () => renderer.xr.isPresenting ? renderer.xr.getSession()?.end() : renderer.xr.start(mode, init).catch((e) => console.error(e));
+        // The other button waits while this one's session runs.
+        renderer.xr.addEventListener('sessionstart', () => {
+            if (renderer.xr._x?.mode === mode) btn.textContent = `EXIT ${label}`;
+            else btn.disabled = true;
+        });
+        renderer.xr.addEventListener('sessionend', () => { btn.textContent = `ENTER ${label}`; btn.disabled = false; });
+    });
+    return btn;
+}
+export class VRButton { static createButton(renderer, init) { return _xrButton(renderer, 'immersive-vr', 'VR', init); } }
+export class ARButton { static createButton(renderer, init) { return _xrButton(renderer, 'immersive-ar', 'AR', init); } }
 export class XRControllerModelFactory { constructor() {} createControllerModel(_controller) { return new Group(); } }
 export class XRHandModelFactory { constructor() {} createHandModel(_hand) { return new Group(); } }
+
+// ---- Candles (threers extension) ----
+/// threers extension (not in three.js): a candle — wax, wick, flame and the
+/// light it gives — built in Rust (`threers::extras::candle`) and flickered
+/// on the renderer's clock, nothing to call per frame. `realistic` draws a
+/// volumetric flame (ray-marched, `steps` per pixel) and a shadowing light;
+/// otherwise a cheap glowing teardrop. Sizes are metres. `castShadow`
+/// (default: when realistic) is off where shadow casters are costly — fur,
+/// hair: a point light draws each into six shadow views.
+///
+///     const candle = new THREE.Candle({ realistic: true });
+///     candle.position.set(0, 0.75, 0);   // standing on a table top
+///     scene.add(candle);
+export class Candle extends Object3D {
+    constructor({ realistic = false, height = 0.12, radius = 0.024, wax = 0xf1e6cf, flameHeight = 0.045,
+                  intensity = 0.06, steps = 64, seed = Math.random() * 100, castShadow = realistic } = {}) {
+        super();
+        this.type = 'Candle';
+        this.isCandle = true;
+        this._opts = { realistic: !!realistic, height, radius, wax: _clearColorHex(wax) ?? 0xf1e6cf, flameHeight, intensity, steps, seed, castShadow: !!castShadow };
+        this._parts = [];
+    }
+    get realistic() { return this._opts.realistic; }
+    _mirrorKind() { return 'candle'; }
+    _mirrorCreate(w) {
+        const o = this._opts;
+        const h = w.createCandle(o.realistic, o.height, o.radius, o.wax, o.flameHeight, o.intensity, o.steps, o.seed, o.castShadow);
+        this._parts = Array.from(w.candleParts(h));
+        return h;
+    }
+    _mirrorOwnChildren() { return this._parts; }
+}
 
 // ---- CSS3DRenderer companion ----
 export class CSS3DObject extends Object3D { constructor(element) { super(); this.element = element; this._isCSS3DObject = true; } }
@@ -18768,7 +18970,7 @@ const THREE = {
     BufferGeometryUtils, geometryToBufferGeometry, SceneUtils, SkeletonUtils, RoomEnvironment,
     MTLLoader, OBJExporter, STLExporter, PLYExporter, GLTFExporter, MeshoptDecoder,
     Reflector, Refractor, Water, Sky, Lensflare,
-    VRButton, ARButton, XRControllerModelFactory, XRHandModelFactory,
+    VRButton, ARButton, XRControllerModelFactory, XRHandModelFactory, Candle,
     CSS3DObject, CSS3DSprite, CSS3DRenderer,
     BokehPass, SAOPass, SMAAPass, TAARenderPass, SSAARenderPass, AfterimagePass, BloomPass,
     OutputPass, TransitionPass, RenderTransitionPass, LUTPass, RenderPixelatedPass,

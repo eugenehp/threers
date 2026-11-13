@@ -240,67 +240,34 @@ fn unflipped(texture: &Texture, count: usize) -> Option<Vec<u8>> {
         TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => {
             texture.pixels().get(..count * 4).map(<[u8]>::to_vec)
         }
-        // One channel becomes grey, so the written file says what the single
-        // channel said however a reader samples it.
-        TextureFormat::R8Unorm => texture
-            .data
-            .get(..count)
-            .map(|d| d.iter().flat_map(|v| [*v, *v, *v, 255]).collect()),
-        // Half float down to 8 bits. Anything above 1.0 clamps, which is a
-        // real loss and only reachable for a map holding an HDR image.
-        TextureFormat::Rgba16Float => texture.data.get(..count * 8).map(|d| {
-            d.as_chunks::<2>()
-                .0
-                .iter()
-                .map(|h| {
-                    let bits = u16::from_le_bytes([h[0], h[1]]);
-                    let value = half_bits_to_f32(bits);
-                    (value.clamp(0.0, 1.0) * 255.0).round() as u8
-                })
-                .collect()
-        }),
-        // The other floats likewise, one channel as grey.
-        f @ (TextureFormat::R16Float | TextureFormat::R32Float | TextureFormat::Rgba32Float) => {
-            let v = f.texels_f32(
-                texture
-                    .data
-                    .get(..f.data_len(texture.width, texture.height))?,
-            )?;
+        // Everything else through f32, block formats decoded first. One
+        // channel becomes grey, so the written file says what the single
+        // channel said however a reader samples it; two are red and green.
+        // Floats above 1.0 clamp, which is a real loss and only reachable for
+        // a map holding an HDR image.
+        f => {
+            let (w, h) = (texture.width, texture.height);
+            let v =
+                crate::textures::codec::texels_f32(f, texture.data.get(..f.data_len(w, h))?, w, h)?;
             let byte = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
-            Some(if f.channels() == 1 {
-                v.iter()
-                    .flat_map(|x| [byte(*x), byte(*x), byte(*x), 255])
-                    .collect()
-            } else {
-                v.iter().map(|x| byte(*x)).collect()
-            })
-        }
-        _ => None,
-    }
-}
-
-/// An IEEE half as an `f32`.
-fn half_bits_to_f32(bits: u16) -> f32 {
-    let sign = ((bits >> 15) & 1) as u32;
-    let exponent = ((bits >> 10) & 0x1f) as u32;
-    let mantissa = (bits & 0x3ff) as u32;
-    let assembled = match exponent {
-        0 if mantissa == 0 => sign << 31,
-        // Subnormal: normalise it by hand, since the exponent fields do not
-        // line up between the two formats.
-        0 => {
-            let mut e = -1i32;
-            let mut m = mantissa;
-            while m & 0x400 == 0 {
-                m <<= 1;
-                e -= 1;
+            let n = crate::textures::codec::decoded_format(f).channels();
+            if v.len() < count * n {
+                return None;
             }
-            (sign << 31) | (((127 - 15 + e + 1) as u32) << 23) | ((m & 0x3ff) << 13)
+            Some(
+                (0..count)
+                    .flat_map(|i| {
+                        let t = &v[i * n..i * n + n];
+                        match n {
+                            1 => [byte(t[0]), byte(t[0]), byte(t[0]), 255],
+                            2 => [byte(t[0]), byte(t[1]), 0, 255],
+                            _ => [byte(t[0]), byte(t[1]), byte(t[2]), byte(t[3])],
+                        }
+                    })
+                    .collect(),
+            )
         }
-        0x1f => (sign << 31) | (0xff << 23) | (mantissa << 13),
-        _ => (sign << 31) | ((exponent + 127 - 15) << 23) | (mantissa << 13),
-    };
-    f32::from_bits(assembled)
+    }
 }
 
 /// USD's name for a wrap mode.
@@ -2614,6 +2581,87 @@ def Material "Mat"
             1,
             "and it is still reported rather than dropped"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A JPEG texture loads like a PNG one, with the `jpeg` feature: the
+    /// colour map arrives on the material instead of staying a request.
+    /// Without the feature it stays a request, reported rather than dropped.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_jpeg_texture_is_attached() {
+        use super::super::{attach_textures_from_dir, UsdLoader};
+
+        let dir = std::env::temp_dir().join(format!("threers_usd_jpeg_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // one copy named .png on purpose: the decoder goes by the bytes, not the name
+        let jpeg = include_bytes!("../testdata/jpeg/rgb.jpg");
+        std::fs::write(dir.join("pic.jpg"), jpeg).unwrap();
+        std::fs::write(dir.join("misnamed.png"), jpeg).unwrap();
+
+        for file in ["pic.jpg", "misnamed.png"] {
+            let text = format!(
+                r#"#usda 1.0
+
+def Mesh "M" (
+    prepend apiSchemas = ["MaterialBindingAPI"]
+)
+{{
+    int[] faceVertexCounts = [3]
+    int[] faceVertexIndices = [0, 1, 2]
+    rel material:binding = </Mat>
+    point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+}}
+
+def Material "Mat"
+{{
+    token outputs:surface.connect = </Mat/S.outputs:surface>
+
+    def Shader "S"
+    {{
+        uniform token info:id = "UsdPreviewSurface"
+        color3f inputs:diffuseColor.connect = </Mat/T.outputs:rgb>
+        token outputs:surface
+    }}
+
+    def Shader "T"
+    {{
+        uniform token info:id = "UsdUVTexture"
+        asset inputs:file = @./{file}@
+        float3 outputs:rgb
+    }}
+}}
+"#
+            );
+            let mut scene = UsdLoader::parse(text.as_bytes()).expect("reads");
+            let attached = attach_textures_from_dir(&mut scene, &dir);
+            let pending = scene.textures.iter().flat_map(|(_, r)| r).count();
+            if cfg!(feature = "jpeg") {
+                assert_eq!((attached, pending), (1, 0), "{file}");
+                let map = scene
+                    .arena
+                    .nodes
+                    .iter()
+                    .find_map(|(_, o)| match &o.kind {
+                        crate::core::ObjectKind::Mesh(m) => match &*m.material {
+                            crate::materials::Material::Standard(s) => s.map.clone(),
+                            crate::materials::Material::Physical(p) => p.map.clone(),
+                            _ => None,
+                        },
+                        _ => None,
+                    })
+                    .expect("a colour map on the mesh");
+                assert_eq!((map.width, map.height), (16, 16), "{file}");
+                assert_eq!(
+                    map.format,
+                    crate::textures::TextureFormat::Rgba8UnormSrgb,
+                    "a colour map is sRGB"
+                );
+            } else {
+                assert_eq!((attached, pending), (0, 1), "{file}");
+            }
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

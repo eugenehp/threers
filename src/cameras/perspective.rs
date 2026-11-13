@@ -63,6 +63,9 @@ pub struct PerspectiveCamera {
     /// a camera whose world matrix is not a pure rotation and translation (a
     /// scaled parent). `position`, `target` and `up` still describe its pose.
     pub view_override: Option<super::ViewOverride>,
+    /// When set, only this patch of the full picture is rendered (see
+    /// [`ViewOffset`](super::ViewOffset)).
+    pub view_offset: Option<super::ViewOffset>,
 }
 
 impl PerspectiveCamera {
@@ -117,7 +120,45 @@ impl PerspectiveCamera {
             projection_override: None,
             layers: crate::core::Layers::default(),
             view_override: None,
+            view_offset: None,
         }
+    }
+
+
+    /// The projection of the full picture, before any
+    /// [`view_offset`](Self::view_offset).
+    pub fn full_projection(&self) -> Matrix4 {
+        if let Some(m) = self.projection_override {
+            return Matrix4 { elements: m };
+        }
+        // Panoramic kinds still expose a perspective matrix for the raster
+        // path; specialised integrators read `projection` directly.
+        if self.shift_x.abs() > 1e-8 || self.shift_y.abs() > 1e-8 {
+            Matrix4::perspective_with_shift(
+                self.fov,
+                self.aspect,
+                self.near,
+                self.far,
+                self.shift_x,
+                self.shift_y,
+            )
+        } else {
+            Matrix4::perspective(self.fov, self.aspect, self.near, self.far)
+        }
+    }
+
+    /// Renders only the patch `(x, y, width, height)` of a `full_width` ×
+    /// `full_height` picture (see [`ViewOffset`](super::ViewOffset)); the
+    /// aspect stays the full picture's.
+    pub fn set_view_offset(&mut self, full_width: f32, full_height: f32, x: f32, y: f32, width: f32, height: f32) -> &mut Self {
+        self.view_offset = Some(super::ViewOffset { full_width, full_height, x, y, width, height });
+        self
+    }
+
+    /// The whole picture again.
+    pub fn clear_view_offset(&mut self) -> &mut Self {
+        self.view_offset = None;
+        self
     }
 
     pub fn look_at(&mut self, target: Vector3) -> &mut Self {
@@ -182,24 +223,13 @@ impl Camera for PerspectiveCamera {
         PerspectiveCamera::lens(self)
     }
     fn projection_matrix(&self) -> Matrix4 {
-        if let Some(m) = self.projection_override {
-            return Matrix4 { elements: m };
-        }
-        // Panoramic kinds still expose a perspective matrix for the raster
-        // path; specialised integrators read `projection` directly.
-        if self.shift_x.abs() > 1e-8 || self.shift_y.abs() > 1e-8 {
-            Matrix4::perspective_with_shift(
-                self.fov,
-                self.aspect,
-                self.near,
-                self.far,
-                self.shift_x,
-                self.shift_y,
-            )
-        } else {
-            Matrix4::perspective(self.fov, self.aspect, self.near, self.far)
+        let m = self.full_projection();
+        match self.view_offset {
+            Some(v) => v.apply(m),
+            None => m,
         }
     }
+
     fn position(&self) -> Vector3 {
         self.position
     }

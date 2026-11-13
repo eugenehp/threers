@@ -345,6 +345,42 @@ pub(crate) fn parse_class_def(b: &[u8], off: usize) -> Option<HashMap<u16, u16>>
     Some(out)
 }
 
+/// One glyph's class in the class definition at `off` (0 when it has
+/// none), read in place: an index for format 1, a binary search over the
+/// ranges for format 2 (which the format keeps sorted by first glyph).
+pub(crate) fn class_of(b: &[u8], off: usize, glyph: u16) -> u16 {
+    let found = || -> Option<u16> {
+        match u16_at(b, off)? {
+            1 => {
+                let start = u16_at(b, off + 2)?;
+                let i = glyph.checked_sub(start)?;
+                if i >= u16_at(b, off + 4)? {
+                    return None;
+                }
+                u16_at(b, off + 6 + 2 * usize::from(i))
+            }
+            2 => {
+                let (mut lo, mut hi) = (0, usize::from(u16_at(b, off + 2)?));
+                while lo < hi {
+                    let mid = (lo + hi) / 2;
+                    let r = off + 4 + 6 * mid;
+                    let (first, last) = (u16_at(b, r)?, u16_at(b, r + 2)?);
+                    if glyph < first {
+                        hi = mid;
+                    } else if glyph > last {
+                        lo = mid + 1;
+                    } else {
+                        return u16_at(b, r + 4);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    };
+    found().unwrap_or(0)
+}
+
 /// `GDEF`'s item variation store offset (version 1.3), absolute.
 pub(crate) fn gdef_var_store(b: &[u8], gdef: usize) -> Option<usize> {
     if u16_at(b, gdef)? != 1 || u16_at(b, gdef + 2)? < 3 {
@@ -357,6 +393,35 @@ pub(crate) fn gdef_var_store(b: &[u8], gdef: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_class_read_in_place_matches_the_whole_definition() {
+        // Format 1 from glyph 5: classes 1, 0, 3; format 2: 10..=12 class 2,
+        // 20..=29 class 1, 40..=40 class 3.
+        let one = [0, 1, 0, 5, 0, 3, 0, 1, 0, 0, 0, 3];
+        let two = [0, 2, 0, 3, 0, 10, 0, 12, 0, 2, 0, 20, 0, 29, 0, 1, 0, 40, 0, 40, 0, 3];
+        let mut defs: Vec<(Vec<u8>, usize)> = vec![(one.to_vec(), 0), (two.to_vec(), 0)];
+        // And real ones: each font's GDEF glyph classes.
+        for path in ["src/openscad/DejaVuSans.ttf", "/System/Library/Fonts/Supplemental/Arial.ttf", "/System/Library/Fonts/SFNS.ttf"] {
+            let Ok(b) = std::fs::read(path) else { continue };
+            let n = u16_at(&b, 4).unwrap() as usize;
+            let gdef = (0..n).map(|i| 12 + 16 * i).find(|&r| &b[r..r + 4] == b"GDEF");
+            if let Some(r) = gdef {
+                let at = u32_at(&b, r + 8).unwrap() as usize;
+                let classes = u16_at(&b, at + 4).unwrap() as usize;
+                if classes != 0 {
+                    defs.push((b.clone(), at + classes));
+                }
+            }
+        }
+        assert!(defs.len() >= 3, "no font with glyph classes to check against");
+        for (b, off) in &defs {
+            let all = parse_class_def(b, *off).unwrap();
+            for g in 0..=u16::MAX {
+                assert_eq!(class_of(b, *off, g), all.get(&g).copied().unwrap_or(0), "glyph {g}");
+            }
+        }
+    }
 
     #[test]
     fn coverage_ranges_number_glyphs_from_their_start_index() {

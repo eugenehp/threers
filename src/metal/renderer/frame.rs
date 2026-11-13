@@ -198,9 +198,11 @@ impl MetalRenderer {
                     x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)
                 })
         });
+        single_layer_glass(&mut items);
 
         // Upload before encoding: both touch `self`, and the encoder holds a
         // command buffer that a mipmap blit would otherwise interleave with.
+        self.volume_maps.evict();
         for item in &mut items {
             let slim = item.primitive == primitive::LINE && slim_lines_enabled();
             if self.ensure_geometry(&item.geometry, slim)? {
@@ -273,6 +275,18 @@ impl MetalRenderer {
                 for map in m.maps.iter().take(4) {
                     if self.ensure_texture_as(map, false)? {
                         stats.texture_uploads += 1;
+                    }
+                }
+                if !m.volume_maps.is_empty() {
+                    let gpu = self.volume_gpu.get_or_insert_with(|| crate::marks::gpu::Gpu::from(&self.device)).clone();
+                    for v in m.volume_maps.iter().take(2) {
+                        if self.volume_maps.ensure(&gpu, v) {
+                            stats.texture_uploads += 1;
+                        }
+                    }
+                    if !self.samplers.contains_key(&USER_VOLUME_SAMPLER) {
+                        let sampler = new_sampler(&self.device, USER_VOLUME_SAMPLER)?;
+                        self.samplers.insert(USER_VOLUME_SAMPLER, sampler);
                     }
                 }
             }
@@ -1088,10 +1102,8 @@ impl MetalRenderer {
             // 3–5 and their lengths at 6 (`SharedShader::msl`'s `fs_custom`).
             if custom_draw != 0
                 && let Material::Shader(m) = &*item.material {
-                    let mut data = [[0.0f32; 4]; 16];
-                    for (slot, v) in data.iter_mut().zip(&m.data) {
-                        *slot = *v;
-                    }
+                    // The uniform block as it is now, live or from the field.
+                    let data = m.data_slots();
                     unsafe { set_bytes(encoder, false, &data, FB_FUR) };
                     // The vertex stage sees the same data (a custom vertex
                     // stage may read it), and the instances' custom columns.
@@ -1109,7 +1121,11 @@ impl MetalRenderer {
                     };
                     let _: () = unsafe { msg3(encoder, sel!("setVertexBuffer:offset:atIndex:"), custom_buf, 0usize, 10usize) };
                     let mut lens = [0u32; 4];
-                    for (k, values) in [&m.storage0, &m.storage1, &m.storage2].into_iter().enumerate() {
+                    // As the material is now: live values set through its
+                    // setters, else its fields.
+                    let storage = [m.storage(0), m.storage(1), m.storage(2)];
+                    for (k, values) in storage.iter().enumerate() {
+                        let values: &[f32] = values;
                         lens[k] = values.len() as u32;
                         let buffer = if values.is_empty() {
                             self.identity_instance.id()
@@ -1321,13 +1337,15 @@ impl MetalRenderer {
                 let _: () = unsafe { msg2(encoder, sel!("setFragmentSamplerState:atIndex:"), smp, USER_SAMPLER_SLOT) };
                 let _: () = unsafe { msg2(encoder, sel!("setVertexSamplerState:atIndex:"), smp, USER_SAMPLER_SLOT) };
                 // Volumes made on this device (a wgpu view has no texture
-                // here, and reads zero, as an empty slot does).
-                let volumes = match &*item.material {
-                    Material::Shader(m) => m.volumes.as_slice(),
-                    _ => &[],
+                // here, and reads zero, as an empty slot does), then the
+                // material's own uploaded where it has no view.
+                let (volumes, maps) = match &*item.material {
+                    Material::Shader(m) => (m.volumes.as_slice(), m.volume_maps.as_slice()),
+                    _ => (&[][..], &[][..]),
                 };
                 for i in 0..2 {
-                    let tex = volumes.get(i).and_then(|v| v.as_metal()).map_or(self.zero_volume.id(), |t| t.obj.id());
+                    let view = volumes.get(i).or_else(|| maps.get(i).and_then(|v| self.volume_maps.get(v)).map(|v| &v.view));
+                    let tex = view.and_then(|v| v.as_metal()).map_or(self.zero_volume.id(), |t| t.obj.id());
                     let _: () = unsafe { msg2(encoder, sel!("setFragmentTexture:atIndex:"), tex, USER_VOLUME0 + i) };
                     let _: () = unsafe { msg2(encoder, sel!("setVertexTexture:atIndex:"), tex, USER_VOLUME0 + i) };
                 }
@@ -1608,4 +1626,40 @@ impl MetalRenderer {
         }
         rpd
     }
+}
+
+/// `TransparencyMode::Glass` on a blended (not transmissive) physical
+/// material, as the wgpu renderer draws it: a depth-only prepass, then the
+/// colour where that depth is, so only the nearest layer blends. Drawn in
+/// one pass instead, a closed or folded translucent mesh (a ghosted cortex)
+/// blends its own far walls under or over its near ones in triangle order,
+/// and shows its triangles. Each prepass goes just before its colour pass,
+/// after the opaque scene, so it hides only the mesh's own far side.
+fn single_layer_glass(items: &mut Vec<DrawItem>) {
+    let glass = |d: &DrawItem| {
+        d.transparent
+            && !d.transmissive
+            && !d.oit
+            && d.primitive == primitive::TRIANGLE
+            && d.state.depth_test
+            && matches!(&*d.material, Material::Physical(m)
+                if m.transparency == crate::materials::TransparencyMode::Glass)
+    };
+    if !items.iter().any(glass) {
+        return;
+    }
+    let mut out = Vec::with_capacity(items.len() + 4);
+    for mut d in items.drain(..) {
+        if glass(&d) {
+            let mut depth = d.clone();
+            depth.state.color_write = false;
+            depth.state.depth_write = Some(true);
+            depth.cast_shadow = false;
+            out.push(depth);
+            d.state.depth_write = Some(false);
+            d.state.depth_func = crate::materials::DepthFunc::LessEqual;
+        }
+        out.push(d);
+    }
+    *items = out;
 }

@@ -954,20 +954,38 @@ impl Item {
                 join(&c.value, Lang::Msl)
             ),
             Item::Fn(f) => {
+                // A texture parameter — `u_tex*` or `u_vol*` handed on —
+                // is the slot's tag type, so the function is a template
+                // over the slot: `slice_label(t: texture_3d<f32>, ..)`.
+                let mut slots = Vec::new();
                 let params: Vec<String> = f
                     .params
                     .iter()
-                    .map(|(n, t)| format!("{} {n}", join(t, Lang::Msl)))
+                    .map(|(n, t)| {
+                        let tag = match join(t, Lang::Wgsl).replace(' ', "").as_str() {
+                            "texture_3d<f32>" => Some("ThreersUVol"),
+                            "texture_2d<f32>" => Some("ThreersUTex"),
+                            _ => None,
+                        };
+                        match tag {
+                            Some(tag) => {
+                                slots.push(format!("int N_{n}"));
+                                format!("{tag}<N_{n}> {n}")
+                            }
+                            None => format!("{} {n}", join(t, Lang::Msl)),
+                        }
+                    })
                     .collect();
                 let ret = f
                     .ret
                     .as_ref()
                     .map(|r| join(r, Lang::Msl))
                     .unwrap_or_else(|| "void".into());
+                let template = if slots.is_empty() { String::new() } else { format!("template <{}> ", slots.join(", ")) };
                 // Not `const`: a WGSL function may write module state
                 // (`var<private>`), which lives in the struct.
                 format!(
-                    "    {ret} {}({}) {{\n{}    }}\n",
+                    "    {template}{ret} {}({}) {{\n{}    }}\n",
                     f.name,
                     params.join(", "),
                     body(&f.body, Lang::Msl, 2)

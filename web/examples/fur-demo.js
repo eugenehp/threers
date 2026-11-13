@@ -69,6 +69,17 @@ async function main() {
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
     scene.add(floor);
+    // Candles on the floor in front (threers' own, built in Rust), sized to
+    // this scene and bright enough to warm the hair beside the sun.
+    // `?candles=0` leaves them out.
+    const candles = new URLSearchParams(location.search).get('candles') === '0' ? [] : [[-1.5, 0.9, 0.55, true], [-0.95, 1.3, 0.4, false], [1.35, 1.05, 0.45, true]];
+    for (const [x, z, height, realistic] of candles) {
+        // No shadows from their light: each would draw every strand into six
+        // more shadow views.
+        const candle = new THREE.Candle({ realistic, height, radius: 0.09, flameHeight: 0.17, intensity: 2.5, castShadow: false });
+        candle.position.set(x, 0, z);
+        scene.add(candle);
+    }
 
     // Built from the controls; rebuilt when the wind changes (a fur's look
     // is fixed when it is made).

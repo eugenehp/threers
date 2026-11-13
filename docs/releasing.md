@@ -1,12 +1,13 @@
 # Releasing
 
-Seven crates publish to **crates.io**. Language packages publish to npm and
+Eleven crates publish to **crates.io**. Language packages publish to npm and
 PyPI (not crates.io). See also [`docs/bindings.md`](bindings.md).
 
 | Artifact | Version | Registry | On the index (2026-11-10) |
 |---|---|---|---|
 | `threers-math` | 0.0.12 | crates.io | not yet: its first publish; `threers::math`, with no dependencies |
 | `threers-captions` | 0.0.12 | crates.io | not yet: its first publish; the caption data model, with no dependencies |
+| `threers-ui` | 0.0.12 | crates.io | not yet: its first publish; `threers::ui` without the overlay painter, on `threers-math` and `threers-captions` |
 | `threers-audio` | 0.0.12 | crates.io | not yet: its first publish; `threers::audio`, on `threers-math` |
 | `threers-codec` | 0.0.12 | crates.io | 0.0.10 |
 | `threers-softbody` | 0.0.12 | crates.io | 0.0.10; the soft-body lattice and solver (`gpu` feature: WebGPU compute) |
@@ -30,8 +31,8 @@ steady tension does not yet hold the rod at a steady bend). All of them are work
 
 ## The order is not optional
 
-`threers` depends on `threers-math`, `threers-captions`, `threers-audio`,
-`threers-codec` and `threers-softbody` by **path and version** (all but the
+`threers` depends on `threers-math`, `threers-captions`, `threers-ui`,
+`threers-audio`, `threers-codec` and `threers-softbody` by **path and version** (all but the
 math optionally), so those go up first, each after what it depends on itself.
 The crates on top — physics, animation, probe and video — depend on `threers`
 the same way:
@@ -58,7 +59,7 @@ Steps 0 to 5, less the hardware, conformance and GPU parity suites, are one
 command, which runs every step even when one fails and ends with a table:
 
 ```bash
-CARGO_TARGET_DIR=/path/of/its/own ./scripts/release-all.sh verify
+CARGO_TARGET_DIR=$PWD/target-verify ./scripts/release-all.sh verify   # its own, gitignored
 FULL=1 ./scripts/release-all.sh verify     # and the two browser tests
 ```
 
@@ -131,7 +132,7 @@ cargo test -p threers-codec --release --all-features
 cargo test -p threers-codec --release --no-default-features
 # Every crate declares edition 2024 and `rust-version = "1.99"`; check the
 # published ones on exactly that, with every feature.
-for c in threers-math threers-captions threers-audio threers-codec threers-softbody threers threers-physics threers-animation threers-probe threers-video; do
+for c in threers-math threers-captions threers-ui threers-audio threers-codec threers-softbody threers threers-physics threers-animation threers-probe threers-video; do
   cargo +1.99 check -p "$c" --all-targets --all-features || break
 done
 cargo clippy -p threers-codec --all-targets --features vaapi,nvidia,parallel --target x86_64-unknown-linux-gnu
@@ -183,6 +184,7 @@ cargo package -p threers-softbody --features gpu   # and the new crates, from th
 # directory first, or the tarballs are checked against the old sources.
 cargo package -p threers-math
 cargo package -p threers-captions
+cargo package -p threers-ui
 cargo package -p threers-audio
 cargo package -p threers-codec
 
@@ -190,6 +192,7 @@ cargo package -p threers-codec
 #    captions under the codecs), threers, then what sits on top of it.
 cargo publish -p threers-math
 cargo publish -p threers-captions
+cargo publish -p threers-ui                  # after math and captions
 cargo publish -p threers-audio
 cargo publish -p threers-codec
 cargo publish -p threers-softbody

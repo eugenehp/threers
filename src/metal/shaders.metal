@@ -172,7 +172,16 @@ struct Draw {
     // height, shadow strength, longitude offset, cloud map bound; [3] the
     // eclipse occluder; [4] x: the normal map's y scale.
     float4   planet[5];
+    // three.js `clippingPlanes` (one): xyz the plane's normal, w its
+    // constant; what is behind it (dot(n, p) + c < 0) is cut away. A zero
+    // normal: no plane.
+    float4   clip;
 };
+
+/// Whether the world point `p` is cut away by the draw's clipping plane.
+static inline bool clipped(constant Draw &draw, float3 p) {
+    return any(draw.clip.xyz != float3(0.0)) && dot(draw.clip.xyz, p) + draw.clip.w < 0.0;
+}
 
 constant uint MAP_BASE     = 0u;
 constant uint MAP_EMISSIVE = 1u;
@@ -921,6 +930,9 @@ vertex VOut vs_line_quad(uint vid [[vertex_id]],
 fragment float4 fs_line_quad(VOut in [[stage_in]],
                              constant Frame &frame [[buffer(0)]],
                              constant Draw  &draw  [[buffer(1)]]) {
+    if (clipped(draw, in.world_pos)) {
+        discard_fragment();
+    }
     // The share of the pixel the ribbon covers, a box filter over the pixel's
     // width across it (1 square to a row or column, √2 on the diagonal; uv.x
     // is affine on screen, so its derivatives are exact). A sub-pixel
@@ -2042,6 +2054,9 @@ static inline float4 mesh_fragment(FIn in,
                                    sampler           transmission_samp,
                                    thread const PhysTexels &phys,
                                    thread float3 &glass_t) {
+    if (clipped(draw, in.world_pos)) {
+        discard_fragment();
+    }
     // Blended glass (`TransparencyMode::Glass`, `Oit`): what passes of the
     // background, per channel, for the caller's blend. Negative otherwise.
     glass_t = float3(-1.0);
@@ -2611,6 +2626,9 @@ static inline float4 point_fragment(FIn in, float2 point_coord, constant Frame &
                                     constant Draw &draw, texture2d<float> base_map,
                                     sampler samp, texture2d<float> alpha_map,
                                     sampler alpha_samp) {
+    if (clipped(draw, in.world_pos)) {
+        discard_fragment();
+    }
     float2 pc = float2(point_coord.x, 1.0 - point_coord.y);
     float4 base = draw.base_color;
     if (draw.flags.y == 1u) {

@@ -19,70 +19,127 @@ use super::{
 use crate::math::Matrix4;
 use crate::scene::Scene;
 
+// Apple's ARM64 convention returns a `simd_float4x4` (four vector columns)
+// in `q0`–`q3`, and takes a `simd_float2` in one vector register. Stable
+// Rust has no type that FFI passes that way: a `#[repr(C)]` struct of
+// sixteen floats, or of four NEON vectors, comes back through memory
+// (`x8`), and a pair of floats goes in two registers. Read that way, every
+// pose and projection was whatever the registers held, and
+// `cp_drawable_set_depth_range` saw a near plane of 0. So these few calls
+// are made as C makes them: the matrix ones by a branch in assembly that
+// reads `q0`–`q3` back, the pair as an `f64` with both floats in its bits
+// (it lands in `d0`, the low half of the register the callee reads).
+
+/// Calls `f(x0, x1, x2)`, a C function returning a `simd_float4x4`.
+pub(crate) unsafe fn call_returning_float4x4(f: unsafe extern "C" fn(), x0: usize, x1: usize, x2: usize) -> SimdFloat4x4 {
+    use std::arch::aarch64::float32x4_t;
+    let (c0, c1, c2, c3): (float32x4_t, float32x4_t, float32x4_t, float32x4_t);
+    // SAFETY: `f` takes up to three integer arguments and returns the four
+    // columns in v0–v3, per the platform's convention; everything else the C
+    // convention lets it clobber is declared clobbered.
+    unsafe {
+        std::arch::asm!(
+            "blr {f}",
+            f = in(reg) f,
+            inout("x0") x0 => _,
+            inout("x1") x1 => _,
+            inout("x2") x2 => _,
+            out("v0") c0,
+            out("v1") c1,
+            out("v2") c2,
+            out("v3") c3,
+            clobber_abi("C"),
+        );
+        SimdFloat4x4 { columns: std::mem::transmute::<[float32x4_t; 4], [[f32; 4]; 4]>([c0, c1, c2, c3]) }
+    }
+}
+
+/// `simd_float2` in an `f64`'s bits: `x` in the low lane, `y` in the high.
+fn float2_bits(v: SimdFloat2) -> f64 {
+    f64::from_bits(((v.y.to_bits() as u64) << 32) | v.x.to_bits() as u64)
+}
+
+pub(crate) unsafe fn cp_drawable_set_depth_range(drawable: CpDrawable, depth_range: SimdFloat2) {
+    unsafe { cp_drawable_set_depth_range_raw(drawable, float2_bits(depth_range)) }
+}
+
+pub(crate) unsafe fn cp_drawable_compute_projection(drawable: CpDrawable, convention: u8, view_index: NSUInteger) -> SimdFloat4x4 {
+    unsafe { call_returning_float4x4(cp_drawable_compute_projection_sym, drawable as usize, convention as usize, view_index) }
+}
+
+pub(crate) unsafe fn cp_view_get_transform(view: CpView) -> SimdFloat4x4 {
+    unsafe { call_returning_float4x4(cp_view_get_transform_sym, view as usize, 0, 0) }
+}
+
+pub(crate) unsafe fn ar_device_anchor_get_origin_from_anchor_transform(anchor: ArDeviceAnchor) -> SimdFloat4x4 {
+    unsafe { call_returning_float4x4(ar_device_anchor_get_origin_from_anchor_transform_sym, anchor as usize, 0, 0) }
+}
+
 #[link(name = "CompositorServices", kind = "framework")]
 unsafe extern "C" {
-    fn cp_layer_renderer_get_state(layer_renderer: CpLayerRenderer) -> u32;
-    fn cp_layer_renderer_wait_until_running(layer_renderer: CpLayerRenderer);
-    fn cp_layer_renderer_query_next_frame(layer_renderer: CpLayerRenderer) -> CpFrame;
-    fn cp_layer_renderer_get_device(layer_renderer: CpLayerRenderer) -> Id;
-    fn cp_layer_renderer_get_properties(
+    pub(crate) fn cp_layer_renderer_get_state(layer_renderer: CpLayerRenderer) -> u32;
+    pub(crate) fn cp_layer_renderer_wait_until_running(layer_renderer: CpLayerRenderer);
+    pub(crate) fn cp_layer_renderer_query_next_frame(layer_renderer: CpLayerRenderer) -> CpFrame;
+    pub(crate) fn cp_layer_renderer_get_device(layer_renderer: CpLayerRenderer) -> Id;
+    pub(crate) fn cp_layer_renderer_get_properties(
         layer_renderer: CpLayerRenderer,
     ) -> CpLayerRendererProperties;
-    fn cp_layer_renderer_properties_get_view_count(
+    pub(crate) fn cp_layer_renderer_properties_get_view_count(
         properties: CpLayerRendererProperties,
     ) -> NSUInteger;
 
-    fn cp_frame_predict_timing(frame: CpFrame) -> CpFrameTiming;
-    fn cp_frame_start_update(frame: CpFrame);
-    fn cp_frame_end_update(frame: CpFrame);
-    fn cp_frame_start_submission(frame: CpFrame);
-    fn cp_frame_end_submission(frame: CpFrame);
-    fn cp_frame_query_drawable(frame: CpFrame) -> CpDrawable;
+    pub(crate) fn cp_frame_predict_timing(frame: CpFrame) -> CpFrameTiming;
+    pub(crate) fn cp_frame_start_update(frame: CpFrame);
+    pub(crate) fn cp_frame_end_update(frame: CpFrame);
+    pub(crate) fn cp_frame_start_submission(frame: CpFrame);
+    pub(crate) fn cp_frame_end_submission(frame: CpFrame);
+    pub(crate) fn cp_frame_query_drawable(frame: CpFrame) -> CpDrawable;
 
-    fn cp_frame_timing_get_optimal_input_time(timing: CpFrameTiming) -> CpTime;
-    fn cp_frame_timing_get_presentation_time(timing: CpFrameTiming) -> CpTime;
-    fn cp_time_wait_until(time: CpTime);
-    fn cp_time_to_cf_time_interval(time: CpTime) -> f64;
+    pub(crate) fn cp_frame_timing_get_optimal_input_time(timing: CpFrameTiming) -> CpTime;
+    pub(crate) fn cp_frame_timing_get_presentation_time(timing: CpFrameTiming) -> CpTime;
+    pub(crate) fn cp_time_wait_until(time: CpTime);
+    pub(crate) fn cp_time_to_cf_time_interval(time: CpTime) -> f64;
 
-    fn cp_drawable_get_view_count(drawable: CpDrawable) -> NSUInteger;
-    fn cp_drawable_get_view(drawable: CpDrawable, index: NSUInteger) -> CpView;
-    fn cp_drawable_get_color_texture(drawable: CpDrawable, index: NSUInteger) -> Id;
-    fn cp_drawable_get_depth_texture(drawable: CpDrawable, index: NSUInteger) -> Id;
-    fn cp_drawable_get_frame_timing(drawable: CpDrawable) -> CpFrameTiming;
-    fn cp_drawable_set_device_anchor(drawable: CpDrawable, device_anchor: ArDeviceAnchor);
-    fn cp_drawable_set_depth_range(drawable: CpDrawable, depth_range: SimdFloat2);
-    fn cp_drawable_compute_projection(
-        drawable: CpDrawable,
-        convention: u8,
-        view_index: NSUInteger,
-    ) -> SimdFloat4x4;
-    fn cp_drawable_encode_present(drawable: CpDrawable, command_buffer: Id);
+    pub(crate) fn cp_drawable_get_view_count(drawable: CpDrawable) -> NSUInteger;
+    pub(crate) fn cp_drawable_get_view(drawable: CpDrawable, index: NSUInteger) -> CpView;
+    pub(crate) fn cp_drawable_get_color_texture(drawable: CpDrawable, index: NSUInteger) -> Id;
+    pub(crate) fn cp_drawable_get_depth_texture(drawable: CpDrawable, index: NSUInteger) -> Id;
+    pub(crate) fn cp_drawable_get_frame_timing(drawable: CpDrawable) -> CpFrameTiming;
+    pub(crate) fn cp_drawable_set_device_anchor(drawable: CpDrawable, device_anchor: ArDeviceAnchor);
+    #[link_name = "cp_drawable_set_depth_range"]
+    fn cp_drawable_set_depth_range_raw(drawable: CpDrawable, depth_range: f64);
+    // Called through `call_returning_float4x4`: (drawable, convention, view index).
+    #[link_name = "cp_drawable_compute_projection"]
+    fn cp_drawable_compute_projection_sym();
+    pub(crate) fn cp_drawable_encode_present(drawable: CpDrawable, command_buffer: Id);
 
-    fn cp_view_get_transform(view: CpView) -> SimdFloat4x4;
-    fn cp_view_get_view_texture_map(view: CpView) -> CpViewTextureMap;
-    fn cp_view_texture_map_get_texture_index(map: CpViewTextureMap) -> NSUInteger;
-    fn cp_view_texture_map_get_slice_index(map: CpViewTextureMap) -> NSUInteger;
-    fn cp_view_texture_map_get_viewport(map: CpViewTextureMap) -> MTLViewport;
+    #[link_name = "cp_view_get_transform"]
+    fn cp_view_get_transform_sym();
+    pub(crate) fn cp_view_get_view_texture_map(view: CpView) -> CpViewTextureMap;
+    pub(crate) fn cp_view_texture_map_get_texture_index(map: CpViewTextureMap) -> NSUInteger;
+    pub(crate) fn cp_view_texture_map_get_slice_index(map: CpViewTextureMap) -> NSUInteger;
+    pub(crate) fn cp_view_texture_map_get_viewport(map: CpViewTextureMap) -> MTLViewport;
 }
 
 #[link(name = "ARKit", kind = "framework")]
 unsafe extern "C" {
-    fn ar_session_create() -> ArSession;
-    fn ar_session_run(session: ArSession, data_providers: ArDataProviders);
-    fn ar_world_tracking_configuration_create() -> ArWorldTrackingConfiguration;
-    fn ar_world_tracking_provider_create(
+    pub(crate) fn ar_session_create() -> ArSession;
+    pub(crate) fn ar_session_run(session: ArSession, data_providers: ArDataProviders);
+    pub(crate) fn ar_world_tracking_configuration_create() -> ArWorldTrackingConfiguration;
+    pub(crate) fn ar_world_tracking_provider_create(
         configuration: ArWorldTrackingConfiguration,
     ) -> ArWorldTrackingProvider;
-    fn ar_world_tracking_provider_query_device_anchor_at_timestamp(
+    pub(crate) fn ar_world_tracking_provider_query_device_anchor_at_timestamp(
         provider: ArWorldTrackingProvider,
         timestamp: f64,
         device_anchor: ArDeviceAnchor,
     ) -> isize;
-    fn ar_data_providers_create() -> ArDataProviders;
-    fn ar_data_providers_add_data_provider(providers: ArDataProviders, provider: *mut c_void);
-    fn ar_device_anchor_create() -> ArDeviceAnchor;
-    fn ar_device_anchor_get_origin_from_anchor_transform(anchor: ArDeviceAnchor) -> SimdFloat4x4;
-    fn ar_release(object: *mut c_void);
+    pub(crate) fn ar_data_providers_create() -> ArDataProviders;
+    pub(crate) fn ar_data_providers_add_data_provider(providers: ArDataProviders, provider: *mut c_void);
+    pub(crate) fn ar_device_anchor_create() -> ArDeviceAnchor;
+    #[link_name = "ar_device_anchor_get_origin_from_anchor_transform"]
+    fn ar_device_anchor_get_origin_from_anchor_transform_sym();
+    pub(crate) fn ar_release(object: *mut c_void);
 }
 
 /// An ARKit object, released on drop. ARKit's C objects are `os_object`s, so
@@ -125,6 +182,12 @@ impl WorldTracking {
     /// without it ARKit refuses the provider and every query fails, leaving the
     /// scene head-locked rather than crashing.
     pub fn new() -> Result<Self, MetalError> {
+        Self::with_providers(&[])
+    }
+
+    /// [`new`](Self::new), with more data providers (hand tracking) run in
+    /// the same session.
+    pub(crate) fn with_providers(extra: &[*mut c_void]) -> Result<Self, MetalError> {
         unsafe {
             let configuration = ArObject::new(ar_world_tracking_configuration_create())
                 .ok_or_else(|| MetalError::Unsupported("ar_world_tracking_configuration".into()))?;
@@ -133,6 +196,9 @@ impl WorldTracking {
             let providers = ArObject::new(ar_data_providers_create())
                 .ok_or_else(|| MetalError::Unsupported("ar_data_providers".into()))?;
             ar_data_providers_add_data_provider(providers.ptr(), provider.ptr());
+            for &p in extra {
+                ar_data_providers_add_data_provider(providers.ptr(), p);
+            }
 
             let session = ArObject::new(ar_session_create())
                 .ok_or_else(|| MetalError::Unsupported("ar_session".into()))?;
@@ -168,12 +234,28 @@ impl WorldTracking {
 
     /// The `ar_device_anchor_t` this tracker fills in, to hand back to the
     /// compositor so it can reproject the frame.
-    fn anchor_ptr(&self) -> ArDeviceAnchor {
+    pub(crate) fn anchor_ptr(&self) -> ArDeviceAnchor {
         self.anchor.ptr()
     }
 }
 
 // ------------------------------------------------------------------ renderer
+
+/// The nearest near plane the compositor accepts, metres.
+const MIN_NEAR: f32 = 0.1;
+
+/// A frame of an immersive space, as [`ImmersiveRenderer::render_frame_with`]
+/// hands it to an update.
+pub struct ImmersiveFrame<'a> {
+    /// The head (the device) in the space, at the frame's predicted
+    /// presentation time: `None` without world tracking, when the scene is
+    /// head-locked.
+    pub head: Option<Matrix4>,
+    /// The eyes about to be drawn.
+    pub views: &'a [RenderView],
+    /// The drawable's size, in pixels.
+    pub size: (u32, u32),
+}
 
 /// Draws a [`Scene`] into a visionOS immersive space.
 ///
@@ -188,6 +270,7 @@ pub struct ImmersiveRenderer {
     convention: AxisConvention,
     near: f32,
     far: f32,
+    origin: Matrix4,
     last_stats: MetalRenderStats,
 }
 
@@ -216,8 +299,9 @@ impl ImmersiveRenderer {
             renderer,
             tracking,
             convention: AxisConvention::RightUpBack,
-            near: 0.01,
+            near: MIN_NEAR,
             far: 1000.0,
+            origin: Matrix4::identity(),
             last_stats: MetalRenderStats::default(),
         })
     }
@@ -246,8 +330,11 @@ impl ImmersiveRenderer {
 
     /// Near and far clipping distances in metres. The compositor is told these
     /// each frame and builds the projection from them.
+    ///
+    /// The near plane is kept at 10 cm or further: CompositorServices takes
+    /// nothing nearer (`cp_drawable_set_depth_range` stops the app).
     pub fn set_depth_range(&mut self, near: f32, far: f32) {
-        self.near = near.max(0.001);
+        self.near = near.max(MIN_NEAR);
         self.far = far.max(self.near + 0.001);
     }
 
@@ -260,6 +347,13 @@ impl ImmersiveRenderer {
     /// Defaults to [`AxisConvention::RightUpBack`], which is Metal's.
     pub fn set_axis_convention(&mut self, convention: AxisConvention) {
         self.convention = convention;
+    }
+
+    /// Where the space ARKit tracks the head in (the floor under the
+    /// viewer at the start) is in the scene's world: the eyes are placed
+    /// through it. The identity by default.
+    pub fn set_origin(&mut self, origin: Matrix4) {
+        self.origin = origin;
     }
 
     /// Whether world tracking came up. `false` means the scene is head-locked —
@@ -290,6 +384,19 @@ impl ImmersiveRenderer {
     /// ask ARKit where the head is at the predicted presentation time, encode
     /// both eyes, present.
     pub fn render_frame(&mut self, scene: &mut Scene) -> Result<bool, MetalError> {
+        self.render_frame_with(scene, |_, _| {})
+    }
+
+    /// As [`render_frame`](Self::render_frame), calling `update` once the
+    /// frame's head pose and eyes are known and before they are drawn: the
+    /// place for an app's per-frame work (input, animation, a panel placed
+    /// by the head), which then shows in this frame rather than the next.
+    /// `update` is not called for a frame that is skipped.
+    pub fn render_frame_with(
+        &mut self,
+        scene: &mut Scene,
+        update: impl FnOnce(&mut Scene, &ImmersiveFrame),
+    ) -> Result<bool, MetalError> {
         match self.state() {
             LayerRendererState::Invalidated => return Ok(false),
             LayerRendererState::Paused => {
@@ -332,9 +439,11 @@ impl ImmersiveRenderer {
                 },
             );
 
-            let origin_from_device = self.update_device_anchor(drawable);
+            let head = self.update_device_anchor(drawable);
+            let origin_from_device = head.unwrap_or_else(Matrix4::identity);
             let views = self.views(drawable, &origin_from_device);
             let pass = self.attachments(drawable);
+            update(scene, &ImmersiveFrame { head, views: &views, size: pass.size() });
 
             let stats = self.renderer.render_views(scene, &views, &pass)?;
             self.last_stats = stats;
@@ -353,23 +462,17 @@ impl ImmersiveRenderer {
 
     /// Ask ARKit for the head pose at this frame's presentation time and give
     /// the anchor to the compositor, which needs it to reproject the frame.
-    unsafe fn update_device_anchor(&self, drawable: CpDrawable) -> Matrix4 {
-        let Some(tracking) = &self.tracking else {
-            return Matrix4::identity();
-        };
+    unsafe fn update_device_anchor(&self, drawable: CpDrawable) -> Option<Matrix4> {
+        let tracking = self.tracking.as_ref()?;
         let timing = unsafe { cp_drawable_get_frame_timing(drawable) };
         if timing.is_null() {
-            return Matrix4::identity();
+            return None;
         }
         let presentation =
             unsafe { cp_time_to_cf_time_interval(cp_frame_timing_get_presentation_time(timing)) };
-        match tracking.device_pose(presentation) {
-            Some(pose) => {
-                unsafe { cp_drawable_set_device_anchor(drawable, tracking.anchor_ptr()) };
-                pose
-            }
-            None => Matrix4::identity(),
-        }
+        let pose = tracking.device_pose(presentation)?;
+        unsafe { cp_drawable_set_device_anchor(drawable, tracking.anchor_ptr()) };
+        Some(pose)
     }
 
     /// One [`RenderView`] per eye.
@@ -386,7 +489,7 @@ impl ImmersiveRenderer {
                 continue;
             }
             let device_from_eye: Matrix4 = unsafe { cp_view_get_transform(view) }.into();
-            let world_from_eye = origin_from_device.multiply(&device_from_eye);
+            let world_from_eye = self.origin.multiply(&origin_from_device.multiply(&device_from_eye));
             let projection: Matrix4 =
                 unsafe { cp_drawable_compute_projection(drawable, self.convention as u8, index) }
                     .into();

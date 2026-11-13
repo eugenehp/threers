@@ -102,6 +102,14 @@ if [ "${WEBGL:-}" = "1" ]; then
     echo "    (webgl feature enabled — WebGL2 fallback for browsers without WebGPU)"
 fi
 
+# WebXR, composable with any variant: XR=1 ./web/build.sh — `renderer.xr`,
+# VRButton and ARButton present to a headset. Without it they report VR/AR
+# as not supported.
+if [ "${XR:-}" = "1" ]; then
+    FEATURE_LIST+=("xr")
+    echo "    (xr feature enabled — WebXR sessions, both eyes drawn to a headset)"
+fi
+
 # Wasm SIMD, composable with any variant: SIMD=1 VARIANT=full ./web/build.sh
 #
 # A target feature, not a Cargo feature: it changes codegen for every crate, so

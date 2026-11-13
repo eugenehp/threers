@@ -105,6 +105,9 @@ pub struct LayerRenderer {
     /// so the renderer stays `Send`: wgpu's Metal surface already holds and
     /// uses the same layer from whichever thread renders.
     layer: usize,
+    /// What the layer can composite with, from the surface's capabilities
+    /// (for [`LayerRenderer::set_transparent`]).
+    alpha_modes: Vec<wgpu::CompositeAlphaMode>,
     frames: Arc<RwLock<()>>,
     /// The last configure failed; try again before the next frame.
     unconfigured: bool,
@@ -248,6 +251,7 @@ impl LayerRenderer {
             device: Arc::clone(&gpu.device),
             instance: gpu.instance.clone(),
             layer: layer as usize,
+            alpha_modes: caps.alpha_modes.clone(),
             frames: gpu.frames.clone(),
             unconfigured: true,
             renderer: ManuallyDrop::new(renderer),
@@ -286,6 +290,28 @@ impl LayerRenderer {
         (self.config.width, self.config.height)
     }
 
+    /// Composite what is drawn over whatever is behind the layer — a camera
+    /// feed, for AR — where the scene's `background_alpha` leaves it clear.
+    /// Premultiplied where the layer offers it; `false` puts back the opaque
+    /// default. The layer's own `isOpaque` is the app's to clear as well.
+    /// Whether the layer can.
+    pub fn set_transparent(&mut self, on: bool) -> bool {
+        let want: &[wgpu::CompositeAlphaMode] = if on {
+            &[wgpu::CompositeAlphaMode::PreMultiplied, wgpu::CompositeAlphaMode::PostMultiplied]
+        } else {
+            &[wgpu::CompositeAlphaMode::Opaque, wgpu::CompositeAlphaMode::Auto]
+        };
+        let Some(mode) = want.iter().copied().find(|m| self.alpha_modes.contains(m)) else {
+            return false;
+        };
+        if mode != self.config.alpha_mode {
+            let _pool = Pool::new();
+            self.config.alpha_mode = mode;
+            self.configure();
+        }
+        true
+    }
+
     /// Render and present one frame. `false`: no drawable this time, and the
     /// next call draws.
     ///
@@ -294,6 +320,36 @@ impl LayerRenderer {
     /// configuration is reapplied, and a surface Metal reports lost is rebuilt
     /// on the same layer.
     pub fn render(&mut self, scene: &mut Scene, camera: &dyn Camera) -> bool {
+        self.present(|renderer, view| renderer.render(scene, camera, view, false))
+    }
+
+    /// [`render`](Self::render) once per eye of `source`
+    /// ([`Renderer::render_xr`]): a phone's AR camera, say, as one eye.
+    /// `false` when no drawable came, or no eye was drawn.
+    #[cfg(feature = "xr")]
+    pub fn render_xr(
+        &mut self,
+        scene: &mut Scene,
+        lens: &crate::cameras::PerspectiveCamera,
+        source: &impl crate::xr::XrSource,
+        origin: &crate::math::Matrix4,
+    ) -> bool {
+        let mut drawn = false;
+        let presented = self.present(|renderer, view| drawn = renderer.render_xr(scene, lens, source, origin, view));
+        presented && drawn
+    }
+
+    /// Acquire a drawable, hand it to `draw` with the renderer and the
+    /// drawable's format, and present it: for drawing more than a scene —
+    /// a UI over it ([`UiPass`](super::UiPass)), an [`App`](crate::xr::App)'s
+    /// own `draw`. `false` when no drawable came.
+    pub fn draw_with(&mut self, draw: impl FnOnce(&mut Renderer, &wgpu::TextureView, wgpu::TextureFormat)) -> bool {
+        let format = self.config.format;
+        self.present(|renderer, view| draw(renderer, view, format))
+    }
+
+    /// Acquire a drawable, `draw` into it and present it.
+    fn present(&mut self, draw: impl FnOnce(&mut Renderer, &wgpu::TextureView)) -> bool {
         use wgpu::CurrentSurfaceTexture as Acquired;
         let _pool = Pool::new();
         if self.unconfigured && !self.configure() {
@@ -301,12 +357,12 @@ impl LayerRenderer {
         }
         match self.surface.get_current_texture() {
             Acquired::Success(frame) => {
-                self.draw(scene, camera, frame);
+                self.draw(draw, frame);
                 true
             }
             Acquired::Suboptimal(frame) => {
                 // Draw this one; the reconfigure fits the next to the layer.
-                self.draw(scene, camera, frame);
+                self.draw(draw, frame);
                 self.unconfigured = true;
                 true
             }
@@ -329,11 +385,11 @@ impl LayerRenderer {
         }
     }
 
-    fn draw(&mut self, scene: &mut Scene, camera: &dyn Camera, frame: wgpu::SurfaceTexture) {
+    fn draw(&mut self, draw: impl FnOnce(&mut Renderer, &wgpu::TextureView), frame: wgpu::SurfaceTexture) {
         // Shared: layers draw in parallel, and only a reconfigure waits.
         let _frame = self.frames.read().unwrap_or_else(|e| e.into_inner());
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.renderer.render(scene, camera, &view, false);
+        draw(&mut self.renderer, &view);
         self.renderer.queue_arc().present(frame);
     }
 

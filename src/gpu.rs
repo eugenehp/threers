@@ -53,7 +53,20 @@ pub struct GpuContext {
 /// pipelines between runs; the same holds — it cannot be added later.
 const OPTIONAL_FEATURES: wgpu::Features = wgpu::Features::RG11B10UFLOAT_RENDERABLE
     .union(wgpu::Features::TIMESTAMP_QUERY)
-    .union(wgpu::Features::PIPELINE_CACHE);
+    .union(wgpu::Features::PIPELINE_CACHE)
+    .union(TEXTURE_FEATURES);
+
+/// What lets textures stay in their own format on the GPU: the three
+/// compression families, 16-bit unorm and filtered 32-bit floats. Every
+/// device the crate creates asks for these, masked by what the adapter has;
+/// a texture in a format the device then lacks is converted on upload
+/// ([`codec::for_device`](crate::textures::codec::for_device)), so asking
+/// can only make textures smaller and sharper, never fail.
+pub const TEXTURE_FEATURES: wgpu::Features = wgpu::Features::TEXTURE_COMPRESSION_BC
+    .union(wgpu::Features::TEXTURE_COMPRESSION_ETC2)
+    .union(wgpu::Features::TEXTURE_COMPRESSION_ASTC)
+    .union(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM)
+    .union(wgpu::Features::FLOAT32_FILTERABLE);
 
 impl GpuContext {
     /// A device with no surface — for headless rendering, compute, and tests.

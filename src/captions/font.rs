@@ -65,6 +65,12 @@ impl FontMetrics {
     }
 }
 
+/// The face [`CaptionFont::set_ui`] chose for [`CaptionFont::ui`].
+static UI_FACE: std::sync::Mutex<Option<std::sync::Arc<TtfFont>>> = std::sync::Mutex::new(None);
+/// The UI face's other files, set with [`CaptionFont::set_ui_style`]:
+/// italic, bold, bold italic.
+static UI_STYLES: std::sync::Mutex<[Option<std::sync::Arc<[u8]>>; 3]> = std::sync::Mutex::new([None, None, None]);
+
 enum Face {
     Builtin,
     Ttf(Box<TtfFace>),
@@ -648,6 +654,8 @@ pub struct CaptionFont {
     /// Text already laid out, by its string, style and width: a HUD draws the
     /// same strings every frame, and shaping them again was half of its cost.
     pub(crate) layouts: HashMap<u64, super::layout::LaidOutText>,
+    /// The generation before `layouts` (see [`layout`](super::layout::layout)).
+    pub(crate) layouts_old: HashMap<u64, super::layout::LaidOutText>,
     /// The optical size glyphs are drawn at regardless of their pixel size;
     /// `None` follows the size. See [`set_optical_size`](Self::set_optical_size).
     optical_size: Option<f32>,
@@ -693,11 +701,16 @@ impl std::fmt::Debug for CaptionFont {
 impl CaptionFont {
     /// The bundled 8×8 bitmap face — no assets required.
     pub fn builtin() -> Self {
+        Self::from_face(Face::Builtin)
+    }
+
+    fn from_face(face: Face) -> Self {
         Self {
-            face: Face::Builtin,
+            face,
             cache: HashMap::new(),
             grown: HashMap::new(),
             layouts: HashMap::new(),
+            layouts_old: HashMap::new(),
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
@@ -724,6 +737,7 @@ impl CaptionFont {
             cache: HashMap::new(),
             grown: HashMap::new(),
             layouts: HashMap::new(),
+            layouts_old: HashMap::new(),
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
@@ -739,6 +753,7 @@ impl CaptionFont {
             cache: HashMap::new(),
             grown: HashMap::new(),
             layouts: HashMap::new(),
+            layouts_old: HashMap::new(),
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
@@ -754,6 +769,7 @@ impl CaptionFont {
             cache: HashMap::new(),
             grown: HashMap::new(),
             layouts: HashMap::new(),
+            layouts_old: HashMap::new(),
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
@@ -769,6 +785,7 @@ impl CaptionFont {
             cache: HashMap::new(),
             grown: HashMap::new(),
             layouts: HashMap::new(),
+            layouts_old: HashMap::new(),
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
@@ -785,6 +802,7 @@ impl CaptionFont {
             cache: HashMap::new(),
             grown: HashMap::new(),
             layouts: HashMap::new(),
+            layouts_old: HashMap::new(),
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
@@ -821,6 +839,7 @@ impl CaptionFont {
             cache: HashMap::new(),
             grown: HashMap::new(),
             layouts: HashMap::new(),
+            layouts_old: HashMap::new(),
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
@@ -847,6 +866,7 @@ impl CaptionFont {
             cache: HashMap::new(),
             grown: HashMap::new(),
             layouts: HashMap::new(),
+            layouts_old: HashMap::new(),
             optical_size: self.optical_size,
             hinting: self.hinting,
             font_smoothing: self.font_smoothing,
@@ -879,12 +899,45 @@ impl CaptionFont {
         self.style().map(|s| s.0)
     }
 
-    /// SF Compact when the system ships it (macOS), otherwise
-    /// [`builtin`](Self::builtin).
+    /// The face set with [`set_ui`](Self::set_ui); else SF Compact when the
+    /// system ships it (macOS), otherwise [`builtin`](Self::builtin).
     ///
     /// This is the preferred UI face for burned-in labels and data graphics.
     pub fn ui() -> Self {
+        let set = UI_FACE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(base) = set {
+            let mut face = TtfFace::shared(base);
+            let [italic, bold, bold_italic] = UI_STYLES.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            (face.family.italic, face.family.bold, face.family.bold_italic) = (italic, bold, bold_italic);
+            return Self::from_face(Face::Ttf(Box::new(face)));
+        }
         Self::try_sf_compact().unwrap_or_else(Self::builtin)
+    }
+
+    /// Make the TrueType or OpenType font in `bytes` what [`ui`](Self::ui)
+    /// returns from now on, everywhere in the process: for platforms with no
+    /// font to find, such as the web, where the page fetches one. Parsed
+    /// once here; each face made from it after shares it.
+    pub fn set_ui(bytes: &[u8]) -> Result<(), TtfError> {
+        let font = std::sync::Arc::new(TtfFont::parse(bytes)?);
+        *UI_FACE.lock().unwrap_or_else(|e| e.into_inner()) = Some(font);
+        Ok(())
+    }
+
+    /// The [`set_ui`](Self::set_ui) face's file for bold and/or italic: asked
+    /// for 600 or more, or italic, the UI face uses it rather than growing
+    /// or slanting the upright one (a real bold reads as bold at UI sizes,
+    /// where a grown one barely does).
+    pub fn set_ui_style(bold: bool, italic: bool, bytes: &[u8]) -> Result<(), TtfError> {
+        TtfFont::parse(bytes)?;
+        let slot = match (bold, italic) {
+            (false, true) => 0,
+            (true, false) => 1,
+            (true, true) => 2,
+            (false, false) => return Self::set_ui(bytes),
+        };
+        UI_STYLES.lock().unwrap_or_else(|e| e.into_inner())[slot] = Some(std::sync::Arc::from(bytes));
+        Ok(())
     }
 
     /// Load Apple's SF Compact from a well-known install path, at its
@@ -1315,6 +1368,7 @@ impl CaptionFont {
             cache: HashMap::new(),
             grown: HashMap::new(),
             layouts: HashMap::new(),
+            layouts_old: HashMap::new(),
             optical_size: self.optical_size,
             hinting: self.hinting,
             font_smoothing: self.font_smoothing,

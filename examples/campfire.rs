@@ -6,12 +6,14 @@
 //! shades itself and casts a shadow, and heat haze bending the view above
 //! it; its glow drives a point light that lights the snow and casts the
 //! logs' shadows, flickering as the flames do. Rendered through bloom and
-//! ACES. Written to `out/campfire.png`.
+//! ACES. Candles burn on one of the logs, two with the volumetric flame
+//! and one with the simple one. Written to `out/campfire.png`.
 //!
 //! ```bash
 //! cargo run --release --example campfire
 //! ```
 
+use threers::extras::candle::{Candle, FlameStyle};
 use threers::lights::Light;
 use threers::particles::sand::Downwind;
 use threers::particles::snow::SnowCover;
@@ -188,6 +190,26 @@ fn main() {
     glow.shadow.normal_bias = 0.02;
     let light = scene.add(Object3D::light(Light::Point(glow)));
     particles.light_with(fire, light, 9.0);
+
+    // Candles stood on the left log, as someone left them: two with the
+    // volumetric flame and one with the simple one.
+    let candles: Vec<_> = [(-2.12, 0.62, 0.2, FlameStyle::Realistic), (-1.92, 0.55, 0.14, FlameStyle::Simple), (-1.74, 0.64, 0.1, FlameStyle::Realistic)]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (x, z, height, style))| {
+            let mut c = Candle::new(style).with_size(height, 0.035).with_seed(i as f32 * 2.3);
+            c.light_intensity = 0.25;
+            // On the snow lying on the log, not sunk in it.
+            let top = match particles.layer_mut(snow) {
+                Some(threers::particles::Layer::Snow(cover)) => cover.field.height_at(x, z).unwrap_or(0.41),
+                _ => 0.41,
+            };
+            c.add_to(&mut scene, Vector3::new(x, top.max(0.41), z))
+        })
+        .collect();
+    for c in &candles {
+        c.update(&mut scene, 4.0);
+    }
 
     let mut camera = PerspectiveCamera::new(38.0, W as f32 / H as f32, 0.05, 100.0);
     camera.position = Vector3::new(2.4, 1.25, 3.6);

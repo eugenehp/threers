@@ -81,6 +81,11 @@ mod raycaster;
 pub use raycaster::*;
 mod mesh_bvh;
 pub use mesh_bvh::*;
+// WebXR: the session, its frame loop, and both eyes drawn into it.
+#[cfg(feature = "xr")]
+mod xr;
+#[cfg(feature = "xr")]
+pub use xr::*;
 
 /// A lazy renderer's pipelines, to be built from a page's event loop. Hold it
 /// past the renderer's own borrow: awaiting `run()` does not lock the renderer.
@@ -499,7 +504,7 @@ pub async fn acquire_browser_gpu(
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("threers device"),
-            required_features: wgpu::Features::empty(),
+            required_features: adapter.features() & crate::gpu::TEXTURE_FEATURES,
             required_limits: adapter.limits(),
             ..Default::default()
         })
@@ -1536,6 +1541,14 @@ impl WebRenderer {
         crate::renderer::caps::supports_compute(&self.device)
     }
 
+    /// How many geometries currently have GPU buffers. A removed mesh's goes
+    /// once nothing has drawn it for the cache's retention
+    /// (`Renderer::set_cache_retention`).
+    #[wasm_bindgen(js_name = cachedGeometryCount)]
+    pub fn cached_geometry_count(&self) -> usize {
+        self.renderer.cached_geometry_count()
+    }
+
     pub fn render(&mut self, scene: &mut WebScene, camera: &WebCamera) {
         // Targets resized since the last frame: their sample views are new.
         for id in RESIZED_TARGETS.with(|r| std::mem::take(&mut *r.borrow_mut())) {
@@ -1632,6 +1645,8 @@ pub struct WebScene {
     fur_animator: crate::fur::FurAnimator,
     /// Particles, snow and sand in this scene, run by `stepParticles`.
     particle_animator: crate::particles::ParticleAnimator,
+    /// Candles in this scene (`createCandle`), flickered by `stepCandles`.
+    candles: Vec<crate::extras::candle::CandleHandle>,
 }
 
 #[wasm_bindgen]
@@ -1643,6 +1658,7 @@ impl WebScene {
             node_uuids: std::collections::HashMap::new(),
             fur_animator: crate::fur::FurAnimator::new(),
             particle_animator: crate::particles::ParticleAnimator::new(),
+            candles: Vec::new(),
         }
     }
 
@@ -3914,9 +3930,12 @@ impl WebShaderMaterial {
 
     /// The uniform block, as a flat array of floats read four at a time into
     /// `u_data.data[0..16]`. Anything past sixty-four floats is ignored.
+    ///
+    /// In place: every mesh already holding a `material()` of this one sees
+    /// it on the next frame, and the cost is one 256-byte write.
     #[wasm_bindgen(js_name = setData)]
     pub fn set_data(&mut self, data: Vec<f32>) {
-        self.inner.data = data
+        let slots: Vec<[f32; 4]> = data
             .chunks(4)
             .map(|c| {
                 let mut v = [0.0f32; 4];
@@ -3924,6 +3943,20 @@ impl WebShaderMaterial {
                 v
             })
             .collect();
+        self.inner.set_data(&slots);
+    }
+
+    /// One float of the uniform block: `index` 5 is `u_data.data[1].y`.
+    /// In place, like [`setData`](Self::set_data).
+    #[wasm_bindgen(js_name = setUniform)]
+    pub fn set_uniform(&mut self, index: u32, value: f32) {
+        self.inner.set_data_floats(index as usize, &[value]);
+    }
+
+    /// Consecutive floats of the uniform block starting at float `offset`.
+    #[wasm_bindgen(js_name = setDataRange)]
+    pub fn set_data_range(&mut self, offset: u32, values: &[f32]) {
+        self.inner.set_data_floats(offset as usize, values);
     }
 
     /// One of the three storage slots, read as `s0(i)`, `s1(i)` or `s2(i)`.
@@ -3931,13 +3964,20 @@ impl WebShaderMaterial {
     /// Use those rather than `u_s0[i]`: on WebGL2 there are no storage buffers
     /// and the same data arrives as a texture instead, which the accessors
     /// know about and a raw index does not.
+    ///
+    /// In place, like [`setData`](Self::set_data); the whole slot is uploaded
+    /// once, on the next frame.
     #[wasm_bindgen(js_name = setStorage)]
     pub fn set_storage(&mut self, slot: u32, data: Vec<f32>) {
-        match slot {
-            0 => self.inner.storage0 = data,
-            1 => self.inner.storage1 = data,
-            _ => self.inner.storage2 = data,
-        }
+        self.inner.set_storage(slot.min(2) as usize, data);
+    }
+
+    /// Overwrite part of a storage slot from float `offset` on, and upload only
+    /// that part. For changing a few objects' attributes out of many.
+    #[wasm_bindgen(js_name = setStorageRange)]
+    pub fn set_storage_range(&mut self, slot: u32, offset: u32, data: &[f32]) {
+        self.inner
+            .set_storage_range(slot.min(2) as usize, offset as usize, data);
     }
 
     #[wasm_bindgen(js_name = setTransparent)]
@@ -3995,6 +4035,11 @@ impl WebShaderMaterial {
     }
 
     /// The material to hand to a `Mesh`.
+    ///
+    /// Every material this returns shares this one's uniform and storage, so
+    /// `setData`, `setUniform`, `setStorage` and `setStorageRange` afterwards
+    /// reach meshes that already hold it. The other settings are copied at the
+    /// time of the call.
     #[wasm_bindgen(js_name = material)]
     pub fn material(&self) -> WebMaterial {
         WebMaterial {

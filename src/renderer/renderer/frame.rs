@@ -724,24 +724,28 @@ impl Renderer {
             }
         };
         // Per-custom-shader-material draw data (parallel to Topology::Custom).
+        //
+        // The material itself rather than a copy of its sources and data: the
+        // GPU side is kept across frames by `custom_cache`, which only needs to
+        // look. Copying cost a clone of every storage array a draw a frame.
         struct ShaderDrawData {
-            fragment: String,
-            vertex: Option<String>,
-            data: [[f32; 4]; 16],
-            storage: [Vec<f32>; 3],
-            textures: Vec<crate::marks::gpu::TextureView>,
-            /// `ShaderMaterial::maps`: the slots `textures` leaves empty.
-            maps: Vec<Arc<Texture>>,
-            volumes: Vec<crate::marks::gpu::TextureView>,
+            material: Arc<Material>,
             /// Drawn from an `InstancedMesh`: the instanced pipeline layout,
             /// with the instance buffer at `instance_buf_idx` in slot 1 and
             /// the custom columns at `custom_buf` in slot 2.
             instanced: bool,
             custom_buf: usize,
-            /// three.js `alphaToCoverage`.
-            alpha_to_coverage: bool,
+        }
+        impl ShaderDrawData {
+            fn sm(&self) -> &crate::materials::ShaderMaterial {
+                match &*self.material {
+                    Material::Shader(sm) => sm,
+                    _ => unreachable!("only shader materials are pushed"),
+                }
+            }
         }
         let mut shader_data: Vec<ShaderDrawData> = Vec::new();
+        self.custom_cache.begin_frame();
         let mut instance_buffers: Vec<wgpu::Buffer> = Vec::new();
         struct SkinData {
             bone_buf: wgpu::Buffer,
@@ -1032,6 +1036,7 @@ impl Renderer {
         let now = self.instance_frame;
         self.instance_cache.retain(|_, c| now - c.frame < 64);
         self.evict_unused_textures(now);
+        self.evict_unused_geometry(now);
         scene.arena.traverse_visible(root, &mut |obj_id, obj| {
             if !cam_layers.test(&obj.layers) {
                 return;
@@ -1231,7 +1236,7 @@ impl Renderer {
                             // them, and a custom one calls `morph_position` /
                             // `morph_normal` / `morph_color` itself. Its group 2
                             // then carries the geometry's morph texture.
-                            let hash = custom_shader_hash(&sm.fragment, sm.vertex.as_deref())
+                            let hash = self.custom_cache.shader_hash(sm)
                                 ^ if sm.alpha_to_coverage {
                                     COVERAGE_CUSTOM_SALT
                                 } else {
@@ -1241,24 +1246,10 @@ impl Renderer {
                             d.topology =
                                 Topology::Custom(hash, transparent, sm.screen_space, sm.side);
                             d.shader_idx = shader_data.len();
-                            let pad = |s: &Vec<f32>| {
-                                if s.is_empty() {
-                                    vec![0.0f32]
-                                } else {
-                                    s.clone()
-                                }
-                            };
                             shader_data.push(ShaderDrawData {
-                                fragment: sm.fragment.clone(),
-                                vertex: sm.vertex.clone(),
-                                data: sm.data_slots(),
-                                storage: [pad(&sm.storage0), pad(&sm.storage1), pad(&sm.storage2)],
-                                textures: sm.textures.clone(),
-                                maps: sm.maps.clone(),
-                                volumes: sm.volumes.clone(),
+                                material: Arc::clone(material),
                                 instanced: false,
                                 custom_buf: 0,
-                                alpha_to_coverage: sm.alpha_to_coverage,
                             });
                         }
                         // Route transparent PhysicalMaterials to single-layer glass
@@ -1577,7 +1568,7 @@ impl Renderer {
                         // entry with the same material on a plain mesh.
                         if let (Material::Shader(sm), Some(custom_buf)) = (&**material, custom_idx)
                         {
-                            let hash = custom_shader_hash(&sm.fragment, sm.vertex.as_deref())
+                            let hash = self.custom_cache.shader_hash(sm)
                                 ^ INSTANCED_CUSTOM_SALT
                                 ^ if sm.alpha_to_coverage {
                                     COVERAGE_CUSTOM_SALT
@@ -1588,24 +1579,10 @@ impl Renderer {
                             d.topology =
                                 Topology::Custom(hash, transparent, sm.screen_space, sm.side);
                             d.shader_idx = shader_data.len();
-                            let pad = |s: &Vec<f32>| {
-                                if s.is_empty() {
-                                    vec![0.0f32]
-                                } else {
-                                    s.clone()
-                                }
-                            };
                             shader_data.push(ShaderDrawData {
-                                fragment: sm.fragment.clone(),
-                                vertex: sm.vertex.clone(),
-                                data: sm.data_slots(),
-                                storage: [pad(&sm.storage0), pad(&sm.storage1), pad(&sm.storage2)],
-                                textures: sm.textures.clone(),
-                                maps: sm.maps.clone(),
-                                volumes: sm.volumes.clone(),
+                                material: Arc::clone(material),
                                 instanced: true,
                                 custom_buf,
-                                alpha_to_coverage: sm.alpha_to_coverage,
                             });
                         }
                         draws.push(d);
@@ -2001,17 +1978,36 @@ impl Renderer {
                             });
                         }
                     } else {
-                        let s = settings.camera_size;
-                        let light_eye = -dir.normalize() * (s * 1.5);
-                        let light_view = Matrix4::look_at(light_eye, Vector3::ZERO, Vector3::UP);
-                        let light_proj = Matrix4::orthographic(
-                            -s,
-                            s,
-                            s,
-                            -s,
-                            settings.camera_near,
-                            settings.camera_far,
-                        );
+                        // One map: the fixed box around the origin, or with
+                        // `fit_view` the camera's view out to that distance
+                        // (plus `camera_far` toward the light, for casters
+                        // outside it), snapped to texels so it does not
+                        // shimmer as the camera moves.
+                        let (light_view, light_proj) = if settings.fit_view > 0.0 {
+                            let (_, view, proj) = fit_shadow_to_view(
+                                dir,
+                                &camera.projection_matrix().multiply(&view_m).invert(),
+                                &view_m.invert(),
+                                settings.fit_view,
+                                settings.camera_far,
+                                size,
+                            );
+                            (view, proj)
+                        } else {
+                            let s = settings.camera_size;
+                            let light_eye = -dir.normalize() * (s * 1.5);
+                            (
+                                Matrix4::look_at(light_eye, Vector3::ZERO, Vector3::UP),
+                                Matrix4::orthographic(
+                                    -s,
+                                    s,
+                                    s,
+                                    -s,
+                                    settings.camera_near,
+                                    settings.camera_far,
+                                ),
+                            )
+                        };
                         let vp = light_proj.multiply(&light_view).elements;
                         rec.vp[0] = vp;
                         rec.extra = [f32::MAX; 4];
@@ -2714,28 +2710,28 @@ impl Renderer {
                     // source stand for its output. Not its textures: a texture
                     // can be drawn into without anything here changing.
                     if let Topology::Custom(..) = d.topology {
-                        match shader_data.get(d.shader_idx) {
-                            Some(sd) if sd.textures.is_empty() && sd.volumes.is_empty() => {
+                        match shader_data.get(d.shader_idx).map(|sd| sd.sm()) {
+                            Some(sm) if sm.textures.is_empty() && sm.volumes.is_empty() => {
                                 // A map is pixels the renderer owns: its id
                                 // and upload count stand for its contents.
-                                sd.maps.iter().for_each(|m| {
+                                sm.maps.iter().for_each(|m| {
                                     let k = tex_cache_key(m);
                                     mix(k.0);
                                     mix(k.1);
                                 });
-                                sd.data
+                                // a volume map is immutable behind its `Arc`
+                                sm.volume_maps.iter().for_each(|v| mix(std::sync::Arc::as_ptr(v) as u64));
+                                sm.data_slots()
                                     .iter()
                                     .flatten()
                                     .for_each(|v| mix(v.to_bits() as u64));
-                                sd.storage.iter().for_each(|st| {
-                                    mix(st.len() as u64);
-                                    st.iter().for_each(|v| mix(v.to_bits() as u64));
-                                });
-                                mix(hash_words(sd.fragment.bytes().map(u64::from)));
-                                mix(sd
-                                    .vertex
-                                    .as_deref()
-                                    .map_or(0, |v| hash_words(v.bytes().map(u64::from))));
+                                // Storage by its stamp — a version for live
+                                // storage, the allocation for a field — rather
+                                // than by its megabytes, as the upload cache
+                                // tells a change from no change.
+                                sm.storage_stamps().into_iter().for_each(&mut mix);
+                                // The pipeline's hash stands for both sources.
+                                mix(self.custom_cache.shader_hash(sm));
                             }
                             _ => {
                                 known = false;
@@ -2853,6 +2849,68 @@ impl Renderer {
                 Some(sphere.apply_matrix4(&Matrix4 { elements: d.model }))
             })
             .collect();
+        // `ShaderMaterial` casters that ask to (`shadow_vertex`) cast through
+        // their own vertex stage in the directional and spot passes, so what
+        // the stage moves, grows or hides casts the shadow of what is drawn:
+        // the key of each such draw's depth-only pipeline. One whose pipeline would not build, or whose
+        // layout is not settled yet (a trimmed backend's first frame), casts
+        // its geometry in the passes below as before.
+        let mut custom_shadow: Vec<Option<(u64, bool, u32)>> = vec![None; draws.len()];
+        if draw_pass.iter().any(|&d| d) {
+            for (i, d) in draws.iter().enumerate() {
+                let Topology::Custom(hash, _, false, _) = d.topology else {
+                    continue;
+                };
+                let Some(sd) = shader_data.get(d.shader_idx) else {
+                    continue;
+                };
+                let sm = sd.sm();
+                let Some(vertex) = sm.vertex.as_deref() else {
+                    continue;
+                };
+                if !d.cast_shadow || !sm.shadow_vertex {
+                    continue;
+                }
+                let lit = if self.custom_lit_pipeline_layout.is_some() {
+                    match self.custom_lit.get(&hash) {
+                        Some(&lit) => lit,
+                        None => continue,
+                    }
+                } else {
+                    false
+                };
+                let Some(layout) = (if lit {
+                    self.custom_lit_shadow_layout.as_ref()
+                } else {
+                    self.custom_shadow_layout.as_ref()
+                }) else {
+                    continue;
+                };
+                let key = (hash, lit, d.shadow_side);
+                let device = &self.device;
+                let built = self.custom_shadow_pipelines.entry(key).or_insert_with(|| {
+                    build_custom_shadow_pipeline(
+                        device,
+                        layout,
+                        &sm.fragment,
+                        vertex,
+                        sd.instanced,
+                        shadow_cull(d.shadow_side),
+                    )
+                    .map_err(|e| {
+                        log::error!(
+                            "shader material shadow pipeline failed; it casts its geometry instead:\n{e}"
+                        )
+                    })
+                    .ok()
+                });
+                if built.is_some() {
+                    custom_shadow[i] = Some(key);
+                }
+            }
+        }
+        // (pass, draw) for the casters above, drawn once their bind groups exist.
+        let mut custom_shadow_todo: Vec<(usize, usize)> = Vec::new();
         let drawn: Vec<usize> = (0..shadow_passes.len()).filter(|&k| draw_pass[k]).collect();
         self.shadow_stats.0 += drawn.len() as u64;
         for (n, &k) in drawn.iter().enumerate() {
@@ -2907,6 +2965,10 @@ impl Renderer {
                     continue;
                 }
                 self.shadow_stats.1 += 1;
+                if custom_shadow[i].is_some() && p.kind != ShadowKind::Point {
+                    custom_shadow_todo.push((k, i));
+                    continue;
+                }
                 let skinned = matches!(d.topology, Topology::Skinned | Topology::SkinnedAlpha);
                 // A `ShaderMaterial` casts its geometry, as three.js's depth
                 // material draws it (and the Metal backend does): the mesh's
@@ -3067,20 +3129,32 @@ impl Renderer {
         // glass pass rather than the opaque one, and both need these.
         let mut user_bgs: Vec<Option<wgpu::BindGroup>> = Vec::new();
         user_bgs.resize_with(draws.len(), || None);
-        let mut _custom_keep_alive: Vec<wgpu::Buffer> = Vec::new();
-        let mut _custom_keep_alive_tex: Vec<wgpu::Texture> = Vec::new();
+        let storage_buffers = crate::renderer::caps::supports_storage_buffers(&self.device);
+        let with_volumes_here =
+            crate::renderer::caps::supports_shader_material_volumes(&self.device);
+        // Out of `self` for the loop, which resolves textures through `&self`
+        // while the cache is written; put back below. Nothing in it returns.
+        self.volume_maps.evict();
+        let mut custom_cache = std::mem::take(&mut self.custom_cache);
         for (i, d) in draws.iter().enumerate() {
             if let Topology::Custom(hash, transparent, screen_space, side) = d.topology {
                 let sd = &shader_data[d.shader_idx];
-                for map in sd.maps.iter().take(4) {
+                let sm = sd.sm();
+                for map in sm.maps.iter().take(4) {
                     self.ensure_slot_uploaded(&Some(map.clone()));
+                }
+                if with_volumes_here && !sm.volume_maps.is_empty() {
+                    let gpu = crate::marks::gpu::Gpu::from((&*self.device, &*self.queue));
+                    for v in sm.volume_maps.iter().take(2) {
+                        self.volume_maps.ensure(&gpu, v);
+                    }
                 }
                 let key = (hash, linear_framebuffer, transparent, screen_space, side);
                 let lit = self.custom_lit_pipeline_layout.is_some() && {
                     if !self.custom_lit.contains_key(&hash) {
                         let source = custom_shader_module_source(
-                            &sd.fragment,
-                            sd.vertex.as_deref(),
+                            &sm.fragment,
+                            sm.vertex.as_deref(),
                             false,
                             false,
                             1,
@@ -3122,15 +3196,15 @@ impl Renderer {
                     let pipeline = build_custom_pipeline(
                         &self.device,
                         custom_layout,
-                        &sd.fragment,
-                        sd.vertex.as_deref(),
+                        &sm.fragment,
+                        sm.vertex.as_deref(),
                         fmt,
                         transparent,
                         screen_space,
                         side,
                         sd.instanced,
                         1,
-                        sd.alpha_to_coverage,
+                        sm.alpha_to_coverage,
                         &mut self.state_pipelines,
                     );
                     match pipeline {
@@ -3156,15 +3230,15 @@ impl Renderer {
                     match build_custom_pipeline(
                         &self.device,
                         custom_layout,
-                        &sd.fragment,
-                        sd.vertex.as_deref(),
+                        &sm.fragment,
+                        sm.vertex.as_deref(),
                         self.color_format.remove_srgb_suffix(),
                         transparent,
                         screen_space,
                         side,
                         sd.instanced,
                         1,
-                        sd.alpha_to_coverage,
+                        sm.alpha_to_coverage,
                         &mut self.state_pipelines,
                     ) {
                         Ok(p) => {
@@ -3185,15 +3259,15 @@ impl Renderer {
                     match build_custom_pipeline(
                         &self.device,
                         custom_layout,
-                        &sd.fragment,
-                        sd.vertex.as_deref(),
+                        &sm.fragment,
+                        sm.vertex.as_deref(),
                         self.color_format,
                         transparent,
                         screen_space,
                         side,
                         sd.instanced,
                         MSAA_SAMPLES,
-                        sd.alpha_to_coverage,
+                        sm.alpha_to_coverage,
                         &mut self.state_pipelines,
                     ) {
                         Ok(p) => {
@@ -3202,44 +3276,182 @@ impl Renderer {
                         Err(e) => log::error!("shader material failed to compile:\n{e}"),
                     }
                 }
-                let (bg, bufs, texs) = build_user_bind_group(
-                    &self.device,
-                    &self.queue,
-                    if no_volumes {
+                // The textures as the four slots bind them: the material's own
+                // views, its maps where those leave a slot empty (uploaded
+                // above), and the placeholder.
+                let textures: [&wgpu::TextureView; 4] = std::array::from_fn(|t| {
+                    sm.textures
+                        .get(t)
+                        .and_then(|v| v.as_wgpu())
+                        .or_else(|| {
+                            sm.maps
+                                .get(t)
+                                .map(|m| self.view_for(&Some(m.clone()), &self.default_white_linear))
+                        })
+                        .unwrap_or(&self.default_white_linear.view)
+                });
+                let with_volumes = !no_volumes && with_volumes_here;
+                let volumes = with_volumes.then(|| {
+                    std::array::from_fn(|v| {
+                        // A Metal view (a volume made for the native backend)
+                        // has nothing to bind here.
+                        sm.volumes
+                            .get(v)
+                            .or_else(|| sm.volume_maps.get(v).and_then(|m| self.volume_maps.get(m)).map(|g| &g.view))
+                            .and_then(|v| v.as_wgpu())
+                            .unwrap_or(&self.default_volume_view)
+                    })
+                });
+                let binds = super::super::custom_cache::DrawBinds {
+                    mesh_buffer: self.mesh_arena.as_ref().expect("grown above"),
+                    mesh_offset: self.per_mesh[i].0,
+                    mesh_size: std::mem::size_of::<MeshUniforms>() as u64,
+                    bgl: if no_volumes {
                         self.custom_lit_mesh_bgl
                             .as_ref()
                             .expect("no_volumes implies the layout")
                     } else {
                         &self.custom_mesh_bgl
                     },
-                    wgpu::BufferBinding {
-                        buffer: self.mesh_arena.as_ref().expect("grown above"),
-                        offset: self.per_mesh[i].0,
-                        size: wgpu::BufferSize::new(std::mem::size_of::<MeshUniforms>() as u64),
-                    },
-                    &sd.data,
-                    &sd.storage,
-                    &(0..4)
-                        .map(|t| {
-                            sd.textures.get(t).and_then(|v| v.as_wgpu()).or_else(|| {
-                                sd.maps.get(t).map(|m| {
-                                    self.view_for(&Some(m.clone()), &self.default_white_linear)
-                                })
-                            })
-                        })
-                        .collect::<Vec<_>>(),
-                    &self.default_white_linear.view,
-                    &self.default_data_tex_view,
-                    &self.sampler_linear_repeat,
-                    &sd.volumes,
-                    &self.default_volume_view,
-                    &self.sampler_volume,
-                    !no_volumes
-                        && crate::renderer::caps::supports_shader_material_volumes(&self.device),
-                );
-                _custom_keep_alive.extend(bufs);
-                _custom_keep_alive_tex.extend(texs);
+                    textures,
+                    volumes,
+                };
+                let ctx = super::super::custom_cache::CustomCtx {
+                    device: &self.device,
+                    queue: &self.queue,
+                    data_placeholder: &self.default_data_tex_view,
+                    sampler: &self.sampler_linear_repeat,
+                    volume_sampler: &self.sampler_volume,
+                    storage_buffers,
+                };
+                let bg = custom_cache.bind_group(&ctx, sm, i, &binds);
                 user_bgs[i] = Some(bg);
+            }
+        }
+
+        custom_cache.evict();
+        self.custom_cache = custom_cache;
+
+        // The custom-vertex-stage shadow casters queued above, into the passes
+        // the built-in casters drew (loaded, not cleared), each with a copy of
+        // the frame uniforms whose camera is the pass's light.
+        if !custom_shadow_todo.is_empty() {
+            let stride = self.custom_shadow_frame_stride as usize;
+            let n = shadow_passes.len();
+            if self
+                .custom_shadow_frames
+                .as_ref()
+                .is_none_or(|(_, _, cap)| *cap < n)
+            {
+                let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("threers custom shadow frames"),
+                    size: (stride * n) as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let bg =
+                    self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("threers custom shadow frames bg"),
+                        layout: &self.custom_shadow_frame_bgl,
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &buffer,
+                                offset: 0,
+                                size: wgpu::BufferSize::new(
+                                    std::mem::size_of::<FrameUniforms>() as u64
+                                ),
+                            }),
+                        }],
+                    });
+                self.custom_shadow_frames = Some((buffer, bg, n));
+            }
+            let mut bytes = vec![0u8; stride * n];
+            for (k, p) in shadow_passes.iter().enumerate() {
+                let mut f = frame_u;
+                f.view_proj = p.vp;
+                f.camera_position = [p.pos[0], p.pos[1], p.pos[2], frame_u.camera_position[3]];
+                bytes[k * stride..k * stride + std::mem::size_of::<FrameUniforms>()]
+                    .copy_from_slice(bytemuck::bytes_of(&f));
+            }
+            let (frames_buffer, frames_bg, _) =
+                self.custom_shadow_frames.as_ref().expect("made above");
+            self.queue.write_buffer(frames_buffer, 0, &bytes);
+            let mut at = 0;
+            while at < custom_shadow_todo.len() {
+                let k = custom_shadow_todo[at].0;
+                let end = at
+                    + custom_shadow_todo[at..]
+                        .iter()
+                        .take_while(|(pk, _)| *pk == k)
+                        .count();
+                let p = &shadow_passes[k];
+                let view = match p.kind {
+                    ShadowKind::Dir => self.dir_shadows.layer_view(p.layer),
+                    ShadowKind::Spot => self.spot_shadows.layer_view(p.layer),
+                    ShadowKind::Point => self.point_shadows.layer_view(p.layer),
+                };
+                let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("threers custom shadow pass"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                spass.set_bind_group(0, frames_bg, &[(k * stride) as u32]);
+                for &(_, i) in &custom_shadow_todo[at..end] {
+                    let d = &draws[i];
+                    let (Some(key), Some(bg)) = (custom_shadow[i], &user_bgs[i]) else {
+                        continue;
+                    };
+                    let Some(Some(pipe)) = self.custom_shadow_pipelines.get(&key) else {
+                        continue;
+                    };
+                    spass.set_pipeline(pipe);
+                    spass.set_bind_group(1, bg, &[]);
+                    spass.set_bind_group(
+                        2,
+                        custom_morph_bgs[i]
+                            .as_ref()
+                            .unwrap_or(&self.custom_tex_bind_group),
+                        &[],
+                    );
+                    // Never the scene's own: it holds the maps being drawn.
+                    let lit = key.1;
+                    spass.set_bind_group(
+                        3,
+                        match (&self.custom_env_bind_group, lit) {
+                            (Some(env), false) => env,
+                            _ => &self.shadow_env_bind_group,
+                        },
+                        &[],
+                    );
+                    let gm = &self.geom_cache[&d.key].mesh;
+                    spass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
+                    let sd = &shader_data[d.shader_idx];
+                    let instances = if sd.instanced {
+                        spass.set_vertex_buffer(1, instance_buffers[d.instance_buf_idx].slice(..));
+                        spass.set_vertex_buffer(2, instance_buffers[sd.custom_buf].slice(..));
+                        0..d.instance_count
+                    } else {
+                        0..1
+                    };
+                    if let Some(ib) = &gm.index_buffer {
+                        spass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                        spass.draw_indexed(draw_span(d.range, gm.index_count), 0, instances);
+                    } else {
+                        spass.draw(draw_span(d.range, gm.vertex_count), instances);
+                    }
+                }
+                at = end;
             }
         }
 
@@ -3349,6 +3561,14 @@ impl Renderer {
             }
             // The pane's own plan when drawing into a pane target.
             let main_plan = pane_msaa.as_ref().map(|p| p.local()).unwrap_or(vp_plan);
+            if !self.cube_pass {
+                self.last_overlay = Some(super::LastOverlay {
+                    pane: pane_key.zip(pane_msaa.as_ref().map(|p| p.region)),
+                    viewport: main_plan.viewport,
+                    scissor: main_plan.scissor,
+                    projection_fix: pane_msaa.as_ref().map_or(vp_plan.projection_fix, |p| p.projection_fix),
+                });
+            }
             if let super::super::viewport::ClearMode::Rect(_) = vp_plan.clear {
                 self.viewport_state.ensure_clear_pipeline(
                     &self.device,

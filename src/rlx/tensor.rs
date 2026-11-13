@@ -10,7 +10,7 @@
 use ::rlx::{DType, Dim, Shape};
 
 use crate::core::{BufferAttribute, BufferGeometry};
-use crate::textures::{pack_rgba16f, Texture, TextureFormat};
+use crate::textures::{Texture, TextureFormat};
 
 use super::{linear_to_srgb, srgb_to_linear};
 
@@ -345,35 +345,25 @@ pub fn texture_to_tensor(
     space: ColorSpace,
 ) -> Result<Tensor, TensorError> {
     let (width, height) = (texture.width, texture.height);
-    let pixels = width as usize * height as usize;
-    let bpp = texture.bytes_per_pixel();
-    let expected = pixels * bpp;
+    let expected = texture.format.data_len(width, height);
     if texture.data.len() != expected {
         return Err(TensorError::ByteCount {
             expected,
             got: texture.data.len(),
         });
     }
-    let channels = texture.format.channels();
-    let stored_srgb = matches!(texture.format, TextureFormat::Rgba8UnormSrgb);
+    // Every format through f32 texels, block formats decoded first: their
+    // channels are what the decoded format holds.
+    let floats = crate::textures::codec::texels_f32(texture.format, &texture.data, width, height)
+        .ok_or(TensorError::ByteCount {
+        expected,
+        got: texture.data.len(),
+    })?;
+    let channels = crate::textures::codec::decoded_format(texture.format).channels();
+    let stored_srgb = texture.format.is_srgb();
     let want_linear = matches!(space, ColorSpace::Linear);
-    let bytes = &texture.data;
-    // The wider floats decoded once (half floats are read in place).
-    let floats = match texture.format {
-        TextureFormat::R16Float | TextureFormat::R32Float | TextureFormat::Rgba32Float => {
-            texture.format.texels_f32(bytes)
-        }
-        _ => None,
-    };
     Ok(pack(width, height, channels, layout, |i, c| {
-        let v = match texture.format {
-            TextureFormat::Rgba16Float => {
-                let o = i * 8 + c * 2;
-                f16_to_f32(u16::from_le_bytes([bytes[o], bytes[o + 1]]))
-            }
-            _ if floats.is_some() => floats.as_ref().map_or(0.0, |f| f[i * channels + c]),
-            _ => bytes[i * bpp + c] as f32 / 255.0,
-        };
+        let v = floats[i * channels + c];
         match (stored_srgb, want_linear, c) {
             // Alpha is a coverage fraction, not a colour: never transferred.
             (_, _, 3) => v,
@@ -390,7 +380,9 @@ pub fn texture_to_tensor(
 /// The encoding mirrors [`texture_to_tensor`]: a linear tensor written to
 /// `Rgba8UnormSrgb` is encoded, a linear tensor written to a linear format is
 /// copied, and alpha is never transferred. Channel counts must fit the format
-/// — 1 for `R8Unorm`, 3 or 4 for the rest (3 gets an opaque alpha).
+/// — 1 for the one-channel formats, 3 or 4 for the four-channel ones (3 gets
+/// an opaque alpha). Two-channel and block-compressed formats cannot be
+/// written: tensors have no two-channel image, and there is no encoder here.
 pub fn tensor_to_texture(
     tensor: &Tensor,
     format: TextureFormat,
@@ -399,14 +391,17 @@ pub fn tensor_to_texture(
 ) -> Result<Texture, TensorError> {
     let (width, height, channels) = image_dims(tensor, layout)?;
     let pixels = width as usize * height as usize;
-    let fits = match format {
-        TextureFormat::R8Unorm | TextureFormat::R16Float | TextureFormat::R32Float => channels == 1,
-        _ => channels == 3 || channels == 4,
-    };
+    let n = format.channels();
+    let fits = !format.is_block_compressed()
+        && match n {
+            1 => channels == 1,
+            2 => false,
+            _ => channels == 3 || channels == 4,
+        };
     if !fits {
         return Err(TensorError::FormatChannels { format, channels });
     }
-    let stored_srgb = matches!(format, TextureFormat::Rgba8UnormSrgb);
+    let stored_srgb = format.is_srgb();
     let want_linear = matches!(space, ColorSpace::Linear);
     let sample = |i: usize, c: usize| -> f32 {
         let v = at(tensor, layout, width, height, channels, i, c);
@@ -417,49 +412,16 @@ pub fn tensor_to_texture(
             _ => v,
         }
     };
-    let data = match format {
-        TextureFormat::R8Unorm => (0..pixels).map(|i| quantize(sample(i, 0))).collect(),
-        TextureFormat::Rgba16Float => {
-            let mut rgba = Vec::with_capacity(pixels * 4);
-            for i in 0..pixels {
-                for c in 0..4 {
-                    rgba.push(if c < channels { sample(i, c) } else { 1.0 });
-                }
+    let texels: Vec<f32> = (0..pixels * n)
+        .map(|k| {
+            if k % n < channels {
+                sample(k / n, k % n)
+            } else {
+                1.0
             }
-            pack_rgba16f(&rgba)
-        }
-        TextureFormat::R16Float => {
-            crate::math::float::pack_f16(&(0..pixels).map(|i| sample(i, 0)).collect::<Vec<_>>())
-        }
-        TextureFormat::R32Float => {
-            crate::math::float::pack_f32(&(0..pixels).map(|i| sample(i, 0)).collect::<Vec<_>>())
-        }
-        TextureFormat::Rgba32Float => {
-            let rgba: Vec<f32> = (0..pixels * 4)
-                .map(|k| {
-                    if k % 4 < channels {
-                        sample(k / 4, k % 4)
-                    } else {
-                        1.0
-                    }
-                })
-                .collect();
-            crate::math::float::pack_f32(&rgba)
-        }
-        _ => {
-            let mut out = Vec::with_capacity(pixels * 4);
-            for i in 0..pixels {
-                for c in 0..4 {
-                    out.push(if c < channels {
-                        quantize(sample(i, c))
-                    } else {
-                        255
-                    });
-                }
-            }
-            out
-        }
-    };
+        })
+        .collect();
+    let data = format.pack_f32(&texels).expect("an uncompressed format");
     Ok(Texture::new(width, height, format, data))
 }
 
@@ -547,14 +509,10 @@ fn quantize(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
-/// IEEE half → f32. The encode direction is [`pack_rgba16f`]'s.
-fn f16_to_f32(bits: u16) -> f32 {
-    crate::math::float::f16_to_f32(bits)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::textures::pack_rgba16f;
 
     #[test]
     fn an_attribute_round_trips_through_a_tensor() {

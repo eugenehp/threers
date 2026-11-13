@@ -35,11 +35,39 @@ pub mod pixel_format {
     pub const BGRA8_UNORM_SRGB: NSUInteger = 81;
     pub const RGBA16_FLOAT: NSUInteger = 115;
     pub const RGBA32_FLOAT: NSUInteger = 125;
-    /// BC1 ("DXT1"), sRGB. Desktop-class GPUs only — see
+    // Values from the SDK's MTLPixelFormat.h, not from memory: BC7 sRGB was
+    // once written here as 145, which is no pixel format at all, and every
+    // BC7 texture failed to create.
+    pub const R16_UNORM: NSUInteger = 20;
+    pub const RG16_FLOAT: NSUInteger = 65;
+    pub const RGB10A2_UNORM: NSUInteger = 90;
+    pub const RG11B10_FLOAT: NSUInteger = 92;
+    pub const RGB9E5_FLOAT: NSUInteger = 93;
+    pub const RG32_FLOAT: NSUInteger = 105;
+    pub const RGBA16_UNORM: NSUInteger = 110;
+    /// The BC formats. Desktop-class GPUs only — see
     /// `MTLDevice.supportsBCTextureCompression`.
+    pub const BC1_RGBA: NSUInteger = 130;
     pub const BC1_RGBA_SRGB: NSUInteger = 131;
-    /// BC7, sRGB. Same availability caveat as BC1.
-    pub const BC7_RGBA_SRGB: NSUInteger = 145;
+    pub const BC3_RGBA: NSUInteger = 134;
+    pub const BC3_RGBA_SRGB: NSUInteger = 135;
+    pub const BC4_R_UNORM: NSUInteger = 140;
+    pub const BC5_RG_UNORM: NSUInteger = 142;
+    pub const BC6H_RGB_FLOAT: NSUInteger = 150;
+    pub const BC6H_RGB_UFLOAT: NSUInteger = 151;
+    pub const BC7_RGBA: NSUInteger = 152;
+    pub const BC7_RGBA_SRGB: NSUInteger = 153;
+    /// ETC2 and EAC: Apple-family GPUs (Apple silicon, iOS, tvOS, visionOS).
+    pub const EAC_RGBA8: NSUInteger = 178;
+    pub const EAC_RGBA8_SRGB: NSUInteger = 179;
+    pub const ETC2_RGB8: NSUInteger = 180;
+    pub const ETC2_RGB8_SRGB: NSUInteger = 181;
+    /// ASTC LDR, by footprint in `AstcBlock::ALL` order: sRGB from 186, linear
+    /// from 204, each with a gap after 6x6 (191 and 209 are not formats).
+    pub fn astc(index: usize, srgb: bool) -> NSUInteger {
+        let base = if srgb { 186 } else { 204 };
+        base + index + (index >= 5) as usize
+    }
     pub const DEPTH32_FLOAT: NSUInteger = 252;
     pub const DEPTH32_FLOAT_STENCIL8: NSUInteger = 260;
 

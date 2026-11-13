@@ -162,12 +162,59 @@ export class OrthographicCamera implements ThreersHandle {
     lookAt(x: number, y: number, z: number): this;
 }
 
+// ---- XR (three.js \`renderer.xr\`, over threers' WebXR session) ----
+
+/** three.js \`WebXRManager\`: both eyes drawn into a headset by the wasm \`WebXr\`. */
+export class WebXRManager {
+    enabled: boolean;
+    isPresenting: boolean;
+    cameraAutoUpdate: boolean;
+    /** Opens a session (call from a click) and presents into it. */
+    start(mode?: 'immersive-vr' | 'immersive-ar', init?: { requiredFeatures?: string[]; optionalFeatures?: string[] }): Promise<any>;
+    setSession(session: any | null): Promise<any>;
+    getSession(): any | null;
+    getReferenceSpace(): any | null;
+    /** Before a session starts; default \`'local-floor'\`. */
+    setReferenceSpaceType(type: 'viewer' | 'local' | 'local-floor' | 'bounded-floor' | 'unbounded'): void;
+    setFramebufferScaleFactor(scale: number): void;
+    getEnvironmentBlendMode(): 'opaque' | 'alpha-blend' | undefined;
+    getFrame(): any | null;
+    getCamera(): ArrayCamera;
+    getController(index: number): Group;
+    getControllerGrip(index: number): Group;
+    /** \`joints[name]\` per WebXR joint name, each with \`jointRadius\`. */
+    getHand(index: number): Group & { joints: Record<string, Group & { jointRadius?: number }> };
+    addEventListener(type: 'sessionstart' | 'sessionend', listener: (event: { type: string }) => void): void;
+    removeEventListener(type: string, listener: (event: any) => void): void;
+}
+
+/** @see three.js \`VRButton\`: says "VR NOT SUPPORTED" without WebXR or the \`xr\` feature. */
+export class VRButton {
+    static createButton(renderer: WebGLRenderer, init?: { requiredFeatures?: string[]; optionalFeatures?: string[] }): HTMLButtonElement;
+}
+
+/** @see three.js \`ARButton\`: says "AR NOT SUPPORTED" without WebXR or the \`xr\` feature. */
+export class ARButton {
+    static createButton(renderer: WebGLRenderer, init?: { requiredFeatures?: string[]; optionalFeatures?: string[] }): HTMLButtonElement;
+}
+
+/** threers extension: a candle (wax, wick, flame, light), flickered on the renderer's clock. Sizes in metres; \`realistic\` draws a volumetric flame. */
+export class Candle extends Object3D {
+    constructor(options?: { realistic?: boolean; height?: number; radius?: number; wax?: number | Color; flameHeight?: number; intensity?: number; steps?: number; seed?: number; castShadow?: boolean });
+    readonly isCandle: true;
+    readonly realistic: boolean;
+}
+
 // ---- Renderer (async factory — threers-specific) ----
 
 export class WebGLRenderer implements ThreersHandle {
     _w?: unknown;
     domElement: HTMLCanvasElement;
     shadowMap: { enabled: boolean; type: number };
+    /** three.js \`renderer.xr\` (needs a wasm build with the \`xr\` feature). */
+    xr: WebXRManager;
+    /** \`callback(time, frame)\` each display frame, or each headset frame while presenting; null stops it. */
+    setAnimationLoop(callback: ((time: number, frame?: any) => void) | null): void;
     /** @deprecated use WebGLRenderer.create(canvas) */
     constructor(): never;
     /** three.js \`new WebGLRenderer(parameters)\`; \`antialias\` (default false) turns on 4× MSAA. */

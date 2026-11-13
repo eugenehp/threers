@@ -170,10 +170,10 @@ pub enum DeviceAnchorStatus {
 // target, which is what lets a host app be written — and this file's ABI
 // assumptions checked — from a Mac.
 #[cfg(target_os = "visionos")]
-mod frame_loop;
+pub(crate) mod frame_loop;
 
 #[cfg(target_os = "visionos")]
-pub use frame_loop::{ImmersiveRenderer, WorldTracking};
+pub use frame_loop::{ImmersiveFrame, ImmersiveRenderer, WorldTracking};
 
 #[cfg(test)]
 mod tests {

@@ -218,3 +218,51 @@ fn a_shader_material_reads_a_volume_on_either_backend() {
         "{differing} pixels differ between wgpu and Metal"
     );
 }
+
+/// `volume_maps`: the app hands the material its voxels, with no GPU of its
+/// own, and the renderer uploads them — the same on both backends; a new
+/// `Arc` (a 4D series' next frame) shows its own.
+#[test]
+fn a_shader_material_uploads_its_own_volume_maps() {
+    use std::sync::Arc;
+    use threers::volume::{Data3DTexture, VolumeFormat};
+    use threers::{Material, Mesh, Object3D, OrthographicCamera, PlaneGeometry, ShaderMaterial, Vector3 as V};
+    if threers::metal::MetalDevice::new().is_err() {
+        eprintln!("skipping: no Metal device");
+        return;
+    }
+    // read through a helper that takes the volume, as a slice shader's
+    // label lookup does (a template over the slot on Metal)
+    let fragment = "fn texel(t: texture_3d<f32>, x: f32) -> f32 {
+        let size = vec3<f32>(textureDimensions(t));
+        let i = min(i32(x * size.x), i32(size.x) - 1);
+        return textureLoad(t, vec3<i32>(i, 0, 0), 0).r;
+    }
+    @fragment fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+        return vec4<f32>(texel(u_vol0, in.uv.x), 0.0, 0.0, 1.0);
+    }";
+    let mut camera = OrthographicCamera::new(-1.0, 1.0, 1.0, -1.0, 0.1, 10.0);
+    camera.position = V::new(0.0, 0.0, 5.0);
+    camera.look_at(V::ZERO);
+    let red = |f: &[u8]| f[(((SIZE / 2) * SIZE + SIZE * 3 / 8) * 4) as usize];
+    for metal in [false, true] {
+        let mut hr = build(metal);
+        let mut scene = Scene::new();
+        let mut m = ShaderMaterial::new(fragment);
+        m.tone_mapped = false;
+        m.volume_maps = vec![Arc::new(Data3DTexture::new(4, 1, 1, VolumeFormat::R8Unorm, vec![0, 85, 170, 255]))];
+        let id = scene.add(Object3D::mesh(Mesh::new(PlaneGeometry::new(2.0, 2.0), Material::Shader(m))));
+        let first = hr.render_to_rgba(&mut scene, &camera);
+        assert_eq!(hr.is_native_metal(), metal);
+        // texel 1 of 4, 85/255, through the sRGB target
+        assert!(red(&first).abs_diff(156) <= 2, "metal {metal}: {}", red(&first));
+        if let Some(o) = scene.get_mut(id)
+            && let threers::ObjectKind::Mesh(mesh) = &mut o.kind
+            && let Material::Shader(m) = Arc::make_mut(&mut mesh.material)
+        {
+            m.volume_maps = vec![Arc::new(Data3DTexture::new(4, 1, 1, VolumeFormat::R8Unorm, vec![0, 255, 0, 0]))];
+        }
+        let next = hr.render_to_rgba(&mut scene, &camera);
+        assert!(red(&next) >= 253, "metal {metal}: the next frame's: {}", red(&next));
+    }
+}

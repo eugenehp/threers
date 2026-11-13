@@ -356,6 +356,9 @@ pub(crate) struct DrawUniforms {
     /// bound]`, `[eclipse occluder centre, radius]`; and `[normal_scale.y,
     /// 0, 0, 0]`, the normal map's own y scale.
     planet: [[f32; 4]; 5],
+    /// The object's clipping plane (three.js `clippingPlanes`, one): normal
+    /// and constant; zero, none (`Draw::clip` in the shader).
+    clip: [f32; 4],
 }
 
 /// How many material maps a draw can bind, `MAP_*` in `shaders.metal`.
@@ -478,6 +481,7 @@ impl Default for DrawUniforms {
             phys_flags: [0; 4],
             map_xform: IDENTITY_XFORMS,
             planet: [[0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4], [1.0, 0.0, 0.0, 0.0]],
+            clip: [0.0; 4],
         }
     }
 }
@@ -767,6 +771,7 @@ struct OitTargets {
 /// Every shadow-casting light this frame, in the order its record takes.
 type Casters = Vec<Caster>;
 
+#[derive(Clone)]
 struct DrawItem {
     /// Shell fur's parameters (`FurMaterial::data`) when the material is fur.
     fur: Option<[f32; 64]>,
@@ -804,6 +809,8 @@ struct DrawItem {
     instance_color_offset: u32,
     view_depth: f32,
     render_order: i32,
+    /// The object's clipping plane: normal, constant (zero: none).
+    clip: [f32; 4],
     transparent: bool,
     /// three.js's transmissive material (`Material::transmissive`): drawn
     /// after the opaque items, reading them from the transmission capture.
@@ -922,6 +929,10 @@ pub struct MetalRenderer {
     white: Owned,
     /// See [`zero_volume`](crate::metal::resources::zero_volume).
     zero_volume: Owned,
+    /// `ShaderMaterial::volume_maps` as uploaded, on `volume_gpu` (this
+    /// device), made on first use.
+    volume_maps: crate::volume::VolumeMaps,
+    volume_gpu: Option<crate::marks::gpu::Gpu>,
     /// three.js's `RectAreaLight` tables, at fragment texture 28.
     ltc: Owned,
     /// three.js's transmission render target — see [`MetalCapture`].
@@ -1089,6 +1100,8 @@ impl MetalRenderer {
             depth_states,
             white,
             zero_volume,
+            volume_maps: Default::default(),
+            volume_gpu: None,
             ltc,
             capture_dummy,
             capture_depth_dummy,
@@ -1709,6 +1722,7 @@ fn draw_uniforms(
                 },
             ]
         },
+        clip: item.clip,
         // Filled in at bind time, where the pool and the uploaded set are known.
         map_samplers: [[0; 4]; 6],
         phys_flags: [0; 4],

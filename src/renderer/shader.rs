@@ -2461,6 +2461,15 @@ fn shadow_factor_point(i : u32) -> f32 {
     return light_shadow(frame.point_lights[i].color.w);
 }
 
+// The first directional light's shadow at `world_pos` (1 lit, 0 shadowed), in
+// one call, for a custom shader that wants a single number:
+// `compute_shadows` then `shadow_factor_dir(0u)`. 1 where no directional
+// light casts.
+fn shadow_factor(world_pos : vec3<f32>, world_normal : vec3<f32>) -> f32 {
+    compute_shadows(world_pos, world_normal);
+    return shadow_factor_dir(0u);
+}
+
 // One compare in layer `layer` of kind `kind`'s map array.
 fn shadow_compare(kind : u32, uv : vec2<f32>, layer : i32, depth : f32) -> f32 {
     if (kind == 0u) {

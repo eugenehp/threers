@@ -46,9 +46,9 @@ pub struct CpuTexture {
 }
 
 impl CpuTexture {
-    /// Decode a [`Texture`]. Returns `None` for a texture with no CPU-side
-    /// pixels at all — a render-target handle, or a format without a decoder
-    /// (BC7, which the crate can upload but not expand).
+    /// Decode a [`Texture`], block-compressed formats included. Returns `None`
+    /// for a texture with no CPU-side pixels at all (a render-target handle),
+    /// or whose bytes are too few for its size and format.
     pub fn from_texture(tex: &Texture) -> Option<Self> {
         if (tex.is_handle() && tex.stream.is_none()) || tex.width == 0 || tex.height == 0 {
             return None;
@@ -57,7 +57,20 @@ impl CpuTexture {
         // A video's newest frame, or the texture's own bytes.
         let pixels = tex.pixels();
         let src: &[u8] = &pixels;
-        let texels = match tex.format {
+        // Block formats decode first, to 8-bit colour, one or two 8-bit
+        // channels, or half floats (BC6H); then every format is one of the
+        // cases below.
+        let decoded;
+        let (format, src) = if tex.format.is_block_compressed() {
+            decoded = crate::textures::codec::decode(tex.format, src, w, h)?;
+            (
+                crate::textures::codec::decoded_format(tex.format),
+                &decoded[..],
+            )
+        } else {
+            (tex.format, src)
+        };
+        let texels = match format {
             TextureFormat::Rgba8UnormSrgb => Texels::Ldr {
                 data: fit(src, (w * h * 4) as usize),
                 srgb: true,
@@ -66,15 +79,22 @@ impl CpuTexture {
                 data: fit(src, (w * h * 4) as usize),
                 srgb: false,
             },
-            TextureFormat::R8Unorm => {
+            TextureFormat::R8Unorm | TextureFormat::Rg8Unorm => {
                 // Splat red across RGB so a roughness or mask map reads the
-                // same however the caller indexes it.
+                // same however the caller indexes it; two channels are red and
+                // green, as a GPU samples them.
+                let n = format.channels();
                 let mut out = vec![255u8; (w * h * 4) as usize];
                 for i in 0..(w * h) as usize {
-                    let r = src.get(i).copied().unwrap_or(0);
+                    let r = src.get(i * n).copied().unwrap_or(0);
+                    let (g, b) = if n == 1 {
+                        (r, r)
+                    } else {
+                        (src.get(i * n + 1).copied().unwrap_or(0), 0)
+                    };
                     out[i * 4] = r;
-                    out[i * 4 + 1] = r;
-                    out[i * 4 + 2] = r;
+                    out[i * 4 + 1] = g;
+                    out[i * 4 + 2] = b;
                 }
                 Texels::Ldr {
                     data: out,
@@ -91,26 +111,23 @@ impl CpuTexture {
                 }
                 Texels::Hdr(out)
             }
-            // Other floats as linear RGBA, one channel splat like `R8Unorm`.
-            f
-            @ (TextureFormat::R16Float | TextureFormat::R32Float | TextureFormat::Rgba32Float) => {
+            // Every other format as linear RGBA through f32: one channel splat
+            // like `R8Unorm`, two as red and green.
+            f => {
                 let count = (w * h) as usize;
                 let v = f.texels_f32(src).unwrap_or_default();
                 let at = |i: usize| v.get(i).copied().unwrap_or(0.0);
-                let out = if f.channels() == 1 {
-                    (0..count)
+                let out = match f.channels() {
+                    1 => (0..count)
                         .flat_map(|i| [at(i), at(i), at(i), 1.0])
-                        .collect()
-                } else {
-                    (0..count * 4).map(at).collect()
+                        .collect(),
+                    2 => (0..count)
+                        .flat_map(|i| [at(2 * i), at(2 * i + 1), 0.0, 1.0])
+                        .collect(),
+                    _ => (0..count * 4).map(at).collect(),
                 };
                 Texels::Hdr(out)
             }
-            TextureFormat::Bc1RgbaUnormSrgb => Texels::Ldr {
-                data: crate::textures::bc1::decode(src, w, h),
-                srgb: true,
-            },
-            TextureFormat::Bc7RgbaUnormSrgb => return None,
         };
         let has_alpha = match &texels {
             Texels::Ldr { data, .. } => data.as_chunks::<4>().0.iter().any(|p| p[3] < 255),

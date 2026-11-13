@@ -185,6 +185,9 @@ pub struct RaytraceRenderer {
     /// Previous camera pose for motion blur when only the view changed.
     prev_camera: Option<RtCamera>,
     scene_fingerprint: Option<SceneFingerprint>,
+    /// View and projection matrices the film was traced with: `prepare_if_changed` keeps the film when neither the
+    /// scene nor these changed (calling it every frame used to clear the film each time).
+    camera_key: Option<[f32; 32]>,
     /// Rolling estimate of milliseconds per unconverged tile (interactive pacing).
     last_tile_ms: f32,
     /// A trained denoiser, used in place of the À-Trous filter when set.
@@ -225,6 +228,7 @@ impl RaytraceRenderer {
             camera: None,
             prev_camera: None,
             scene_fingerprint: None,
+            camera_key: None,
             last_tile_ms: 0.0,
             #[cfg(all(feature = "learned-denoise", not(target_arch = "wasm32")))]
             learned: None,
@@ -296,6 +300,7 @@ impl RaytraceRenderer {
         // settings, so it has to go too.
         self.scene = None;
         self.scene_fingerprint = None;
+        self.camera_key = None;
         self.prev_camera = None;
         self.backend.invalidate();
     }
@@ -654,26 +659,34 @@ impl RaytraceRenderer {
         self.scene_fingerprint = Some(fp);
     }
 
-    /// Rebuild only when the scene fingerprint changed; always refresh the camera.
+    /// Rebuild only when the scene fingerprint changed; refresh the camera only when it moved.
     ///
-    /// Returns `true` when the acceleration structure was rebuilt. When `false`,
-    /// only the camera moved and the existing BVH is reused — the film is cleared.
+    /// Returns `true` when the acceleration structure was rebuilt. When `false`, the existing BVH is reused: if the
+    /// camera moved the film is cleared, if nothing changed the film is kept - so this is safe to call every frame of
+    /// a progressive render.
     pub fn prepare_if_changed(&mut self, scene: &mut Scene, camera: &dyn Camera) -> bool {
         let fp = SceneFingerprint::of(scene, &self.settings);
         let layers = camera.layers();
         // A scene with sprites was flattened facing the old camera: their
         // billboards have to turn with it, so it rebuilds.
         let camera_dependent = self.scene.as_ref().is_some_and(|s| s.camera_dependent);
+        let key = camera_key(camera);
         if self.scene_fingerprint == Some(fp) && self.scene.is_some() && !camera_dependent {
-            self.update_camera(scene, camera);
+            // unchanged scene and camera: keep accumulating into the same film
+            if self.camera_key != Some(key) {
+                self.update_camera(scene, camera);
+                self.camera_key = Some(key);
+            }
             return false;
         }
+        self.camera_key = Some(key);
         self.rebuild_scene(scene, camera, layers);
         self.scene_fingerprint = Some(fp);
         true
     }
 
     fn rebuild_scene(&mut self, scene: &mut Scene, camera: &dyn Camera, layers: Layers) {
+        self.camera_key = Some(camera_key(camera));
         let flat = RaytraceScene::build_for_camera(scene, &self.settings, layers, Some(camera));
         self.camera = Some(self.build_camera(camera, &flat));
         self.scene = Some(flat);
@@ -1340,6 +1353,14 @@ impl RaytraceRenderer {
     }
 }
 
+/// The camera state a traced film depends on: view and projection matrices.
+fn camera_key(camera: &dyn Camera) -> [f32; 32] {
+    let mut k = [0.0f32; 32];
+    k[..16].copy_from_slice(&camera.view_matrix().elements);
+    k[16..].copy_from_slice(&camera.projection_matrix().elements);
+    k
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1581,6 +1602,24 @@ mod tests {
         let mut r = RaytraceRenderer::new(4, 4);
         assert!(matches!(r.accumulate(4), Err(RaytraceError::NotPrepared)));
         assert_eq!(r.samples(), 0);
+    }
+
+    #[test]
+    fn prepare_if_changed_keeps_the_film_when_nothing_changed() {
+        let (mut scene, cam) = scene_and_camera();
+        let mut r = RaytraceRenderer::new(8, 8);
+        r.set_settings(RaytraceSettings::default().with_samples(2).with_denoise(false));
+        assert!(r.prepare_if_changed(&mut scene, &cam));
+        r.accumulate(2).unwrap();
+        assert_eq!(r.samples(), 2);
+        assert!(!r.prepare_if_changed(&mut scene, &cam));
+        assert_eq!(r.samples(), 2, "an unchanged scene and camera must not clear the film");
+        r.accumulate(1).unwrap();
+        assert_eq!(r.samples(), 3);
+        let mut cam2 = cam;
+        cam2.position.x += 0.5;
+        assert!(!r.prepare_if_changed(&mut scene, &cam2));
+        assert_eq!(r.samples(), 0, "a camera move restarts the film");
     }
 
     #[test]

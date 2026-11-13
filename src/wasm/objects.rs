@@ -339,8 +339,18 @@ impl WebLight {
     /// three.js `light.shadow.bias`, `.normalBias` and `.radius`: the depth
     /// offset, the offset along the surface normal, and how soft the edge is
     /// (the radius, in shadow-map texels, it is filtered over; 1 by default).
+    /// `fit_view` is this renderer's own: > 0 fits a directional light's
+    /// single shadow map to the camera out to that distance
+    /// ([`ShadowSettings::fit_view`](crate::lights::ShadowSettings::fit_view));
+    /// omitted from JavaScript, it is 0.
     #[wasm_bindgen(js_name = setShadowParams)]
-    pub fn set_shadow_params(&mut self, bias: f32, normal_bias: f32, radius: f32) {
+    pub fn set_shadow_params(
+        &mut self,
+        bias: f32,
+        normal_bias: f32,
+        radius: f32,
+        fit_view: Option<f32>,
+    ) {
         let shadow = match &mut self.inner {
             LightInner::Directional(l) => &mut l.shadow,
             LightInner::Spot(l) => &mut l.shadow,
@@ -352,6 +362,7 @@ impl WebLight {
         shadow.bias = (-bias).max(0.0);
         shadow.normal_bias = normal_bias.max(0.0);
         shadow.radius = radius.max(0.0);
+        shadow.fit_view = fit_view.unwrap_or(0.0).max(0.0);
     }
 
     #[wasm_bindgen(js_name = spot)]
@@ -420,9 +431,22 @@ impl WebScene {
         }
     }
 
-    /// Remove an object from the scene (by handle).
+    /// Remove an object and everything under it from the scene, for good.
+    ///
+    /// Deleted rather than detached: a detached node was never reused by its
+    /// callers, who add a fresh object under a new handle, and it kept its
+    /// geometry — and through it the GPU buffers — alive for the life of the
+    /// page. `WebSceneGraph`'s `detachNode` keeps a node for re-parenting.
     pub fn remove(&mut self, handle: &WebObjectHandle) {
-        self.inner.arena.remove_child(handle.id);
+        if handle.id != self.inner.root {
+            self.inner.arena.remove_subtree(handle.id);
+        }
+    }
+
+    /// How many objects the scene arena holds (root included).
+    #[wasm_bindgen(js_name = objectCount)]
+    pub fn object_count(&self) -> usize {
+        self.inner.arena.nodes.len()
     }
 
     /// Replace a mesh's geometry positions in place. Used for morph-target

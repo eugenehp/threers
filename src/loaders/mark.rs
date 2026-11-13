@@ -123,13 +123,12 @@ impl<'a> Marks<'a> {
     /// Logical order matters: a mark attaches to what precedes it in the text, which
     /// after a right-to-left reversal is what follows it on the screen.
     pub(crate) fn attach(&self, glyphs: &[u16]) -> Vec<Attachment> {
-        // One class lookup for the whole run rather than one per glyph: `parse_class_def`
-        // builds a map, and asking it per glyph would rebuild it per glyph.
-        let classes = self
-            .classes
-            .and_then(|at| super::gpos::parse_class_def(self.gdef, at))
-            .unwrap_or_default();
-        let is_mark = |g: u16| classes.get(&g).copied() == Some(CLASS_MARK);
+        // Each glyph's class read where it is: a run is a few glyphs, and building a map
+        // of the whole class definition per run cost more than all the rest of a layout.
+        let is_mark = |g: u16| {
+            self.classes
+                .is_some_and(|at| super::gpos::class_of(self.gdef, at, g) == CLASS_MARK)
+        };
         let mut out = vec![Attachment::default(); glyphs.len()];
         for (i, g) in glyphs.iter().enumerate() {
             if !is_mark(*g) {

@@ -863,7 +863,14 @@ fn base_colour_map(material: &Material) -> Option<std::sync::Arc<crate::textures
 fn gltf_rows(texture: &crate::textures::Texture) -> Option<Vec<u8>> {
     let pixels = texture.to_rgba8()?;
     let stride = texture.width as usize * 4;
-    Some(pixels.chunks_exact(stride).rev().flatten().copied().collect())
+    Some(
+        pixels
+            .chunks_exact(stride)
+            .rev()
+            .flatten()
+            .copied()
+            .collect(),
+    )
 }
 
 /// RGBA pixels in glTF row order, embedded as a PNG, and a texture over them.
@@ -921,12 +928,16 @@ fn write_metal_rough(
     {
         return write_texture(w, r);
     }
-    let ptr = |t: Option<&std::sync::Arc<crate::textures::Texture>>| t.map_or(0, |t| std::sync::Arc::as_ptr(t) as usize);
+    let ptr = |t: Option<&std::sync::Arc<crate::textures::Texture>>| {
+        t.map_or(0, |t| std::sync::Arc::as_ptr(t) as usize)
+    };
     let key = (ptr(rough), ptr(metal));
     if let Some(found) = w.interned_packed.get(&key) {
         return Some(*found);
     }
-    let read = |t: Option<&std::sync::Arc<crate::textures::Texture>>| t.and_then(|t| Some((t.width, t.height, gltf_rows(t)?)));
+    let read = |t: Option<&std::sync::Arc<crate::textures::Texture>>| {
+        t.and_then(|t| Some((t.width, t.height, gltf_rows(t)?)))
+    };
     let (r, m) = (read(rough), read(metal));
     if r.is_none() && m.is_none() {
         return None;
@@ -936,7 +947,10 @@ fn write_metal_rough(
     // nearest texel of a source at the packed image's (x, y)
     let at = |src: &Option<(u32, u32, Vec<u8>)>, x: u32, y: u32, c: usize| match src {
         Some((sw, sh, px)) => {
-            let (sx, sy) = ((x as u64 * *sw as u64 / width as u64) as usize, (y as u64 * *sh as u64 / height as u64) as usize);
+            let (sx, sy) = (
+                (x as u64 * *sw as u64 / width as u64) as usize,
+                (y as u64 * *sh as u64 / height as u64) as usize,
+            );
             px[(sy * *sw as usize + sx) * 4 + c]
         }
         None => 255,
@@ -955,10 +969,30 @@ fn write_metal_rough(
 /// The maps past the base colour — normal, metallic-roughness, occlusion and
 /// emissive — for a lit material: the metallic-roughness one into `pbr`, the
 /// rest returned for the material itself.
-fn write_other_maps(w: &mut Writer, material: &Material, pbr: &mut Vec<(String, Value)>) -> Vec<(String, Value)> {
+fn write_other_maps(
+    w: &mut Writer,
+    material: &Material,
+    pbr: &mut Vec<(String, Value)>,
+) -> Vec<(String, Value)> {
     let (normal, scale, rough, metal, ao, ao_strength, emissive) = match material {
-        Material::Standard(m) => (&m.normal_map, m.normal_scale.x, &m.roughness_map, &m.metalness_map, &m.ao_map, m.ao_intensity, &m.emissive_map),
-        Material::Physical(m) => (&m.normal_map, m.normal_scale.x, &m.roughness_map, &m.metalness_map, &m.ao_map, m.ao_intensity, &m.emissive_map),
+        Material::Standard(m) => (
+            &m.normal_map,
+            m.normal_scale.x,
+            &m.roughness_map,
+            &m.metalness_map,
+            &m.ao_map,
+            m.ao_intensity,
+            &m.emissive_map,
+        ),
+        Material::Physical(m) => (
+            &m.normal_map,
+            m.normal_scale.x,
+            &m.roughness_map,
+            &m.metalness_map,
+            &m.ao_map,
+            m.ao_intensity,
+            &m.emissive_map,
+        ),
         _ => return Vec::new(),
     };
     if let Some(index) = write_metal_rough(w, rough.as_ref(), metal.as_ref()) {
@@ -973,14 +1007,20 @@ fn write_other_maps(w: &mut Writer, material: &Material, pbr: &mut Vec<(String, 
         if scale != 1.0 {
             info.push(("scale".to_string(), Value::number(scale as f64)));
         }
-        pairs.push(("normalTexture".to_string(), Value::Object(info.into_iter().collect())));
+        pairs.push((
+            "normalTexture".to_string(),
+            Value::Object(info.into_iter().collect()),
+        ));
     }
     if let Some(index) = ao.as_ref().and_then(|t| write_texture(w, t)) {
         let mut info = vec![("index".to_string(), Value::number(index as f64))];
         if ao_strength != 1.0 {
             info.push(("strength".to_string(), Value::number(ao_strength as f64)));
         }
-        pairs.push(("occlusionTexture".to_string(), Value::Object(info.into_iter().collect())));
+        pairs.push((
+            "occlusionTexture".to_string(),
+            Value::Object(info.into_iter().collect()),
+        ));
     }
     if let Some(index) = emissive.as_ref().and_then(|t| write_texture(w, t)) {
         pairs.push((
@@ -1236,7 +1276,11 @@ mod tests {
             );
             let map = back.map.expect("the map came back");
             assert!(!map.flip_y);
-            assert_eq!(&map.data[..4], &first, "flip_y {flip_y}: the texel at v = 0");
+            assert_eq!(
+                &map.data[..4],
+                &first,
+                "flip_y {flip_y}: the texel at v = 0"
+            );
         }
     }
 
@@ -1267,7 +1311,10 @@ mod tests {
         assert!(back.normal_map.is_some(), "normal map");
         assert!(back.ao_map.is_some(), "occlusion map");
         assert!(back.emissive_map.is_some(), "emissive map");
-        let (r, m) = (back.roughness_map.expect("roughness"), back.metalness_map.expect("metalness"));
+        let (r, m) = (
+            back.roughness_map.expect("roughness"),
+            back.metalness_map.expect("metalness"),
+        );
         assert!(Arc::ptr_eq(&r, &m), "one image serves both");
         assert_eq!((r.data[1], r.data[2]), (0x40, 0x80));
     }

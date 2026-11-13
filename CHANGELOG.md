@@ -9,12 +9,1419 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Progress indicators** (`threers_ui::indicators`).
+  - **Plain ones,** as a platform draws them (`progress_view`): a bar, a
+    ring and an activity indicator's spokes, in the theme's colours or a
+    tint, with a value or busy. No shader: every painter draws them.
+  - **Glowing ones** drawn by signed distance fields (`indicator`): bars,
+    rings and batteries, flat neon or solid glass (ray-traced: a capsule
+    tube, a ray-marched torus), with studio reflections, refraction and a
+    glow that fades to nothing at the layer's edge. Fills: neon, liquid,
+    `Electric`, `Fire`, `Water`, `Plasma`, `Frost`, or your own
+    (`Fill::custom`). Colour through a `Palette` (CSS colours, hex, stops,
+    hues, shades; sixteen named) or by phase (`.phases(0.2, 0.5)`: a
+    battery red, amber, green). Labels (`.labelled(ui, Label::percent())`):
+    templates, fonts, colours, places. Twenty-odd `Preset`s. On a light
+    page the glow becomes a haze and electricity coloured ink.
+  - **Themes:** an `IndicatorTheme` set on a box styles every indicator
+    built inside it with `indicator_themed`; inner themes change only
+    what they set.
+  - **In a 3D scene** (`threers::extras::progress`): glass tubes and rings
+    ray-marched in a box mesh, turned and placed like any object.
+- **Motion for any box** (`threers_ui::motion`): spin, rock, roll, bounce,
+  buzz, pulse and float through its 3D transform (`Ui::set_motion`),
+  paused out of sight and still under reduced motion. `Transform3d` has a
+  `translate_y`.
+- **Solid boxes** (`threers_ui::solid`): `Ui::set_depth(node,
+  Depth::Solid)` (or `set_subtree_depth` for every control in a part of
+  the UI) extrudes what a box draws into a slab and ray-traces it in
+  perspective: walls, back and shadow show as it turns. `SolidStyle` sets
+  its thickness, which face lies on the page, its lift, bevel and gloss.
+- **Composable styles** (`threers_ui::patch`): a `Patch` is part of a
+  style, built with methods or CSS, combined with `+`, taken apart with
+  `without` and `only`, with theme colours and state looks. Named classes
+  build on each other (`Ui::define_class`, `add_class`); redefining one
+  restyles its nodes. Spacing on a 4-pixel `Space` scale, per-side
+  padding and margins, alignment that follows the flex direction.
+- **A WGSL library for effects** (`threers_ui::shader_lib`): noise
+  (`ui_fbm`, `ui_voronoi`), colour (`ui_ramp3`, `ui_hsl`, `ui_blackbody`),
+  shapes by distance and the indicators' fills, put in front of your own
+  shader with `ui_shader! { use Noise, Fx; … }`.
+- **An animation budget** (`Ui::set_animation_budget`): the largest few
+  animated effects at full rate, the rest and the small ones slower or
+  held, frames asked for only when one changes; `next_effect_frame_in`
+  says when to wake. `AnimationBudget::PHONE` for phones.
+- **Rendering part of a picture:** `UiPass::draw_regions` paints only
+  some rectangles; `draw_patch` and `render_patch_to_rgba` render one
+  patch of a UI on its own; cameras take three.js's `set_view_offset`.
+- **Many cameras** (`threers::views`): named cameras switched or blended
+  (a morph, a crossfade, a wipe), laid out side by side, in a grid or a
+  picture in a picture; a camera's picture as a texture on any object
+  (`CameraTexture`, double-buffered so a camera may see its own screen);
+  and `Feedback`, a screen showing itself levels deep.
+
+- **A better particle fire** (`particles::presets::fire`).
+  - **Shape:** the flame is now a body of licking tongues rather than a
+    glowing heap with streaks above it. Gas is fed from the middle of the
+    bed, rises faster, and is drawn in toward a point above the fire so
+    the plume narrows to a cone. Finer, faster eddies break it into
+    licks, stretched along their motion, that taper as they rise.
+  - **Colour:** the soot glows a little cooler at the base (1650 K, so it
+    stays yellow-orange through tone mapping instead of going white) and
+    stays hot through the body. Each particle is dimmer, since many now
+    overlap in the narrow plume.
+  - **The particles page** draws through an `EffectComposer` (render,
+    bloom, output), so its glowing particles add up in linear light as
+    the native campfire's do. Drawn straight to the 8-bit canvas, they
+    add encoded values and the flame goes white. Its winter camp is now
+    at dusk, the fire carrying the light.
+  - **Fixed in the three.js shim:** an `EffectComposer` now advances
+    particles, fur and candles each frame, as `renderer.render` does.
+    Under post-processing they had stood still or not drawn at all.
+
+- **Candles** (`threers::extras::candle`). `Candle::new(style).add_to(scene,
+  position)` adds a wax body, a wick, a flame and its light in one call,
+  and `CandleHandle::update(scene, time)` flickers the flame and the light
+  together, from one signal. There are two flames:
+  - **`FlameStyle::Simple`:** a teardrop mesh with a glow shader,
+    flickered by moving the mesh. It is cheap enough for many candles,
+    phones and headsets.
+  - **`FlameStyle::Realistic`:** a volumetric flame ray-marched through
+    rising 3D noise (64 steps by default, set by `steps`) and coloured by
+    temperature as a black body. It has a yellow-white core, an orange
+    envelope, the dark zone over the wick and the blue sheet of burning
+    vapour at the base. The wax glows from inside near the flame, the
+    wick's tip is an ember, and the light casts shadows.
+
+  `cargo run --release --example candles` renders both on a table in a
+  dark room (`out/candles.png`), close-ups of each flame, and with
+  `CANDLE_FRAMES=n` an animation.
+
+  - **three.js pages:** `new THREE.Candle({ realistic })` is a threers
+    extension, built in Rust and flickered on the renderer's clock with
+    nothing to call per frame. The WebXR example has one of each on its
+    table, and the particles page's winter camp has three on a crate.
+  - **The campfire example** has three candles standing on the snow on a
+    log, placed by the settled snow's height.
+  - **The fur demo** has three on the floor in front of the coats, their
+    warm light on the fur and hair. They're made with `castShadow: false`:
+    a candle's point light draws every caster into six shadow views, which
+    behind 16,000 strands nearly halved the frame rate (21 to 12 fps
+    headless; 19 without candle shadows). `?candles=0` leaves them out.
+  - **`cast_shadow` option** (`castShadow` in the shim): whether a candle's
+    light casts shadows. By default the realistic style's does.
+  - **The UI demo's headset room** has three realistic candles on a plinth
+    beside the panel, in the browser and in the native Apple Vision Pro
+    app.
+  - **Shared with the UI's candles:** the flicker (`threers_math::flicker`)
+    and the volumetric gas (`flicker::FLAME_WGSL`), so the 3D and UI flames
+    move and look the same.
+  - **UIs** (`threers_ui::candle`): `candle(ui, parent, style, width,
+    seed)` builds one from ordinary nodes: wax shaded as a cylinder, a melt
+    pool, a wick, and a warm glow behind. `Candle::update(ui, time)`
+    animates it from Rust.
+    - The simple flame is nested teardrop paths, stretched and leaned by
+      the flicker, so it draws on the 2D canvas too.
+    - The realistic flame is the volumetric flame as a shader effect, with
+      the simple one standing in where shaders don't run.
+    - The demo's 3D page has one of each. They animate only while the page
+      shows, and not under reduced motion.
+
+- **XR: headsets** (feature `xr`; `XR=1 ./web/build.sh` for the browser).
+  See [docs/xr.md](docs/xr.md). Any threers scene, and flat UIs, in a
+  headset. App code is the same on every platform; only the layer that
+  talks to the device differs.
+  - **Platforms.** Each gives frames through `xr::XrSource`: the head,
+    the eyes, the inputs (`XrInput`) and what they did (`XrEvent`).
+    - **The browser:** `xr::web::XrSession` (WebXR). It draws on WebGPU
+      or WebGL2 and copies each frame to the headset through a WebGL2
+      layer.
+    - **Apple Vision Pro:** `xr::visionos::ImmersiveSession` (feature
+      `xr-visionos`). It uses CompositorServices' frames and ARKit's head
+      and hands, and draws with wgpu's Metal backend into the
+      compositor's textures. Without tracking (the simulator, or before
+      ARKit finds the head) the head is taken to be standing, 1.6 m up.
+    - **Apple screens:** `xr::apple` runs an app on an iPhone, iPad, Mac
+      or visionOS window with an orbit camera, or in a phone's AR camera
+      (`apple_app!`).
+  - **Apps.** `xr::App` is a scene built once (`setup`) and changed each
+    frame (`update`). Each `Frame` carries the time, the head, the inputs
+    and `selects()`, this frame's taps as rays. `draw` draws the scene per
+    eye by default and can be overridden to draw more, such as a UI
+    panel. `Frame::take(source, …)` builds a frame on any platform.
+    - **On Vision Pro:** `threers::visionos_app!(MyApp)` makes the app.
+    - **New projects:** `scripts/new-visionos-app.sh path` creates one
+      from `templates/visionos-app`: the app, a test that runs on the Mac,
+      and a generic SwiftUI shell, Info.plist and `build.sh` that build and
+      run it without an Xcode project.
+  - **Scenes.** `Renderer::render_xr` draws a scene once per eye through
+    the app camera's lens, with a rig matrix to move the viewer. `XrEye`
+    turns a device's per-eye projection and pose into a camera.
+    `Renderer::draw_over_last` draws more into the last render,
+    depth-tested, whether it went straight to the target, through MSAA or
+    through a multisampled pane.
+  - **UIs.** `xr::Panel` stands a flat UI in front of the viewer and turns
+    rays, pinches and fingertips into a screen's mouse moves, presses,
+    wheel turns and touches. `xr::PanelPass` draws it alone in a room or
+    standing in a scene (`draw_in_scene`), depth-sorted with it.
+  - **Input.**
+    - **Controllers** act as a mouse with hover: the trigger clicks, the
+      thumbstick scrolls and the grip recenters.
+    - **Look-and-pinch** (Vision Pro) and **a phone's tap in AR** act as
+      a finger, so pinch and drag scrolls.
+    - **Hands** (WebXR's, and ARKit's on Vision Pro with
+      `NSHandsTrackingUsageDescription`) carry WebXR's 25 joints. An
+      index fingertip pokes the panel: a hover dot within 5 cm, a touch on
+      crossing the surface, drags along it, a lift past 1.5 cm.
+  - **three.js pages** get `renderer.xr`, `setAnimationLoop`, VRButton and
+    ARButton. The camera follows the head, and controllers and hands
+    follow their poses and fire events.
+  - **Demos.**
+    - `web/examples/webxr.html` is a table of shapes to point at, recolour
+      and carry.
+    - The UI demo's XR page puts the whole demo on a panel standing in a
+      threers room of turning shapes and candles.
+    - `crates/threers-ui-demo-visionos` is the same as a native Vision Pro
+      app: an ordinary `xr::App` on the template's shell.
+    - **For the simulator, where nobody can pinch,** its `app/build.sh`
+      takes:
+      - `SHOW=candles`, to open on the candles;
+      - `SCRIPT=…`, to play taps, drags and fingertip pokes at UI points
+        through the real input path;
+      - `CONSOLE=file`, to log each step and the page it lands on;
+      - `SHOT=secs:file`, to take a screenshot.
+
+- **UI input: events, focus and actions** (`threers_ui::input`, `keymap`).
+  `Input` delivers pointer, wheel and key events to nodes with the DOM's
+  model: a capture phase from the root inward, then a bubble phase outward,
+  with `stop_propagation` and `prevent_default`. Listeners get the app's
+  state as `&mut S` along with the tree. By default:
+  - a press focuses the nearest focusable node;
+  - press and release make a `Click` on the nearest node holding both;
+  - Enter and Space activate a focused button, checkbox or other control;
+  - Tab and Shift+Tab move through the focus order;
+  - the wheel scrolls the innermost scrolling box that can still move, then
+    chains outward.
+
+  Pointer capture keeps a dragged slider receiving moves off its edge, and
+  hover enter and leave events track the path under the pointer. A `Keymap`
+  turns keystrokes into actions of your own types, and chords such as
+  `ctrl-k ctrl-s` work. Bindings can be limited to key contexts on the focus
+  path, where the deepest context wins, and the nearest `on_action` handler
+  takes the action. `click`, `press`, `type_text` and `scroll` drive it from
+  tests.
+- **A recorded scene, and the UI drawn on the GPU.** `Ui::scene()` records a
+  frame's painting as data: rectangles, text, paths and clips, in order. It
+  replays into any painter and compares with `==`. `renderer::UiPass` draws a
+  scene with one instanced draw call:
+  - rectangles, rounded rectangles, borders and gradient bands are SDF
+    quads, using the CPU overlay's edge-coverage rule;
+  - text and icons are rasterised once by the overlay's own code into an
+    atlas kept between frames;
+  - clipping is per pixel.
+
+  Against `OverlayPainter` painting the same scene, one pixel in 33,600
+  differs, by 3 (`tests/ui_pass_gpu.rs`, at 1x and 2x). The shader also
+  translates for WebGL2.
+- **Styles that follow interaction, and animations**.
+  - **State styles:** `hover_style`, `active_style`, `focus_style`,
+    `focus_visible_style`, `disabled_style` and `group_hover_style` take CSS
+    declarations that apply while a node is in that state. `Input` reports
+    the state after every event. With `transition`, colours and opacity
+    animate to the new state.
+  - **Animations:** `Ui::animate` runs a property animation on a node
+    (opacity, colours, size, position, scroll), with easing, repeats,
+    alternation and delay. `Ui::step(dt)` advances them, and
+    `scroll_smoothly` animates scrolling.
+  - **Redrawing only when needed:** `Ui::needs_frame` and
+    `Input::needs_frame` say whether another frame is wanted (a layout or
+    animation pending, a tooltip or long-press timer, a drag, autoscroll),
+    so an idle app draws nothing.
+- **Selecting text with the pointer.** `Ui::text_index_at`, `text_caret` and
+  `text_selection_rects` map points to characters and back, across wrapped
+  lines and styled runs. `TextField` and `TextArea` select by character,
+  word or line from the click count. A drag held past a scrolling box's edge
+  autoscrolls it.
+- **Popups that close and dialogs that trap focus.** `Input::on_click_outside`
+  fires for a press anywhere outside a node. `Input::set_modal` makes
+  everything outside a dialog inert to the pointer and the wheel, and keeps
+  Tab inside it. `pointer-events: none` lets the pointer through a box.
+- **Keymaps as data.** Binding contexts are expressions: `&&`,
+  `||`, `!`, `==`, `!=`, parentheses, and `a > b` for a context inside
+  another. Key contexts carry `key=value` pairs. `Keymap::load_json` reads
+  JSON keymap files through an `ActionRegistry` (the default `json`
+  feature), where `null` unbinds an earlier binding.
+- **Scrolling.** `Ui::scroll_to`, `scroll_into_view`, and scrollbars
+  (`scrollbar-width`, `scrollbar-color`) that `Input` lets the user drag or
+  page along. They are off by default, as on a Mac. With
+  `scrollbar-visibility: auto` a bar shows only while its box scrolls, or
+  while the pointer is over the bar or drags its thumb, then fades out.
+  `scrollbar-fade: <delay> <duration>` (default `1s 300ms`) sets how long
+  it stays and how long the fade takes. Browsers leave this to the
+  platform, so the property is this crate's own. The default, `always`,
+  keeps the bar showing. The UI asks for frames only until a bar has
+  faded.
+- **CSS Grid.** `display: grid` with track lists in pixels, percentages,
+  `fr`, `auto`, `minmax()` and `repeat()`, `grid-column` and `grid-row`
+  placement by line, negative line and span, row-major auto-placement, and
+  `row-gap`. Seven layouts worked by hand from the spec pass, and grids are
+  part of the random-tree cache and hit-test tests.
+- **Vector paths on the GPU.** `UiPass` draws a path larger than
+  `gpu_path_area` (256 × 256 device pixels by default) from its edges in the
+  shader, using the overlay's own fill and stroke rules. Against the CPU it
+  matches to the same one pixel off by 3 as everything else. Small icons
+  stay cached sprites.
+- **Native accessibility through AccessKit** (the `accesskit` feature).
+  `a11y_accesskit::tree_update` gives the accessibility tree to VoiceOver,
+  Narrator and Orca through AccessKit's platform adapters. `request` maps
+  their actions back to focus, click and step.
+- **A browser demo of threers-ui**, `web/ui-demo`: `SERVE=1
+  web/ui-demo/build.sh` builds it and serves `web/` on 0.0.0.0. It adapts to
+  the window with container queries: one scrolling column on a phone, two
+  on a tablet, three on a desktop. Scrolling it costs about 0.9 ms of layout
+  a frame, against 7.7 ms before the layout skip, the text cache and panel
+  cache boundaries. On a phone, the text field opens the keyboard. The page
+  keeps an invisible text input at the caret that mirrors the field's text
+  and selection, and focuses it during the tap, so typing, autocorrect,
+  input methods and paste all edit the field. Fingers arrive as touch
+  events. On a touch screen the input lies over the field itself (from the
+  app's new `field_rect`), so a tap on the field lands on the input and the
+  browser focuses it and opens the keyboard. Focus given from a script did
+  not open the keyboard on iOS, in any touch handler. The demo still hears
+  the tap, to place the caret or select. The page writes the field into
+  the input only when the field changes on the demo's side, never mid-word.
+  It also keeps the caret where the tap placed it: just after a tap or
+  focus, the browser places the input's caret by its own text layout, and
+  the page puts the field's caret back. In the field, a finger places the caret, a
+  double tap selects a word, and once the field has focus a drag selects
+  instead of scrolling the page. The page also turns off the browser's pinch
+  zoom, rubber-banding and touch scrolling. When the keyboard comes up, the
+  canvas follows the visible viewport, both its size and where Safari pans
+  it to. The demo keeps what has focus in view whenever the window changes
+  size, as a browser does for a focused input.
+- **`TextEditing`: text fields and page text, edited and selected, as one
+  component** (`text_editing`, with the `text-touch` feature). An app keeps
+  each field's `TextField` and registers it with `add_field` (its box, its
+  text node, and where its model is in the app's state). It sends the
+  pointer and fingers through `pointer_down`, `pointer_move`, `pointer_up`
+  and `touch`, which pass on to `Input` what they don't take, and calls
+  `place` after layout. The component draws:
+  - each field's caret and selection, an input method's composition
+    underlined, and a long line scrolled to its caret;
+  - a finger's handles, and highlights over selected page text, clipped to
+    its scrolling box;
+  - the paged edit menu.
+
+  The clipboard, look-up, translate and share come back as `Request`s. It
+  was the demo's own code; the demo's app went from 1,348 to 806 lines.
+- **Flexbox (threers-ui).** `flex-wrap` (`wrap`, `wrap-reverse`), the
+  `row-reverse` and `column-reverse` directions, `flex-flow`, `order`,
+  `align-content` (`stretch`, `flex-start`, `center`, `flex-end`,
+  `space-between`, `space-around`, `space-evenly`), `justify-content:
+  space-around | space-evenly`, `column-gap` and two-value `gap`. A
+  wrapping row's height is its lines'. Checked against Chrome's layout of
+  the same boxes; one-line layouts are unchanged.
+- **Data tables (threers-ui).** `table::data_table`: columns (`fr` or
+  pixel widths, numeric ones right-aligned and sorted by value), sorted by
+  a heading (click or Enter; again to reverse), one row selected (click,
+  arrows, Home, End, Page Up and Down, scrolled into view), the rows
+  virtual (only those showing are built) and shared (`Rc`, compared by
+  pointer). Roles `Table`, `Row`, `Cell`, `ColumnHeader`; `Semantics`
+  gains `row_index` (`aria-rowindex`, and `aria-rowcount` on the table)
+  and `sort` (`aria-sort`).
+- **Custom shaders on boxes (threers-ui and threers).** `Ui::set_effect`
+  draws a box and everything inside it through a WGSL function: the GPU UI
+  pass draws the subtree into a layer in the box's own space (so it turns
+  with a box turned in 3D), then puts it back through the function, run for
+  each pixel. The function's first parameter is the position in the box;
+  `color`, `time` and `size` are filled in by name; any other `f32` or
+  `vecN<f32>` parameter is an argument set with `Effect::arg` or
+  `Ui::set_effect_arg`. `layer(q)` reads the box anywhere, for warps and
+  blurs. `ui_shader! { fn … }` writes the WGSL inline in Rust, and
+  `Shader::new` takes a string. A shader whose shape is wrong says so
+  (`Shader::error`). One the GPU will not compile is reported by
+  `UiPass::effect_error` and `UiPassStats::failed_effects`, and its box is
+  drawn as it is. An effect that takes the time keeps frames coming while it
+  shows. `Input::effect_follows_pointer` keeps an argument at the pointer.
+  Painters without shaders (the 2D canvas, the CPU overlay) draw the box
+  unchanged. `UiPass::effect_wgsl` gives the module for validation; it is
+  translated for WebGL2 in the tests.
+- **Split-flap display (threers-ui).** `depth::split_flap` shows text a
+  character a cell; on `SplitFlap::set`, each changed cell's top half falls
+  over its hinge and the bottom lands, the cells one after another.
+  Assistive technology hears the text as the board's value.
+- **Work off the UI thread (threers-ui).** `Ui::spawn_job` runs a job (a
+  plain `fn(&[u8]) -> Vec<u8>`) on the runner set with
+  `Ui::set_job_runner`, then gives its output to a callback on the UI
+  thread at the next `Input::tick`. `jobs::Threads` is a pool of native
+  threads. `jobs::Workers` uses Web Workers, each running its own instance
+  of the app's wasm module and sent the compiled module. A job is named by
+  its function's place in the module's function table, and its bytes cross
+  as transferred buffers. Memory is not shared, so the page needs no
+  cross-origin isolation or nightly build. With no runner set, a job runs
+  on the spot, as before. `Ui::needs_frame` holds frames while a job runs.
+  `model3d::model_view` draws on the runner, one drawing at a time, and
+  draws the newest turn when one lands. The demo draws its model on
+  workers; `?workers=0` turns them off.
+- **Painting only what changed (threers).** `UiPass::draw_retained` keeps
+  the last frame and compares the new scene with the old
+  (`Scene::damage`). It paints again only where something differs, into a
+  kept picture, scissored, then copies the picture to the target. An item's
+  place is its box through its transforms and clips, padded for what
+  reaches past it. Inside an effect, an item counts as the whole effect.
+  Surfaces always count as changed, and a material counts as changed when
+  anything under it does. Effect layers outside the damage are not drawn
+  again. The demo draws this way.
+- **Text laid out once.** The caption layout cache keys on what layout reads
+  (text, size, spacing, line height), not on the whole style. A line laid
+  out at its natural width serves any width it fits. The cache keeps two
+  generations instead of clearing itself when full. A paragraph that fits
+  on one line is measured once, not word by word.
+- **Materials (threers-ui and threers).** `backdrop-filter: blur(…)
+  saturate(…)`, and `Ui::set_material` with `Material::UltraThin` to
+  `Thick` and `Bar`, tinted for the light and dark appearances. The GPU
+  pass copies what is under the box, blurs it in two passes (smaller for
+  wide blurs), and draws it in the box's shape before its tint. The 2D
+  canvas draws itself through a filter.
+- **Content transitions (threers-ui).** `content_transition::rolling_text`
+  rolls each changed character: numbers line up on their units and roll up
+  as they grow, down as they shrink. `crossfade_text` fades from one text to
+  the next. With reduced motion both only fade.
+- **Keyframes (threers-ui).** `Keyframes` plays several properties on
+  tracks of eased keys, once, several times or forever
+  (`Ui::play_keyframes`). `Keyframes::phases` steps through looks in turn.
+  New animatable properties: `Scale`, `RotateZ` and `TranslateX`.
+- **Scroll transitions (threers-ui).** `Ui::scroll_transition` fades,
+  shrinks and tilts a scrolling box's items by how far out of view they are
+  (`Ui::scroll_phase`).
+- **CSS (threers-ui):**
+  - `aspect-ratio`.
+  - `clip-path` with `circle()`, `ellipse()`, `capsule` and
+    `inset(… round …)`.
+  - `linear-gradient` at any angle, `radial-gradient` and `conic-gradient`,
+    drawn by the GPU from a ramp of their stops, and by the CPU and 2D
+    canvas painters as well.
+  - `mask-image`, a gradient's alpha.
+  - `mix-blend-mode` with `multiply`, `screen`, `plus-lighter`, `darken`
+    and `lighten`.
+
+  Masks and blend modes go through an effect layer, so they need the GPU
+  pass.
+- **Keys and work (threers-ui).** `Keymap::available` and `continuations`,
+  and `Input::shortcuts_here`, list the shortcuts that work where focus is.
+  `Ui::spawn_job` returns a `JobId`. `cancel_job`, `spawn_job_for` (dropped
+  with its node) and `spawn_latest` (only the newest per key) manage jobs.
+- **Search, undo, gauges and charts (threers-ui).**
+  - `search::fuzzy_match`, `filter` and `highlight`, and `searchable`: a
+    search field over ranked results, with matches in bold, arrows to move
+    and Enter to pick.
+  - `undo::UndoManager`, with groups, merged bursts, and `Undo`/`Redo`
+    actions that `bind_undo_keys` binds.
+  - `charts::gauge`, `bar_chart` and `line_chart`. Each reads out its
+    values to assistive technology.
+  - **Gauges** come in four kinds:
+    - `Linear`: a bar with its name and value above it and its range's
+      ends below.
+    - `Marker`: a knob on a coloured track.
+    - `Circular`: an open dial with its value and unit in the middle, its
+      range's ends in the gap at the bottom, and its name under it.
+    - `Ring`: a whole ring showing a percentage.
+  - **Gauge styles.** `gauge_styled` takes a `GaugeStyle`:
+    - a tint: the accent, a colour, or `Bands` that change colour as the
+      value passes limits (`GaugeTint::levels`: green, then amber, then
+      red);
+    - or a `Gradient` along the range (`GaugeTint::heat`);
+    - also a size, a unit, a number of decimal places, and whether to show
+      the range.
+  - **Gauge animation.** A gauge glides to a new value over a quarter of a
+    second, starting from wherever it is shown, unless motion is reduced.
+    `Ui::step` moves it. Assistive technology hears the new value at once,
+    as a range.
+- **The demo** gains a Toolkit page showing all of these.
+- **Known limit:** the GPU pass gives each shape one clip. A rounded clip
+  that only partly overlaps an enclosing rounded clip loses its corners
+  where they cross.
+- **Faster text on the GPU path.** `Marks::attach` built a `HashMap` of
+  the font's whole `GDEF` class table for every string it measured or drew.
+  It now reads each glyph's class where it lies (`gpos::class_of`: an index,
+  or a binary search over the ranges). Scrolling the demo's Messages list
+  took 21.6 s of CPU before and 1.45 s after; at 4× CPU throttle its frames
+  went from 518 ms to 9 ms. `srgb_to_linear` and `linear_to_srgb`
+  (threers-math) use tables instead of `powf` and give the same bytes; text
+  rasterising spent most of its time there.
+- **System, Light or Dark, for any UI and any part of it (threers-ui,
+  `theme`).** `Theme` defaults to System, which follows the system's
+  appearance as the host reports it.
+  - **A picker.** `theme_picker` is a System / Light / Dark segmented
+    control bound to the app's state, and the UI follows it.
+    `Theme::name` and `Theme::parse` keep the choice between runs.
+  - **A part with its own theme.** `Ui::set_subtree_theme` gives any
+    subtree its own theme, as CSS `color-scheme` does: Light, Dark, or the
+    system's whatever the UI's. Its tokens and appearance styles follow
+    it. `Ui::appearance_of` and `token_of` tell what a node shows.
+  - **Hosts report the system's appearance:**
+    - `threers-ios` passes iOS and visionOS dark mode to every app's UI;
+    - the visionOS template reports it with the accessibility settings;
+    - the browser demo already followed `prefers-color-scheme`.
+  - **The demo** puts the picker on its Accessibility page, kept in step
+    with its menu and palette, beside an always-light and an always-dark
+    preview.
+- **XR on iPhone and iPad (threers, `xr::phone`).** Safari there has no
+  immersive WebXR. `PhoneView` is an `XrSource` for it:
+  - the motion sensors turn the view (three degrees of freedom: turning,
+    not walking);
+  - the rear camera shows behind what is drawn;
+  - a tap is a finger on the panel;
+  - an Exit button ends it.
+
+  Any app or panel a headset shows draws into it unchanged. It needs
+  https, and it asks for the motion sensors from the tap that starts it.
+  - **The XR page** only offers what the browser can open: Enter VR, Enter
+    AR, or Look around where neither is possible. It says why when a
+    button is missing (http, no WebXR).
+  - **The panel** stands back until it fits a phone's narrow view.
+  - **See-through on WebGPU.** wgpu lists only Opaque for a WebGPU canvas
+    but passes PreMultiplied on, so the demo asks for it in AR.
+  - **The 3D flame's alpha** now follows its light, so its box no longer
+    shows as a dark rectangle over a camera picture.
+- **Links into a UI (threers-ui).**
+  - **Anchors.** `Ui::set_anchor` names a node, as an element's `id` does.
+    A heading has a name already: its text as a `slug`, so "Gauges and
+    charts" becomes `gauges-and-charts`. `Ui::find_anchor` and
+    `find_anchor_in` find a named node; one that shows wins over one that
+    doesn't. `Ui::anchors` lists every name.
+  - **Following one.** `Input::go_to_anchor` scrolls the node to the top
+    and moves focus there, as a browser does for a fragment. A screen
+    reader reads it, and Tab carries on from it.
+  - **Accessibility.** The accessibility tree carries each node's anchor.
+    The DOM mirror gives the element that `id`, and a `tabindex` of -1 so
+    focus can be moved to it.
+  - **The demo** follows `#page/section` links, such as
+    `#toolkit/gauges-and-charts`, on load, on `hashchange`, and with back
+    and forward. The address follows the page and the section focus is in.
+- **Candle flames (threers-math, threers-ui, threers).** The shared gas
+  model is rebuilt:
+  - a teardrop pinched at the wick, widest a third of the way up, with a
+    tip that wanders and necks more than the body;
+  - a white-hot core, a deep orange rim, a dark cone over the wick that
+    the glowing body wraps round, a thin blue cup at the base, and a faint
+    haze.
+
+  The UI's realistic flame is tone mapped (its core reads white-hot) and
+  integrated with jitter (no rings). It now returns premultiplied colour,
+  as effects must; returning straight colour had drawn a pale box once the
+  edges stopped being exactly zero. The 3D flame is a little narrower and
+  is scaled to a candlelit exposure. The simple flame lifts its yellow
+  and white off the wick, so the dark zone shows, and draws its blue as a
+  see-through cup at the base rather than a blob.
+- **Real bold on the GPU (threers).** `CaptionFont::set_ui_style` gives the
+  UI face its bold, italic or bold-italic file. The browser demo loads
+  DejaVu Sans Bold beside the regular (`web/ui-demo/`, with its licence),
+  and the visionOS demo embeds it. A grown regular barely reads as bold at
+  UI sizes.
+- **Bold Text and Increase Contrast (threers-ui, `legibility`).**
+  - `Ui::set_bold_text` shows every text node a step bolder, including
+    text added or restyled later. It doesn't trigger extra layout.
+  - `Ui::set_increase_contrast` strengthens the theme's quiet colours:
+    secondary text moves halfway towards the text colour, and borders and
+    separators a third of the way.
+  - **visionOS demo:** follows both system settings, and takes the
+    system's exact text size, times the page's own steps.
+  - **Browser demo:** follows `prefers-contrast: more` and
+    `prefers-reduced-motion`.
+- **More distance-field drawing (threers-ui and threers).**
+  - **Paths.** A path of at most 96 straight pieces is drawn from its
+    distance field on the GPU at any size: icons, ticks, needles and chart
+    lines. Before, these were drawn into sprites on the CPU.
+  - **Circles.** A filled circle path is a disc (the rounded box's
+    distance field), and a stroked one is a ring (an arc).
+  - **Clips.** Each GPU shape now carries a second clip. A rounded box
+    inside a rounded box that it overlaps is cut by both sets of corners,
+    where the inner one used to lose its corners. The CPU painter still
+    clips to boxes only, rounded or not.
+- **Charts and gauges (threers-ui).**
+  - **Bar charts:**
+    - gridlines at round values (1, 2, 2.5 or 5 times a power of ten),
+      with the values beside them;
+    - each bar's value on it;
+    - bars that grow in, one after another (at once under reduced motion).
+  - **Bar chart accessibility.** A screen reader can step through the bars
+    as a list ("Mon, 4.2"), and the summary is kept.
+  - **Dials** can have `ticks` and a `needle` that glides to the value,
+    with the value on a line under the dial.
+- **Smooth shading on 3D models (threers-ui).** The model view lights each
+  face corner by the surface's normal there. Neighbouring faces within 40°
+  blend smoothly, and a cube's edges stay sharp. It shades once a pixel,
+  as multisampling does. `model3d::corner_normals` works the normals out
+  once per model and sends them with the mesh, so bands don't each
+  recompute them. A 160,000-face model at 600 × 360 with 4 samples takes
+  6.2 ms in 4 bands, against 19.4 ms whole.
+- **Fewer frames (threers-ui, threers).**
+  - **Candles.** The 3D page's candles flicker only while one is on screen
+    (`Ui::is_on_screen`, which respects scrolling clips). Scrolled away,
+    the page draws no frames for them.
+  - **Headset panel.** It rebuilds its mipmaps only when the UI drawn on
+    it changed (`PanelPass::ui_unchanged`).
+- **Accessibility in threers-ios windows.** The window's UI is one Metal
+  picture, but now each of its controls is also an accessibility element
+  (`threers_view_controls`), with its label, value, traits and frame.
+  VoiceOver, Voice Control and Switch Control find them, and activating
+  one presses it. Volume mode already had native controls. A gaze
+  highlight per control in a UIKit window would need views over the
+  picture that take touches, so windows don't have one.
+- **Not done.** On visionOS a frame may carry a second drawable, for a
+  recording or AirPlay. Only the headset's own drawable is drawn, so
+  those come out blank.
+- **Housekeeping (threers-ui).** The candle example compiles, and
+  `layout.rs`, `svg.rs` and `native.rs` are clean for clippy and rustdoc.
+- **Smooth arcs from a distance field (threers-ui and threers).**
+  `Painter::stroke_arc` strokes an `ArcShape` (a centre, a radius, a start
+  and a sweep) with round ends.
+  - **How each painter draws it:**
+    - the GPU pass computes the distance per pixel, as a new shape kind;
+    - the CPU painter uses the same distance, pixel by pixel;
+    - the 2D canvas uses its own exact `arc`.
+  - **Arcs in SVG paths.** A stroked path made of circular arcs
+    (`ArcShape::from_svg`) is painted this way. That covers gauge dials,
+    rings and icon circles.
+  - **Other curves.** These were cut into a fixed 12 pieces each, however
+    large. A 270° dial became 24 straight segments, about 11° each, and
+    looked choppy. Now they get a piece for every 6 pixels of the path's
+    larger side, between 12 and 96.
+  - **Line charts** are a smooth curve that never goes past the data
+    (monotone cubic), with a dot on the latest value.
+- **Faster smooth edges on dense models (threers-ui).** The model view's
+  multisampling now:
+  - projects each corner once, not once per face that shares it;
+  - drops faces that point away by their on-screen winding, before
+    working out their normals;
+  - unrolls its per-sample loops for 1, 4 and 8 samples.
+
+  A 160,000-face model at 600 × 360 with 4 samples takes 13.0 ms, down
+  from 16.0 ms, on one thread. `model3d::render_rows` draws a band of
+  rows. A model of 4,096 faces or more, or a picture of 250,000 pixels or
+  more, is drawn in 4 bands, each its own job, so workers draw them side
+  by side. On 4 threads that took 7.7 ms, with the machine busy with
+  other work.
+- **Preludes.** `threers_ui::prelude` gathers what nearly every UI uses:
+  the tree, `style!` and `binding!`, layout enums, input and events,
+  semantics, theme tokens, painters, gauges and charts, `ArcShape` and
+  hover regions. `threers::prelude` gains two modules you import
+  explicitly:
+  - `ui`: that prelude, plus the CPU painter and, with `render`, the GPU
+    `UiPass`;
+  - `xr`: `App`, `Frame`, `Gpu`, `Panel`, `PanelPass`, `HoverArea` and
+    what a headset reports.
+- **A bare `line-height` multiplies the font size (threers-ui).**
+  `line-height: 1.5` in CSS strings was read as 1.5 pixels; it is now 1.5
+  times the font size, as in CSS.
+- **Better UIs on Apple Vision Pro.**
+  - **The system highlights what is looked at.** Apps never learn where
+    the user looks. Instead they mark areas, and visionOS 26 lights them up.
+    - `Ui::hover_regions` (threers-ui, `spatial`) lists the controls that
+      show. Each has an id that stays the same from frame to frame, its
+      rectangle cut by its clips, its corner radius and its role, in paint
+      order.
+    - `PanelPass::draw_hover_regions` marks them on a panel in every eye.
+      It does this only where the platform offers it (`XrSource::hover_target`
+      and `declare_hover`).
+    - The visionOS session wraps the compositor's tracking-areas texture.
+      It asks the frame for its drawables as an array, which visionOS
+      requires once tracking areas are on, and keeps the one for the
+      headset's own display.
+    - The template's `App.swift` turns tracking areas on. The visionOS 26
+      calls are looked up when the app runs, so a build for an older
+      system runs without them.
+  - **Sharper panels.** The panel's UI texture has mipmaps, rebuilt after
+    each UI draw, and is read through a trilinear, 16× anisotropic sampler.
+    Fine text seen from afar or at an angle no longer shimmers.
+    `PanelPass::ui_scale_for` gives the texture scale the eyes can resolve.
+    The demo follows it in steps, between 1 and 3 device pixels per UI
+    pixel. In the simulator, which shows one 3840 × 2160 view, it chose
+    2.5, up from a fixed 1.25.
+  - **Accessibility.** The template passes the system's settings to Rust
+    when the app starts and whenever they change: Reduce Motion, Bold
+    Text, Increase Contrast, Reduce Transparency, VoiceOver, and text size
+    (`visionos::system_accessibility`). It also lets Rust have VoiceOver
+    speak (`visionos::announce`). The demo follows the system's text size
+    and Reduce Motion, and has VoiceOver read the UI's announcements.
+    `Ui::set_min_target` sets the minimum target size the accessibility
+    audit checks. The visionOS demo sets it to visionOS's 60 points
+    (`spatial::SPATIAL_MIN_TARGET`).
+  - **Battery.** `ImmersiveSession::set_frame_repeat` shows each frame
+    twice or more, for a scene that is still.
+  - **Not done.** Render quality would allow sharper eye textures, but
+    visionOS only allows it with foveation. That needs rasterization-rate
+    maps, which wgpu cannot drive, so the eyes stay at the
+    non-foveated size. An immersive space has no accessibility elements,
+    so VoiceOver can read announcements but cannot move through the
+    controls.
+- **Only drawn when only the look changes (threers-ui).** A restyle that
+  changes colours, opacity, corners, shadows, filters or the cursor
+  (`Style::same_layout`), a path turned or scaled, and an image replaced by
+  one of the same size now ask for a repaint, not a layout. A layout pass
+  over the whole page ran on every one of them, three per frame on the
+  demo's 3D page, where a candle flickers; turning its model now lays
+  nothing out, and its frames take a third of the main thread they did.
+  `Ui::layout_passes` counts the passes, for tests.
+- **Scene damage item by item (threers-ui).** When a frame has as many scene
+  items as the last, the retained GPU pass compares them place by place
+  (each under the transform, clip, effect and blur it is drawn in), not as
+  one span from the first change to the last: two changes far apart in
+  drawing order no longer redraw everything between them. Over 64 changed
+  places join into one box instead of pair by pair.
+- **Line wrapping is linear (threers-ui).** Wrapping measured every longer
+  prefix of a paragraph. It now estimates a line from its words, each
+  measured once (and cached). It measures the whole line only when the
+  estimate is within a tenth of an em per space of the width, so lines break
+  where they did.
+- **Smooth, seamless gradients.** The GPU pass draws a linear gradient one
+  instance per stretch between stops, its colour mixed at each pixel, where
+  it drew 16 bands of flat colour. The bands stepped, and where they met,
+  two antialiased edges let the background through as faint lines. The CPU
+  painter draws the same pixels.
+- **Crisper text.** Text lines land on whole device pixels down (a quarter
+  pixel across), on the GPU and the CPU painter.
+- **3D (threers-ui).** `model3d::model_view` draws at the display's
+  resolution, multisampled (`model3d::render_smooth`: 4 samples a pixel, 8
+  at 1×, averaged in linear light). Like a GPU's MSAA, a pixel wholly inside
+  a face is tested once and only edges sample by sample, so it costs about
+  a third of the supersampling it replaces (which drew 4–9× the pixels and
+  then averaged them down). It also scales the orbit so the whole model shows at the default distance; it
+  was cut off by its box. A face with `hide_backface` is judged by its
+  projected winding, so a cube's side faces turned square to the viewer no
+  longer show as slivers at the front face's rounded corners. A lifted box's
+  shadow is as large as the box is drawn, and offset and softened by the
+  square root of the lift.
+- **More shaders in the demo:** a swirl, halftone dots, a kaleidoscope, neon
+  edges, a flag and a glitch (fifteen in all). The colour split stays inside
+  its card. `Demo::failed_shaders` reports shaders the GPU would not
+  compile.
+- **`Ui::set_hover_style`** replaces a node's hover declarations (where
+  `hover_style` adds to them). The demo uses it so that the chosen list tab
+  and the current page's link keep their accent under the pointer. Before,
+  they showed white text on grey, at 1.3:1 contrast in the light theme.
+- **Fixed:** rich text on the GPU path lost the spaces where runs met. The
+  caption layout trims a line's ends, so a run ending or starting with a
+  space measured and drew without it.
+- **Fixed:** `Input::light_follows_pointer` set a NaN light before the
+  first pointer event. A model view then counted every event as a new view
+  and drew again each time.
+- **The demo draws on the GPU.** It uses WebGPU, or WebGL2 where WebGPU is
+  missing, through the UI pass, with true perspective. It falls back to the
+  2D canvas where neither works; `?renderer=canvas` or `?renderer=webgl`
+  picks one, and the corner shows which is in use.
+  `CaptionFont::set_ui` gives the GPU path a TrueType face from the page
+  (`DejaVuSans.ttf`, copied next to the wasm), as a browser has no font
+  files to read. The wasm is built with SIMD (`+simd128`). A Shaders page
+  has nine effects: a ripple, holographic foil, a lens, a peeling page, a
+  curved screen, frost, a colour split, pixels and a burn. The 3D page
+  gains a departures board.
+- Fixed: a `linear-gradient` background ignored `border-radius`;
+  `threers::ui::model_view` is native-only (the headless renderer it uses
+  has no wasm build).
+- **3D (threers-ui).** `depth::cube` turns a cube of faces to the one
+  chosen, sprung, painted far faces first; `Ui::cylinder_3d` rolls a
+  list's rows over a drum as it scrolls; `Ui::set_reflection` mirrors a box
+  below itself, fading into what is behind it; `Transform3d::translate_x`.
+- **On-screen keyboard (threers-ui).** Layouts by locale
+  (`KeyboardLayout`: English, Spanish, German, French, Russian, Ukrainian,
+  Greek; the first from the UI's `Locale`) and a 🌐 key to move between
+  them; a centred panel with a bar naming the field and Done;
+  `VirtualKeyboard::attach_button` gives a field a ⌨ button that brings the
+  keyboard up for it alone (`summon`); keys' names follow Shift.
+- **The demo** is now pages (Basics, Lists, Text, Layout, Components,
+  Screens, 3D, Shaders, Accessibility) with a sidebar, a bar of links on a phone;
+  the Layout page has a flexbox playground and a 10,000-row table, the
+  Accessibility page its settings and a live audit, which passes on every
+  page in both themes.
+- Faster: painting skips what is out of sight (outside the window or a
+  box that clips; not inside boxes turned in 3D); hit testing through 3D
+  transforms starts from the transformed boxes, not a walk of the tree.
+- Fixed: the data table copied all its rows on every event (the demo's
+  frames cost about six times what they should, on every page); a virtual
+  table's rows lost the height the list placed them by; a stepper's end
+  button is disabled at its limit (and exempt from the contrast audit);
+  `Ui::clear_token_style` takes a token back.
+- **More 3D (threers-ui and threers).** A 3D model in the UI:
+  `model3d::model_view` draws a `Mesh3` (`cube`, `torus`) with a small
+  software renderer (depth buffer, lit by the UI's light) into an image
+  node, turned by an `Orbit` in the state (drag, wheel, arrow keys,
+  `+`/`-`); `threers::ui::model_view::ModelView` renders a real threers
+  scene with the GPU renderer into a UI box the same way (example
+  `ui_model_view`). True perspective on the GPU: `Painter::push_projective`
+  hands painters the exact projective map (`Transform3d::homography`), and
+  the UI pass draws it per instance (the vertex shader projects, the
+  fragment shader shades the shape in its own coordinates), so a turned
+  card's near edge is drawn taller; the CPU painters keep the 2D
+  approximation. Boxes turned in 3D are hit where they are drawn (the
+  pointer is taken back through their transforms). Springs:
+  `Ui::spring_to` moves a property keeping its speed across new targets;
+  tilt and flip use them. `Transform3d` gains `origin`, `rotate_z` and
+  `shade`; `depth::Light` (`Ui::set_light`, `Input::light_follows_pointer`)
+  drives glare and shading; `Ui::set_depth_of_field` blurs boxes by their
+  distance from a focal depth (`Painter::push_blur`; the canvas painter
+  uses a CSS filter); `Input::tilt_with_device` leans a box with the
+  phone (`Ui::set_device_tilt`; the demo asks iOS for permission on the
+  first tap). Transitions: `nav_stack::NavTransition` (`Slide`, `Cube`,
+  `PageTurn`, set as an environment value), disclosures fold open and
+  shut, and `depth::card_deck` is a stack of cards swiped off either way
+  (keys and accessibility actions too). The demo's Depth tab shows them.
+- Fixed: a card deck could leave the card under a swiped one unpromoted
+  (still hidden from assistive technology).
+- Fixed: a grid row of `1fr` in a grid of known height grew to the full
+  content of an item in it that scrolls or clips; such an item has no
+  automatic minimum size (as in CSS), so the row takes what is left and
+  the item scrolls. A single-row item also no longer grew its row a
+  second time through the spanning-items pass.
+- Fixed: depth of field is set on a subtree (`Ui::set_depth_of_field(scope,
+  …)`), not the whole UI, so boxes turned elsewhere are not blurred; the
+  DOM mirror's custom-action buttons are visually hidden; and
+  `threers::ui::model_view` needs the `render` feature (the `ui` feature
+  alone builds again).
+- **Core accessibility (threers-ui).** A modal dialog keeps assistive
+  technology in: while `Input::set_modal` holds one, the accessibility
+  tree is that dialog alone, marked modal (`aria-modal`, AccessKit's
+  modal). Rows of a `VirtualList` are list items that know their place in
+  the whole list ("5 of 100,000": `aria-posinset`/`aria-setsize`), kept
+  right as it changes. `Semantics` gains `position`, `busy` (set for
+  placeholders), `invalid` with its reason, `current`, `shortcut`
+  (`aria-keyshortcuts`), `labelled_by` and `described_by`; the DOM
+  mirror and AccessKit carry them, and a slider's value text and an
+  alert's assertive politeness. `Ui::announce`/`announce_assertive` have
+  messages read with no node to carry them (live regions in the DOM
+  mirror). A focus ring is drawn round a node focused from the keyboard
+  that has no focus style of its own (`Ui::set_focus_ring`). And
+  `Ui::accessibility_audit` lists unnamed controls, undescribed images,
+  targets under 24 px, nodes that take focus while hidden, skipped
+  heading levels and low contrast (with the colours compared); the demo
+  now passes it on every tab, light and dark.
+- Changed: the accent is `#2563eb` (white on it is 5.2:1; it was 3.7:1),
+  avatars use darker colours (4.5:1 or better for their initials), the
+  light theme's secondary text is `#5b6270` and the dark theme's
+  `#979eaf`; switches, steppers and sliders are at least 24 px tall.
+- Fixed (demo): explicit white text (`color: white`) was drawn in the
+  inherited grey, since white is the "unset" colour; the Save button,
+  swipe actions and contact avatars now say `#fcfcfc`.
+- **3D effects (threers-ui).** `depth::Transform3d` turns a box and
+  everything in it about its horizontal and vertical axes, lifts it toward
+  the viewer and scales it, in perspective (`Ui::set_transform3d`;
+  animatable as `Property::RotateX`, `RotateY` and `Depth`), with an
+  optional glare that slides with the turn, a shadow as far below as it
+  is lifted, and hidden back faces. `Ui::set_parallax` moves layers inside
+  a tilted box by their depth. `Input::tilt_on_hover` leans a card toward
+  the pointer or finger and settles it back; `depth::flip_card` turns two
+  faces over by a binding (assistive technology hears only the face
+  showing); `Ui::carousel_3d` turns a strip's items away from its middle
+  as it scrolls. Painters gain `push_transform`/`pop_transform` (the
+  canvas and scene painters implement them; others draw the effects
+  flat): each box is drawn through the 2D transform nearest its
+  projection, so it foreshortens and grows but has no keystone. Hit
+  testing ignores the transforms. The demo has a Depth tab.
+- **Keyboards (threers-ui and the demo).** Any text control can be
+  mirrored into the platform's own text input: `Input::register_text`,
+  `focused_text` and `set_focused_text` (the demo's field and the search
+  box use it), so a phone's keyboard comes up for whichever text box,
+  text area or search box has focus — on a tap, and in the demo also when
+  focus arrives by Tab or from the app (Android and desktop browsers; iOS
+  allows it only during a tap). `wants_ime` now counts search boxes.
+  `virtual_keyboard::VirtualKeyboard`: an on-screen keyboard drawn by the
+  UI (letters, Shift and caps lock, digits and symbols, Backspace, Space,
+  Return, ⌄ to put it away) that rises while a text control has focus,
+  types key events at it without taking its focus, and shortens the page
+  above it so the field stays in view; the demo turns it on from the ⋯
+  menu or the palette and remembers the choice.
+- Fixed: a transition moving a box placed by its `bottom` (or `right`)
+  edge gave it a `top` (or `left`), stretching it to the far edge; it now
+  moves by the edge it is placed by (new `Property::Right` and `Bottom`).
+- **Screens, sheets, snapping and more controls (threers-ui).**
+  `nav_stack`: screens pushed and popped by a path in the state, with a
+  header, a back button, Alt+Left and a drag from the left edge; screens
+  slide in and out and name themselves with a `NavTitle` preference.
+  `sheet`: a bottom sheet at `Detent`s (medium, large, a height), dragged
+  between them by its grabber or down and away, shown while a binding is
+  true. `scroll_snap`: `Ui::set_scroll_snap` makes a sideways strip settle
+  on an item or a page after a flick, a drag or the wheel;
+  `Input::bind_scroll`/`bind_scroll_x` keep a scroll offset in the state
+  both ways (restored once the box is laid out); `scroll_into_view` now
+  scrolls sideways too. `pickers`: `segmented`, `stepper`, `slider`,
+  `progress` (known or not), `empty_state`, `search_field`, all bound.
+  `button`: `ButtonRole` (primary, destructive, cancel) and `ButtonStyle`
+  as an environment value; `prompt_with` answers Escape with the cancel
+  button; `MenuItem::destructive`. `matched`: an indicator that slides to
+  follow a node (the tab underline now does; the tab row scrolls when it
+  is too narrow). `model::track` and `View::update_tracked` describe a view
+  again only when a model it read changed. Environment: `scale_with_text`
+  (spacing and fixed sizes grow with the text), `set_safe_area` and
+  `pad_safe_area` (the demo reads `env(safe-area-inset-*)`),
+  `set_redacted` placeholders, `set_layout_direction` (right to left
+  mirrors the layout). `i18n`: CLDR plural rules for common languages and
+  `direction_of`. `storage`: a `Storage` trait and `stored` bindings (the
+  demo keeps its theme in `localStorage`). `preferences`: values stated by
+  a node and read by an ancestor. `focus_state`: `Input::bind_focus` and
+  `default_focus`. `Input::set_gesture_priority` (`High` takes pans from
+  scrolling, swiping and dragging; `Simultaneous` shares them).
+  Accessibility: `Semantics::combine` (read a row as one item),
+  `sort_priority`, custom `actions` with `Input::on_accessibility_action`
+  (the DOM mirror offers them as buttons, reported as
+  `A11yAction::Custom`), and roles `SpinButton`, `ProgressBar`,
+  `SearchBox`, `Navigation`.
+- Fixed: a node with state styles that an animation moved, resized or
+  faded snapped back to where it started whenever the pointer or focus
+  moved (the restyle rebuilt it from its base); animations of place, size,
+  scroll and opacity now write through to the base.
+- Fixed: the arrow keys on tabs moved from the selected tab rather than the
+  one with focus.
+- **Declarative UI, bindings and an environment (threers-ui).**
+  `view`: describe a subtree from state as `El`s each frame; a `View`
+  changes only what differs (children matched by key, else by place),
+  so nothing is edited by hand. `binding`: `Binding<S, T>` (and
+  `binding!(|s: S| s.field)`, `Binding::local`, `constant`, `on_set`);
+  `switch`, `tabs` and `disclosure` now take one and keep no state of
+  their own, so two controls bound to one value never disagree.
+  `environment`: values set on a node and read inside it
+  (`set_environment`/`environment`, falling back to globals); colours by
+  purpose (`Token`, `Tokens`, `Ui::token_style`), restyled as the
+  appearance or the tokens change, now used by the components; text
+  size (`set_text_scale`) and reduced motion (`set_reduce_motion`).
+  `transitions`: `Ui::appear` and `Ui::remove_with` animate nodes in and
+  out (notifications, popovers, the palette and prompts use them).
+  `Input::present` shows a prompt or popover while the state asks;
+  `on_appear`, `on_disappear`, and `after_for`/`every_for` timers that
+  end with their node. `Ui::view_that_fits` shows the first child that
+  fits. `preview`: build a component in light, dark, sizes and text
+  scales and compare a text snapshot (`assert_snapshot`,
+  `UPDATE_SNAPSHOTS=1`). The demo shows all of them (a Tasks tab built
+  declaratively, bound switches, a fitting title, Larger Text and
+  Reduced Motion in the palette).
+- Fixed: the prompt and the palette were centred by their content width,
+  not their box (found by a preview snapshot).
+- Fixed: sideways scrolling with a finger. A pan now keeps to the
+  direction it starts in where a strip that scrolls sideways sits in a page
+  that scrolls down (before, a sideways swipe that drifted down moved the
+  page, and the strip stopped following), and a sideways flick glides on
+  after the finger lifts, as a vertical one does.
+- Fixed: the command palette was 440 px wide whatever the window, so it ran
+  off a phone's screen. It and the prompt are now as wide as the window
+  less a margin (up to their own width), re-centred as the window changes
+  size, and no taller than the window (the palette's list scrolls); a long
+  command name is cut short with an ellipsis so its shortcut still shows,
+  and the highlighted row's shortcut is drawn in the accent's text colour.
+- **Components, a palette, prompts and notifications (threers-ui).**
+  `components`: `switch` (role `switch`, Space or Enter), `disclosure`
+  (`expanded`), `tabs` (one tab stop, arrows/Home/End move choice and
+  focus), `avatar`, `badge`, and `popover` (an anchored, non-modal dialog
+  closed by Escape or a click outside, focus given back). `palette`: a
+  command palette with fuzzy matching (`fuzzy_score`) and shortcut labels, a
+  dialog over a combobox and a listbox of options. `prompt`: a modal
+  `alertdialog` (Enter the focused or first button, Escape the last).
+  `notifications`: a corner stack of live `status`/`alert` notices with
+  actions and timeouts. `split`: two panes and a draggable, focusable
+  `separator` handle (arrows, Home/End, double-click resets).
+  `navigation::ListNavigation` moves a highlighted row with the keys and
+  scrolls a virtual list to it. `Ui::set_global`/`global`/`update_global`
+  keep app-wide state as models. Horizontal scrolling: `overflow-x`,
+  `scroll_left`, `Ui::scroll_to_x`, wheel and finger sideways. New roles
+  `Switch`, `Separator`, `AlertDialog`. The demo uses all of them (a ⋯ menu
+  with a theme submenu, ⌘/Ctrl-⇧-P palette, a components section, list
+  keys, notifications in place of the toast).
+- Fixed: `scroll_into_view` scrolled by a fraction that layout's
+  whole-pixel snapping rounded away, leaving the target's last fraction of
+  a pixel out of view; the switch did not toggle on Enter; styles set with
+  `style_mut` on nodes with state or light styles were lost on restyle
+  (`Ui::update_style` edits the base).
+- **More from gpui and Zed's `ui` crate.**
+  - **Observable state** (`model`): `Model<T>` is shared state whose
+    `update` tells its observers and counts a `version`; `Emitter<E>` sends
+    events. Both return a `Subscription` that stops when dropped.
+  - **Timers:** `Input::after` and `Input::every`, run from ticks;
+    `cancel_timer`; and `next_timer` for a host that sleeps between frames.
+  - **Focus in and out of whole subtrees:** `Input::on_focus_in` and
+    `on_focus_out`.
+  - **Scrolling through an overlay:** `HitBehavior::BlockExceptScroll` lets
+    the wheel through to what's under it.
+  - **Drags over a target:** `Input::on_drag_move::<T>` hears a drag move
+    over a node.
+  - **Files dropped from outside:** `Input::on_drop_files`, `drop_files`
+    and `files_target`.
+  - **Context menus:** `Event::ContextMenu`, from a right-click or a held
+    finger (a listener that takes it stops the long press), and
+    `Input::on_context_menu`.
+  - **Menus** (`menu`): `open_menu` at a point, under a node or beside it,
+    with actions, shortcut labels, disabled items, separators, headers and
+    submenus. The keyboard moves past what can't be picked, Right and Left
+    open and close submenus, and Enter and Escape pick and close; focus
+    goes back after. The pointer highlights, opens submenus and picks, and
+    a click outside closes. `popover_menu` opens one below a button and
+    closes it on a second click.
+  - **Shortcut labels:** `Keystroke::label` gives `⇧⌘S` on macOS and
+    `Ctrl+Shift+S` elsewhere, and `Keymap::label_for` finds an action's.
+  - **Simulated keystrokes for tests:** `Input::simulate_keystrokes("cmd-a
+    backspace enter")`.
+  - **Line clamp:** `line-clamp: N` (or `-webkit-line-clamp`) clamps
+    wrapping text to N lines, the last ending in `…`;
+    `Ui::text_lines_of` gives a text node's lines as laid out.
+  - **Scroll strategies:** `ScrollStrategy` (`Nearest`, `Top`, `Center`,
+    `Bottom`) for `VirtualList::scroll_to_with` and
+    `Ui::scroll_into_view_with`.
+  - **Transforms** (`transform`): `Ui::set_path_transform` turns, scales or
+    moves a vector shape about its middle, by rewriting its path data. The
+    `Rotate` animation property turns a spinner.
+  - **Themes:** `Theme` is Light, Dark or System (the default).
+    `Ui::set_theme` sets the choice and `Ui::set_system_appearance` tells
+    the UI what the system shows; `Ui::appearance` is the result.
+    `Ui::appearance_style(node, Light|Dark, css)` gives a node styles for
+    one appearance, and states such as hover still apply over them.
+  - **`color` inherits as in CSS:** a text node follows the nearest box
+    above it that has a colour of its own (not the default white), at paint
+    time, until `set_style` gives it its own. A recoloured panel or a
+    button's hover colour now reaches the text inside. `Ui::color_of` gives
+    the colour, and the contrast check uses it.
+  - **`Input::on_after_dispatch`:** runs code with the input itself after
+    each event and tick, for what listeners can't do, such as a menu
+    opening its submenu.
+- **The demo is served uncached, and shows its build.** `web/ui-demo/serve.py`
+  (what `SERVE=1 build.sh` runs) sends `Cache-Control: no-store`; Safari on a
+  phone otherwise kept an earlier build's JavaScript and WebAssembly across
+  reloads. With `CERT` and `KEY` it serves https, which Paste needs. The page
+  shows the build's time in its corner.
+- **Editing text with a finger (`text_touch`).** As in gpui, the field owns
+  its text, selection and composition, and the platform's text input only
+  carries what is typed into it. `TouchSelection` is the touch half, as iOS
+  text fields behave:
+  - **Taps:** a tap places the caret, and on the caret shows the edit menu.
+    Two taps select the word, three everything. The second tap held and
+    dragged selects by whole words.
+  - **The caret:** held still, the caret comes to the finger and follows it,
+    with the menu when it lifts. Dragged straight away, it follows too.
+  - **A firm press** selects the word, where the screen reports force. It
+    must press harder than it came down, since some screens report one
+    middling force for every touch.
+  - **Handles:** a selection has two, a bar with a knob each, dragging its
+    ends. A handle stops at the other end.
+  - **The edit menu** offers Cut, Copy, Paste and Select All over a
+    selection, and Paste, Select and Select All at a caret. `apply` carries
+    out a choice and returns what the app must do with the clipboard.
+  - **The edit menu's actions are iOS's**, built in. Over a selection:
+    Cut, Copy, Paste, Select All, Look Up, Translate, Share…, Uppercase,
+    Lowercase and Capitalize. At a caret: Paste, Select and Select All. On
+    read-only text: Copy, Select All, Look Up, Translate and Share…. `apply`
+    changes case itself. For the rest it returns a `Request` saying what
+    the platform must do: `Copy(text)`, `Paste`, `LookUp(text)`,
+    `Translate(text)` or `Share(text)`. `add_action(label, Shows::…)` adds an
+    app's own after them. `menu_page(per_page)` pages the menu with back and
+    more chevrons, and `turn_page` turns it.
+  - **Configurable, and a feature.** `TouchConfig`, given to
+    `TouchSelection::with_config` (or `config_mut`), sets:
+    - the timings and reaches: tap slop, multi-tap window, long-press time,
+      firm-press force and rise, and handle reach;
+    - which gestures are on: double tap, triple tap, dragging the caret,
+      holding the caret, and firm press;
+    - which built-in actions the menu shows, and in what order, over a
+      selection, at a caret, and on read-only text.
+
+    The defaults are iOS's. The module is behind the `text-touch` feature,
+    on by default.
+  - **Read-only text** (`TouchSelection::read_only`, `select_word`) is for a
+    page's text, which is selected and copied, not edited.
+  - **Handles are easy to take.** A finger takes a handle near its knob, or
+    within 14 px of its bar on the knob's side of the line. A fingertip
+    landing a little high still takes the bottom handle.
+
+  The demo draws the handles and the menu over everything. A tap on the
+  menu keeps the field's focus and keyboard, and the menu is placed again
+  after the layout that measures it, so it doesn't move under the finger.
+  On a phone, the page's text input lies over the field, unseen, under
+  every touch on it. The tap that focuses it is the browser's, and opens the
+  keyboard. Later ones go to the demo. It stays under the finger because iOS,
+  while a text input has focus, watches for double taps itself, and one on
+  anything not editable gave up the focus and closed the keyboard. Before,
+  the page took focus away and gave it back on each tap, which closed the
+  keyboard. The edit menu's copy goes to the clipboard while the tap is
+  handled, falling back on the input's copy command without the clipboard
+  API. Paste needs the API, which browsers give only over https.
+- **The demo's text field edits like a text input.**
+  - **One line:** the page's hidden text element is now an `<input>`. As a
+    `<textarea>` it wrapped text longer than the field onto a second line,
+    and the text jumped out of the field.
+  - **Scrolls to its caret:** on the canvas, the field scrolls sideways to
+    keep the caret in view as text runs past its end. It used to cut the end
+    off. On a phone the input draws and scrolls the text itself.
+  - **iOS's own look removed:** the input has no native appearance, inset or
+    text-size adjustment, so its text sits where the field draws it.
+  - **Spellcheck and autocorrect are on**, for iOS's Replace suggestions.
+  - **The text stays in the field when the keyboard opens.** Safari pans the
+    page to show the input, and while panned it reads positions on screen
+    against another origin than it lays out fixed boxes against. The input,
+    a fixed box placed from the canvas's position on screen, ended up above
+    the field by the pan. It now sits in the canvas's own container, placed
+    from the same numbers as the canvas.
+  - **Selection handles can be dragged.** Their knobs stand out past the
+    input's box, over the canvas, and the canvas cancelled every touch that
+    started on it, which cancelled the handle drag. With the input focused,
+    touches starting within 32 px of it are left to the browser. The input
+    is also restyled only when its place or font changes, not every frame.
+  - **A double tap selects the word under it.** The page does this itself,
+    from the caret the first tap placed, rather than relying on iOS's
+    gesture.
+- **The DOM accessibility mirror follows its canvas.** `DomAccessibility`
+  copied the canvas's placement once, when made. When the page moved or
+  resized the canvas, the mirror's elements stayed where the canvas had
+  been.
+  - **Checked in Chrome:** typing, select all, typing over a selection, copy,
+    paste, and deleting a selection made in the input all edit the field, on
+    a phone and on a desktop.
+- **Links in text.** `TextRun::link(target)` makes a run a link.
+  `Ui::link_rects` gives a text node's links' boxes as laid out (two for a
+  link that wraps), each with its target, and `Ui::link_at` gives the link
+  under a point. In the demo, the paragraph's "link" opens on a click or
+  tap, and the pointer is a hand over it. The page opens it while the click
+  is handled, which is when a browser allows opening a window.
+- **Selecting and copying any text.** As in a browser, text can be
+  selected unless something says not to:
+  - **Per node:** `user-select: none` turns it off for a node and everything
+    inside it, and `user-select: text` turns it back on inside that.
+  - **Controls:** text inside buttons, tabs, menu items, checkboxes, radio
+    buttons, sliders and options can't be selected, as a browser's own
+    styles have it.
+  - **Everywhere:** `Ui::set_text_selection(false)` turns it off for the
+    whole UI.
+
+  `Ui::selectable_text_at` finds the selectable text under a point. In
+  gpui, selection is per component (Zed's markdown view) and opt-in; the
+  demo takes from it the I-beam over selectable text, the pointing hand
+  over links, Shift-click to extend, and links that open only on a click,
+  not a drag. In the demo:
+  - **Finger:** a long press selects the word, with the handles and the
+    read-only edit menu.
+  - **Mouse:** a drag selects, two clicks select a word, three all of it,
+    Shift-click extends, and ⌘/Ctrl-C copies.
+  - **Off switches:** the drag-and-drop board is `user-select: none`, since
+    its cards are dragged, and Settings has a "Selectable text" switch.
+  - **Highlight:** translucent boxes drawn over the text, clipped to its
+    scrolling box, so styled runs keep their colours.
+- **Swipe to delete.** `Input::on_swipe_delete(container, f)` lets the rows
+  of a list slide left under a finger moving sideways (up and down still
+  scrolls). Let go past half the row's width and `f` is called with the row
+  to delete. Past half of `SWIPE_ACTION_WIDTH` (84 px), the row stays open on
+  its action, and a tap there is a normal click. Short of that, it springs
+  back. With a row open, a tap anywhere else only closes it. `Input::swipe`
+  gives the row and its offset for the app to draw, and `close_swipe` closes
+  it. Each demo list except the cards has a red Delete action behind its rows.
+- **`VirtualList::remove(index)`** deletes a row from the middle. The rows
+  after it move up one and keep their nodes and measured heights, so nothing
+  is rebuilt and the list does not jump.
+- **Double tap and the selection handles work in the demo's text field on a
+  phone.** The page had `touch-action: none` on `html` and `body`. That
+  applies to everything inside, the text input included, and turned off the
+  phone's double tap and handle dragging. Only the canvas has it now.
+- **`?beacon` on the demo** sends its frame timings to the server every two
+  seconds, as requests the server logs. It measures the demo on a phone.
+- **Pull to refresh.** `Input::on_refresh(container, f)` makes a scrolling
+  box refresh when pulled down from its top. A finger dragging down there
+  pulls it open against growing resistance instead of scrolling. Let go
+  past `PULL_THRESHOLD` (64 px), `f` runs and the pull holds open until
+  `Input::finish_refresh`; short of it, the pull springs back. A pull starts
+  only once the box and every scrolling box inside it are at their top.
+  `Input::pull` gives its distance and phase (`Pulling`, `Armed`,
+  `Refreshing`, `Settling`) for the app to draw an indicator. Each demo list
+  has one, and a refresh changes the list's content.
+- **Virtual list rows keep their layout while the list scrolls.** Scrolling
+  marked the list changed every frame, and every row in view was measured
+  again, re-wrapping its text several times a frame. The Messages list went
+  from 1.7 ms to 0.2 ms a frame in Chrome. Rows are now layout cache
+  boundaries, and only rows that come into view are measured.
+- **An `auto` scrollbar restyled to `always` asks for no more frames.** A
+  container query that changed the demo's page style kept the UI asking
+  for frames forever.
+- **Five kinds of virtual list in the demo**, chosen by tabs: 100,000 plain
+  rows, 10,000 chat messages that are as tall as their text, 7,800 contacts
+  under letter headings, 30,000 cards three to a row, and 5,000 rows to tick
+  with a count of those ticked.
+- **Flicks in a row build speed.** A flick made while the content is still
+  gliding fast adds that glide's speed and multiplies the sum by 1.5 for each
+  flick in the row. The speed limit rises with the run, up to one glide over
+  the whole list. Eight flicks cross the demo's 100,000 rows (2.6 million
+  pixels). One flick on its own glides no farther than before. Flicking the
+  other way, or catching the content and letting go, starts over.
+- **A flex item's automatic minimum width is its min-content width**, as CSS
+  has it. Text that wraps can shrink to its longest word, and `max-width`
+  caps the minimum. A chat bubble with `max-width: 78%` in a flex row was
+  laid out as one long line, spilling out of its row.
+- **A lifted finger hovers nothing.** Hover styles stayed on whatever was
+  last tapped and hid the style the tap set, such as a selected tab.
+- **A fling no longer stops dead on a virtual list.** A pan and the glide
+  after it scrolled from the node the finger first touched, often a list
+  row. The list drops rows as they scroll out of sight, and once that row
+  was gone the glide stopped. A pan now follows the box it scrolled, so a
+  flick glides, slowing down, and quick flicks in a row build speed.
+- **A finger drags a scrollbar's thumb.** A touch on the thumb began a thumb
+  drag but then panned the content like any other finger, the opposite way.
+  It now drags the thumb as the mouse does. A finger also reaches the thumb
+  from up to 16 px to its left, because the thumb is only 6 to 10 px wide.
+- **Touch scrolling no longer stops for good after a lost touch end.**
+  iOS Safari can drop a finger's end event. The finger stayed down, so
+  every later touch counted as a second finger, a pinch, and nothing
+  scrolled or glided again. A touch that reuses the id of a finger still
+  down now replaces it. The demo page also cancels any finger missing from
+  the browser's list of touches. A flick still glides when the browser
+  reports the lift late: its speed is now measured up to the finger's last
+  move, and a finger counts as resting only after 100 ms without moving.
+- **Long lists, popups and hit-testing in the UI**.
+  - **Virtual lists:** `virtual_list::VirtualList` builds only the rows in
+    view, between two spacers that keep the scroll extent exact. Rows have one
+    height or are measured as they appear, with offsets in a Fenwick tree.
+    The row in view stays put as heights arrive, and `scroll_to` holds its
+    target until measuring settles. 100,000 rows cost fewer than 50 nodes.
+  - **Layers:** `Ui::defer` paints a node last, outside its ancestors'
+    clips, and hit-tests it first. `Ui::anchor` places a node against a point
+    or another node's corner after layout, flipping or snapping to stay in
+    the window. Together they make menus and popups.
+  - **Hit index:** `Ui::hit_test` looks the point up in a grid of the laid-out
+    boxes instead of walking the tree. On random trees with clips, deferred
+    layers and hidden boxes it agrees with `Ui::hit_test_walk` at every
+    point tried.
+- **Text and pictures in the UI.**
+  - **Images:** `Ui::add_image` shows decoded RGBA, sized like `<img>` (its
+    own size, or its aspect ratio from one side) and fitted by `object-fit`.
+    It is drawn by the CPU overlay, the browser canvas and the GPU pass.
+    `image::ImageCache` loads images off the main thread and drops those no
+    frame has shown recently.
+  - **Rich text:** `Ui::set_text_runs` styles byte ranges of a text node with
+    their own colour, weight, italic, underline, highlight and strike.
+    Layout measures each run in its own style, so a bold word wraps as a bold
+    word.
+  - **Decorations:** `box-shadow` (blurred, in closed form, after Evan
+    Wallace) and `text-decoration: underline`, straight or
+    wavy, in style and CSS.
+  - **Text cache:** `text_cache::TextCache` keeps text measurements from one
+    frame to the next and drops what a frame did not use.
+- **Input for touch, input methods and drag and drop.**
+  - **Gestures:** `Event::Touch` is recognised into tap, long press, pan and
+    pinch. A finger also drives the pointer, so taps click and sliders drag.
+    A pan scrolls the content with the finger.
+  - **IME:** `Event::Ime` composes text from an input method in place, marked,
+    in `TextField` and `TextArea`, matching winit's `Ime::Preedit` and
+    `Ime::Commit`. `Input::wants_ime` and `Input::set_ime_area` give the host
+    what the platform needs.
+  - **Drag and drop:** `Input::draggable` and `on_drop::<T>` carry typed data.
+    `drag_over` reports the target for highlighting, and an optional preview
+    follows the pointer. Escape cancels, and a drag never also clicks.
+  - **Tooltips:** `Input::tooltip` shows one after the pointer rests, hung
+    below its node and dismissed by a press, a key or the wheel.
+  - **Tab order and cursors:** `Semantics::tab_index` orders Tab as HTML's
+    `tabindex` does. `Style::cursor` (CSS `cursor`) and `Input::cursor` give
+    the pointer shape to set.
+- **Motion, state and tooling.**
+  - **Springs:** `Animator::springy` and `set_spring` move values by damped
+    springs, stepped exactly for any frame length. A retarget keeps the
+    current speed, and `needs_frame` says when to stop drawing.
+  - **Element state:** `state::ElementState` keeps values by key across UIs
+    rebuilt every frame, and drops them once a frame passes without them.
+  - **Container queries:** `Ui::container_query` restyles a node by its
+    container's width, laying out again when a breakpoint is crossed.
+  - **Inspector:** `Ui::inspect` gives the node at a point, with its path,
+    boxes, the style that differs from the default, and the source line that
+    added it (recorded through `#[track_caller]`). `Ui::paint_highlight`
+    draws a devtools-style overlay of its margin, padding and content boxes.
+  - **Frame stats:** `debug_overlay::FrameStats` paints frame and layout times
+    with their 95th percentiles and a bar per frame.
+  - **Random trees:** `testing::random_tree` makes reproducible random trees
+    for property tests.
+- **The UI as an image, and video in it.** `UiPass::render_to_rgba` and
+  `ui::paint_to_rgba` render a UI to pixels on the GPU or the CPU, for
+  screenshots and golden tests. Against each other, on a scene with
+  shadows, both underlines, images and styled runs, they match to within one
+  pixel off by 3, at 1x and 2x. `Ui::add_surface` and `UiPass::set_surface`
+  show a GPU texture (a video frame, another renderer's output) in tree
+  order, with no copy through the CPU.
+- **Layout caching** (`Ui::cache_layout`). A marked
+  subtree that has not changed and gets the same box takes its layout from
+  the last frame, without being measured or placed again. Content sizes are
+  also remembered within each layout, so a nested flex row is no longer
+  measured once per level above it. `Ui::laid_out_last` says how much work a
+  layout did. 400 frames of random edits per seed, over 18 seeds, give
+  bit-identical layouts and scenes with and without the cache
+  (`tests/layout_cache.rs`).
+- **In-place `ShaderMaterial` updates.** `set_uniform`, `set_data`,
+  `set_data_floats`, `set_storage` and `set_storage_range` take `&self` and
+  write state every clone shares, so one call reaches every mesh holding the
+  material; `set_storage_range` uploads only the range. Writing the fields
+  still works (the uniform block is compared, a replaced storage `Vec` is
+  noticed, `mark_storage_dirty` covers an in-place edit), and the Metal
+  backend reads the live values too. From JavaScript,
+  `THREE.ShaderMaterial.setUniform` and `setStorageRange`, and `setUniforms` /
+  `setStorage` no longer rebuild the material; the wasm `WebShaderMaterial`
+  gains `setUniform`, `setDataRange` and `setStorageRange`.
+  `Renderer::custom_shader_stats` counts what the custom-shader path created
+  and uploaded.
+- **`ShaderMaterial::shadow_vertex`**: cast shadows through the material's own
+  vertex stage, in directional (cascades included) and spot shadow maps, so a
+  stage that moves, grows or hides geometry casts the shadow of what it draws.
+  Off by default — the mesh's triangles, as three.js's depth material and the
+  Metal backend cast — since the pass is depth-only and the stage sees the
+  light as its camera, which suits displaced geometry and not fur or ribbons.
+- **`ShadowSettings::fit_view`**: with one cascade, fits a directional light's
+  map to the camera's view out to that distance (plus `camera_far` toward the
+  light), snapped to texels, instead of the fixed box on the origin. JS
+  `light.shadow.fitView`.
+- The custom-shader preamble's `shadow_factor(world_pos, world_normal)`: the
+  first directional light's shadow in one call.
+- `ObjectArena::remove_subtree`; `WebScene.objectCount` and
+  `WebRenderer.cachedGeometryCount`.
+
+- Texture formats: `Rg8Unorm`, `R16Unorm`, `Rgba16Unorm`, `Rgb10a2Unorm`,
+  `Rg16Float`, `Rg32Float`, `Rg11b10Ufloat`, `Rgb9e5Ufloat`; linear `Bc1` and
+  `Bc7`, `Bc3` (sRGB and linear), `Bc4RUnorm`, `Bc5RgUnorm`, `Bc6hRgbUfloat`,
+  `Bc6hRgbFloat`; ETC2 RGB and RGBA (sRGB and linear); and ASTC LDR at all
+  fourteen footprints (`TextureFormat::Astc { block: AstcBlock, srgb }`), on
+  the wgpu and Metal backends. See `docs/texture-formats.md`.
+- `textures::codec`: CPU decoders for every block format, held to the GPU's own
+  decode (`tests/texture_formats.rs`: bit-exact for BC1, BC6H, BC7, ETC2 and
+  sRGB ASTC on Apple silicon, within half an 8-bit step where the hardware
+  returns more precision). `codec::for_device` and `codec::Support` convert a
+  texture into what a device samples; `TextureFormat::with_srgb`, `code`,
+  `compression`, `pack_f32` and `all`.
+- A texture in a format the GPU lacks is converted on upload instead of failing:
+  BC on phones and pre-M3 Apple GPUs, ETC2 and ASTC on most desktops decode to
+  RGBA8 (R8, RG8, or half floats for BC6H); 16-bit unorm and unfilterable
+  32-bit floats become floats the device filters.
 - `PLATFORMS=all ./scripts/release-all.sh publish` builds every Node addon and
   PyPI wheel on one Mac (zig for Linux, xwin for Windows) and runs the Linux
   ones in Docker (`scripts/test-linux-builds.sh`) before uploading them.
 
+### Changed
+
+- **Destructive colours pass WCAG contrast.** Filled destructive buttons
+  use a new `Token::DestructiveFill` (white text 4.7:1 in both themes;
+  dark was 3.7:1). The destructive text red is lighter in dark (5.6:1 or
+  more on every surface) and darker in light (5.9:1 on the page's grey,
+  was 4.4:1).
+- **Render targets' textures stand upright** on a material, as three.js's
+  do: they were read upside down. Post-processing is unchanged.
+- **Repeating animations wait out of sight:** one on a node that does not
+  show no longer asks for frames or moves.
+
+- **Hybrid raster + path-traced compositing** (`raytrace::HybridCompositor`,
+  wasm `WebHybridCompositor`).
+  - **What it does:** it puts the light of a low-resolution path trace (soft
+    shadows, inter-reflections, emitters lighting their surroundings) onto
+    the sharp, full-resolution raster frame. The trace can then run at a
+    third of the resolution and converge several times faster.
+  - **Upsampling:** joint bilateral upsampling over a 4x4 window, guided by
+    the raster frame in log-luminance and chroma, so traced light does not
+    bleed across silhouettes.
+  - **Detail transfer:** the raster's high-frequency detail is carried over
+    per channel (raster ÷ its own low-pass), so coloured traced light still
+    tints the result.
+  - **Bloom:** a soft-knee threshold feeds a multi-scale bloom pyramid (2×2
+    down, tent up), also available on its own for raster frames.
+  - **Input/output:** RGBA8 sRGB in and out, linear maths throughout.
+    Covered by 7 tests: a trace that agrees with the raster changes nothing,
+    shadow transfer keeps the texture, no edge bleed, bloom falloff and
+    threshold, and size errors.
+
+- **The retained UI is its own crate, `threers-ui`.** Styles, flexbox layout,
+  controls, painting, hit-testing, the accessibility tree and the browser's
+  canvas painter and DOM mirror moved out of `threers::ui`; they depend only
+  on `threers-math` and `threers-captions`, so a UI needs no renderer.
+  `threers::ui` re-exports all of it and keeps `OverlayPainter`, the painter
+  onto threers' overlay, and `threers::style!` / `threers::ui!` still work, so
+  existing code does not change. The easing curves moved to
+  `threers_math::easing` for the same reason; `threers::easing` re-exports
+  them. `PACKAGE=threers-ui TEST=ui_a11y_dom scripts/wasm-browser-test.sh`
+  runs the UI's browser suites.
+- **Additions to UI types that can break code which matches or builds them.**
+  `NodeKind` has `Image` and `Surface`, so an exhaustive `match` needs arms
+  for them. `Semantics` has `tab_index`, `TextField` and `TextArea` have
+  `marked`, and `Style` has `cursor`, `object_fit`, `box_shadow` and
+  decoration fields, so a struct literal needs them (or `..Default`). The
+  new `Painter` methods have defaults. Images and surfaces in block flow keep
+  their own width rather than stretching, as replaced elements do in a page.
+  `VirtualList::scroll_to` takes `&mut self`. `Display` has `Grid`, so an
+  exhaustive `match` on it needs an arm. `TextField` and `TextArea` keep
+  pointer-selection state in a private field, so they are built with `new`
+  (or `Default`) rather than a struct literal. `set_style` on a node with
+  state styles sets the style its states apply on top of.
+- **`Ui::layout` does nothing when nothing changed** since the last layout at
+  the same size, so it can be called every frame, or several times a frame,
+  for free. Changes made through the tree's methods count, including
+  `offset`, `anchor` and container queries. A `TextMeasure` that starts
+  measuring differently does not: call `invalidate_layout`, as the layout
+  cache already required.
+- **Scrolling moves smoothly.** A mouse wheel's notches (40 px or more)
+  glide to their target over 0.16 s, and further notches extend it rather
+  than restart it. A trackpad's small steps still move at once. A flung
+  finger keeps the content gliding after it lifts, as far as a phone's: its
+  speed is measured over the last 80 ms of movement and it slows at iOS's
+  normal rate (a flick at `v` px/s glides about `v / 2` px), integrated
+  exactly, so it goes as far at any frame rate. A second flick while it
+  glides adds to it.
+  `Ui::set_pixel_ratio` puts scroll offsets on whole device pixels, so moving
+  text does not shimmer. `Input::smooth_wheel = false` restores instant
+  notches.
+- **Drag previews of the item itself.** `Input::drag_preview_with` builds a
+  preview for each drag from its data and source node, held where it was
+  grabbed and removed when the drag ends.
+- **A finger on a draggable node drags it** instead of panning, so drag and
+  drop works on touch screens. Elsewhere a finger still pans and scrolls.
+- **Restyling no longer resets a scroll position.** A container query or
+  state style applying a stored style kept the stored `scroll_top`, which
+  undid every scroll of a page styled that way.
+- **UI node ids are generational, and removed nodes free their slots.** A
+  `NodeId` now names one node for its lifetime. Once the node is removed, its
+  slot goes to the next node added, under a new generation. `Ui::contains`
+  says whether an id is live, and the accessors panic on a stale id instead of
+  answering for whichever node took its place. A UI rebuilt every frame with
+  `clear_children` therefore holds one frame's worth of nodes instead of
+  growing without end (`Ui::slots`).
+  - Removing the root now removes its children and keeps the root.
+  - A `display: none` box now lays out as an empty box at the origin, as a
+    page reports it, instead of keeping whatever position it last had
+    (scrolling used to drift it).
+  - `set_style` and `set_text` with an unchanged value no longer mark the
+    node for layout.
+- **`ShaderMaterial` keeps its GPU resources across frames.** Every custom draw
+  built a fresh uniform buffer, three storage buffers (data textures on
+  WebGL2) and a bind group each frame, and the draw list cloned the shader
+  sources and every storage array to do it. They are now cached per material:
+  an unchanged material re-submits for nothing, a changed uniform is one
+  256-byte write, storage is re-uploaded only when it changes and reallocated
+  only when it outgrows its buffer, and a material shared by many meshes is
+  uploaded once. Entries not drawn for 240 renders are dropped. On an M4 Pro,
+  200,000 quads with a 6.4 MB storage slot and a uniform written every frame
+  (`examples/shader_material_bench.rs`): 0.8 ms a frame as one mesh, 2.7 ms
+  split across 300 tiles sharing the material.
+- **Removed meshes free their GPU geometry.** The geometry cache kept every
+  vertex and index buffer it had uploaded; an entry nothing has drawn for the
+  cache retention (`Renderer::set_cache_retention`, now covering geometry as
+  well as textures) is dropped. `WebScene.remove` deletes the object and its
+  subtree rather than detaching it (`detachNode` keeps a node).
+- Every device the crate creates (headless, window, browser) asks for the
+  compression families, 16-bit unorm and float filtering the adapter has
+  (`gpu::TEXTURE_FEATURES`). Windows and the browser asked for none, so BC
+  textures failed there even on GPUs that sample them.
+- KTX2 loads every format above, linear BC included (it refused linear BC1 and
+  BC7, and so normal maps); what it still refuses names itself.
+- `WebTexture.setSrgb` applies to every format with an sRGB twin, compressed
+  ones included. The CPU path tracer, post-processing passes, the USD exporter
+  and the tensor conversions read every format, BC7 and ASTC included.
+
 ### Fixed
 
+- **visionOS bindings read garbage matrices.** `simd_float4x4` results
+  (eye transforms, projections, the head anchor) were declared as plain
+  structs, which Rust reads from memory while the system returns them in
+  vector registers. `simd_float2` went in two registers where it belongs
+  in one, so the compositor saw a near plane of 0. Both are now called as
+  C calls them. This affects the Metal `ImmersiveRenderer` too.
+
+- The Metal backend aborted on any BC7 sRGB texture: its pixel format was
+  written as 145, which is no `MTLPixelFormat` (153 is). The constants now come
+  from the SDK header, and `tests/metal_texture_formats.rs` creates and draws
+  every format through Metal.
+- `R32Float` and `Rgba32Float` textures failed validation on devices without
+  `FLOAT32_FILTERABLE`, which the crate never requested.
 - Post-processing crashed on GPUs without f16 support in f32 shaders (Mesa's
   Vulkan drivers without shader f16, such as llvmpipe on arm64): the module
   used `pack2x16float`, which needs `SHADER_F16_IN_F32`, so it failed to build

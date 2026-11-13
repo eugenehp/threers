@@ -247,32 +247,58 @@ fn key_values(bytes: &[u8], offset: usize, length: usize) -> HashMap<String, Vec
 impl Ktx2 {
     /// The Vulkan format as one of this crate's, if it has an equivalent.
     ///
-    /// The block-compressed variants here are all sRGB, so a *linear* BC
-    /// payload — which is what a normal map is stored as — has no home and is
-    /// refused rather than labelled sRGB. Reading a normal map through an sRGB
-    /// curve is wrong in a way that looks like bad lighting rather than like a
-    /// bug, which is exactly the failure worth refusing.
+    /// sRGB and linear variants stay apart: a normal map stored linear and
+    /// read through the sRGB curve is wrong in a way that looks like bad
+    /// lighting rather than like a bug. BC1's opaque `RGB` variants load as
+    /// BC1 RGBA; they differ only in a three-colour block's index 3, which
+    /// reads transparent rather than black, and no opaque material looks at
+    /// alpha. What has no equivalent here says what it is.
     pub fn texture_format(&self) -> Result<TextureFormat, Ktx2Error> {
+        use TextureFormat as F;
+        // VkFormat values, from the Vulkan headers.
         Ok(match self.vk_format {
-            37 => TextureFormat::Rgba8Unorm,     // R8G8B8A8_UNORM
-            43 => TextureFormat::Rgba8UnormSrgb, // R8G8B8A8_SRGB
+            9 => F::R8Unorm,         // R8_UNORM
+            16 => F::Rg8Unorm,       // R8G8_UNORM
+            37 => F::Rgba8Unorm,     // R8G8B8A8_UNORM
+            43 => F::Rgba8UnormSrgb, // R8G8B8A8_SRGB
             // B8G8R8A8_UNORM / _SRGB: swizzled to RGBA by `to_texture`.
-            44 => TextureFormat::Rgba8Unorm,
-            50 => TextureFormat::Rgba8UnormSrgb,
-            9 => TextureFormat::R8Unorm,            // R8_UNORM
-            97 => TextureFormat::Rgba16Float,       // R16G16B16A16_SFLOAT
-            134 => TextureFormat::Bc1RgbaUnormSrgb, // BC1_RGBA_SRGB_BLOCK
-            146 => TextureFormat::Bc7RgbaUnormSrgb, // BC7_SRGB_BLOCK
-            131 | 133 => {
-                return Err(Ktx2Error::Unsupported(
-                    "linear BC1 (no linear BC format here)",
-                ))
-            }
-            145 => {
-                return Err(Ktx2Error::Unsupported(
-                    "linear BC7 (no linear BC format here)",
-                ))
-            }
+            44 => F::Rgba8Unorm,
+            50 => F::Rgba8UnormSrgb,
+            64 => F::Rgb10a2Unorm,        // A2B10G10R10_UNORM_PACK32
+            70 => F::R16Unorm,            // R16_UNORM
+            76 => F::R16Float,            // R16_SFLOAT
+            83 => F::Rg16Float,           // R16G16_SFLOAT
+            91 => F::Rgba16Unorm,         // R16G16B16A16_UNORM
+            97 => F::Rgba16Float,         // R16G16B16A16_SFLOAT
+            100 => F::R32Float,           // R32_SFLOAT
+            103 => F::Rg32Float,          // R32G32_SFLOAT
+            109 => F::Rgba32Float,        // R32G32B32A32_SFLOAT
+            122 => F::Rg11b10Ufloat,      // B10G11R11_UFLOAT_PACK32
+            123 => F::Rgb9e5Ufloat,       // E5B9G9R9_UFLOAT_PACK32
+            131 | 133 => F::Bc1RgbaUnorm, // BC1_RGB(A)_UNORM_BLOCK
+            132 | 134 => F::Bc1RgbaUnormSrgb,
+            137 => F::Bc3RgbaUnorm, // BC3_UNORM_BLOCK
+            138 => F::Bc3RgbaUnormSrgb,
+            139 => F::Bc4RUnorm,     // BC4_UNORM_BLOCK
+            141 => F::Bc5RgUnorm,    // BC5_UNORM_BLOCK
+            143 => F::Bc6hRgbUfloat, // BC6H_UFLOAT_BLOCK
+            144 => F::Bc6hRgbFloat,  // BC6H_SFLOAT_BLOCK
+            145 => F::Bc7RgbaUnorm,  // BC7_UNORM_BLOCK
+            146 => F::Bc7RgbaUnormSrgb,
+            147 => F::Etc2Rgb8Unorm, // ETC2_R8G8B8_UNORM_BLOCK
+            148 => F::Etc2Rgb8UnormSrgb,
+            151 => F::Etc2Rgba8Unorm, // ETC2_R8G8B8A8_UNORM_BLOCK
+            152 => F::Etc2Rgba8UnormSrgb,
+            // ASTC_4x4_UNORM_BLOCK .. ASTC_12x12_SRGB_BLOCK, unorm then sRGB
+            // for each footprint in turn.
+            v @ 157..=184 => F::Astc {
+                block: crate::textures::AstcBlock::ALL[((v - 157) / 2) as usize],
+                srgb: (v - 157) % 2 == 1,
+            },
+            135 | 136 => return Err(Ktx2Error::Unsupported("BC2 (DXT3)")),
+            140 | 142 => return Err(Ktx2Error::Unsupported("signed BC4/BC5")),
+            149 | 150 => return Err(Ktx2Error::Unsupported("ETC2 RGB8A1 (punch-through alpha)")),
+            153..=156 => return Err(Ktx2Error::Unsupported("EAC R11/RG11")),
             0 => {
                 return Err(Ktx2Error::Unsupported(
                     "Basis Universal, which needs transcoding",
@@ -466,10 +492,15 @@ mod tests {
             k.texture_format(),
             Err(Ktx2Error::Unsupported(what)) if what.contains("Basis")
         ));
-        k.vk_format = 145;
+        k.vk_format = 135;
         assert!(matches!(
             k.texture_format(),
-            Err(Ktx2Error::Unsupported(what)) if what.contains("linear BC7")
+            Err(Ktx2Error::Unsupported(what)) if what.contains("BC2")
+        ));
+        k.vk_format = 149;
+        assert!(matches!(
+            k.texture_format(),
+            Err(Ktx2Error::Unsupported(what)) if what.contains("punch-through")
         ));
         let mut z = parse(ZLIB).unwrap();
         z.supercompression = Supercompression::Zstd;
@@ -477,6 +508,48 @@ mod tests {
             z.level_data(),
             Err(Ktx2Error::Unsupported(what)) if what.contains("zstd")
         ));
+    }
+
+    /// Linear BC (normal maps), and every family the renderer now has, load
+    /// as the format they are, sRGB kept apart from linear.
+    #[test]
+    fn every_supported_vulkan_format_maps_to_its_own() {
+        use crate::textures::AstcBlock;
+        let mut k = parse(RGBA8).unwrap();
+        for (vk, want) in [
+            (145, TextureFormat::Bc7RgbaUnorm),
+            (146, TextureFormat::Bc7RgbaUnormSrgb),
+            (133, TextureFormat::Bc1RgbaUnorm),
+            (141, TextureFormat::Bc5RgUnorm),
+            (143, TextureFormat::Bc6hRgbUfloat),
+            (151, TextureFormat::Etc2Rgba8Unorm),
+            (
+                157,
+                TextureFormat::Astc {
+                    block: AstcBlock::B4x4,
+                    srgb: false,
+                },
+            ),
+            (
+                172,
+                TextureFormat::Astc {
+                    block: AstcBlock::B8x8,
+                    srgb: true,
+                },
+            ),
+            (
+                184,
+                TextureFormat::Astc {
+                    block: AstcBlock::B12x12,
+                    srgb: true,
+                },
+            ),
+            (123, TextureFormat::Rgb9e5Ufloat),
+            (64, TextureFormat::Rgb10a2Unorm),
+        ] {
+            k.vk_format = vk;
+            assert_eq!(k.texture_format(), Ok(want), "VkFormat {vk}");
+        }
     }
 
     /// Something that is not KTX2 is refused, and truncation never panics.

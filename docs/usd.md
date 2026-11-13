@@ -132,8 +132,9 @@ Coming back the other way, a `.usdz` needs nothing: `UsdLoader::parse` decodes
 its images onto the materials. For the other two, `attach_textures_from_dir`
 says where the layer was read from and loads what is beside it — declining any
 path that climbs out of that directory, since it was handed a directory and not
-the disk. Whatever cannot be resolved stays in `UsdScene::textures` rather than
-being dropped.
+the disk. Both read PNG, and JPEG with the `jpeg` feature (on by default, pure
+Rust, wasm-safe) — most packaged assets carry JPEG. Whatever cannot be resolved
+stays in `UsdScene::textures` rather than being dropped.
 
 `scene_to_usdz` needs no such help — a package is required to be self-contained,
 so the images travel inside it, and a `.usdz` read back comes with its pictures

@@ -481,3 +481,107 @@ async fn webgl_renderer() -> threers::wasm::WebRenderer {
         .await
         .expect("the renderer would not start on this browser")
 }
+
+/// A custom shader, through the JavaScript API, in a browser.
+///
+/// `ShaderMaterial` had no counterpart in the wasm bindings at all, so every
+/// custom shader in the crate was reachable from Rust and nowhere else — and
+/// the shim's `THREE.ShaderMaterial` was a stub that quietly built a *basic*
+/// material and rendered a flat colour, which is worse than the class being
+/// absent.
+///
+/// The storage array is the part worth checking here rather than on a desktop:
+/// WebGL2 has no storage buffers, so `s0(i)` has to resolve to a texture read.
+/// A shader written with `u_s0[i]` does not compile on this backend at all,
+/// which is exactly the failure this is meant to catch before a user does.
+#[wasm_bindgen_test]
+async fn a_shader_material_draws_on_webgl2() {
+    let mut renderer = webgl_renderer().await;
+    let target = threers::wasm::WebRenderTarget::new(&renderer, 64, 64);
+
+    // Colour comes from the uniform block, brightness from the storage slot —
+    // so a frame that renders but binds either wrongly is the wrong colour
+    // rather than no pixels.
+    let mut material = threers::wasm::WebShaderMaterial::new(
+        "@fragment\n\
+         fn fs_main(in: VsOut) -> @location(0) vec4<f32> {\n\
+         let tint = u_data.data[0].rgb;\n\
+         let gain = s0(3u);\n\
+         return vec4<f32>(framebuffer_encode(tint * gain), 1.0);\n\
+         }\n",
+    );
+    material.set_data(vec![0.0, 0.8, 0.2, 1.0]);
+    material.set_storage(0, vec![0.0, 0.0, 0.0, 1.0]);
+
+    let mut scene = threers::wasm::WebScene::new();
+    scene.add(&threers::wasm::WebMesh::new(
+        &threers::wasm::WebGeometry::box_(2.0, 2.0, 2.0),
+        &material.material(),
+    ));
+    let mut camera = threers::wasm::WebCamera::perspective(55.0, 1.0, 0.1, 100.0);
+    camera.set_position(0.0, 0.0, 4.0);
+
+    renderer.set_render_target(target.id);
+    renderer.render(&mut scene, &camera);
+    renderer.render(&mut scene, &camera);
+    let px = read_target(&renderer, target.id, 64, 64).await;
+
+    let centre = ((32 * 64 + 32) * 4) as usize;
+    let (r, g, b) = (px[centre], px[centre + 1], px[centre + 2]);
+    assert!(
+        g > 120 && g > r + 40 && g > b + 40,
+        "expected the green the uniform asked for, got ({r}, {g}, {b}) — the \
+         shader material did not reach the backend"
+    );
+}
+
+/// An in-place update reaches a mesh already holding the material, on the
+/// data-texture path.
+///
+/// `setUniform` and `setStorageRange` write state every `material()` of a
+/// `WebShaderMaterial` shares, rather than rebuilding it — which is what lets
+/// a mesh built before the change see it without being handed the material
+/// again, and what keeps the storage texture from being re-uploaded whole.
+#[wasm_bindgen_test]
+async fn a_shader_material_updates_in_place_on_webgl2() {
+    let mut renderer = webgl_renderer().await;
+    let target = threers::wasm::WebRenderTarget::new(&renderer, 64, 64);
+
+    let mut material = threers::wasm::WebShaderMaterial::new(
+        "@fragment\n\
+         fn fs_main(in: VsOut) -> @location(0) vec4<f32> {\n\
+         let gain = s0(u32(u_data.data[0].w));\n\
+         return vec4<f32>(framebuffer_encode(u_data.data[0].rgb * gain), 1.0);\n\
+         }\n",
+    );
+    material.set_data(vec![0.0, 0.8, 0.2, 3.0]);
+    material.set_storage(0, vec![1.0; 10_000]);
+
+    let mut scene = threers::wasm::WebScene::new();
+    scene.add(&threers::wasm::WebMesh::new(
+        &threers::wasm::WebGeometry::box_(2.0, 2.0, 2.0),
+        &material.material(),
+    ));
+    let mut camera = threers::wasm::WebCamera::perspective(55.0, 1.0, 0.1, 100.0);
+    camera.set_position(0.0, 0.0, 4.0);
+    renderer.set_render_target(target.id);
+    renderer.render(&mut scene, &camera);
+
+    // Red instead of green, read from a storage float written by range.
+    material.set_uniform(0, 0.8);
+    material.set_uniform(1, 0.0);
+    material.set_uniform(3, 9000.0);
+    material.set_storage_range(0, 9000, &[1.0]);
+    material.set_storage_range(0, 3, &[0.0]);
+    renderer.render(&mut scene, &camera);
+    renderer.render(&mut scene, &camera);
+    let px = read_target(&renderer, target.id, 64, 64).await;
+
+    let centre = ((32 * 64 + 32) * 4) as usize;
+    let (r, g, b) = (px[centre], px[centre + 1], px[centre + 2]);
+    assert!(
+        r > 120 && r > g + 40 && r > b + 40,
+        "expected the red set in place, got ({r}, {g}, {b}) — the update did not \
+         reach the mesh"
+    );
+}

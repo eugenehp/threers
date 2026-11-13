@@ -237,23 +237,62 @@ pub mod utils;
 pub mod volume;
 pub mod wgsl;
 
-pub mod easing;
+// Easing curves: `threers_math::easing`, re-exported.
+pub use threers_math::easing;
 pub mod overlay;
-// A retained UI: CSS-subset styles, flexbox layout, painting, hit-testing.
-// (Its docs are the module's own `//!`; an outer `///` here would make their
-// intra-doc links resolve in this scope, where `Ui` is not.)
 #[cfg(feature = "render")]
 pub mod renderer;
+// Many cameras: layouts, transitions, cameras as textures, feedback.
+#[cfg(feature = "render")]
+pub mod views;
 #[cfg(winit_window)]
 pub mod sketch;
+// A retained UI: the `threers-ui` crate plus its painter onto `overlay`.
+// (Its docs are the module's own `//!`; an outer `///` here would make their
+// intra-doc links resolve in this scope, where `Ui` is not.)
 #[cfg(feature = "ui")]
 pub mod ui;
+// `threers::style!` and `threers::ui!`; they expand to `threers_ui` paths.
+#[cfg(feature = "ui")]
+pub use threers_ui::{style, ui};
 
 // No outer doc comment: `gpu.rs` carries `//!` docs, and an outer `///` here
 // would make the intra-doc links inside them resolve in this scope.
 #[cfg(feature = "render")]
 pub mod gpu;
 pub mod strict_float;
+// Headset stereo: per-eye cameras from an XR device's views (`wasm::WebXr`
+// runs the browser session).
+#[cfg(feature = "xr")]
+pub mod xr;
+
+/// Makes an [`xr::App`] the Apple Vision Pro app: exports
+/// `threers_app_run`, which the SwiftUI shell (`templates/visionos-app`)
+/// calls with its `CompositorLayer`'s layer renderer, to run the app with
+/// [`xr::visionos::run`](crate::xr::App). Expands to nothing on other
+/// targets, so the crate still builds (and tests) on a Mac.
+///
+/// ```ignore
+/// struct MyApp { /* … */ }
+/// impl threers::xr::App for MyApp { /* setup, update */ }
+/// threers::visionos_app!(MyApp);
+/// ```
+#[macro_export]
+macro_rules! visionos_app {
+    ($app:ty) => {
+        /// The app's entry point: run on the shell's render thread until
+        /// the immersive space closes.
+        ///
+        /// # Safety
+        /// `layer_renderer` must be the `CompositorLayer`'s layer renderer.
+        #[cfg(target_os = "visionos")]
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn threers_app_run(layer_renderer: *mut ::core::ffi::c_void) {
+            unsafe { $crate::xr::visionos::run::<$app>(layer_renderer) }
+        }
+    };
+}
+
 /// The `THREE.*` JS shim's bindings (WebRenderer, WebMesh, loaders, ...).
 /// Built with `--cfg threers_no_js_bindings` they are left out: a consumer
 /// driving the Rust API from its own wasm-bindgen crate otherwise ships
@@ -364,7 +403,7 @@ pub use audio::{
 };
 #[cfg(feature = "brep")]
 pub use brep::{retessellate, Surface, SurfaceTable};
-pub use cameras::{Camera, OrthographicCamera, PerspectiveCamera, ScreenProjector};
+pub use cameras::{Camera, OrthographicCamera, PerspectiveCamera, ScreenProjector, ViewOffset};
 #[cfg(feature = "captions")]
 pub use captions::{
     CaptionAlign, CaptionAnchor, CaptionError, CaptionFont, CaptionFormat, CaptionOverlay,
@@ -487,8 +526,8 @@ pub use renderers::{
 pub use scene::Scene;
 pub use stats::Stats;
 pub use textures::{
-    pack_rgba16f, CubeTexture, DataTexture, DepthTexture, Texture, TextureFilter, TextureFormat,
-    TextureWrap,
+    pack_rgba16f, AstcBlock, Compression, CubeTexture, DataTexture, DepthTexture, Texture,
+    TextureFilter, TextureFormat, TextureWrap,
 };
 pub use utils::png::{decode_png, encode_png, PngImage};
 #[cfg(feature = "render")]

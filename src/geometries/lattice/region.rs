@@ -293,6 +293,30 @@ impl<'a> Region<'a> {
         })
     }
 
+    /// An intersection whose edges are rounded rather than sharp, over a radius
+    /// of about `blend`: where the two boundaries meet, material is taken away
+    /// so the corner becomes a fillet. Far from the meeting line (further than
+    /// `blend` from it) it is the plain [`intersection`](Self::intersection).
+    ///
+    /// The natural use is trimming a lattice to a shell without leaving a cut
+    /// face with knife edges: fill `lattice_region.smooth_intersection(shell,
+    /// 0.3)` and every strut that reaches the shell's surface ends rounded.
+    pub fn smooth_intersection(self, other: Region<'a>, blend: f32) -> Self {
+        let bounds = self.bounds.intersect(&other.bounds);
+        let (a, b) = (self.inside, other.inside);
+        let k = blend.max(1e-6);
+        Self::new(bounds, move |p| smooth_min(a(p), b(p), k))
+    }
+
+    /// This region with the other cut out, the cut's edges rounded over about
+    /// `blend` (see [`smooth_intersection`](Self::smooth_intersection)).
+    pub fn smooth_difference(self, other: Region<'a>, blend: f32) -> Self {
+        let bounds = self.bounds;
+        let (a, b) = (self.inside, other.inside);
+        let k = blend.max(1e-6);
+        Self::new(bounds, move |p| smooth_min(a(p), -b(p), k))
+    }
+
     /// Grow the region by `distance`, or shrink it with a negative one.
     pub fn offset(self, distance: f32) -> Self {
         let mut bounds = self.bounds;
@@ -469,6 +493,14 @@ fn frustum_bounds(a: Vector3, b: Vector3, radius_a: f32, radius_b: f32) -> Box3 
     };
     let (sa, sb) = (spread(radius_a), spread(radius_b));
     Box3::from_points(&[a - sa, a + sa, b - sb, b + sb])
+}
+
+/// Polynomial smooth minimum: `min(x, y)` with the corner rounded over `k`
+/// (the inside-positive fields here make it a smooth intersection). Never above
+/// the hard minimum, equal to it once `|x - y| >= k`.
+fn smooth_min(x: f32, y: f32, k: f32) -> f32 {
+    let h = (0.5 + 0.5 * (y - x) / k).clamp(0.0, 1.0);
+    y + (x - y) * h - k * h * (1.0 - h)
 }
 
 #[cfg(test)]
@@ -684,6 +716,37 @@ mod tests {
         assert!((rounded.distance(Vector3::ZERO) - 1.0).abs() < 1e-5);
         assert!(rounded.contains(Vector3::new(0.99, 0.0, 0.0)));
         assert!(!rounded.contains(Vector3::new(0.95, 0.95, 0.95)));
+    }
+
+    #[test]
+    fn a_smooth_intersection_rounds_the_edge_and_leaves_the_rest() {
+        let a = || Region::sphere(Vector3::new(-0.6, 0.0, 0.0), 1.0);
+        let b = || Region::sphere(Vector3::new(0.6, 0.0, 0.0), 1.0);
+        let hard = a().intersection(b());
+        let soft = a().smooth_intersection(b(), 0.3);
+        // never more material than the hard intersection
+        for k in 0..200 {
+            let t = k as f32 / 200.0 * std::f32::consts::TAU;
+            let p = Vector3::new(0.3 * t.cos(), 0.8 * t.sin(), 0.2);
+            assert!(soft.distance(p) <= hard.distance(p) + 1e-6, "smooth intersection added material at {p:?}");
+        }
+        // the sharp rim where the two spheres meet is pulled in...
+        let rim = Vector3::new(0.0, 0.795, 0.0);
+        assert!(hard.contains(rim) && !soft.contains(rim), "the edge was not rounded");
+        // ...and where one boundary is much nearer than the other (by more than the blend) nothing changes
+        let p = Vector3::new(-0.3, 0.0, 0.0);
+        assert!((soft.distance(p) - hard.distance(p)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_smooth_difference_matches_the_hard_one_away_from_the_cut() {
+        let a = || Region::sphere(Vector3::ZERO, 1.0);
+        let b = || Region::sphere(Vector3::new(1.0, 0.0, 0.0), 0.6);
+        let hard = a().difference(b());
+        let soft = a().smooth_difference(b(), 0.2);
+        let far = Vector3::new(-0.7, 0.0, 0.0);
+        assert!((soft.distance(far) - hard.distance(far)).abs() < 1e-5);
+        assert!(!soft.contains(Vector3::new(0.6, 0.0, 0.0)));
     }
 
     #[test]

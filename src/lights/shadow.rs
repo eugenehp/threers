@@ -49,6 +49,15 @@ pub struct ShadowSettings {
     /// This light's filter, in place of the renderer's
     /// ([`Renderer::set_shadow_type`](crate::Renderer::set_shadow_type)).
     pub filter: Option<ShadowType>,
+    /// Fit the directional shadow box (with `cascades` at 1) to the camera instead of the fixed cube
+    /// on the origin: when > 0, the box covers the view frustum out to this
+    /// many world units from the camera, plus `camera_far` toward the light
+    /// for casters outside the view. `0` keeps the fixed cube.
+    ///
+    /// The fixed cube is right for a model on a turntable and wrong for a map,
+    /// where the camera roams kilometres from the origin and the area worth
+    /// shadowing is the few hundred metres in front of it.
+    pub fit_view: f32,
 }
 
 /// How shadow maps are filtered — three.js's `renderer.shadowMap.type`.
@@ -98,6 +107,7 @@ impl Default for ShadowSettings {
             cascade_split: 0.6,
             light_size: 0.0,
             filter: None,
+            fit_view: 0.0,
         }
     }
 }

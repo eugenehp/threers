@@ -155,6 +155,14 @@ impl WebPathTracer {
         Ok(self.inner.resolve_rgba_aov(aov))
     }
 
+    /// Resolve to RGBA8 with an awaited film readback. On the WebGPU backend
+    /// the synchronous resolves cannot map the accumulator in a browser, so
+    /// this is the one to call there (it works on the CPU backend too).
+    #[wasm_bindgen(js_name = resolveRgbaAsync)]
+    pub async fn resolve_rgba_async(&mut self, denoise: bool) -> Vec<u8> {
+        self.inner.resolve_rgba_denoised_async(denoise).await
+    }
+
     /// Grayscale sample-density map.
     #[wasm_bindgen(js_name = resolveRgbaSamples)]
     pub fn resolve_rgba_samples(&mut self) -> Vec<u8> {
@@ -456,5 +464,55 @@ impl WebPathTracer {
         let mut r = RaytraceRenderer::with_backend(w, h, Box::new(CpuBackend::new()));
         r.set_settings(settings);
         self.inner = r;
+    }
+}
+
+/// Hybrid raster + path-traced compositor ([`crate::raytrace::HybridCompositor`]): joint-bilateral upsampling of a
+/// low-resolution trace guided by the full-resolution raster frame, raster detail transfer, mix, soft-knee bloom.
+/// Inputs / output are RGBA8 sRGB, top row first (e.g. `getImageData` / `resolveRgbaAsync`).
+#[wasm_bindgen]
+pub struct WebHybridCompositor {
+    inner: crate::raytrace::HybridCompositor,
+}
+
+#[wasm_bindgen]
+impl WebHybridCompositor {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> WebHybridCompositor {
+        WebHybridCompositor { inner: crate::raytrace::HybridCompositor::default() }
+    }
+
+    /// mix, detail, edge sigma (see `HybridParams`)
+    #[wasm_bindgen(js_name = setBlend)]
+    pub fn set_blend(&mut self, mix: f32, detail: f32, edge_sigma: f32) {
+        let p = &mut self.inner.params;
+        p.mix = mix.clamp(0.0, 1.0);
+        p.detail = detail.clamp(0.0, 1.0);
+        p.edge_sigma = edge_sigma.max(0.01);
+    }
+
+    /// strength (0 = off), linear-luminance threshold, soft knee, pyramid levels (1..8)
+    #[wasm_bindgen(js_name = setBloom)]
+    pub fn set_bloom(&mut self, strength: f32, threshold: f32, knee: f32, levels: u32) {
+        let p = &mut self.inner.params;
+        p.bloom_strength = strength.max(0.0);
+        p.bloom_threshold = threshold.max(0.0);
+        p.bloom_knee = knee.max(0.0);
+        p.bloom_levels = levels.clamp(1, 8);
+    }
+
+    pub fn composite(&mut self, raster: &[u8], w: u32, h: u32, trace: &[u8], tw: u32, th: u32) -> Result<Vec<u8>, JsValue> {
+        self.inner.composite(raster, w, h, trace, tw, th).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    #[wasm_bindgen(js_name = bloom)]
+    pub fn bloom(&mut self, rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, JsValue> {
+        self.inner.bloom_rgba(rgba, w, h).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+}
+
+impl Default for WebHybridCompositor {
+    fn default() -> Self {
+        Self::new()
     }
 }

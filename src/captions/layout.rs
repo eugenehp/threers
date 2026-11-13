@@ -52,23 +52,63 @@ pub fn layout(
     style: &CaptionStyle,
     max_width: f32,
 ) -> LaidOutText {
-    use std::hash::{Hash, Hasher};
-    /// Enough for a HUD's strings; past it the cache starts again.
-    const KEEP: usize = 512;
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    text.hash(&mut h);
-    format!("{style:?}").hash(&mut h);
-    max_width.to_bits().hash(&mut h);
-    let key = h.finish();
-    if let Some(laid) = font.layouts.get(&key) {
-        return laid.clone();
+    // Two generations of this many: when the newer fills, the older goes,
+    // so what is still in use survives (a cache cleared whole at its limit
+    // starts over just when it is busiest).
+    const KEEP: usize = 1024;
+    // Laid out at its natural width, a block fits any width at least as
+    // wide unchanged (every line already fits): one entry serves them all.
+    let natural = layout_key(text, style, None);
+    if let Some(laid) = cached(font, natural)
+        && laid.width <= max_width
+    {
+        return laid;
+    }
+    let bounded = layout_key(text, style, Some(max_width));
+    if let Some(laid) = cached(font, bounded) {
+        return laid;
     }
     let laid = layout_uncached(font, text, style, max_width);
+    // Nothing wrapped: it is the natural layout.
+    let unwrapped = laid.lines.len() == text.split('\n').count() || laid.lines.is_empty();
+    let key = if unwrapped { natural } else { bounded };
     if font.layouts.len() >= KEEP {
-        font.layouts.clear();
+        font.layouts_old = std::mem::take(&mut font.layouts);
     }
     font.layouts.insert(key, laid.clone());
     laid
+}
+
+/// A layout from the cache, the older generation's moved to the newer.
+fn cached(font: &mut CaptionFont, key: u64) -> Option<LaidOutText> {
+    if let Some(l) = font.layouts.get(&key) {
+        return Some(l.clone());
+    }
+    let l = font.layouts_old.remove(&key)?;
+    font.layouts.insert(key, l.clone());
+    Some(l)
+}
+
+/// What a layout depends on: the text, the size, spacing and line height,
+/// and the width (`None`: as wide as it is). FNV-1a, as this runs for every
+/// string measured or drawn.
+fn layout_key(text: &str, style: &CaptionStyle, width: Option<f32>) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |bytes: &[u8]| {
+        for &b in bytes {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    };
+    eat(text.as_bytes());
+    eat(&style.font_size.to_bits().to_le_bytes());
+    eat(&style.letter_spacing.to_bits().to_le_bytes());
+    eat(&style.line_height.to_bits().to_le_bytes());
+    match width {
+        Some(w) => eat(&w.to_bits().to_le_bytes()),
+        None => eat(b"natural"),
+    }
+    h
 }
 
 fn layout_uncached(
@@ -127,6 +167,14 @@ fn wrap_paragraph(
 ) {
     let size = style.font_size;
     let spacing = style.letter_spacing;
+    // Most lines fit whole: measured once, not word by word.
+    let whole = font.measure(paragraph.trim_start(), size, spacing);
+    if whole <= max_width && !paragraph.trim().is_empty() {
+        let text = paragraph.split_whitespace().collect::<Vec<_>>().join(" ");
+        let width = if text.len() == paragraph.trim_start().len() { whole } else { font.measure(&text, size, spacing) };
+        out.push(LineBox { width, text });
+        return;
+    }
     let mut current = String::new();
 
     for word in paragraph.split_whitespace() {
@@ -193,6 +241,23 @@ fn break_point(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_layout_serves_every_width_it_fits_and_any_colour() {
+        let mut font = CaptionFont::builtin();
+        let s = style(16.0);
+        let wide = layout(&mut font, "hello world", &s, 1000.0);
+        assert_eq!(wide.lines.len(), 1);
+        let red = CaptionStyle { color: [255, 0, 0, 255], ..s.clone() };
+        let again = layout(&mut font, "hello world", &red, 400.0);
+        assert_eq!((again.lines.len(), again.width), (1, wide.width));
+        assert_eq!(font.layouts.len(), 1, "measured once, for both widths and colours");
+        // Too narrow for it: wrapped, and kept apart.
+        let narrow = layout(&mut font, "hello world", &s, 80.0);
+        assert_eq!(narrow.lines.len(), 2);
+        assert_eq!(font.layouts.len(), 2);
+        assert_eq!(layout(&mut font, "hello world", &s, 80.0).lines.len(), 2);
+    }
 
     fn style(size: f32) -> CaptionStyle {
         CaptionStyle::default().font_size(size).line_height(1.0)

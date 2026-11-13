@@ -16,7 +16,8 @@ fn postfx_needs_no_f16_capability() {
     let source = postfx_shader();
     let module = naga::front::wgsl::parse_str(source)
         .unwrap_or_else(|e| panic!("postfx: WGSL parse failed:\n{}", e.emit_to_string(source)));
-    let caps = naga::valid::Capabilities::all() - naga::valid::Capabilities::SHADER_FLOAT16_IN_FLOAT32;
+    let caps =
+        naga::valid::Capabilities::all() - naga::valid::Capabilities::SHADER_FLOAT16_IN_FLOAT32;
     naga::valid::Validator::new(naga::valid::ValidationFlags::all(), caps)
         .validate(&module)
         .unwrap_or_else(|e| panic!("postfx needs SHADER_FLOAT16_IN_FLOAT32 again: {e:?}"));
@@ -25,7 +26,9 @@ fn postfx_needs_no_f16_capability() {
 /// The `f16_round` function as the post-processing module defines it.
 fn f16_round_wgsl() -> &'static str {
     let source = postfx_shader();
-    let start = source.find("fn f16_round(x: f32) -> f32 {").expect("f16_round in postfx");
+    let start = source
+        .find("fn f16_round(x: f32) -> f32 {")
+        .expect("f16_round in postfx");
     let end = start + source[start..].find("\n}\n").expect("end of f16_round") + 3;
     &source[start..end]
 }
@@ -121,8 +124,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
         label: None,
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: output.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: output.as_entire_binding(),
+            },
         ],
     });
     let mut encoder = device.create_command_encoder(&Default::default());
@@ -136,16 +145,25 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     queue.submit([encoder.finish()]);
     let slice = readback.slice(..);
     slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-    device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("poll");
     let ys: Vec<f32> = bytemuck::cast_slice(&slice.get_mapped_range().expect("mapped")).to_vec();
 
     let mut wrong = Vec::new();
     for (&x, &y) in xs.iter().zip(&ys) {
         let want = half::f16::from_f32(x).to_f32();
         // Bit-exact, signed zeros included; any NaN matches any NaN.
-        let same = if want.is_nan() { y.is_nan() } else { y.to_bits() == want.to_bits() };
+        let same = if want.is_nan() {
+            y.is_nan()
+        } else {
+            y.to_bits() == want.to_bits()
+        };
         if !same {
-            wrong.push(format!("{x:e} ({:#010x}): got {y:e}, IEEE f16 gives {want:e}", x.to_bits()));
+            wrong.push(format!(
+                "{x:e} ({:#010x}): got {y:e}, IEEE f16 gives {want:e}",
+                x.to_bits()
+            ));
         }
     }
     assert!(

@@ -41,6 +41,35 @@
 //!     return vec4<f32>(in.vertex_color.rgb, 1.0);
 //! }
 //! ```
+//!
+//! # Changing it every frame
+//!
+//! The renderer keeps each material's uniform buffer, storage buffers and bind
+//! groups from one frame to the next, so a material that is drawn unchanged
+//! costs nothing to re-submit, and one whose uniform changed costs a 256-byte
+//! write. Two ways to change one:
+//!
+//! - Through the fields, given `&mut` access (`Arc::make_mut` on the mesh's
+//!   material). Uniform changes are seen by comparing the block; a storage field
+//!   is seen when it is *replaced* — a new `Vec` is a new allocation. Editing
+//!   one in place keeps the allocation, so follow that with
+//!   [`mark_storage_dirty`](ShaderMaterial::mark_storage_dirty). Note that
+//!   `make_mut` on an `Arc` other meshes also hold *copies* the material,
+//!   storage and all, and the copy is uploaded afresh — use the setters there.
+//! - Through the `&self` setters — [`set_uniform`](ShaderMaterial::set_uniform),
+//!   [`set_data`](ShaderMaterial::set_data),
+//!   [`set_storage`](ShaderMaterial::set_storage),
+//!   [`set_storage_range`](ShaderMaterial::set_storage_range). These write to
+//!   state that every clone of the material shares, so one call reaches every
+//!   mesh it was handed to, however many `Arc`s that is, and the next frame
+//!   draws with it. A range update uploads that range and nothing else. Once a
+//!   value has been set this way it takes precedence over the field.
+//!
+//! Share one material between many meshes by sharing its `Arc<Material>`: the
+//! storage is then uploaded once, and only the per-mesh transform differs from
+//! draw to draw. Clones that were handed live storage share that upload too.
+
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// A custom-shader material. See the module docs for the WGSL contract.
 #[derive(Debug, Clone)]
@@ -131,6 +160,14 @@ pub struct ShaderMaterial {
     /// [`supports_shader_material_volumes`](crate::renderer::caps::supports_shader_material_volumes).
     #[cfg(feature = "render")]
     pub volumes: Vec<crate::marks::gpu::TextureView>,
+    /// The same two slots from [`Data3DTexture`](crate::volume::Data3DTexture)s
+    /// the renderer uploads and caches itself, as [`maps`](Self::maps) are
+    /// to `volumes`: `volume_maps[i]` fills `u_vol{i}` wherever `volumes`
+    /// has no view at `i`, on wgpu and the native Metal backend alike, with
+    /// no GPU handle of the app's. A new `Arc` is new contents (a 4D series'
+    /// next frame): the same one is uploaded once.
+    #[cfg(feature = "render")]
+    pub volume_maps: Vec<std::sync::Arc<crate::volume::Data3DTexture>>,
     /// Draw this material in the screen-space pass, with the opaque scene
     /// available as `ss_color_tex` / `ss_depth_tex` at `@group(3)`.
     ///
@@ -210,6 +247,124 @@ pub struct ShaderMaterial {
     /// the share of samples as its alpha for alpha-to-coverage to place. Fur
     /// and hair draw their strands this way.
     pub alpha_to_coverage: bool,
+    /// Cast shadows through this material's own vertex stage (`vs_custom`)
+    /// instead of its mesh's triangles, for a stage that moves, grows or hides
+    /// geometry: then the shadow is of what is drawn. Off by default, which is
+    /// three.js's depth-material behaviour and what the Metal backend does.
+    ///
+    /// Depth only: the fragment stage does not run, so a cut-out (fur, a
+    /// discard) casts solid. And the stage sees the light as its camera —
+    /// `frame.view_proj` is the light's, `frame.camera_position` its position
+    /// (none for a directional light) — so camera-facing geometry such as
+    /// billboards or ribbons turns toward the light and should leave this off.
+    /// Directional and spot lights; a point light casts the mesh. wgpu backend.
+    pub shadow_vertex: bool,
+    /// Identity for the renderer's GPU cache, and the uniform and storage
+    /// values set through the `&self` setters, which clones share.
+    ///
+    /// Leave it at its default; it is public only so that struct-literal
+    /// construction with `..Default::default()` keeps working.
+    pub live: ShaderLive,
+}
+
+/// The shared, in-place-updatable half of a [`ShaderMaterial`].
+///
+/// Cloning gives the copy its own identity — so a copy whose *fields* are then
+/// changed gets its own GPU resources — but the same live values, so a
+/// [`set_uniform`](ShaderMaterial::set_uniform) on one is seen by all of them.
+pub struct ShaderLive {
+    /// This value's identity. Fresh for every clone.
+    id: u64,
+    /// Bumped by `mark_storage_dirty`, per slot.
+    field_rev: [u64; 3],
+    shared: Arc<LiveShared>,
+}
+
+struct LiveShared {
+    /// Identity of the shared state, which keys live storage on the GPU.
+    id: u64,
+    state: Mutex<LiveState>,
+}
+
+#[derive(Default)]
+pub(crate) struct LiveState {
+    pub(crate) data: Option<[[f32; 4]; 16]>,
+    pub(crate) storage: [Option<LiveSlot>; 3],
+}
+
+/// One storage slot set through the setters.
+pub(crate) struct LiveSlot {
+    pub(crate) data: Vec<f32>,
+    /// Bumped on every change.
+    pub(crate) version: u64,
+    /// The version of the last change that was not a range: a replacement or a
+    /// resize. A copy older than this has to be uploaded whole.
+    pub(crate) base: u64,
+    /// `(version, start, end)` for each range written since `base`, oldest
+    /// first, capped at [`RANGE_LOG`]. A renderer whose copy is too old for the
+    /// log to cover uploads the whole slot instead.
+    pub(crate) ranges: std::collections::VecDeque<(u64, usize, usize)>,
+}
+
+/// How many range updates a slot remembers. Enough for a frame's worth of
+/// scattered edits; past that a whole upload is about as cheap anyway.
+const RANGE_LOG: usize = 256;
+
+fn next_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+impl Default for ShaderLive {
+    fn default() -> Self {
+        Self {
+            id: next_id(),
+            field_rev: [0; 3],
+            shared: Arc::new(LiveShared {
+                id: next_id(),
+                state: Mutex::new(LiveState::default()),
+            }),
+        }
+    }
+}
+
+impl Clone for ShaderLive {
+    fn clone(&self) -> Self {
+        Self {
+            id: next_id(),
+            field_rev: self.field_rev,
+            shared: self.shared.clone(),
+        }
+    }
+}
+
+impl std::fmt::Debug for ShaderLive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShaderLive")
+            .field("id", &self.id)
+            .field("shared", &self.shared.id)
+            .finish()
+    }
+}
+
+impl ShaderLive {
+    /// This material value's identity.
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+    /// Identity of the state shared between clones.
+    pub(crate) fn shared_id(&self) -> u64 {
+        self.shared.id
+    }
+    pub(crate) fn field_rev(&self, slot: usize) -> u64 {
+        self.field_rev[slot]
+    }
+    pub(crate) fn lock(&self) -> MutexGuard<'_, LiveState> {
+        // A panic while holding this cannot leave the floats half-valid in any
+        // way that matters, so a poisoned lock is just taken.
+        self.shared.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 impl Default for ShaderMaterial {
@@ -226,6 +381,8 @@ impl Default for ShaderMaterial {
             maps: Vec::new(),
             #[cfg(feature = "render")]
             volumes: Vec::new(),
+            #[cfg(feature = "render")]
+            volume_maps: Vec::new(),
             screen_space: false,
             opacity: 1.0,
             transparent: false,
@@ -235,6 +392,8 @@ impl Default for ShaderMaterial {
             fallback_color: crate::math::Color::WHITE,
             msl: None,
             alpha_to_coverage: false,
+            shadow_vertex: false,
+            live: ShaderLive::default(),
         }
     }
 }
@@ -300,7 +459,9 @@ impl ShaderMaterial {
     /// WGSL front end to check against and the browser's own compiler does the
     /// job instead, reporting to the console. `validate` returns `Ok` there
     /// rather than pretending — check this if the distinction matters.
-    pub const VALIDATION_AVAILABLE: bool = !cfg!(target_arch = "wasm32");
+    /// A `precompiled-shaders` build has no WGSL compiler either.
+    pub const VALIDATION_AVAILABLE: bool =
+        !cfg!(any(target_arch = "wasm32", feature = "precompiled-shaders"));
 
     /// Compile-check this material without a GPU, or even a renderer.
     ///
@@ -394,6 +555,13 @@ impl ShaderMaterial {
         self.maps = maps;
         self
     }
+    /// Attach CPU-side volumes for `u_vol0`/`u_vol1` — see
+    /// [`volume_maps`](Self::volume_maps). At most two are used.
+    #[cfg(feature = "render")]
+    pub fn with_volume_maps(mut self, volumes: Vec<std::sync::Arc<crate::volume::Data3DTexture>>) -> Self {
+        self.volume_maps = volumes;
+        self
+    }
     /// Draw in the screen-space pass so `ss_color_tex` / `ss_depth_tex` carry the
     /// opaque scene. See [`Self::screen_space`].
     pub fn with_screen_space(mut self, on: bool) -> Self {
@@ -417,11 +585,155 @@ impl ShaderMaterial {
     }
 
     /// The 16 uniform slots as a flat `[[f32; 4]; 16]`, zero-padded/truncated.
+    ///
+    /// The live block if one was set through [`set_data`](Self::set_data) or
+    /// [`set_uniform`](Self::set_uniform), otherwise the `data` field.
     pub fn data_slots(&self) -> [[f32; 4]; 16] {
+        if let Some(d) = self.live.lock().data {
+            return d;
+        }
+        self.field_slots()
+    }
+
+    pub(crate) fn field_slots(&self) -> [[f32; 4]; 16] {
         let mut out = [[0.0f32; 4]; 16];
         for (i, v) in self.data.iter().take(16).enumerate() {
             out[i] = *v;
         }
         out
+    }
+
+    /// Replace the uniform block in place, for this material and every clone
+    /// of it. Seen by the next frame; costs a 256-byte write.
+    pub fn set_data(&self, data: &[[f32; 4]]) {
+        let mut out = [[0.0f32; 4]; 16];
+        for (i, v) in data.iter().take(16).enumerate() {
+            out[i] = *v;
+        }
+        self.live.lock().data = Some(out);
+    }
+
+    /// Set one `vec4` uniform slot (`u_data.data[slot]`) in place. Slots past
+    /// 15 are ignored.
+    pub fn set_uniform(&self, slot: usize, value: [f32; 4]) {
+        if slot >= 16 {
+            return;
+        }
+        let base = self.field_slots();
+        let mut st = self.live.lock();
+        st.data.get_or_insert(base)[slot] = value;
+    }
+
+    /// Write `values` into the uniform block as flat floats starting at float
+    /// `offset` (so `offset` 5 is `u_data.data[1].y`). Anything past the
+    /// sixty-fourth float is ignored.
+    pub fn set_data_floats(&self, offset: usize, values: &[f32]) {
+        let base = self.field_slots();
+        let mut st = self.live.lock();
+        let d = st.data.get_or_insert(base);
+        for (k, v) in values.iter().enumerate() {
+            let i = offset + k;
+            if i >= 64 {
+                break;
+            }
+            d[i / 4][i % 4] = *v;
+        }
+    }
+
+    /// Replace storage slot `slot` (0, 1 or 2) in place, for this material and
+    /// every clone of it. The whole slot is uploaded on the next frame.
+    pub fn set_storage(&self, slot: usize, data: Vec<f32>) {
+        let Some(slot) = Self::slot(slot) else { return };
+        let mut st = self.live.lock();
+        let version = st.storage[slot].as_ref().map_or(0, |s| s.version) + 1;
+        st.storage[slot] = Some(LiveSlot {
+            data,
+            version,
+            base: version,
+            ranges: Default::default(),
+        });
+    }
+
+    /// Overwrite `values.len()` floats of storage slot `slot` starting at
+    /// `offset`, and upload only those on the next frame.
+    ///
+    /// The slot grows, zero-filled, if the range runs past its end — which
+    /// makes that one update a whole upload. A slot not yet set through
+    /// [`set_storage`](Self::set_storage) starts from a copy of its field.
+    pub fn set_storage_range(&self, slot: usize, offset: usize, values: &[f32]) {
+        let Some(slot) = Self::slot(slot) else { return };
+        if values.is_empty() {
+            return;
+        }
+        let mut st = self.live.lock();
+        let s = st.storage[slot].get_or_insert_with(|| LiveSlot {
+            data: self.storage_field(slot).to_vec(),
+            version: 1,
+            base: 1,
+            ranges: Default::default(),
+        });
+        let end = offset + values.len();
+        s.version += 1;
+        if end > s.data.len() {
+            s.data.resize(end, 0.0);
+            s.base = s.version;
+            s.ranges.clear();
+        } else {
+            if s.ranges.len() == RANGE_LOG {
+                s.ranges.pop_front();
+            }
+            s.ranges.push_back((s.version, offset, end));
+        }
+        s.data[offset..end].copy_from_slice(values);
+    }
+
+    /// Say that storage field `slot` was edited in place, so the renderer
+    /// re-uploads it. Only needed for in-place edits of `storage0`..`storage2`
+    /// themselves — assigning a new `Vec` is noticed without it, and the
+    /// setters never need it.
+    pub fn mark_storage_dirty(&mut self, slot: usize) {
+        if let Some(slot) = Self::slot(slot) {
+            self.live.field_rev[slot] += 1;
+        }
+    }
+
+    fn slot(slot: usize) -> Option<usize> {
+        (slot < 3).then_some(slot)
+    }
+
+    /// One number per storage slot that changes whenever what the renderer
+    /// would upload for it changes: the live version for a slot set through
+    /// the setters, else the field's allocation, length and edit count — the
+    /// same tests the upload cache makes, without reading the data.
+    pub(crate) fn storage_stamps(&self) -> [u64; 3] {
+        let live = self.live.lock();
+        std::array::from_fn(|slot| match &live.storage[slot] {
+            Some(ls) => ls.version ^ (self.live.shared_id() << 20) ^ (1 << 63),
+            None => {
+                let f = self.storage_field(slot);
+                (f.as_ptr() as u64)
+                    ^ (f.len() as u64).rotate_left(40)
+                    ^ self.live.field_rev(slot).rotate_left(20)
+            }
+        })
+    }
+
+    /// The storage slot as the renderer sees it: the live data where it was
+    /// set through the setters, else the field. For backends and readers that
+    /// take the floats themselves rather than through the GPU cache.
+    pub fn storage(&self, slot: usize) -> std::borrow::Cow<'_, [f32]> {
+        let live = self.live.lock();
+        match live.storage.get(slot).and_then(|s| s.as_ref()) {
+            Some(ls) => std::borrow::Cow::Owned(ls.data.clone()),
+            None => std::borrow::Cow::Borrowed(self.storage_field(slot)),
+        }
+    }
+
+    pub(crate) fn storage_field(&self, slot: usize) -> &[f32] {
+        match slot {
+            0 => &self.storage0,
+            1 => &self.storage1,
+            _ => &self.storage2,
+        }
     }
 }

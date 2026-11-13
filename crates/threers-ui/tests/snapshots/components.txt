@@ -1,0 +1,76 @@
+== 600x400 Dark text 1
+group @0,0 600x400 fg #ffffff
+  switch "Wi-Fi" checked=false @8,8 584x24 fg #ffffff
+    statictext "Wi-Fi" @50,10 35x19 fg #ffffff
+  tablist @8,40 584x34 fg #ffffff
+    tab "One" selected=true @8,40 45x33 fg #ffffff
+      statictext "One" @20,46 21x19 fg #ffffff
+    tab "Two" selected=false @55,40 45x33 fg #ffffff
+      statictext "Two" @67,46 21x19 fg #ffffff
+  tabpanel "One" @8,82 584x16 fg #ffffff
+== 600x400 Light text 1
+group @0,0 600x400 fg #ffffff
+  switch "Wi-Fi" checked=false @8,8 584x24 fg #ffffff
+    statictext "Wi-Fi" @50,10 35x19 fg #ffffff
+  tablist @8,40 584x34 fg #ffffff
+    tab "One" selected=true @8,40 45x33 fg #ffffff
+      statictext "One" @20,46 21x19 fg #ffffff
+    tab "Two" selected=false @55,40 45x33 fg #ffffff
+      statictext "Two" @67,46 21x19 fg #ffffff
+  tabpanel "One" @8,82 584x16 fg #ffffff
+== 600x400 Dark text 1.5
+group @0,0 600x400 fg #ffffff
+  switch "Wi-Fi" checked=false @8,8 584x29 fg #ffffff
+    statictext "Wi-Fi" @50,8 35x29 fg #ffffff
+  tablist @8,45 584x44 fg #ffffff
+    tab "One" selected=true @8,45 45x43 fg #ffffff
+      statictext "One" @20,51 21x29 fg #ffffff
+    tab "Two" selected=false @55,45 45x43 fg #ffffff
+      statictext "Two" @67,51 21x29 fg #ffffff
+  tabpanel "One" @8,97 584x16 fg #ffffff
+== 600x400 Light text 1.5
+group @0,0 600x400 fg #ffffff
+  switch "Wi-Fi" checked=false @8,8 584x29 fg #ffffff
+    statictext "Wi-Fi" @50,8 35x29 fg #ffffff
+  tablist @8,45 584x44 fg #ffffff
+    tab "One" selected=true @8,45 45x43 fg #ffffff
+      statictext "One" @20,51 21x29 fg #ffffff
+    tab "Two" selected=false @55,45 45x43 fg #ffffff
+      statictext "Two" @67,51 21x29 fg #ffffff
+  tabpanel "One" @8,97 584x16 fg #ffffff
+== 600x400 Dark text 1
+group @0,0 600x400 fg #ffffff
+  alertdialog "Delete?" @140,100 320x132 bg #1f2430 fg #e5e7eb
+    statictext "Delete?" @159,119 282x18 bg #1f2430 fg #e5e7eb
+    statictext "It cannot be undone." @159,149 282x19 bg #1f2430 fg #979eaf
+    button "Delete" @289,180 72x33 bg #2563eb fg #fcfcfc
+      statictext "Delete" @304,187 42x19 bg #2563eb fg #fcfcfc
+    button "Cancel" @369,180 72x33 bg #1f2430 fg #e5e7eb
+      statictext "Cancel" @384,187 42x19 bg #1f2430 fg #e5e7eb
+== 600x400 Light text 1
+group @0,0 600x400 fg #ffffff
+  alertdialog "Delete?" @140,100 320x132 bg #ffffff fg #1f2329
+    statictext "Delete?" @159,119 282x18 bg #ffffff fg #1f2329
+    statictext "It cannot be undone." @159,149 282x19 bg #ffffff fg #5b6270
+    button "Delete" @289,180 72x33 bg #2563eb fg #fcfcfc
+      statictext "Delete" @304,187 42x19 bg #2563eb fg #fcfcfc
+    button "Cancel" @369,180 72x33 bg #ffffff fg #1f2329
+      statictext "Cancel" @384,187 42x19 bg #ffffff fg #1f2329
+== 600x400 Dark text 1.5
+group @0,0 600x400 fg #ffffff
+  alertdialog "Delete?" @140,100 320x161 bg #1f2430 fg #e5e7eb
+    statictext "Delete?" @159,119 282x27 bg #1f2430 fg #e5e7eb
+    statictext "It cannot be undone." @159,158 282x29 bg #1f2430 fg #979eaf
+    button "Delete" @289,199 72x43 bg #2563eb fg #fcfcfc
+      statictext "Delete" @304,206 42x29 bg #2563eb fg #fcfcfc
+    button "Cancel" @369,199 72x43 bg #1f2430 fg #e5e7eb
+      statictext "Cancel" @384,206 42x29 bg #1f2430 fg #e5e7eb
+== 600x400 Light text 1.5
+group @0,0 600x400 fg #ffffff
+  alertdialog "Delete?" @140,100 320x161 bg #ffffff fg #1f2329
+    statictext "Delete?" @159,119 282x27 bg #ffffff fg #1f2329
+    statictext "It cannot be undone." @159,158 282x29 bg #ffffff fg #5b6270
+    button "Delete" @289,199 72x43 bg #2563eb fg #fcfcfc
+      statictext "Delete" @304,206 42x29 bg #2563eb fg #fcfcfc
+    button "Cancel" @369,199 72x43 bg #ffffff fg #1f2329
+      statictext "Cancel" @384,206 42x29 bg #ffffff fg #1f2329

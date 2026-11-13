@@ -1,0 +1,22 @@
+[package]
+name = "my-vision-app"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+# The SwiftUI shell links the static library; the rlib is for `cargo test`.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+threers = { git = "https://github.com/eugenehp/threers", default-features = false, features = ["xr"] }
+
+# On Apple Vision Pro: the immersive space, ARKit, and wgpu on Metal.
+[target.'cfg(target_os = "visionos")'.dependencies]
+threers = { git = "https://github.com/eugenehp/threers", default-features = false, features = ["xr-visionos"] }
+
+# Rendering is slow unoptimised: dependencies optimised even in a debug build.
+[profile.dev.package."*"]
+opt-level = 3
+
+# A project of its own, wherever it is made.
+[workspace]

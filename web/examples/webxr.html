@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WebXR — threers</title>
+    <style>
+        :root { color-scheme: dark; }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: #08090d;
+            color: #e6e8ee;
+            font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+        header {
+            display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+            padding: 18px 24px 12px;
+            border-bottom: 1px solid #1e2129;
+        }
+        h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+        h1 .tag { color: #7d879c; font-weight: 400; }
+        #status { color: #7d879c; font-size: 12px; }
+        nav { margin-left: auto; display: flex; gap: 14px; }
+        nav a { color: #6ea8fe; text-decoration: none; font-size: 13px; }
+        nav a:hover { text-decoration: underline; }
+        main { padding: 20px 24px 40px; max-width: 1200px; margin: 0 auto; }
+        .intro { color: #97a0b3; max-width: 82ch; margin: 0 0 16px; font-size: 13px; }
+        .intro code { color: #cfd6e6; background: #14161d; padding: 1px 5px; border-radius: 4px; }
+        canvas { width: 100%; aspect-ratio: 16 / 9; display: block; border-radius: 10px; background: #05060a; }
+        .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 14px 0 8px; }
+        button {
+            font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px;
+            border: 1px solid #2a2f3c; background: #161a23; color: #e6e8ee; cursor: pointer;
+        }
+        button:hover:not(:disabled) { background: #1d2230; }
+        button:disabled { color: #7d879c; cursor: default; }
+        #err { color: #ff8080; white-space: pre-wrap; font-size: 12px; margin-top: 12px; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>threers <span class="tag">· WebXR</span></h1>
+        <span id="status">loading wasm…</span>
+        <nav>
+            <a href="./index.html">all examples</a>
+            <a href="../index.html">home</a>
+        </nav>
+    </header>
+    <main>
+        <p class="intro">
+            A table of shapes to look at in a headset. Point a controller (or a
+            hand) at a shape to light it up, pull the trigger (or pinch) to
+            recolour it, and hold the grip to pick it up and move it. On Apple
+            Vision Pro, look at a shape and pinch: a quick pinch recolours it,
+            and pinching and holding carries it. Two candles burn at the front of the
+            table (<code>THREE.Candle</code>, threers' own: simple on the left,
+            volumetric on the right). In AR the
+            room shows through and the floor is hidden. On a desktop, drag to
+            look around. The page uses three.js's <code>renderer.xr</code>,
+            <code>VRButton</code> and <code>ARButton</code>. Headsets only allow
+            WebXR on a secure page (https), and the wasm build needs the
+            <code>xr</code> feature (<code>XR=1 ./web/build.sh</code>).
+        </p>
+        <canvas id="view"></canvas>
+        <div class="controls" id="buttons"></div>
+        <div id="err"></div>
+    </main>
+    <script type="module" src="./webxr-demo.js"></script>
+</body>
+</html>

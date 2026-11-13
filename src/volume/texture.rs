@@ -138,6 +138,41 @@ pub struct GpuVolume {
     pub format: VolumeFormat,
 }
 
+/// The volumes a renderer uploaded for a
+/// [`ShaderMaterial`](crate::ShaderMaterial)'s `volume_maps`: each [`Data3DTexture`] once, on
+/// first use, kept while some material still holds it. A new `Arc` is new
+/// contents; the same `Arc` is never uploaded twice.
+#[derive(Default)]
+pub struct VolumeMaps {
+    uploaded: std::collections::HashMap<usize, (std::sync::Arc<Data3DTexture>, GpuVolume)>,
+}
+
+impl VolumeMaps {
+    fn key(t: &std::sync::Arc<Data3DTexture>) -> usize {
+        std::sync::Arc::as_ptr(t) as usize
+    }
+
+    /// Upload `t` on `gpu` unless it is; whether it was.
+    pub fn ensure(&mut self, gpu: &gpu::Gpu, t: &std::sync::Arc<Data3DTexture>) -> bool {
+        let k = Self::key(t);
+        if self.uploaded.contains_key(&k) {
+            return false;
+        }
+        self.uploaded.insert(k, (t.clone(), GpuVolume::from_texture_on(gpu, t)));
+        true
+    }
+
+    /// `t` as uploaded.
+    pub fn get(&self, t: &std::sync::Arc<Data3DTexture>) -> Option<&GpuVolume> {
+        self.uploaded.get(&Self::key(t)).map(|(_, v)| v)
+    }
+
+    /// Let go of the volumes nothing but this holds any more.
+    pub fn evict(&mut self) {
+        self.uploaded.retain(|_, (t, _)| std::sync::Arc::strong_count(t) > 1);
+    }
+}
+
 impl GpuVolume {
     /// An uninitialized volume (texels read as zero until written), on a
     /// `wgpu::Device` or a [`gpu::Gpu`].

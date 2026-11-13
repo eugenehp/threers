@@ -5,6 +5,9 @@
 # directory that is not *ignored* is one `cargo package` sweeps into the
 # tarball, which is how the scratchpad note below came to be written.
 /target-*/
+# Everything else a session makes stays inside the repo: scratch files —
+# logs, probes, notes.
+/.scratch/
 **/*.rs.bk
 *.pdb
 

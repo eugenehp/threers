@@ -14,23 +14,47 @@
 
 /// One sRGB-encoded byte as linear light in `[0, 1]`.
 pub fn srgb_to_linear(byte: u8) -> f32 {
-    let c = byte as f32 / 255.0;
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
+    tables().decode[byte as usize]
 }
 
-/// Linear light in `[0, 1]` as an sRGB-encoded byte.
+/// Linear light in `[0, 1]` as an sRGB-encoded byte: the byte whose
+/// encoding rounds to it, found among the 255 points where the rounding
+/// changes (no power function per call, and the same byte as computing the
+/// curve and rounding).
 pub fn linear_to_srgb(value: f32) -> u8 {
     let c = value.clamp(0.0, 1.0);
-    let encoded = if c <= 0.0031308 {
-        c * 12.92
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    };
-    (encoded * 255.0).round().clamp(0.0, 255.0) as u8
+    // NaN clamps to NaN, which is below every threshold: 0, as before.
+    tables().steps.partition_point(|&t| c >= t) as u8
+}
+
+/// What the curve takes from each byte, and where encoding moves from one
+/// byte to the next.
+struct Tables {
+    decode: [f32; 256],
+    /// `steps[k]`: the least linear value encoding to byte `k + 1` or more.
+    steps: [f32; 255],
+}
+
+fn tables() -> &'static Tables {
+    static TABLES: std::sync::OnceLock<Tables> = std::sync::OnceLock::new();
+    TABLES.get_or_init(|| {
+        let decode = std::array::from_fn(|i| srgb_to_linear_f32(i as f32 / 255.0));
+        let rounded = |c: f32| (linear_to_srgb_f32(c) * 255.0).round().clamp(0.0, 255.0) as u8;
+        let steps = std::array::from_fn(|k| {
+            // Bisect for where the rounded encoding first passes `k`.
+            let (mut lo, mut hi) = (0.0f32, 1.0f32);
+            for _ in 0..40 {
+                let mid = (lo + hi) / 2.0;
+                if rounded(mid) as usize > k {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            hi
+        });
+        Tables { decode, steps }
+    })
 }
 
 /// Linear light as a float in `[0, 1]`, for callers that stay in floats.
@@ -57,6 +81,26 @@ pub fn srgb_to_linear_f32(value: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tables give what the curve gives: every byte decoded, and
+    /// encoding a dense sweep (plus each step and its neighbours) rounding
+    /// as the curve does.
+    #[test]
+    fn the_tables_agree_with_the_curve() {
+        for byte in 0..=255u8 {
+            assert_eq!(srgb_to_linear(byte), srgb_to_linear_f32(byte as f32 / 255.0));
+        }
+        let curve = |v: f32| (linear_to_srgb_f32(v) * 255.0).round().clamp(0.0, 255.0) as u8;
+        let mut values: Vec<f32> = (0..=1_000_000).map(|i| i as f32 / 1_000_000.0).collect();
+        for &t in &tables().steps {
+            values.extend([t, f32::from_bits(t.to_bits() - 1), f32::from_bits(t.to_bits() + 1)]);
+        }
+        values.extend([-1.0, 2.0, f32::INFINITY, f32::NEG_INFINITY]);
+        for v in values {
+            assert_eq!(linear_to_srgb(v), curve(v), "{v}");
+        }
+        assert_eq!(linear_to_srgb(f32::NAN), 0);
+    }
 
     /// The two directions undo each other for every byte.
     #[test]

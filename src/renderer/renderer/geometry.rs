@@ -29,11 +29,14 @@ impl Renderer {
     pub(super) fn ensure_geometry(&mut self, geom: &std::sync::Arc<BufferGeometry>) {
         let key = geom_cache_key(geom);
         let ver = geom.geometry_version;
-        let stale = self
-            .geom_cache
-            .get(&key)
-            .map(|e| e.version != ver)
-            .unwrap_or(true);
+        let now = self.instance_frame;
+        let stale = match self.geom_cache.get_mut(&key) {
+            Some(e) => {
+                e.last_frame = now;
+                e.version != ver
+            }
+            None => true,
+        };
         if stale {
             let mesh = GpuMesh::upload(&self.device, geom);
             let sphere = local_bounding_sphere(geom);
@@ -41,6 +44,7 @@ impl Renderer {
                 key,
                 CachedGpuMesh {
                     version: ver,
+                    last_frame: now,
                     mesh,
                     sphere,
                 },
@@ -495,5 +499,31 @@ impl Renderer {
     /// How many GPU meshes are currently cached.
     pub fn cached_geometry_count(&self) -> usize {
         self.geom_cache.len()
+    }
+
+    /// Drop the GPU meshes (and UV sets) no render has drawn for
+    /// `cache_retention` renders — see
+    /// [`set_cache_retention`](Self::set_cache_retention). Run at the end of
+    /// each render, with the texture cache's own eviction.
+    ///
+    /// What this frees is, in practice, removed meshes' geometry: an app that
+    /// streams content in and out (map tiles, a level's rooms) no longer has
+    /// its GPU memory only ever grow.
+    pub(super) fn evict_unused_geometry(&mut self, now: u64) {
+        if self.cache_retention == u64::MAX {
+            return;
+        }
+        let cutoff = now.saturating_sub(self.cache_retention);
+        let mut gone = Vec::new();
+        self.geom_cache.retain(|k, e| {
+            let keep = e.last_frame >= cutoff;
+            if !keep {
+                gone.push(*k);
+            }
+            keep
+        });
+        for k in gone {
+            self.uv_cache.remove(&k);
+        }
     }
 }

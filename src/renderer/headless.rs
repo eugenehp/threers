@@ -429,19 +429,18 @@ impl HeadlessRenderer {
         // A mesh is one vertex buffer, and the default cap is 256 MiB: an
         // 11.8M-triangle lattice needs 376. Whatever the adapter can hold.
         limits.max_buffer_size = limits.max_buffer_size.max(adapter_limits.max_buffer_size);
-        // WHATEVER COMPRESSION THIS ADAPTER HAS, ask for it.
+        // WHATEVER COMPRESSION THIS ADAPTER HAS, ask for it — and 16-bit unorm
+        // and filtered 32-bit floats (`gpu::TEXTURE_FEATURES`).
         //
         // A device only exposes features it was asked for, so with
-        // `Features::empty()` a BC texture fails wgpu validation at upload time
-        // on hardware that supports it perfectly well. Which family is present
-        // is not portable -- BC is universal on desktop and missing on most
-        // mobile parts, ASTC the other way round, Apple silicon has all three --
-        // so the request is the intersection of what is wanted and what the
-        // adapter reports, and asking for nothing else keeps the device as
-        // widely creatable as it was.
-        let compression = wgpu::Features::TEXTURE_COMPRESSION_BC
-            | wgpu::Features::TEXTURE_COMPRESSION_ETC2
-            | wgpu::Features::TEXTURE_COMPRESSION_ASTC
+        // `Features::empty()` every BC texture would be decoded on the CPU at
+        // upload on hardware that samples it perfectly well. Which family is
+        // present is not portable -- BC is universal on desktop and missing on
+        // most mobile parts, ASTC the other way round, Apple silicon has all
+        // three -- so the request is the intersection of what is wanted and
+        // what the adapter reports, and asking for nothing else keeps the
+        // device as widely creatable as it was.
+        let compression = crate::gpu::TEXTURE_FEATURES
             // Timestamps for `Renderer::gpu_frame_ms`. Masked by what the
             // adapter reports, like the compression formats above, so asking
             // still cannot fail device creation.

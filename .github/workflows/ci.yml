@@ -38,7 +38,8 @@ jobs:
       - run: cargo check -p threers --no-default-features
       - run: cargo check -p threers --no-default-features --features render
       - run: cargo check -p threers --target wasm32-unknown-unknown --no-default-features --features render
-      - run: cargo test -p threers-math -p threers-audio -p threers-captions
+      - run: cargo test -p threers-math -p threers-audio -p threers-captions -p threers-ui
+      - run: cargo check -p threers-ui --target wasm32-unknown-unknown --tests
       - run: cargo check -p threers-video --all-targets
 
   # Conformance streams through the skip gate: a suite that loses its inputs

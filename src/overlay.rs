@@ -53,6 +53,81 @@
 use crate::math::{Color, Vector2};
 use crate::sdf::{self, d2};
 
+/// The error function, to about 5e-4: Wallace's approximation, which the
+/// GPU UI pass uses too.
+pub(crate) fn erf_approx(x: f32) -> f32 {
+    let (s, a) = (x.signum(), x.abs());
+    let t = 1.0 + (0.278393 + (0.230389 + 0.078108 * (a * a)) * a) * a;
+    let t = t * t;
+    s - s / (t * t)
+}
+
+/// How much of a box shadow covers `point`: the rounded box `(x0, y0, x1,
+/// y1)` with corner `radius`, blurred by `sigma`. Wallace's closed form; see
+/// [`Overlay::shadow`].
+pub(crate) fn shadow_coverage(b: (f32, f32, f32, f32), point: (f32, f32), sigma: f32, radius: f32) -> f32 {
+    let (cx, cy) = ((b.0 + b.2) * 0.5, (b.1 + b.3) * 0.5);
+    let (hx, hy) = ((b.2 - b.0) * 0.5, (b.3 - b.1) * 0.5);
+    let corner = radius.clamp(0.0, hx.min(hy));
+    let (px, py) = (point.0 - cx, point.1 - cy);
+    let gaussian = |v: f32| (-(v * v) / (2.0 * sigma * sigma)).exp() / (2.506_628_3 * sigma);
+    let row = |x: f32, y: f32| {
+        let delta = (hy - corner - y.abs()).min(0.0);
+        let curved = hx - corner + (corner * corner - delta * delta).max(0.0).sqrt();
+        let k = std::f32::consts::FRAC_1_SQRT_2 / sigma;
+        let lo = 0.5 + 0.5 * erf_approx((x - curved) * k);
+        let hi = 0.5 + 0.5 * erf_approx((x + curved) * k);
+        hi - lo
+    };
+    let (low, high) = (py - hy, py + hy);
+    let start = (-3.0 * sigma).clamp(low, high);
+    let end = (3.0 * sigma).clamp(low, high);
+    let step = (end - start) / 4.0;
+    let mut v = start + step * 0.5;
+    let mut sum = 0.0;
+    for _ in 0..4 {
+        sum += row(px, py - v) * gaussian(v) * step;
+        v += step;
+    }
+    sum.clamp(0.0, 1.0)
+}
+
+/// Distance from `(px, py)` to the wave `y + a·sin(k (x − x0))`, to first
+/// order: the vertical gap over the curve's slope.
+pub(crate) fn wave_distance(px: f32, py: f32, x0: f32, y: f32, a: f32, k: f32) -> f32 {
+    let t = k * (px - x0);
+    let dy = py - (y + a * t.sin());
+    let slope = a * k * t.cos();
+    dy.abs() / (1.0 + slope * slope).sqrt()
+}
+
+/// Distance to a wave between `x0` and `x1`, capped round at its ends.
+fn wave_centre(px: f32, py: f32, x0: f32, x1: f32, y: f32, a: f32, k: f32) -> f32 {
+    let x = px.clamp(x0, x1);
+    wave_distance(x, py, x0, y, a, k) + (px - x).abs()
+}
+
+/// How much of the pixel centred at `(px, py)` a wave stroke `half` either
+/// side covers, by the rule strokes use ([`sdf::coverage_stroke`] over the
+/// pixel's footprint). The GPU UI pass computes the same.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn wave_coverage(px: f32, py: f32, x0: f32, x1: f32, y: f32, a: f32, k: f32, half: f32) -> f32 {
+    const BAND: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    let f = |x: f32, y2: f32| wave_centre(x, y2, x0, x1, y, a, k) - half;
+    let d = f(px, py);
+    if d >= BAND {
+        return 0.0;
+    }
+    if d <= -BAND {
+        return 1.0;
+    }
+    let e = 0.5;
+    let gx = ((f(px + e, py) - d) / e).abs().max(((d - f(px - e, py)) / e).abs());
+    let gy = ((f(px, py + e) - d) / e).abs().max(((d - f(px, py - e)) / e).abs());
+    let w = sdf::footprint(Vector2::new(gx, gy));
+    sdf::coverage_stroke(d + half, half, w)
+}
+
 /// sRGB-encoded byte to linear float, for the 256 values a byte can hold.
 fn srgb_decode_table() -> &'static [f32; 256] {
     static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
@@ -477,6 +552,199 @@ impl Overlay {
         self.text_size = pixels.max(1.0);
     }
 
+    /// An image — `image_width × image_height` RGBA8, sRGB-encoded, straight
+    /// alpha — scaled to the rectangle at `(x, y)`, `width × height`, at
+    /// `alpha`, and drawn only inside `clip` (`x0, y0, x1, y1`) when given.
+    ///
+    /// Sampled bilinearly in linear light with premultiplied alpha, so a
+    /// transparent edge does not bleed its colour, and composited as the
+    /// shapes are. Its edges are anti-aliased as [`rect`](Self::rect)'s
+    /// are, so an image and a rectangle in the same box meet exactly. Fill
+    /// and stroke play no part.
+    #[allow(clippy::too_many_arguments)]
+    pub fn image(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        rgba: &[u8],
+        image_width: u32,
+        image_height: u32,
+        alpha: f32,
+        clip: Option<(f32, f32, f32, f32)>,
+    ) {
+        let (iw, ih) = (image_width as usize, image_height as usize);
+        if width <= 0.0 || height <= 0.0 || iw == 0 || ih == 0 || rgba.len() < iw * ih * 4 || alpha <= 0.0 {
+            return;
+        }
+        let (cx0, cy0, cx1, cy1) = clip.unwrap_or((0.0, 0.0, self.width as f32, self.height as f32));
+        let (x0, y0) = (x.max(cx0).max(0.0), y.max(cy0).max(0.0));
+        let (x1, y1) = (
+            (x + width).min(cx1).min(self.width as f32),
+            (y + height).min(cy1).min(self.height as f32),
+        );
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let table = srgb_decode_table();
+        // A texel, decoded and premultiplied.
+        let texel = |tx: usize, ty: usize| -> [f32; 4] {
+            let i = (ty * iw + tx) * 4;
+            let a = rgba[i + 3] as f32 / 255.0;
+            [table[rgba[i] as usize] * a, table[rgba[i + 1] as usize] * a, table[rgba[i + 2] as usize] * a, a]
+        };
+        // The drawn region's field, and coverage by the rule `paint` uses.
+        let (hx, hy) = ((x1 - x0) * 0.5, (y1 - y0) * 0.5);
+        let (mx, my) = (x0 + hx, y0 + hy);
+        let field = |px: f32, py: f32| d2::rect(Vector2::new(px - mx, py - my), Vector2::new(hx, hy));
+        const BAND: f32 = std::f32::consts::FRAC_1_SQRT_2;
+        let coverage = |cx: f32, cy: f32| {
+            let d = field(cx, cy);
+            if d >= BAND {
+                0.0
+            } else if d <= -BAND {
+                1.0
+            } else {
+                let gx = (field(cx + 0.5, cy) - d) / 0.5;
+                let gy = (field(cx, cy + 0.5) - d) / 0.5;
+                sdf::coverage_edge(d, sdf::footprint(Vector2::new(gx, gy)))
+            }
+        };
+        // A pixel either side: anti-aliasing reaches just past the edge, as
+        // `paint` pads its box.
+        let (py0, py1) = ((y0 - 1.0).floor().max(0.0) as u32, (y1.ceil() as u32 + 1).min(self.height));
+        let (px0, px1) = ((x0 - 1.0).floor().max(0.0) as u32, (x1.ceil() as u32 + 1).min(self.width));
+        self.mark_rows(py0, py1);
+        for py in py0..py1 {
+            // Texel coordinates of this row's pixel centres.
+            let v = ((py as f32 + 0.5 - y) / height * ih as f32 - 0.5).clamp(0.0, (ih - 1) as f32);
+            let (ty0, fy) = (v.floor() as usize, v - v.floor());
+            let ty1 = (ty0 + 1).min(ih - 1);
+            for px in px0..px1 {
+                let cover = coverage(px as f32 + 0.5, py as f32 + 0.5);
+                if cover <= 0.0 {
+                    continue;
+                }
+                let u = ((px as f32 + 0.5 - x) / width * iw as f32 - 0.5).clamp(0.0, (iw - 1) as f32);
+                let (tx0, fx) = (u.floor() as usize, u - u.floor());
+                let tx1 = (tx0 + 1).min(iw - 1);
+                let (a, b, c, d) = (texel(tx0, ty0), texel(tx1, ty0), texel(tx0, ty1), texel(tx1, ty1));
+                let mix = |k: usize| {
+                    let top = a[k] + (b[k] - a[k]) * fx;
+                    let bottom = c[k] + (d[k] - c[k]) * fx;
+                    top + (bottom - top) * fy
+                };
+                let sample_a = mix(3);
+                let src_a = sample_a * alpha * cover;
+                if src_a <= 0.0 {
+                    continue;
+                }
+                let lin = [0, 1, 2].map(|k| if sample_a > 0.0 { mix(k) / sample_a } else { 0.0 });
+                let i = (py as usize * self.width as usize + px as usize) * 4;
+                let dst = &mut self.pixels[i..i + 4];
+                let da = dst[3] as f32 / 255.0;
+                let out_a = src_a + da * (1.0 - src_a);
+                for k in 0..3 {
+                    let under = table[dst[k] as usize];
+                    dst[k] = srgb_encode((lin[k] * src_a + under * da * (1.0 - src_a)) / out_a);
+                }
+                dst[3] = (out_a * 255.0 + 0.5) as u8;
+                self.touched = true;
+            }
+        }
+    }
+
+    /// Composites linear `color` at `alpha` into pixel `i` (a byte index).
+    fn blend_linear(&mut self, i: usize, color: [f32; 3], alpha: f32) {
+        let table = srgb_decode_table();
+        let dst = &mut self.pixels[i..i + 4];
+        let da = dst[3] as f32 / 255.0;
+        let out_a = alpha + da * (1.0 - alpha);
+        if out_a <= 0.0 {
+            return;
+        }
+        for k in 0..3 {
+            let under = table[dst[k] as usize];
+            dst[k] = srgb_encode((color[k] * alpha + under * da * (1.0 - alpha)) / out_a);
+        }
+        dst[3] = (out_a * 255.0 + 0.5) as u8;
+        self.touched = true;
+    }
+
+    /// A box shadow: the rounded rectangle at `(x, y)`, `width × height`,
+    /// corners `radius`, blurred by a Gaussian of standard deviation
+    /// `sigma` (CSS's blur radius halved), in the fill colour.
+    ///
+    /// Evaluated in closed form per pixel (after Evan Wallace): the blur across a row of the rounded box is an error
+    /// function, and down the column four Gaussian-weighted samples. No
+    /// blur pass, and the GPU UI pass computes the same thing. A `sigma`
+    /// under half a pixel is a sharp rounded rectangle.
+    pub fn shadow(&mut self, x: f32, y: f32, width: f32, height: f32, radius: f32, sigma: f32) {
+        let Some(paint) = self.fill else { return };
+        if width <= 0.0 || height <= 0.0 || paint.alpha <= 0.0 {
+            return;
+        }
+        if sigma < 0.5 {
+            let stroke = self.stroke.take();
+            self.rounded_rect(x, y, width, height, radius);
+            self.stroke = stroke;
+            return;
+        }
+        let reach = 3.0 * sigma;
+        let (px0, py0) = ((x - reach).floor().max(0.0) as u32, (y - reach).floor().max(0.0) as u32);
+        let px1 = ((x + width + reach).ceil().max(0.0) as u32).min(self.width);
+        let py1 = ((y + height + reach).ceil().max(0.0) as u32).min(self.height);
+        if px0 >= px1 || py0 >= py1 {
+            return;
+        }
+        self.mark_rows(py0, py1);
+        for py in py0..py1 {
+            for px in px0..px1 {
+                let a = shadow_coverage(
+                    (x, y, x + width, y + height),
+                    (px as f32 + 0.5, py as f32 + 0.5),
+                    sigma,
+                    radius,
+                ) * paint.alpha;
+                if a > 1.0 / 512.0 {
+                    let i = (py as usize * self.width as usize + px as usize) * 4;
+                    self.blend_linear(i, paint.linear, a);
+                }
+            }
+        }
+    }
+
+    /// A wavy line, as under a misspelt word: from `x0` to `x1` along `y`,
+    /// rising and falling `amplitude` pixels every `period` pixels, in the
+    /// stroke colour and weight.
+    ///
+    /// Every pixel near it is evaluated (no tiles skipped): the distance to
+    /// a wave is only approximate, too steep near its crests for skipping
+    /// a tile by its centre to be safe.
+    pub fn wavy_line(&mut self, x0: f32, y: f32, x1: f32, amplitude: f32, period: f32) {
+        let Some(paint) = self.stroke else { return };
+        let half = self.stroke_weight * 0.5;
+        let (a, k) = (amplitude, std::f32::consts::TAU / period.max(1e-3));
+        let reach = a + 2.0 * half + 1.0;
+        let (px0, py0) = ((x0 - reach).floor().max(0.0) as u32, (y - reach).floor().max(0.0) as u32);
+        let px1 = ((x1 + reach).ceil().max(0.0) as u32).min(self.width);
+        let py1 = ((y + reach).ceil().max(0.0) as u32).min(self.height);
+        if px0 >= px1 || py0 >= py1 || paint.alpha <= 0.0 {
+            return;
+        }
+        self.mark_rows(py0, py1);
+        for py in py0..py1 {
+            for px in px0..px1 {
+                let c = wave_coverage(px as f32 + 0.5, py as f32 + 0.5, x0, x1, y, a, k, half);
+                if c > 0.0 {
+                    let i = (py as usize * self.width as usize + px as usize) * 4;
+                    self.blend_linear(i, paint.linear, paint.alpha * c);
+                }
+            }
+        }
+    }
+
     /// An axis-aligned rectangle with its top-left corner at `(x, y)`.
     pub fn rect(&mut self, x: f32, y: f32, width: f32, height: f32) {
         self.rounded_rect(x, y, width, height, 0.0);
@@ -496,6 +764,27 @@ impl Overlay {
             cy + hy.abs(),
             sdf,
         );
+    }
+
+    /// A rectangle with corners rounded by `radius` pixels, cut to the
+    /// rectangle `clip` (`[x, y, width, height]`): the part inside it, its
+    /// own corners still round.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rounded_rect_clipped(&mut self, x: f32, y: f32, width: f32, height: f32, radius: f32, clip: [f32; 4]) {
+        let (hx, hy) = (width.abs() * 0.5, height.abs() * 0.5);
+        let (cx, cy) = (x.min(x + width) + hx, y.min(y + height) + hy);
+        let r = radius.clamp(0.0, hx.min(hy));
+        let half = Vector2::new(hx, hy);
+        let (chx, chy) = (clip[2].abs() * 0.5, clip[3].abs() * 0.5);
+        let (ccx, ccy) = (clip[0] + chx, clip[1] + chy);
+        let clip_half = Vector2::new(chx, chy);
+        // inside both: the farther of the two distances
+        let sdf = move |px: f32, py: f32| d2::round_rect(Vector2::new(px - cx, py - cy), half, r).max(d2::rect(Vector2::new(px - ccx, py - ccy), clip_half));
+        let (x0, y0) = ((cx - hx).max(ccx - chx), (cy - hy).max(ccy - chy));
+        let (x1, y1) = ((cx + hx).min(ccx + chx), (cy + hy).min(ccy + chy));
+        if x1 > x0 && y1 > y0 {
+            self.shape(x0, y0, x1, y1, sdf);
+        }
     }
 
     /// A circle of `radius` centred on `(cx, cy)`.

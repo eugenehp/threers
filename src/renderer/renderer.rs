@@ -820,6 +820,12 @@ struct ShadowCutPipelines {
 
 struct CachedGpuMesh {
     version: u32,
+    /// The render that last drew it (`instance_frame`). An entry nothing has
+    /// drawn for `cache_retention` renders is dropped, with its GPU buffers —
+    /// a removed mesh's, typically, which otherwise sat on them for the life
+    /// of the renderer. Tracked by use rather than by holding the geometry
+    /// (a `Weak`), which would make `Arc::get_mut` on it fail for its owner.
+    last_frame: u64,
     mesh: GpuMesh,
     /// Object-space bounds, for frustum culling. `None` when the geometry has
     /// no position attribute, which is the one case that must never be culled
@@ -973,10 +979,10 @@ impl RendererOptions {
     }
 }
 
-/// Frames a texture nothing draws keeps its GPU copy, by default — see
-/// [`Renderer::set_cache_retention`]. Two seconds at 60 fps: long enough for a
-/// texture shown on and off, short enough that a stream of new ones does not
-/// pile up.
+/// Frames a texture or geometry nothing draws keeps its GPU copy, by default —
+/// see [`Renderer::set_cache_retention`]. Two seconds at 60 fps: long enough
+/// for something shown on and off, short enough that a stream of new ones
+/// (removed meshes, a texture a frame) does not pile up.
 pub const DEFAULT_CACHE_RETENTION: u64 = 120;
 
 pub struct Renderer {
@@ -1081,6 +1087,11 @@ pub struct Renderer {
     /// Whether the last frame's main pass drew into `msaa_targets` — which
     /// attachments [`overlay_attachments`](Self::overlay_attachments) hands out.
     overlay_msaa: bool,
+    /// Where the last render's main pass drew, for
+    /// [`draw_over_last`](Self::draw_over_last): its pane (a partial clear
+    /// drawn multisampled), viewport and scissor in that attachment, and the
+    /// projection fix it drew with.
+    pub(super) last_overlay: Option<LastOverlay>,
     /// Whether the last frame drawn multisampled. A frame with `Oit` or
     /// `Refract` glass cannot, whatever `msaa` asks; `render_to_multisampled`
     /// then antialiases it with FXAA instead (`fxaa_fallback`).
@@ -1232,6 +1243,22 @@ pub struct Renderer {
     /// (`env_bgl_glass`), which carries the capture at bindings 9–12 that the
     /// main layout leaves out.
     custom_ss_pipeline_layout: Option<wgpu::PipelineLayout>,
+    /// Group 0 of the custom shadow pipelines: the frame uniforms at a dynamic
+    /// offset, one copy per shadow pass with that pass's light as the camera.
+    custom_shadow_frame_bgl: wgpu::BindGroupLayout,
+    /// The custom shadow layouts: `custom_pipeline_layout`'s, and the lit one
+    /// a trimmed backend uses, with that frame group in front.
+    custom_shadow_layout: Option<wgpu::PipelineLayout>,
+    custom_lit_shadow_layout: Option<wgpu::PipelineLayout>,
+    /// Depth-only pipelines drawing a `ShaderMaterial` into a shadow map
+    /// through its own vertex stage, by (shader hash, lit layout, shadow
+    /// side); `None` for one that would not build, which then casts its
+    /// geometry as before.
+    custom_shadow_pipelines: HashMap<(u64, bool, u32), Option<wgpu::RenderPipeline>>,
+    /// The per-pass frame copies and their bind group, and how many passes
+    /// they have room for.
+    custom_shadow_frames: Option<(wgpu::Buffer, wgpu::BindGroup, usize)>,
+    custom_shadow_frame_stride: u64,
     /// Where the environment is trimmed (WebGL2), the layout of a custom shader
     /// that reads shadows or area lights, and its group 1. The sixteen texture
     /// units hold the full environment or the volume slots but not both, so
@@ -1249,6 +1276,9 @@ pub struct Renderer {
     /// Custom pipelines multisampled, for an opaque shader material in a
     /// frame drawn under MSAA; keyed as `custom_encoded_pipelines` is.
     custom_msaa_pipelines: HashMap<(u64, bool, bool, u32), Pipeline>,
+    /// `ShaderMaterial` uniform/storage buffers and bind groups, kept across
+    /// frames. See `custom_cache`.
+    custom_cache: super::custom_cache::CustomCache,
     /// Shaders that would not compile. Remembered so the error is logged once
     /// rather than every frame, and so the draw is skipped rather than retried.
     custom_failed: std::collections::HashSet<CustomPipelineKey>,
@@ -1484,6 +1514,8 @@ pub struct Renderer {
     default_data_tex_view: wgpu::TextureView,
     /// 1x1x1 `R8Unorm` 3D texture for a `ShaderMaterial`'s empty volume slots.
     default_volume_view: wgpu::TextureView,
+    /// `ShaderMaterial::volume_maps` as uploaded.
+    volume_maps: crate::volume::VolumeMaps,
     /// Linear, clamp-to-edge: a volume's `u_vol_samp`. Repeat would wrap the
     /// far face of a scan onto the near one at the boundary.
     sampler_volume: wgpu::Sampler,
@@ -1664,6 +1696,58 @@ fn default_ssao_noise() -> Vec<f32> {
 }
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+/// How to draw into [`Renderer::draw_over_last`]'s pass so it matches the
+/// render beneath.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OverlayInfo {
+    /// Samples per pixel of the colour (and depth) attached.
+    pub samples: u32,
+    /// Whether a depth attachment is there (`Depth32Float`, see
+    /// [`OverlayInfo::DEPTH_FORMAT`]); without one, draw without a depth test.
+    pub depth: bool,
+    /// Near at 1, far at 0 ([`Renderer::set_reversed_z`]): compare with
+    /// `GreaterEqual`, and flip projections' depth (`z' = w - z`).
+    pub reversed: bool,
+    /// Left-multiplied onto the camera's projection by the render (a viewport
+    /// hanging off its target): apply it to projections drawn here too.
+    pub projection_fix: Option<crate::math::Matrix4>,
+    /// The colour attachment's format.
+    pub color_format: wgpu::TextureFormat,
+}
+
+impl OverlayInfo {
+    pub const DEPTH_FORMAT: wgpu::TextureFormat = DEPTH_FORMAT;
+
+    /// `projection` (this renderer's 0..1 depth) as the render drew with it:
+    /// the fix applied, and the depth flipped if reversed.
+    pub fn projection(&self, projection: &crate::math::Matrix4) -> crate::math::Matrix4 {
+        let mut p = match &self.projection_fix {
+            Some(fix) => fix.multiply(projection),
+            None => *projection,
+        };
+        if self.reversed {
+            for c in 0..4 {
+                p.elements[c * 4 + 2] = p.elements[c * 4 + 3] - p.elements[c * 4 + 2];
+            }
+        }
+        p
+    }
+
+    /// The depth comparison that keeps what is nearer.
+    pub fn depth_compare(&self) -> wgpu::CompareFunction {
+        if self.reversed { wgpu::CompareFunction::GreaterEqual } else { wgpu::CompareFunction::LessEqual }
+    }
+}
+
+/// See [`Renderer::last_overlay`].
+#[derive(Debug, Clone)]
+pub(super) struct LastOverlay {
+    pub pane: Option<(super::viewport::PaneKey, super::viewport::PixelRect)>,
+    pub viewport: super::viewport::PixelRect,
+    pub scissor: super::viewport::PixelRect,
+    pub projection_fix: Option<crate::math::Matrix4>,
+}
 
 /// One depth texture's values written as another's, by a fullscreen triangle:
 /// where depth cannot be copied (WebGL2). Sampled, not loaded — `textureLoad`
@@ -1890,7 +1974,7 @@ const INSTANCED_CUSTOM_SALT: u64 = 0x9e37_79b9_7f4a_7c15;
 /// alpha-to-coverage: the same source, another pipeline.
 const COVERAGE_CUSTOM_SALT: u64 = 0xc2b2_ae3d_27d4_eb4f;
 
-fn custom_shader_hash(fragment: &str, vertex: Option<&str>) -> u64 {
+pub(crate) fn custom_shader_hash(fragment: &str, vertex: Option<&str>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     fragment.hash(&mut h);
@@ -2042,12 +2126,15 @@ fn threers_sample_offset(i : u32) -> vec2<f32> {{\n\
 /// build, so the browser's own WGSL compiler does this job and reports to the
 /// console. This returns `Ok` there rather than pretending otherwise — see
 /// `ShaderMaterial::VALIDATION_AVAILABLE`.
-#[cfg(target_arch = "wasm32")]
+///
+/// A `precompiled-shaders` build has no WGSL compiler either, and returns `Ok`
+/// the same way.
+#[cfg(any(target_arch = "wasm32", feature = "precompiled-shaders"))]
 pub(crate) fn validate_custom_shader(_source: &str, _preamble_lines: usize) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", feature = "precompiled-shaders")))]
 pub(crate) fn validate_custom_shader(source: &str, preamble_lines: usize) -> Result<(), String> {
     if let Ok(path) = std::env::var("THREERS_DUMP_SHADER") {
         let _ = std::fs::write(&path, source);
@@ -2078,8 +2165,13 @@ struct CustomShaderReach {
 
 /// Which of those `source` touches. naga's own usage analysis, followed through
 /// helper functions, so it agrees with the check wgpu makes of the pipeline
-/// against its layout. No naga means WebGPU in a browser, which never trims.
-#[cfg(any(not(target_arch = "wasm32"), feature = "webgl"))]
+/// against its layout. No naga means WebGPU in a browser, which never trims,
+/// or a `precompiled-shaders` build, whose custom shaders are recorded with
+/// the layout this gives.
+#[cfg(all(
+    any(not(target_arch = "wasm32"), feature = "webgl"),
+    not(feature = "precompiled-shaders")
+))]
 fn custom_shader_reach(source: &str) -> CustomShaderReach {
     use wgpu::naga::valid::{Capabilities, GlobalUse, ValidationFlags, Validator};
     let mut reach = CustomShaderReach::default();
@@ -2105,7 +2197,10 @@ fn custom_shader_reach(source: &str) -> CustomShaderReach {
     reach
 }
 
-#[cfg(not(any(not(target_arch = "wasm32"), feature = "webgl")))]
+#[cfg(not(all(
+    any(not(target_arch = "wasm32"), feature = "webgl"),
+    not(feature = "precompiled-shaders")
+)))]
 fn custom_shader_reach(_source: &str) -> CustomShaderReach {
     CustomShaderReach::default()
 }
@@ -2117,6 +2212,7 @@ fn custom_shader_reach(_source: &str) -> CustomShaderReach {
 /// seventeen hundred lines of it. Unmapped, the number is not merely useless,
 /// it points at a file the user does not have.
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(feature = "precompiled-shaders", allow(dead_code))]
 fn annotate(message: &str, source: &str, preamble_lines: usize) -> String {
     let total = source.lines().count();
     let mut out = String::from(message);
@@ -2127,6 +2223,184 @@ fn annotate(message: &str, source: &str, preamble_lines: usize) -> String {
          to write the whole module out."
     ));
     out
+}
+
+/// An up vector for looking along `dir` that is never parallel to it.
+fn light_up(dir: Vector3) -> Vector3 {
+    let d = dir.normalize();
+    if d.y.abs() > 0.99 {
+        Vector3::new(0.0, 0.0, -1.0)
+    } else {
+        Vector3::UP
+    }
+}
+
+/// A directional shadow box fitted to the camera's view: the frustum out to
+/// `reach` world units, extended `behind` units toward the light so casters
+/// outside the view still land in the map. The box is snapped in size and to
+/// whole shadow texels in the light's plane, so it does not shimmer as the
+/// camera pans. Returns (light eye, light view, light projection).
+fn fit_shadow_to_view(
+    dir: Vector3,
+    inv_view_proj: &Matrix4,
+    inv_view: &Matrix4,
+    reach: f32,
+    behind: f32,
+    map_size: u32,
+) -> (Vector3, Matrix4, Matrix4) {
+    let d = dir.normalize();
+    let e = &inv_view.elements;
+    let cam = Vector3::new(e[12], e[13], e[14]);
+    let mut pts = vec![cam];
+    for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        let far = Vector3::new(x, y, 1.0).apply_matrix4(inv_view_proj);
+        let ray = far - cam;
+        let len = ray.length();
+        if len > 1e-6 && len.is_finite() {
+            pts.push(cam + ray * (reach.min(len) / len));
+        }
+    }
+    // Light space with the origin as pivot: only orientation matters here.
+    let rot = Matrix4::look_at(Vector3::ZERO, d, light_up(d));
+    let (mut lo, mut hi) = (
+        Vector3::new(f32::MAX, f32::MAX, f32::MAX),
+        Vector3::new(f32::MIN, f32::MIN, f32::MIN),
+    );
+    for p in &pts {
+        let q = p.apply_matrix4(&rot);
+        lo = Vector3::new(lo.x.min(q.x), lo.y.min(q.y), lo.z.min(q.z));
+        hi = Vector3::new(hi.x.max(q.x), hi.y.max(q.y), hi.z.max(q.z));
+    }
+    // Square box, side snapped up to a power-of-two-ish step so the texel size
+    // only changes in jumps, and the centre snapped to whole texels.
+    let side = (hi.x - lo.x).max(hi.y - lo.y).max(1e-3);
+    let side = 2f32.powf((side.log2() * 4.0).ceil() / 4.0).max(side);
+    let texel = side / map_size.max(1) as f32;
+    let cx = (((lo.x + hi.x) * 0.5) / texel).round() * texel;
+    let cy = (((lo.y + hi.y) * 0.5) / texel).round() * texel;
+    let h = side * 0.5;
+    // Looking along -z in light space: the nearest point has the largest z.
+    let near_z = hi.z + behind;
+    let depth = (hi.z - lo.z) + behind;
+    // Eye on the near face, centred; back to world space.
+    let inv_rot = rot.invert();
+    let eye = Vector3::new(cx, cy, near_z).apply_matrix4(&inv_rot);
+    let view = Matrix4::look_at(eye, eye + d, light_up(d));
+    let proj = Matrix4::orthographic(-h, h, h, -h, 0.0, depth.max(1e-3) * 1.001);
+    (eye, view, proj)
+}
+
+/// The vertex buffers a custom-shader pipeline reads: the mesh's, and on an
+/// `InstancedMesh` the instance matrix and tint in slot 1, as the built-in
+/// instanced pipeline has them, and the two custom columns in slot 2
+/// (`InstancedCustomIn`). Shared by the colour and the shadow pipelines.
+fn custom_vertex_buffers(instanced: bool) -> Vec<Option<wgpu::VertexBufferLayout<'static>>> {
+    const fn attr(
+        offset: u64,
+        shader_location: u32,
+        format: wgpu::VertexFormat,
+    ) -> wgpu::VertexAttribute {
+        wgpu::VertexAttribute {
+            offset,
+            shader_location,
+            format,
+        }
+    }
+    use wgpu::VertexFormat::{Float32x2, Float32x3, Float32x4};
+    const MESH: [wgpu::VertexAttribute; 5] = [
+        attr(0, 0, Float32x3),
+        attr(12, 1, Float32x3),
+        attr(24, 2, Float32x2),
+        attr(32, 3, Float32x4),
+        attr(48, 8, Float32x4),
+    ];
+    const INSTANCE: [wgpu::VertexAttribute; 5] = [
+        attr(0, 4, Float32x4),
+        attr(16, 5, Float32x4),
+        attr(32, 6, Float32x4),
+        attr(48, 7, Float32x4),
+        attr(64, 9, Float32x4),
+    ];
+    const CUSTOM: [wgpu::VertexAttribute; 2] = [attr(0, 10, Float32x4), attr(16, 11, Float32x4)];
+    let base = wgpu::VertexBufferLayout {
+        array_stride: GpuMesh::VERTEX_STRIDE as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &MESH,
+    };
+    if instanced {
+        vec![
+            Some(base),
+            Some(wgpu::VertexBufferLayout {
+                array_stride: 80,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &INSTANCE,
+            }),
+            Some(wgpu::VertexBufferLayout {
+                array_stride: 32,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &CUSTOM,
+            }),
+        ]
+    } else {
+        vec![Some(base)]
+    }
+}
+
+/// Depth-only pipeline drawing a `ShaderMaterial` with its own vertex stage
+/// (`vs_custom`) into a directional or spot shadow map, so geometry the stage
+/// moves, grows or hides casts the shadow of what is drawn, not of the mesh it
+/// was handed. Bound with a copy of the frame uniforms whose `view_proj` is
+/// the pass's light, so a stage written for the camera needs no change.
+/// Biased and culled as the built-in shadow pipelines are.
+fn build_custom_shadow_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    fragment: &str,
+    vertex: &str,
+    instanced: bool,
+    cull: Option<wgpu::Face>,
+) -> Result<wgpu::RenderPipeline, String> {
+    let source = custom_shader_module_source(
+        fragment,
+        Some(vertex),
+        crate::renderer::caps::supports_storage_buffers(device),
+        false,
+        1,
+    );
+    validate_custom_shader(&source, custom_preamble_lines())?;
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("threers custom shadow shader"),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    });
+    let buffers = custom_vertex_buffers(instanced);
+    Ok(
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("threers custom shadow pipeline"),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs_custom"),
+                buffers: &buffers,
+                compilation_options: Default::default(),
+            },
+            fragment: None,
+            primitive: primitive(wgpu::PrimitiveTopology::TriangleList, cull),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: 2,
+                    slope_scale: 2.0,
+                    clamp: 0.0,
+                },
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        }),
+    )
 }
 
 /// Compile a custom-shader pipeline (alpha-blended, no depth write — treated as
@@ -2166,72 +2440,7 @@ fn build_custom_pipeline(
         label: Some("threers custom shader"),
         source: wgpu::ShaderSource::Wgsl(source.into()),
     });
-    let vertex_buffers = [wgpu::VertexBufferLayout {
-        array_stride: GpuMesh::VERTEX_STRIDE as wgpu::BufferAddress,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[
-            wgpu::VertexAttribute {
-                offset: 0,
-                shader_location: 0,
-                format: wgpu::VertexFormat::Float32x3,
-            },
-            wgpu::VertexAttribute {
-                offset: 12,
-                shader_location: 1,
-                format: wgpu::VertexFormat::Float32x3,
-            },
-            wgpu::VertexAttribute {
-                offset: 24,
-                shader_location: 2,
-                format: wgpu::VertexFormat::Float32x2,
-            },
-            wgpu::VertexAttribute {
-                offset: 32,
-                shader_location: 3,
-                format: wgpu::VertexFormat::Float32x4,
-            },
-            wgpu::VertexAttribute {
-                offset: 48,
-                shader_location: 8,
-                format: wgpu::VertexFormat::Float32x4,
-            },
-        ],
-    }];
-    // `buffers` takes a slice of `Option` in wgpu 30.
-    let [base] = vertex_buffers;
-    // On an `InstancedMesh`: the instance matrix and tint in slot 1, as the
-    // built-in instanced pipeline has them, and the two custom columns in
-    // slot 2 (`InstancedCustomIn`).
-    let instance_attrs =
-        [(0, 4), (16, 5), (32, 6), (48, 7), (64, 9)].map(|(offset, shader_location)| {
-            wgpu::VertexAttribute {
-                offset,
-                shader_location,
-                format: wgpu::VertexFormat::Float32x4,
-            }
-        });
-    let custom_attrs = [(0, 10), (16, 11)].map(|(offset, shader_location)| wgpu::VertexAttribute {
-        offset,
-        shader_location,
-        format: wgpu::VertexFormat::Float32x4,
-    });
-    let vertex_buffers: Vec<Option<wgpu::VertexBufferLayout>> = if instanced {
-        vec![
-            Some(base),
-            Some(wgpu::VertexBufferLayout {
-                array_stride: 80,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &instance_attrs,
-            }),
-            Some(wgpu::VertexBufferLayout {
-                array_stride: 32,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &custom_attrs,
-            }),
-        ]
-    } else {
-        vec![Some(base)]
-    };
+    let vertex_buffers = custom_vertex_buffers(instanced);
     Ok(pipes.create(
         device,
         &wgpu::RenderPipelineDescriptor {
@@ -2330,192 +2539,6 @@ pub(crate) fn custom_preamble_lines() -> usize {
         .count()
 }
 
-/// Pack a flat `f32` array into an `Rgba32Float` texture, four values a texel.
-///
-/// This is the storage array for devices that have no storage buffers — WebGL2
-/// being all of them. A `ShaderMaterial` whose data does not fit the 16 `vec4`
-/// uniform block had nowhere else to put it there, which ruled the feature out
-/// for anything data-driven on the web.
-///
-/// `textureLoad` needs no filtering and no sampler, so this works on the
-/// baseline float-texture support every WebGL2 context has.
-fn upload_data_texture(device: &wgpu::Device, queue: &wgpu::Queue, data: &[f32]) -> wgpu::Texture {
-    let texels = data.len().div_ceil(4).max(1);
-    // 2048 is the smallest `max_texture_dimension_2d` anything still shipping
-    // reports, so a row never has to be checked against the device.
-    let width = texels.clamp(1, 2048) as u32;
-    let height = (texels as u32).div_ceil(width).max(1);
-    let mut padded = vec![0.0f32; (width * height * 4) as usize];
-    padded[..data.len()].copy_from_slice(data);
-    let tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("threers user data texture"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba32Float,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &tex,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        bytemuck::cast_slice(&padded),
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(width * 16),
-            rows_per_image: Some(height),
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-    tex
-}
-
-/// Build the custom @group(1) bind group: the mesh uniform (binding 0, shared
-/// with the standard path), the `ShaderMaterial` user uniform (binding 1), the
-/// three storage arrays (bindings 2-4) and the same three as textures
-/// (bindings 10-12) for devices with no storage buffers. Returns the bind group
-/// plus the resources it owns, which the caller keeps alive until submit.
-#[allow(clippy::too_many_arguments)]
-fn build_user_bind_group(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    bgl: &wgpu::BindGroupLayout,
-    mesh_uniform: wgpu::BufferBinding<'_>,
-    data: &[[f32; 4]; 16],
-    storage: &[Vec<f32>; 3],
-    textures: &[Option<&wgpu::TextureView>],
-    placeholder: &wgpu::TextureView,
-    data_placeholder: &wgpu::TextureView,
-    sampler: &wgpu::Sampler,
-    volumes: &[crate::marks::gpu::TextureView],
-    volume_placeholder: &wgpu::TextureView,
-    volume_sampler: &wgpu::Sampler,
-    with_volumes: bool,
-) -> (wgpu::BindGroup, Vec<wgpu::Buffer>, Vec<wgpu::Texture>) {
-    use wgpu::util::DeviceExt;
-    let flat: Vec<f32> = data.iter().flat_map(|v| v.iter().copied()).collect();
-    let mut buffers = vec![
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("threers user uniform"),
-            contents: bytemuck::cast_slice(&flat),
-            usage: wgpu::BufferUsages::UNIFORM,
-        }),
-    ];
-    let storage_buffers = crate::renderer::caps::supports_storage_buffers(device);
-    if storage_buffers {
-        for s in storage.iter() {
-            buffers.push(
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("threers user storage"),
-                    contents: bytemuck::cast_slice(s),
-                    usage: wgpu::BufferUsages::STORAGE,
-                }),
-            );
-        }
-    }
-    let tex = |i: usize| -> &wgpu::TextureView {
-        textures.get(i).copied().flatten().unwrap_or(placeholder)
-    };
-    let mut entries = vec![
-        wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::Buffer(mesh_uniform),
-        },
-        wgpu::BindGroupEntry {
-            binding: 1,
-            resource: buffers[0].as_entire_binding(),
-        },
-    ];
-    if storage_buffers {
-        for (i, buffer) in buffers[1..4].iter().enumerate() {
-            entries.push(wgpu::BindGroupEntry {
-                binding: 2 + i as u32,
-                resource: buffer.as_entire_binding(),
-            });
-        }
-    }
-    entries.extend([
-        wgpu::BindGroupEntry {
-            binding: 5,
-            resource: wgpu::BindingResource::TextureView(tex(0)),
-        },
-        wgpu::BindGroupEntry {
-            binding: 6,
-            resource: wgpu::BindingResource::TextureView(tex(1)),
-        },
-        wgpu::BindGroupEntry {
-            binding: 7,
-            resource: wgpu::BindingResource::TextureView(tex(2)),
-        },
-        wgpu::BindGroupEntry {
-            binding: 8,
-            resource: wgpu::BindingResource::TextureView(tex(3)),
-        },
-        wgpu::BindGroupEntry {
-            binding: 9,
-            resource: wgpu::BindingResource::Sampler(sampler),
-        },
-    ]);
-    // The data textures are only built where they are the only option; with
-    // storage buffers present these bind a 1x1 placeholder nothing reads, so
-    // the layout is the same shape on every backend and the module is not.
-    let mut data_textures: Vec<wgpu::Texture> = Vec::new();
-    let mut data_views: Vec<wgpu::TextureView> = Vec::new();
-    if !storage_buffers {
-        for s in storage.iter() {
-            let t = upload_data_texture(device, queue, s);
-            data_views.push(t.create_view(&wgpu::TextureViewDescriptor::default()));
-            data_textures.push(t);
-        }
-    }
-    for i in 0..3 {
-        entries.push(wgpu::BindGroupEntry {
-            binding: 10 + i as u32,
-            resource: wgpu::BindingResource::TextureView(
-                data_views.get(i).unwrap_or(data_placeholder),
-            ),
-        });
-    }
-    if with_volumes {
-        for i in 0..2 {
-            entries.push(wgpu::BindGroupEntry {
-                binding: 13 + i as u32,
-                resource: wgpu::BindingResource::TextureView(
-                    // A Metal view (a volume made for the native backend)
-                    // has nothing to bind here.
-                    volumes
-                        .get(i)
-                        .and_then(|v| v.as_wgpu())
-                        .unwrap_or(volume_placeholder),
-                ),
-            });
-        }
-        entries.push(wgpu::BindGroupEntry {
-            binding: 15,
-            resource: wgpu::BindingResource::Sampler(volume_sampler),
-        });
-    }
-    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("threers custom mesh+user bg"),
-        layout: bgl,
-        entries: &entries,
-    });
-    (bg, buffers, data_textures)
-}
-
 impl Renderer {
     /// The near and far planes of the camera this renderer last drew with.
     ///
@@ -2602,6 +2625,64 @@ impl Renderer {
     ///
     /// After [`render_to`](Self::render_to) the frame's depth is the target's
     /// own `depth_view`, not this.
+    /// Draws more into what the last [`render`](Self::render) drew,
+    /// depth-tested against its depth: `draw` gets a pass with the colour
+    /// and depth attached (multisampled when the render was) and the viewport
+    /// and scissor set, and an [`OverlayInfo`] saying how to make pipelines
+    /// and projections match. Wherever the render went — straight into
+    /// `target_view`, through the shared multisampled targets, or through a
+    /// pane of its own (a partial clear drawn multisampled, as each eye of
+    /// [`render_xr`](Self::render_xr) is) — the result ends up in
+    /// `target_view` as the render's did. Nothing happens before a render.
+    pub fn draw_over_last(&self, target_view: &wgpu::TextureView, draw: impl FnOnce(&mut wgpu::RenderPass<'_>, &OverlayInfo)) {
+        let Some(last) = &self.last_overlay else { return };
+        let pane = last.pane.as_ref().and_then(|(key, region)| self.viewport_state.pane_target(key).map(|t| (t, key, *region)));
+        // The colour, what it resolves into, the depth (if one matches), samples.
+        let (color, resolve, depth, samples) = match (&pane, &self.msaa_targets) {
+            (Some((t, ..)), _) => (&t.msaa_color, Some(&t.resolve), Some(&t.msaa_depth), self.msaa),
+            (None, Some((_, _, cv, dv))) if self.overlay_msaa => (cv, Some(target_view), Some(dv), self.msaa),
+            // Multisampled under refraction glass: its depth has no colour to
+            // go with it here; drawn without.
+            _ if self.last_frame_msaa => (target_view, None, None, 1),
+            _ => (target_view, None, Some(&self.depth_view), 1),
+        };
+        let info = OverlayInfo {
+            samples,
+            depth: depth.is_some(),
+            reversed: self.reversed_z(),
+            projection_fix: last.projection_fix,
+            color_format: self.color_format,
+        };
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("threers overlay") });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("threers overlay"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: color,
+                    depth_slice: None,
+                    resolve_target: resolve,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: depth.map(|view| wgpu::RenderPassDepthStencilAttachment {
+                    view,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            let (v, sc) = (last.viewport, last.scissor);
+            pass.set_viewport(v.x as f32, v.y as f32, v.width as f32, v.height as f32, 0.0, 1.0);
+            pass.set_scissor_rect(sc.x, sc.y, sc.width, sc.height);
+            draw(&mut pass, &info);
+        }
+        if let Some((_, key, region)) = pane {
+            self.viewport_state.composite_pane(&mut encoder, target_view, self.color_format, key, region);
+        }
+        self.queue.submit(Some(encoder.finish()));
+    }
+
     pub fn overlay_attachments(&self) -> (Option<&wgpu::TextureView>, &wgpu::TextureView, u32) {
         match (&self.msaa_targets, self.overlay_msaa) {
             (Some((_, _, color, depth)), true) => (Some(color), depth, self.msaa),
@@ -2693,6 +2774,13 @@ impl Renderer {
 
     pub fn frustum_culling(&self) -> bool {
         self.frustum_culling
+    }
+
+    /// What the `ShaderMaterial` path has created and uploaded so far. An
+    /// unchanged material drawn again creates nothing and uploads nothing; a
+    /// changed uniform uploads 256 bytes.
+    pub fn custom_shader_stats(&self) -> super::CustomShaderStats {
+        self.custom_cache.stats()
     }
 
     /// `(drawn, culled)` meshes for the most recent `render` call.
@@ -2832,9 +2920,9 @@ impl Renderer {
             self.depth_texture = tex;
             self.depth_view = view;
             self.depth_size = (width, height);
-            // Recreated on the next MSAA pass at the new size.
-            self.msaa_targets = None;
-            self.msaa_targets_spare = None;
+            // The MSAA targets stay: `ensure_msaa_targets` swaps in the spare when it has the new size
+            // and allocates only when neither does, so a page alternating between two render sizes (for
+            // example a lower resolution while the camera moves) stops reallocating on every switch.
         }
     }
 
@@ -2935,11 +3023,10 @@ impl Renderer {
     /// single-sampled (they transparently fall back).
     pub fn set_msaa(&mut self, samples: u32) {
         let s = if samples > 1 { MSAA_SAMPLES } else { 1 };
-        if s != self.msaa {
-            self.msaa = s;
-            self.msaa_targets = None;
-            self.msaa_targets_spare = None;
-        }
+        // Targets are only ever allocated with `MSAA_SAMPLES`, and every reader checks that the last
+        // frame drew multisampled, so they are kept across a toggle: turning MSAA back on (for a still
+        // frame after interaction, say) reuses them instead of allocating ~4x the framebuffer again.
+        self.msaa = s;
     }
     pub fn msaa(&self) -> u32 {
         self.msaa

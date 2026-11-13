@@ -1,0 +1,87 @@
+[package]
+name = "threers-ui"
+version.workspace = true
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+authors = ["Eugene Hauptmann"]
+repository = "https://github.com/eugenehp/threers"
+homepage = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-ui"
+readme = "README.md"
+description = "A small retained UI: CSS-subset styles, flexbox layout, controls, painting through any 2D painter (a browser canvas included), hit-testing and an accessibility tree with WCAG contrast checks"
+keywords = ["ui", "flexbox", "css", "accessibility", "wasm"]
+categories = ["gui", "accessibility", "wasm"]
+
+[lib]
+bench = false
+
+[features]
+default = ["json", "text-touch"]
+# Editing text with a finger (`text_touch`): carets, selections, handles and
+# the edit menu, as on a phone.
+text-touch = []
+# Keymaps from JSON files (`Keymap::load_json`).
+json = ["dep:serde_json"]
+# The accessibility tree for native screen readers through AccessKit
+# (`a11y_accesskit`).
+accesskit = ["dep:accesskit"]
+
+[dependencies]
+# Easing curves for `anim`, and WCAG contrast for `a11y`; neither has
+# dependencies of its own.
+threers-math = { path = "../threers-math", version = "0.0.12" }
+threers-captions = { path = "../threers-captions", version = "0.0.12" }
+serde_json = { version = "1", optional = true }
+accesskit = { version = "0.25", optional = true }
+
+# `canvas` (the page's 2D canvas as a painter) and `a11y_dom` (the
+# accessibility tree mirrored into the page) exist only in a browser.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "Node",
+    # `canvas`: the 2D canvas painter and its DOM text.
+    "CanvasRenderingContext2d",
+    "CanvasGradient",
+    "DomRect",
+    "TextMetrics",
+    "Path2d",
+    # Images, put on canvases of their own to draw from.
+    "ImageData",
+    # `a11y_dom`: the accessibility mirror's focus and activation.
+    "Event",
+    "EventTarget",
+    "KeyboardEvent",
+    "KeyboardEventInit",
+    # `jobs`: work on Web Workers.
+    "Blob",
+    "BlobPropertyBag",
+    "MessageEvent",
+    "Navigator",
+    "Url",
+    "Worker",
+    "WorkerOptions",
+    "WorkerType",
+]
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+# `tests/ui_canvas_text.rs` reads the canvas back to compare pixels.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies.web-sys]
+version = "0.3"
+features = ["ImageData"]
+
+[[test]]
+name = "text_editing"
+required-features = ["text-touch"]

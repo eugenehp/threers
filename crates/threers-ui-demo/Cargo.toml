@@ -1,0 +1,36 @@
+[package]
+name = "threers-ui-demo"
+version.workspace = true
+edition = "2024"
+authors = ["Eugene Hauptmann"]
+description = "threers-ui in the browser: grid layout, state styles, drag and drop, a virtual list, rich text, a modal, tooltips, animations and the inspector"
+license = "MIT"
+repository = "https://github.com/eugenehp/threers"
+# A demo, not a library. See docs/releasing.md.
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+threers-ui = { path = "../threers-ui", features = ["text-touch"] }
+threers-math = { path = "../threers-math" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+# The GPU path: threers' UI pass on WebGPU, or WebGL2 where there is none.
+# Its JavaScript bindings are left out (`--cfg threers_no_js_bindings`, set
+# by `web/ui-demo/build.sh`).
+# `xr`: the XR page puts the demo on a panel in a headset (WebXR).
+threers = { path = "../..", default-features = false, features = ["ui", "webgl", "xr"] }
+js-sys = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+features = ["HtmlCanvasElement", "CanvasRenderingContext2d", "console", "Window", "Performance", "Storage"]
+
+# The native visionOS app (`threers-ui-demo-visionos`): the same headset
+# code, on visionOS's immersive space and wgpu's Metal backend.
+[target.'cfg(target_os = "visionos")'.dependencies]
+threers = { path = "../..", default-features = false, features = ["ui", "xr-visionos"] }

@@ -62,7 +62,14 @@ xattr -dr com.apple.quarantine "$cache" 2>/dev/null || true
 # `wasm-bindgen-test-runner` reads capabilities from `webdriver.json` in the
 # crate root. It holds an absolute path to a downloaded browser, so it is
 # written for the run and taken away after rather than committed.
-config="$root/webdriver.json"
+# Cargo runs a test from its own package's directory, so another crate's
+# suite (`PACKAGE`, below) looks for it there.
+crate_dir="$root"
+if [[ -n "${PACKAGE:-}" ]]; then
+  crate_dir="$root/crates/$PACKAGE"
+  [[ -f "$crate_dir/Cargo.toml" ]] || { echo "no crate at crates/$PACKAGE" >&2; exit 2 }
+fi
+config="$crate_dir/webdriver.json"
 cleanup() { rm -f "$config" }
 trap cleanup EXIT INT TERM
 python3 - "$chrome" "$config" "${WEBGPU:-0}" <<'PY'
@@ -125,10 +132,21 @@ cd "$root"
 # Anything after `--` still goes to cargo, so a filter or `--nocapture` works as
 # usual. Note that appending `--features x --test y` instead would *add* a second
 # suite rather than replace this one, which is what used to happen.
-features=${FEATURES:-usd}
-test_name=${TEST:-usd_wasm}
+#
+# `PACKAGE` runs another workspace crate's suite, with no features unless
+# `FEATURES` names some:
+#
+#   PACKAGE=threers-ui TEST=ui_a11y_dom scripts/wasm-browser-test.sh
+suite=()
+if [[ -n "${PACKAGE:-}" ]]; then
+  suite=(-p "$PACKAGE")
+  [[ -n "${FEATURES:-}" ]] && suite+=(--features "$FEATURES")
+  suite+=(--test "${TEST:?TEST names the suite to run in $PACKAGE}")
+else
+  suite=(--features "${FEATURES:-usd}" --test "${TEST:-usd_wasm}")
+fi
 
-echo "suite: --features $features --test $test_name"
+echo "suite: ${suite[*]}"
 # `wasm-bindgen-test` gives each test twenty seconds by default, and these draw
 # through SwiftShader — software WebGL2 — which is fast enough when the machine
 # is idle and not when a native `cargo test` is running beside it. A timeout here
@@ -139,4 +157,4 @@ echo "suite: --features $features --test $test_name"
 CHROMEDRIVER="$driver" \
 WASM_BINDGEN_TEST_TIMEOUT="${WASM_BINDGEN_TEST_TIMEOUT:-480}" \
 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="$runner" \
-  cargo test --target wasm32-unknown-unknown --features "$features" --test "$test_name" "$@"
+  cargo test --target wasm32-unknown-unknown "${suite[@]}" "$@"

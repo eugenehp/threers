@@ -144,7 +144,10 @@ fn fs(in : FullscreenVertex) -> @location(0) vec4<f32> {
                 | wgpu::TextureFormat::Rgba8UnormSrgb
                 | wgpu::TextureFormat::Rgba16Float
                 | wgpu::TextureFormat::R16Float
+                | wgpu::TextureFormat::Rg16Float
                 | wgpu::TextureFormat::R8Unorm
+                | wgpu::TextureFormat::Rg8Unorm
+                | wgpu::TextureFormat::Rgb10a2Unorm
         )
     }
 
@@ -599,10 +602,10 @@ impl GpuCubeTexture {
 /// A cube's upload, identified by what decides it: the cube (its stable id),
 /// its format and its size. An address would be reused by a later cube once
 /// this one is dropped, and that cube would be drawn with this one's faces.
-pub type CubeCacheKey = (u64, u8, u32);
+pub type CubeCacheKey = (u64, u16, u32);
 
 pub fn cube_cache_key(t: &Arc<CubeTexture>) -> CubeCacheKey {
-    (t.id, t.format as u8, t.size)
+    (t.id, t.format.code(), t.size)
 }
 
 /// Apply `Texture::flip_y` to the pixel data, borrowing when there is nothing
@@ -663,6 +666,8 @@ impl GpuTexture {
         src: &Texture,
         mipgen: &mut MipGenerator,
     ) -> Self {
+        let adapted = for_device(src, device.features());
+        let src = &*adapted;
         let oriented = &*oriented(src);
         let format = wgpu_format(oriented.format);
         let (width, height) = (oriented.width.max(1), oriented.height.max(1));
@@ -809,9 +814,10 @@ impl GpuTexture {
     }
 
     pub fn upload(device: &wgpu::Device, queue: &wgpu::Queue, src: &Texture) -> Self {
-        // Orient before anything else, so the mip chain is built from the
-        // pixels that actually get uploaded.
-        let src = &*oriented(src);
+        // In a format this device can sample, then oriented, so the mip chain
+        // is built from the pixels that actually get uploaded.
+        let adapted = for_device(src, device.features());
+        let src = &*oriented(&adapted);
         let format = wgpu_format(src.format);
         let (width, height) = (src.width.max(1), src.height.max(1));
         let size = wgpu::Extent3d {
@@ -925,6 +931,13 @@ pub fn mip_chain_for(src: &Texture) -> usize {
     build_mip_chain(src).len()
 }
 
+/// The levels below level 0 that [`GpuTexture::upload`] would derive, for a
+/// backend that cannot generate them on the GPU for this format.
+#[cfg(metal_backend)]
+pub(crate) fn cpu_mip_chain(src: &Texture) -> Vec<(u32, u32, Vec<u8>)> {
+    build_mip_chain(src)
+}
+
 fn build_mip_chain(src: &Texture) -> Vec<(u32, u32, Vec<u8>)> {
     // Compressed levels cannot be derived here -- box filtering BC blocks is
     // meaningless and the GPU cannot render into them either. They come from
@@ -941,10 +954,13 @@ fn build_mip_chain(src: &Texture) -> Vec<(u32, u32, Vec<u8>)> {
     {
         return Vec::new();
     }
-    if src.format.is_float() {
-        return float_mip_chain(src);
+    // The 8-bit formats average in linear light through a table; everything
+    // else at its own precision through f32.
+    use TextureFormat::*;
+    if matches!(src.format, Rgba8UnormSrgb | Rgba8Unorm | R8Unorm | Rg8Unorm) {
+        return build_mip_chain_8(src, w, h, bpp);
     }
-    build_mip_chain_8(src, w, h, bpp)
+    float_mip_chain(src)
 }
 
 /// Half-float mip levels, averaged in the linear light the format already
@@ -957,8 +973,9 @@ fn build_mip_chain(src: &Texture) -> Vec<(u32, u32, Vec<u8>)> {
 /// pixel is point-sampled — in frame at one camera angle, gone at the next.
 /// From a vacuum that reads as twinkling.
 ///
-/// The same for every float format, at its own channel count and width:
-/// averaged in f32 and stored back rounded once to the format.
+/// The same for every float format, and for the 16- and 10-bit unorm ones, at
+/// their own channel count and precision: averaged in f32 and stored back
+/// rounded once to the format.
 fn float_mip_chain(src: &Texture) -> Vec<(u32, u32, Vec<u8>)> {
     let (mut w, mut h) = (src.width.max(1), src.height.max(1));
     let n = src.format.channels();
@@ -987,11 +1004,8 @@ fn float_mip_chain(src: &Texture) -> Vec<(u32, u32, Vec<u8>)> {
                 }
             }
         }
-        let bytes = match src.format {
-            TextureFormat::Rgba16Float | TextureFormat::R16Float => {
-                crate::math::float::pack_f16(&next)
-            }
-            _ => crate::math::float::pack_f32(&next),
+        let Some(bytes) = src.format.pack_f32(&next) else {
+            return out;
         };
         out.push((nw, nh, bytes));
         level = next;
@@ -1112,17 +1126,85 @@ fn linear_to_srgb_fast(v: f32) -> f32 {
 }
 
 pub fn wgpu_format(f: TextureFormat) -> wgpu::TextureFormat {
+    use wgpu::TextureFormat as W;
+    use TextureFormat::*;
     match f {
-        TextureFormat::Rgba8UnormSrgb => wgpu::TextureFormat::Rgba8UnormSrgb,
-        TextureFormat::Rgba8Unorm => wgpu::TextureFormat::Rgba8Unorm,
-        TextureFormat::R8Unorm => wgpu::TextureFormat::R8Unorm,
-        TextureFormat::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
-        TextureFormat::R16Float => wgpu::TextureFormat::R16Float,
-        TextureFormat::R32Float => wgpu::TextureFormat::R32Float,
-        TextureFormat::Rgba32Float => wgpu::TextureFormat::Rgba32Float,
-        TextureFormat::Bc1RgbaUnormSrgb => wgpu::TextureFormat::Bc1RgbaUnormSrgb,
-        TextureFormat::Bc7RgbaUnormSrgb => wgpu::TextureFormat::Bc7RgbaUnormSrgb,
+        Rgba8UnormSrgb => W::Rgba8UnormSrgb,
+        Rgba8Unorm => W::Rgba8Unorm,
+        R8Unorm => W::R8Unorm,
+        Rg8Unorm => W::Rg8Unorm,
+        R16Unorm => W::R16Unorm,
+        Rgba16Unorm => W::Rgba16Unorm,
+        Rgb10a2Unorm => W::Rgb10a2Unorm,
+        Rgba16Float => W::Rgba16Float,
+        R16Float => W::R16Float,
+        Rg16Float => W::Rg16Float,
+        R32Float => W::R32Float,
+        Rg32Float => W::Rg32Float,
+        Rgba32Float => W::Rgba32Float,
+        Rg11b10Ufloat => W::Rg11b10Ufloat,
+        Rgb9e5Ufloat => W::Rgb9e5Ufloat,
+        Bc1RgbaUnormSrgb => W::Bc1RgbaUnormSrgb,
+        Bc1RgbaUnorm => W::Bc1RgbaUnorm,
+        Bc3RgbaUnormSrgb => W::Bc3RgbaUnormSrgb,
+        Bc3RgbaUnorm => W::Bc3RgbaUnorm,
+        Bc4RUnorm => W::Bc4RUnorm,
+        Bc5RgUnorm => W::Bc5RgUnorm,
+        Bc6hRgbUfloat => W::Bc6hRgbUfloat,
+        Bc6hRgbFloat => W::Bc6hRgbFloat,
+        Bc7RgbaUnormSrgb => W::Bc7RgbaUnormSrgb,
+        Bc7RgbaUnorm => W::Bc7RgbaUnorm,
+        Etc2Rgb8UnormSrgb => W::Etc2Rgb8UnormSrgb,
+        Etc2Rgb8Unorm => W::Etc2Rgb8Unorm,
+        Etc2Rgba8UnormSrgb => W::Etc2Rgba8UnormSrgb,
+        Etc2Rgba8Unorm => W::Etc2Rgba8Unorm,
+        Astc { block, srgb } => W::Astc {
+            block: wgpu_astc_block(block),
+            channel: if srgb {
+                wgpu::AstcChannel::UnormSrgb
+            } else {
+                wgpu::AstcChannel::Unorm
+            },
+        },
     }
+}
+
+fn wgpu_astc_block(b: crate::textures::AstcBlock) -> wgpu::AstcBlock {
+    use crate::textures::AstcBlock as A;
+    use wgpu::AstcBlock as W;
+    match b {
+        A::B4x4 => W::B4x4,
+        A::B5x4 => W::B5x4,
+        A::B5x5 => W::B5x5,
+        A::B6x5 => W::B6x5,
+        A::B6x6 => W::B6x6,
+        A::B8x5 => W::B8x5,
+        A::B8x6 => W::B8x6,
+        A::B8x8 => W::B8x8,
+        A::B10x5 => W::B10x5,
+        A::B10x6 => W::B10x6,
+        A::B10x8 => W::B10x8,
+        A::B10x10 => W::B10x10,
+        A::B12x10 => W::B12x10,
+        A::B12x12 => W::B12x12,
+    }
+}
+
+/// What a wgpu device with `features` samples natively.
+pub fn support(features: wgpu::Features) -> crate::textures::codec::Support {
+    crate::textures::codec::Support {
+        bc: features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
+        etc2: features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2),
+        astc: features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC),
+        unorm16: features.contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM),
+        float32_filterable: features.contains(wgpu::Features::FLOAT32_FILTERABLE),
+    }
+}
+
+/// `src` as a wgpu device with `features` can sample it: see
+/// [`codec::for_device`](crate::textures::codec::for_device).
+pub fn for_device(src: &Texture, features: wgpu::Features) -> std::borrow::Cow<'_, Texture> {
+    crate::textures::codec::for_device(src, support(features))
 }
 
 pub fn wgpu_filter(f: TextureFilter) -> wgpu::FilterMode {
@@ -1154,17 +1236,7 @@ pub fn wgpu_wrap(w: TextureWrap) -> wgpu::AddressMode {
 pub type TexCacheKey = (u64, u64, u32, u32, u32, bool);
 
 pub fn tex_cache_key(t: &Arc<Texture>) -> TexCacheKey {
-    let format = match t.format {
-        TextureFormat::Rgba8Unorm => 0,
-        TextureFormat::Rgba8UnormSrgb => 1,
-        TextureFormat::R8Unorm => 2,
-        TextureFormat::Rgba16Float => 3,
-        TextureFormat::Bc1RgbaUnormSrgb => 4,
-        TextureFormat::Bc7RgbaUnormSrgb => 5,
-        TextureFormat::R16Float => 6,
-        TextureFormat::R32Float => 7,
-        TextureFormat::Rgba32Float => 8,
-    };
+    let format = t.format.code() as u32;
     // `flip_y` is in the key because the upload honours it — two textures over
     // the same bytes with opposite flips are genuinely different images. The
     // size and format are in it because `Texture`'s fields are public and can

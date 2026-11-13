@@ -4,6 +4,7 @@
 
 pub mod bc1;
 pub mod blob;
+pub mod codec;
 mod cube_texture;
 mod data_texture;
 mod depth_texture;
@@ -18,4 +19,6 @@ pub use stream::BrowserImage;
 pub use stream::{
     Samples, StreamFrame, TextureStream, VideoTexture, YuvCoefficients, YuvFrame, YuvMatrix,
 };
-pub use texture::{pack_rgba16f, Texture, TextureFilter, TextureFormat, TextureWrap};
+pub use texture::{
+    pack_rgba16f, AstcBlock, Compression, Texture, TextureFilter, TextureFormat, TextureWrap,
+};
