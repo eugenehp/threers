@@ -504,10 +504,16 @@ impl Body {
     ///
     /// Falling back to `fill_planar`, which derives its rings from the
     /// edges, does fill it — 407 open edges to 288, 142 to 55 elsewhere — but
-    /// flips no case in a 45-chain corpus and fires nowhere in this crate's
-    /// tests, so there is nothing to hold it in place and it is not here. The
-    /// loops are the thing to fix: they exist before that second cut and not
-    /// after it.
+    /// flips no case in a 45-chain corpus, so for a long time there was nothing
+    /// to hold it in place and it was not here. The loops are still the thing
+    /// to fix there: they exist before that second cut and not after it.
+    ///
+    /// It is here now because something does hold it. A fillet is a cylinder
+    /// patch between two lines and two arcs, and read back from STEP it arrives
+    /// as exactly that — four edges and no stored loops, the importer never
+    /// stating any. No grid describes it and its edges describe it completely,
+    /// so a rounded box came back from its own file as a valid solid that would
+    /// not tessellate: 20 faces unfilled. `tests/step.rs` round-trips one.
     pub fn tessellate(&self, tolerance: f64) -> (BufferGeometry, BodyReport) {
         let mut positions: Vec<f32> = Vec::new();
         let mut normals: Vec<f32> = Vec::new();
@@ -575,6 +581,19 @@ impl Body {
                             surface,
                             tolerance,
                             true,
+                            &emitted,
+                            &mut positions,
+                            &mut normals,
+                            &mut indices,
+                        )
+                    } || {
+                        positions.truncate(mark.0);
+                        normals.truncate(mark.1);
+                        indices.truncate(mark.2);
+                        self.fill_planar(
+                            face_index,
+                            surface,
+                            tolerance,
                             &emitted,
                             &mut positions,
                             &mut normals,

@@ -1341,6 +1341,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `PLATFORMS=all ./scripts/release-all.sh publish` builds every Node addon and
   PyPI wheel on one Mac (zig for Linux, xwin for Windows) and runs the Linux
   ones in Docker (`scripts/test-linux-builds.sh`) before uploading them.
+- **Fillets and chamfers** on a B-rep `Body` (`brep-kernel`):
+  `body.fillet(&edges, radius, tolerance)` and
+  `body.chamfer(&edges, distance, tolerance)`, returning a new closed solid
+  or a `BlendDeclined` naming why not. The blend faces are exact: a cylinder
+  along a straight edge between two planes (convex or concave, at any
+  dihedral angle), a sphere where three fillets meet, a cone or a torus
+  around the rim where a plane caps a cylinder (a shaft's end, a hole's
+  mouth, a boss's foot, a blind hole's floor). Two blends at a corner mitre,
+  inside corners included. They export to STEP as the surfaces they are and
+  read back. An edge that ends on a curved face or a curved edge is declined,
+  so the top of a box whose upright edges are already rounded cannot be
+  rounded yet.
 
 ### Changed
 

@@ -33,6 +33,8 @@
 //! it did before the feature existed. That is the plan's safety property, and it
 //! is what makes it safe to attach provenance to primitives by default.
 
+#[cfg(feature = "brep-kernel")]
+pub mod blend;
 pub mod body;
 #[cfg(feature = "brep-kernel")]
 pub mod boolean;
@@ -48,6 +50,8 @@ pub mod stitch;
 pub mod surface;
 pub mod table;
 
+#[cfg(feature = "brep-kernel")]
+pub use blend::BlendDeclined;
 pub use body::{Body, BodyReport, Defect, Face, Shell, TrimLoop};
 #[cfg(feature = "brep-kernel")]
 pub use boolean::{BooleanOp, Declined};

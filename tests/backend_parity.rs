@@ -2480,3 +2480,57 @@ fn metal_draws_sheen_as_wgpu_does() {
         );
     }
 }
+
+/// The atlas's cortex as its apps light it: a white, rough standard
+/// material carrying a mid grey in its vertex colours (the curvature grey
+/// atlas-core paints), under three.js's RoomEnvironment at half strength, a
+/// hemisphere light and a key, fill and rim, ACES at exposure 0.88 — the
+/// web app on wgpu, the Apple app on Metal. Its grey must come out the same
+/// on both: a brighter Metal cortex washed out every glass scene there.
+#[test]
+fn metal_lights_the_atlas_cortex_as_wgpu_does() {
+    use threers::geometries::SphereGeometry;
+    use threers::lights::{DirectionalLight, HemisphereLight};
+    use threers::materials::StandardMaterial;
+    use threers::metal::{MetalError, MetalHeadlessRenderer};
+
+    let build = || {
+        let mut s = Scene::new();
+        s.background = Color::from_hex(0x000000);
+        s.environment = Some(threers::extras::RoomEnvironment::pmrem(64));
+        s.environment_intensity = 0.5;
+        s.add_light(HemisphereLight::new(Color::from_hex(0xdfeaff), Color::from_hex(0x28303f), 0.25));
+        for (hex, at, intensity) in [(0xffffff, [1.0f32, 1.3, 2.0], 1.2), (0xbcd0ff, [-2.0, 0.3, -1.5], 0.32), (0xffffff, [0.0, -1.5, -1.0], 0.34)] {
+            let at = Vector3::new(at[0], at[1], at[2]);
+            s.add(Object3D::light(DirectionalLight::new(Color::from_hex(hex), intensity).with_direction(-at.normalize())));
+        }
+        let mut g = SphereGeometry::new(14.0, 48, 32);
+        let n = g.get_attribute("position").map_or(0, |a| a.array.len() / 3);
+        g.set_attribute("color", threers::core::BufferAttribute::new([0.55f32, 0.55, 0.55, 1.0].repeat(n), 4));
+        let mat = StandardMaterial::new(Color::WHITE).with_roughness(0.82).with_metalness(0.02);
+        s.add(Object3D::mesh(Mesh::new(g, mat.into())));
+        s
+    };
+    let mean = |px: &[u8]| {
+        let lit: Vec<f64> = px.chunks_exact(4).filter(|p| p[0] > 8).map(|p| (p[0] as f64 + p[1] as f64 + p[2] as f64) / 3.0).collect();
+        lit.iter().sum::<f64>() / lit.len().max(1) as f64
+    };
+    let Some(mut w) = threers::HeadlessRenderer::builder().size(N, N).build().ok() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut m = match MetalHeadlessRenderer::builder().size(N, N).build() {
+        Ok(m) => m,
+        Err(MetalError::NoDevice) => {
+            eprintln!("skipping: no Metal device on this machine");
+            return;
+        }
+        Err(e) => panic!("metal renderer: {e:?}"),
+    };
+    w.renderer().set_tone_mapping(threers::ToneMapping::AcesFilmic, 0.88);
+    m.renderer_mut().set_tone_mapping(threers::ToneMapping::AcesFilmic, 0.88);
+    let reference = mean(&w.render_to_rgba(&mut build(), &camera()));
+    let got = mean(&m.render_to_rgba(&mut build(), &camera()).expect("metal"));
+    eprintln!("the atlas cortex: wgpu {reference:.1}, Metal {got:.1} (mean of its pixels, 0..255)");
+    assert!((got - reference).abs() < 4.0, "Metal lights the atlas's cortex {got:.1} where wgpu lights it {reference:.1}");
+}

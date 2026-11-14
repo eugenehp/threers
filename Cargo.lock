@@ -3766,6 +3766,7 @@ version = "0.0.12"
 name = "threers-codec"
 version = "0.0.12"
 dependencies = [
+ "libc",
  "rayon",
  "threers-captions",
 ]

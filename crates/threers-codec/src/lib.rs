@@ -147,6 +147,8 @@ pub mod rate;
 pub mod swr;
 #[cfg(all(feature = "vaapi", target_os = "linux"))]
 pub mod vaapi;
+#[cfg(all(feature = "v4l2", target_os = "linux"))]
+pub mod v4l2;
 #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
 pub mod videotoolbox;
 // The decoder hands pictures over in `decode`'s types, so it needs `decode` too.

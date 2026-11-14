@@ -126,6 +126,8 @@ const _: () = assert!(std::mem::size_of::<CompositeParams>() == 20);
 /// throws away the very contacts the effect exists to show.
 pub struct MetalSsao {
     texture: Owned,
+    /// the occluded fraction at half resolution (`fs_ssao_occ`)
+    occ: Owned,
     params: Owned,
     width: u32,
     height: u32,
@@ -150,8 +152,19 @@ impl MetalSsao {
             1,
             1,
         )?;
+        let occ = new_texture_2d(
+            device,
+            width.div_ceil(2).max(1),
+            height.div_ceil(2).max(1),
+            pixel_format::R16_FLOAT,
+            texture_usage::RENDER_TARGET | texture_usage::SHADER_READ,
+            storage_mode::PRIVATE,
+            1,
+            1,
+        )?;
         Ok(Self {
             texture,
+            occ,
             params: param_buffer(
                 device,
                 SsaoParams {
@@ -192,9 +205,15 @@ impl MetalSsao {
         depth: Id,
         color_format: NSUInteger,
     ) -> Result<(), MetalError> {
-        let Some(pipeline) = pipelines.ssao_for(color_format) else {
+        let (Some(pipeline), Some(occ_pipeline)) = (pipelines.ssao_for(color_format), pipelines.ssao_occ.as_ref().map(|p| p.id())) else {
             return Ok(());
         };
+        // the occluded fraction, at half resolution
+        encode_fullscreen(cmd, occ_pipeline, self.occ.id(), pixel_format::R16_FLOAT, |enc| unsafe {
+            let _: () = msg2(enc, sel!("setFragmentTexture:atIndex:"), depth, 1usize);
+            let _: () = msg3(enc, sel!("setFragmentBuffer:offset:atIndex:"), self.params.id(), 0usize, 0usize);
+        })?;
+        // then averaged and applied to the frame
         encode_fullscreen(
             cmd,
             pipeline,
@@ -202,7 +221,7 @@ impl MetalSsao {
             color_format,
             |enc| unsafe {
                 let _: () = msg2(enc, sel!("setFragmentTexture:atIndex:"), src, 0usize);
-                let _: () = msg2(enc, sel!("setFragmentTexture:atIndex:"), depth, 1usize);
+                let _: () = msg2(enc, sel!("setFragmentTexture:atIndex:"), self.occ.id(), 2usize);
                 let _: () = msg3(
                     enc,
                     sel!("setFragmentBuffer:offset:atIndex:"),
@@ -238,6 +257,8 @@ pub struct PostFxPipelines {
     /// nice-to-have, and `depth2d` is the one feature that might not build, so
     /// it degrades to "no AO" rather than "no post-processing".
     ssao: Option<Owned>,
+    /// the occlusion pass before it, into a half-resolution R16 float
+    ssao_occ: Option<Owned>,
 }
 
 /// True for the float format the HDR chain uses.
@@ -312,6 +333,7 @@ impl PostFxPipelines {
                 pixel_format::RGBA16_FLOAT,
             )?,
             ssao_hdr: fullscreen_pipeline(device, "fs_ssao", pixel_format::RGBA16_FLOAT).ok(),
+            ssao_occ: fullscreen_pipeline(device, "fs_ssao_occ", pixel_format::R16_FLOAT).ok(),
             tonemap: fullscreen_pipeline(device, "fs_tonemap", pixel_format::RGBA8_UNORM_SRGB)?,
             film: fullscreen_pipeline(device, "fs_film", pixel_format::RGBA8_UNORM_SRGB)?,
         })

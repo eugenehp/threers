@@ -242,23 +242,19 @@ static inline float3 ssao_view_pos_at(
     return ssao_view_pos(c, uint2(dim), z, p.aspect, p.tan_half_fov);
 }
 
-fragment float4 fs_ssao(
+// The occluded fraction (no strength: `Ssao`'s at 1), at half resolution:
+// each texel the full-resolution pixel at twice its coordinates.
+fragment float fs_ssao_occ(
     FullscreenOut in [[stage_in]],
-    texture2d<float, access::sample> src [[texture(0)]],
     depth2d<float, access::sample> depth [[texture(1)]],
     constant SsaoParams &p [[buffer(0)]])
 {
-    constexpr sampler cs(coord::pixel, filter::nearest, address::clamp_to_edge);
-    const int2 c = int2(in.position.xy);
+    const int2 c = int2(in.position.xy) * 2;
     const int2 dim = int2(int(depth.get_width()), int(depth.get_height()));
-    // Sampled by `position`, like fs_downsample — sampling by `uv` here would
-    // flip the frame against the rest of the chain.
-    const float4 color = src.sample(cs, float2(c) + float2(0.5));
-
     const float3 p0 = ssao_view_pos_at(c, dim, depth, p);
     // Background has no crevices, and the linearisation is least trustworthy at
     // the far plane — leave it rather than invent occlusion there.
-    if (p0.z >= p.far_z * 0.999) { return color; }
+    if (p0.z >= p.far_z * 0.999) { return 0.0; }
     const float3 n = ssao_normal(p0,
         ssao_view_pos_at(c + int2(1, 0), dim, depth, p), ssao_view_pos_at(c - int2(1, 0), dim, depth, p),
         ssao_view_pos_at(c + int2(0, 1), dim, depth, p), ssao_view_pos_at(c - int2(0, 1), dim, depth, p));
@@ -267,10 +263,35 @@ fragment float4 fs_ssao(
     for (int i = 0; i < 12; i++) {
         occ += ssao_occlusion(n, p0, ssao_view_pos_at(ssao_tap(c, i, px), dim, depth, p), p.radius);
     }
-    const float ao = clamp(1.0 - p.strength * (occ / 12.0), 0.0, 1.0);
-    // Multiplied in linear light: an sRGB attachment hands back linear on sample
-    // and re-encodes on write, so this is the right space to darken in.
-    return float4(color.rgb * ao, color.a);
+    return clamp(occ / 12.0, 0.0, 1.0);
+}
+
+// The wgpu composite (`renderer/ssao_composite.rs`), line for line: the
+// half-resolution fraction averaged over 5 × 5 texels (smoothing the twelve
+// taps' noise, and spreading a fold's shade a little onto its rims), then a
+// soft 1 / (1 + strength · occlusion) — never black — multiplied in linear
+// light (an sRGB attachment hands back linear on sample, re-encodes on write).
+fragment float4 fs_ssao(
+    FullscreenOut in [[stage_in]],
+    texture2d<float, access::sample> src [[texture(0)]],
+    texture2d<float, access::sample> occ [[texture(2)]],
+    constant SsaoParams &p [[buffer(0)]])
+{
+    constexpr sampler cs(coord::pixel, filter::nearest, address::clamp_to_edge);
+    const int2 c = int2(in.position.xy);
+    // Sampled by `position`, like fs_downsample — sampling by `uv` here would
+    // flip the frame against the rest of the chain.
+    const float4 color = src.sample(cs, float2(c) + float2(0.5));
+    const int2 ad = int2(int(occ.get_width()), int(occ.get_height()));
+    const int2 au = min(c / 2, ad - 1);
+    float sum = 0.0;
+    for (int j = -2; j <= 2; j++) {
+        for (int i = -2; i <= 2; i++) {
+            sum += occ.sample(cs, float2(clamp(au + int2(i, j), int2(0), ad - 1)) + float2(0.5)).r;
+        }
+    }
+    const float k = 1.0 / (1.0 + p.strength * sum / 25.0);
+    return float4(color.rgb * k, color.a);
 }
 
 

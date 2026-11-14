@@ -3,6 +3,9 @@
 //! A multisampled `MetalRenderTarget` now has the main pass resolve its depth
 //! into a single-sampled one while depth is stored, and SSAO reads that: the
 //! crease between a box and the floor darkens at 4x as it does at 1x.
+//! At strength 6: the response is the wgpu composite's soft
+//! `1 / (1 + strength · occlusion)`, gentler than the linear one these were
+//! first written against.
 //!
 //! Skipped without a Metal device.
 
@@ -51,7 +54,7 @@ fn frame(msaa: u32, ssao: bool) -> Option<Vec<f32>> {
         .ok()?;
     if ssao {
         r.set_ssao(Some(SsaoSettings {
-            strength: 2.0,
+            strength: 6.0,
             radius: 0.5,
             near: 0.5,
             far: 30.0,
@@ -110,7 +113,7 @@ fn ssao_under_msaa_with_oit_glass() {
     with_glass.add(ball);
     let plain = r.render_to_rgba(&mut with_glass, &camera()).unwrap();
     r.set_ssao(Some(SsaoSettings {
-        strength: 2.0,
+        strength: 6.0,
         radius: 0.5,
         near: 0.5,
         far: 30.0,

@@ -718,7 +718,7 @@ per-entity tolerance, healing pass after assembly.
 Falls back to the Stage 2 mesh path whenever SSI marching fails to converge or
 validity checking rejects the result — same deferential contract.
 
-### 3c — fillets and chamfers
+### 3c — fillets and chamfers — **SHIPPED** (see the last section)
 
 The capability that is *impossible* on triangle soup and that OpenSCAD itself
 lacks. Rolling-ball edge blend: the new face is a pipe surface (NURBS) swept along
@@ -875,6 +875,7 @@ where the seam is not a plane cut.
 - `split_swept` only cuts at a **constant-v** curve. A curve that spirals across
   a swept face declines.
 - Fillets and chamfers are **not** implemented, and are not planned here.
+  (They are now: see *Fillets and chamfers* at the end.)
 
 ### Found on the way
 
@@ -12404,3 +12405,89 @@ to count edges it cannot explain. Judged by *area* — the ring is bridged, so a
 leftover of sixty points can enclose nothing, and both remaining give-ups do.
 
 Green: 45 boolean, 27 brep, 13 brep_csg, 18 nurbs, 12 step, 730 lib.
+
+## Fillets and chamfers
+
+`brep::blend`, behind `brep-kernel`:
+
+```rust
+let rounded  = body.fillet(&edges, radius, tolerance)?;
+let bevelled = body.chamfer(&edges, distance, tolerance)?;
+```
+
+Not the plan's NURBS pipe surface and not a local boolean. Every case that
+ships has a blend surface with a closed form, so the face is that surface: a
+`Cylinder` along a straight edge, a `Sphere` in a corner, a `Cone` or a `Torus`
+around a rim, a `Plane` for a bevel. The topology is rewritten directly — the
+edge becomes two rails, each corner it ended at becomes one point per face — and
+nothing is intersected numerically.
+
+### What it covers
+
+* **A straight edge between two planes**, at any dihedral angle, convex or
+  concave, ending at corners where three planar faces meet. The setback is
+  `r·tan(φ/2)` for the angle `φ` between the normals. At a corner:
+  * one blend ends on the third face, in a line or an arc of an ellipse;
+  * two mitre — two cylinders of one radius whose axes cross meet in a planar
+    ellipse, in the plane bisecting the axes;
+  * three meet in a point (chamfer) or an octant of a sphere centred where the
+    three faces, each moved `r` inward, intersect (fillet).
+* **A circular rim** between a plane and a cylinder square to it, in all four
+  arrangements — shaft end, hole mouth, boss foot, blind-hole floor — which are
+  one construction: the cap's rim moves radially into the cap, the wall's rim
+  axially into the wall, and the blend is the cone or torus through both.
+
+A mitre works at an inside corner too. The top outline of an L has one reflex
+corner, where the face's two setback lines cross *behind* the vertex; the same
+formula gives a negative distance along each edge and the blends taper past the
+walls into the mitre, which is what a rolling ball does there.
+
+### Measured
+
+Every volume against its closed form, at `1e-4`:
+
+```
+one edge of a cube          chamfer exact, fillet 1e-4
+two edges at a corner       both, with the overlap ∫(r − √(r² − p²))² dp
+all twelve                  18 faces / 48 edges / 32 vertices, Euler 2
+                            26 faces: 6 planes, 12 cylinders, 8 spheres
+box 4 × 3 × 2, all round    1e-4
+L, inside edge              +(1 − π/4)·r²·h
+L, top outline              five outside corners and one inside
+45° edges of a bevel        r²·(tan(φ/2) − φ/2) per unit length
+shaft end, hole mouth       Pappus, cone and torus
+boss foot, blind floor      on boolean results
+drilled plate, upright edges
+```
+
+24 tests in `tests/brep_blend.rs`, and a STEP round trip of five blended solids
+in `tests/step.rs`: exported exactly (`is_exact()`), read back, same volume.
+
+### Deviations
+
+- **Declines rather than approximates.** An edge ending on a curved face or on
+  an edge that is not straight is `UnsupportedEdge` / `UnsupportedVertex`, so a
+  box with its upright edges rounded cannot have its top rounded: that needs a
+  torus patch at each corner. Convex and concave blends meeting at one vertex
+  are `MixedConvexity`. Two blends that reach the third edge at different
+  depths are `UnequalSetback`. A vertex of more than three faces is declined.
+- **Constant radius only**, one size per call.
+- **The tolerance is spent at blend time.** Arcs are sampled once, shared by
+  both faces. `refine_edges` adds to the ones that cross and cannot add to a
+  tangent circle — a torus against its cap — because alternating projection
+  between two surfaces that touch has no slope to converge along.
+- A rim on a cylinder wall that a boolean left with stated rings is
+  `TrimmedFace`.
+
+### Found on the way
+
+A blended solid read back from its own STEP file was valid and would not
+tessellate. The importer never states loops, so a fillet arrived as a cylinder
+with four edges and `loops: None`, went to the parameter-rectangle fill, and was
+dropped — 20 faces of a rounded cube. `Body::tessellate` now falls back to the
+rings its edges derive when neither grid orientation fits. That fallback had
+been tried before and left out for having no test that needed it; this is the
+test.
+
+Green: 24 blend, 45 boolean, 27 brep, 13 brep_csg, 13 step, 193 lib (`brep::`,
+`step::`).

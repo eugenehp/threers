@@ -63,6 +63,44 @@ fn a_solid_survives_a_file_round_trip() {
 }
 
 #[test]
+fn a_blended_solid_survives_a_file_round_trip() {
+    // Fillets and chamfers leave faces no primitive has: a cylinder patch
+    // between two lines and two arcs, an octant of a sphere, a cone and a torus
+    // between two rims. Each has to be written exactly, and each has to come
+    // back as something that still fills.
+    let cube = Body::cuboid([2.0, 2.0, 2.0]);
+    let shaft = Body::cylinder([0.0; 3], [0.0, 0.0, 1.0], 2.0, 5.0);
+    let every = |b: &Body| (0..b.edges().len()).collect::<Vec<_>>();
+    let cases = [
+        ("bevelled cube", cube.chamfer(&every(&cube), 0.3, 1e-4)),
+        ("one round edge", cube.fillet(&[0], 0.3, 1e-4)),
+        ("rounded cube", cube.fillet(&every(&cube), 0.3, 1e-4)),
+        ("rounded shaft", shaft.fillet(&every(&shaft), 0.5, 1e-4)),
+        ("bevelled shaft", shaft.chamfer(&every(&shaft), 0.5, 1e-4)),
+    ];
+    for (name, body) in cases {
+        let body = body.expect(name);
+        let expected = volume(&body, 1e-4);
+
+        let (text, ex) = export(&body, "part", 1e-4);
+        assert!(ex.is_exact(), "{name}: {ex:?}");
+        let (back, im) = import(&text, 1e-4).expect("our own file");
+        assert!(
+            im.skipped.is_empty(),
+            "{name}: import dropped {:?}",
+            im.skipped
+        );
+        assert_eq!(back.faces().len(), body.faces().len(), "{name}");
+
+        let got = volume(&back, 1e-4);
+        assert!(
+            (got - expected).abs() / expected < 1e-4,
+            "{name}: volume {got}, expected {expected}"
+        );
+    }
+}
+
+#[test]
 fn a_bore_arrives_as_a_cylinder_not_as_triangles() {
     // The whole reason to write STEP instead of STL: the receiving system gets
     // a cylinder it can re-dimension, not two hundred facets it cannot.

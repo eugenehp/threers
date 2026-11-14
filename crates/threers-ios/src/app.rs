@@ -116,6 +116,13 @@ pub trait App: Sized + 'static {
         false
     }
 
+    /// Ambient occlusion on the volume's picture (threers' SSAO): its
+    /// radius in the scene's world units and its strength (the web
+    /// composite's soft `1 / (1 + strength · occlusion)`); `None`, none.
+    fn ambient_occlusion(&self) -> Option<(f32, f32)> {
+        None
+    }
+
     /// Whether [`focus`](Self::focus) is a point the app chose to frame (a
     /// scene's, a double tap's) rather than its model's resting place: the
     /// volume's quad then looks there, not at the middle of what is shown.

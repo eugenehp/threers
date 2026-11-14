@@ -502,7 +502,7 @@ impl<A: App> Volume<A> {
     /// What [`draw_into`](Self::draw_into) draws, read back: `size`
     /// square RGBA8, rows from the top (for tests).
     pub fn quad_picture(&mut self, q: [f32; 4], size: u32) -> Option<Vec<u8>> {
-        self.draw_quad(q, size)?.read_rgba().ok()
+        self.draw_quad(q, size)?.read_rgba_processed().ok()
     }
 
     /// The scene drawn along the quad, on the quad's renderer.
@@ -532,6 +532,18 @@ impl<A: App> Volume<A> {
             },
         };
         renderer.resize(size, size).ok()?;
+        // the app's tone mapping, as the window and the room apply it
+        let (tone, exposure) = self.app.tone_mapping();
+        renderer.renderer_mut().set_tone_mapping(tone, exposure);
+        // the folds shaded as the app asks, for this frame's camera
+        renderer.set_ssao(self.app.ambient_occlusion().map(|(radius, strength)| threers::metal::SsaoSettings {
+            strength,
+            radius,
+            near: camera.near,
+            far: camera.far,
+            tan_half_fov: (camera.fov * 0.5).tan(),
+            aspect: 1.0,
+        }));
         let alpha = self.scene.background_alpha;
         self.scene.background_alpha = 0.0;
         let drawn = renderer.render(&mut self.scene, &camera).is_ok();

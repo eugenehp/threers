@@ -290,25 +290,13 @@ impl MetalHeadlessRenderer {
         }
     }
 
-    fn queue_postfx_readback(&mut self) -> Result<PendingMetalReadback, MetalError> {
+    /// The chain sized for this frame: the supersample resolve, an upscale
+    /// to the export size, SSAO and bloom as set. Run before encoding it.
+    fn prepare_postfx(&mut self) -> Result<(), MetalError> {
         let (rw, rh) = self.target.size();
         let format = self.config.color_format;
         let (ew, eh) = (self.export_w, self.export_h);
-        let staging = self.staging_buffer()?;
-        let padded = ((ew as usize * 4).div_ceil(256)) * 256;
-
-        let Some(postfx) = self.postfx.as_mut() else {
-            let cmd = self.target.queue_readback(&self.device, &staging)?;
-            // `queue_readback` hands back an owned reference already.
-            return Ok(PendingMetalReadback {
-                cmd,
-                staging,
-                width: ew,
-                height: eh,
-                from_target: true,
-            });
-        };
-
+        let Some(postfx) = self.postfx.as_mut() else { return Ok(()) };
         // Supersampling already resolves rw×rh down to rw/ss × rh/ss, so the
         // upscale must be judged against that, not the raw target size.
         // Comparing (rw, rh) meant a supersampled render also queued an upscale
@@ -345,6 +333,29 @@ impl MetalHeadlessRenderer {
             postfx.set_bloom(&self.device, bw, bh, strength, threshold, radius)?;
         }
 
+        Ok(())
+    }
+
+    fn queue_postfx_readback(&mut self) -> Result<PendingMetalReadback, MetalError> {
+        let (rw, rh) = self.target.size();
+        let format = self.config.color_format;
+        let (ew, eh) = (self.export_w, self.export_h);
+        let staging = self.staging_buffer()?;
+        let padded = ((ew as usize * 4).div_ceil(256)) * 256;
+
+        if self.postfx.is_none() {
+            let cmd = self.target.queue_readback(&self.device, &staging)?;
+            // `queue_readback` hands back an owned reference already.
+            return Ok(PendingMetalReadback {
+                cmd,
+                staging,
+                width: ew,
+                height: eh,
+                from_target: true,
+            });
+        }
+        self.prepare_postfx()?;
+        let postfx = self.postfx.as_mut().expect("there is a chain");
         let src = self.target.color_texture();
         // Keep the pool live only while building encoders; retain the CB after.
         let cmd = {
@@ -520,6 +531,20 @@ impl MetalHeadlessRenderer {
         self.copy_count += 1;
         let n = self.copy_count;
         let signal = self.device.command_buffer();
+        // the post-processing (SSAO, bloom, a resolve) on the frame first,
+        // when any is on: its output is what is copied
+        let mut source = self.target.color_texture();
+        if self.needs_postfx() {
+            self.prepare_postfx()?;
+            let (rw, rh) = self.target.size();
+            let format = self.config.color_format;
+            let depth = self.target.resolved_depth_texture();
+            if let Some(postfx) = self.postfx.as_mut()
+                && let Some(out) = postfx.encode_on(&self.device, signal, source, depth, rw, rh, format)?
+            {
+                source = out;
+            }
+        }
         unsafe {
             let _: () = super::objc::msg2(signal, sel!("encodeSignalEvent:value:"), event, n);
             let _: () = msg0(signal, sel!("commit"));
@@ -530,7 +555,7 @@ impl MetalHeadlessRenderer {
             let _: () = super::objc::msg9(
                 blit,
                 sel!("copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:"),
-                self.target.color_texture(),
+                source,
                 0 as NSUInteger,
                 0 as NSUInteger,
                 MTLOrigin::default(),
@@ -667,6 +692,18 @@ impl MetalHeadlessRenderer {
     /// [`render_size`](Self::render_size). Blocks until the GPU is done.
     pub fn read_rgba(&self) -> Result<Vec<u8>, MetalError> {
         self.target.read_rgba(&self.device)
+    }
+
+    /// The last frame as [`copy_into`](Self::copy_into) hands it on: through
+    /// the post-processing (SSAO, bloom, a resolve) when any is on, else as
+    /// [`read_rgba`](Self::read_rgba) reads it.
+    pub fn read_rgba_processed(&mut self) -> Result<Vec<u8>, MetalError> {
+        if !self.needs_postfx() {
+            return self.read_rgba();
+        }
+        let mut out = Vec::new();
+        self.run_postfx_and_readback(&mut out)?;
+        Ok(out)
     }
 
     /// The underlying renderer — its viewport, scissor and auto-clear state

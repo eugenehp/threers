@@ -33,10 +33,14 @@ nvidia = ["decode"]
 # other VA drivers). libva is loaded at run time, so a build with this on
 # still runs without it; inert elsewhere.
 vaapi = ["decode"]
+# Hardware H.264 encode through a V4L2 memory-to-memory encoder (Linux: the Raspberry Pi's
+# bcm2835-codec and other boards' stateful encoders); inert elsewhere.
+v4l2 = ["dep:libc"]
 
 [dependencies]
 threers-captions = { path = "../threers-captions", version = "0.0.12" }
 rayon = { version = "1.10", optional = true }
+libc = { version = "0.2", optional = true }
 
 [package.metadata.docs.rs]
 all-features = true
