@@ -65,7 +65,18 @@ pub struct Label {
 impl Label {
     /// Text from a template: `{percent}`, `{value}` and `{max}` filled in.
     pub fn template(template: impl Into<String>) -> Self {
-        Self { template: template.into(), busy: String::new(), max: 100.0, decimals: 0, size: None, color: None, weight: crate::FontWeight::Bold, italic: false, font: String::new(), align: LabelAlign::Center }
+        Self {
+            template: template.into(),
+            busy: String::new(),
+            max: 100.0,
+            decimals: 0,
+            size: None,
+            color: None,
+            weight: crate::FontWeight::Bold,
+            italic: false,
+            font: String::new(),
+            align: LabelAlign::Center,
+        }
     }
 
     /// How far along: `42%`.
@@ -76,7 +87,10 @@ impl Label {
     /// Words that stay as they are.
     pub fn text(text: impl Into<String>) -> Self {
         let t = text.into();
-        Self { busy: t.clone(), ..Self::template(t.replace('{', "{{").replace('}', "}}")) }
+        Self {
+            busy: t.clone(),
+            ..Self::template(t.replace('{', "{{").replace('}', "}}"))
+        }
     }
 
     pub fn busy(mut self, text: impl Into<String>) -> Self {
@@ -134,7 +148,9 @@ impl Label {
 
     /// What it says at `value` (`None`: busy).
     pub fn render(&self, value: Option<f32>) -> String {
-        let Some(v) = value else { return self.busy.clone() };
+        let Some(v) = value else {
+            return self.busy.clone();
+        };
         let d = self.decimals;
         self.template
             .replace("{percent}", &format!("{:.d$}", v * 100.0))
@@ -147,7 +163,14 @@ impl Label {
 
 /// `-0` as `0`.
 pub(super) fn trim(s: String) -> String {
-    if s.trim_start_matches('-').chars().all(|c| c == '0' || c == '.') { s.trim_start_matches('-').to_owned() } else { s }
+    if s.trim_start_matches('-')
+        .chars()
+        .all(|c| c == '0' || c == '.')
+    {
+        s.trim_start_matches('-').to_owned()
+    } else {
+        s
+    }
 }
 
 /// A label's nodes on an indicator.
@@ -166,11 +189,21 @@ pub(super) enum Host {
 }
 
 /// Puts `label` on the indicator box `host_node` (replacing `old`).
-pub(super) fn place_label(ui: &mut Ui, host_node: NodeId, host: Host, label: Label, old: Option<&LabelNode>, value: Option<f32>) -> LabelNode {
+pub(super) fn place_label(
+    ui: &mut Ui,
+    host_node: NodeId,
+    host: Host,
+    label: Label,
+    old: Option<&LabelNode>,
+    value: Option<f32>,
+) -> LabelNode {
     if let Some(o) = old {
         ui.remove(o.node);
     }
-    let outside = matches!(label.align, LabelAlign::Above | LabelAlign::Below | LabelAlign::After);
+    let outside = matches!(
+        label.align,
+        LabelAlign::Above | LabelAlign::Below | LabelAlign::After
+    );
     let size = label.size.unwrap_or(match (host, outside) {
         (_, true) => 12.0,
         (Host::Bar { height }, false) => (height * 0.72).max(6.0),
@@ -190,7 +223,11 @@ pub(super) fn place_label(ui: &mut Ui, host_node: NodeId, host: Host, label: Lab
                     LabelAlign::End => crate::JustifyContent::FlexEnd,
                     _ => crate::JustifyContent::Center,
                 };
-                let pad = if let Host::Bar { height } = host { (height * 0.5).max(4.0) } else { 0.0 };
+                let pad = if let Host::Bar { height } = host {
+                    (height * 0.5).max(4.0)
+                } else {
+                    0.0
+                };
                 s.padding.left = pad;
                 s.padding.right = pad;
                 s.box_sizing = crate::BoxSizing::BorderBox;

@@ -44,7 +44,11 @@ impl Default for Preview {
 impl Preview {
     /// Dark and light, at 600×400, text at its size.
     pub fn new() -> Self {
-        Self { sizes: vec![], appearances: vec![Appearance::Dark, Appearance::Light], text_scales: vec![1.0] }
+        Self {
+            sizes: vec![],
+            appearances: vec![Appearance::Dark, Appearance::Light],
+            text_scales: vec![1.0],
+        }
     }
 
     /// A window size (the first replaces the default).
@@ -67,8 +71,15 @@ impl Preview {
     /// Builds the component with `build` in a fresh UI for each variant,
     /// lays it out (text 7 px a character) and writes each down under a
     /// heading naming the variant.
-    pub fn render<S: Default + 'static>(&self, build: impl Fn(&mut Ui, &mut Input<S>, &mut S)) -> String {
-        let sizes = if self.sizes.is_empty() { vec![(600.0, 400.0)] } else { self.sizes.clone() };
+    pub fn render<S: Default + 'static>(
+        &self,
+        build: impl Fn(&mut Ui, &mut Input<S>, &mut S),
+    ) -> String {
+        let sizes = if self.sizes.is_empty() {
+            vec![(600.0, 400.0)]
+        } else {
+            self.sizes.clone()
+        };
         let mut out = String::new();
         for &(w, h) in &sizes {
             for &scale in &self.text_scales {
@@ -96,7 +107,13 @@ fn hex(c: Rgba) -> String {
     if c[3] >= 1.0 {
         format!("#{:02x}{:02x}{:02x}", b(c[0]), b(c[1]), b(c[2]))
     } else {
-        format!("#{:02x}{:02x}{:02x}{:02x}", b(c[0]), b(c[1]), b(c[2]), b(c[3]))
+        format!(
+            "#{:02x}{:02x}{:02x}{:02x}",
+            b(c[0]),
+            b(c[1]),
+            b(c[2]),
+            b(c[3])
+        )
     }
 }
 
@@ -106,13 +123,27 @@ fn hex(c: Rgba) -> String {
 pub fn snapshot(ui: &Ui) -> String {
     let tree = ui.accessibility_tree();
     let mut out = String::new();
-    let depth = |id: NodeId| ui.ancestors(id).skip(1).filter(|&a| tree.iter().any(|n| n.id == a)).count();
+    let depth = |id: NodeId| {
+        ui.ancestors(id)
+            .skip(1)
+            .filter(|&a| tree.iter().any(|n| n.id == a))
+            .count()
+    };
     for n in &tree {
-        let _ = write!(out, "{}{}", "  ".repeat(depth(n.id)), format!("{:?}", n.role).to_lowercase());
+        let _ = write!(
+            out,
+            "{}{}",
+            "  ".repeat(depth(n.id)),
+            format!("{:?}", n.role).to_lowercase()
+        );
         if !n.name.is_empty() {
             let _ = write!(out, " {:?}", n.name);
         }
-        for (flag, on) in [("checked", n.checked), ("selected", n.selected), ("expanded", n.expanded)] {
+        for (flag, on) in [
+            ("checked", n.checked),
+            ("selected", n.selected),
+            ("expanded", n.expanded),
+        ] {
             if let Some(v) = on {
                 let _ = write!(out, " {flag}={v}");
             }
@@ -124,8 +155,17 @@ pub fn snapshot(ui: &Ui) -> String {
             out.push_str(" disabled");
         }
         let b = n.bounds;
-        let _ = write!(out, " @{},{} {}x{}", b.x.round(), b.y.round(), b.width.round(), b.height.round());
-        let bg = ui.ancestors(n.id).find_map(|a| ui.style(a).background.filter(|c| c[3] > 0.0));
+        let _ = write!(
+            out,
+            " @{},{} {}x{}",
+            b.x.round(),
+            b.y.round(),
+            b.width.round(),
+            b.height.round()
+        );
+        let bg = ui
+            .ancestors(n.id)
+            .find_map(|a| ui.style(a).background.filter(|c| c[3] > 0.0));
         if let Some(bg) = bg {
             let _ = write!(out, " bg {}", hex(bg));
         }
@@ -146,9 +186,14 @@ pub fn assert_snapshot(path: impl AsRef<Path>, actual: &str) {
         std::fs::write(path, actual).unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
         return;
     }
-    let want = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+    let want =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
     if want != actual {
-        let first = want.lines().zip(actual.lines()).position(|(a, b)| a != b).unwrap_or(want.lines().count().min(actual.lines().count()));
+        let first = want
+            .lines()
+            .zip(actual.lines())
+            .position(|(a, b)| a != b)
+            .unwrap_or(want.lines().count().min(actual.lines().count()));
         panic!(
             "snapshot {} differs from line {} (UPDATE_SNAPSHOTS=1 to accept):\n--- kept\n{}\n--- now\n{}",
             path.display(),

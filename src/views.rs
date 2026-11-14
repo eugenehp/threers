@@ -89,10 +89,20 @@ pub struct Frac {
 }
 
 impl Frac {
-    pub const WHOLE: Frac = Frac { x: 0.0, y: 0.0, width: 1.0, height: 1.0 };
+    pub const WHOLE: Frac = Frac {
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+    };
 
     pub const fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 }
 
@@ -114,12 +124,28 @@ pub enum Layout {
     One(String),
     /// Side by side (`vertical`: a line down the middle) or one over the
     /// other, the first taking `ratio` of the room.
-    Split { first: String, second: String, vertical: bool, ratio: f32, gap: f32 },
+    Split {
+        first: String,
+        second: String,
+        vertical: bool,
+        ratio: f32,
+        gap: f32,
+    },
     /// In a grid `columns` across, row by row.
-    Grid { cameras: Vec<String>, columns: usize, gap: f32 },
+    Grid {
+        cameras: Vec<String>,
+        columns: usize,
+        gap: f32,
+    },
     /// `main` whole, `inset` small in a corner (`size`: its share of the
     /// width), `margin` in from the edges, in pixels.
-    PictureInPicture { main: String, inset: String, corner: Corner, size: f32, margin: f32 },
+    PictureInPicture {
+        main: String,
+        inset: String,
+        corner: Corner,
+        size: f32,
+        margin: f32,
+    },
     /// Any cameras, anywhere, drawn in order (later over earlier).
     Custom(Vec<(String, Frac)>),
 }
@@ -127,23 +153,45 @@ pub enum Layout {
 impl Layout {
     /// Two side by side, halves, a 2 px gap.
     pub fn split_vertical(first: &str, second: &str) -> Self {
-        Layout::Split { first: first.into(), second: second.into(), vertical: true, ratio: 0.5, gap: 2.0 }
+        Layout::Split {
+            first: first.into(),
+            second: second.into(),
+            vertical: true,
+            ratio: 0.5,
+            gap: 2.0,
+        }
     }
 
     /// One over the other, halves, a 2 px gap.
     pub fn split_horizontal(first: &str, second: &str) -> Self {
-        Layout::Split { first: first.into(), second: second.into(), vertical: false, ratio: 0.5, gap: 2.0 }
+        Layout::Split {
+            first: first.into(),
+            second: second.into(),
+            vertical: false,
+            ratio: 0.5,
+            gap: 2.0,
+        }
     }
 
     /// A grid as square as the cameras allow.
     pub fn grid(cameras: &[&str]) -> Self {
         let columns = (cameras.len() as f32).sqrt().ceil().max(1.0) as usize;
-        Layout::Grid { cameras: cameras.iter().map(|c| c.to_string()).collect(), columns, gap: 2.0 }
+        Layout::Grid {
+            cameras: cameras.iter().map(|c| c.to_string()).collect(),
+            columns,
+            gap: 2.0,
+        }
     }
 
     /// `inset` a quarter as wide as `main`, top right.
     pub fn picture_in_picture(main: &str, inset: &str) -> Self {
-        Layout::PictureInPicture { main: main.into(), inset: inset.into(), corner: Corner::TopRight, size: 0.28, margin: 12.0 }
+        Layout::PictureInPicture {
+            main: main.into(),
+            inset: inset.into(),
+            corner: Corner::TopRight,
+            size: 0.28,
+            margin: 12.0,
+        }
     }
 
     /// Each camera's rectangle in a `width` × `height` target (pixels, top
@@ -152,24 +200,66 @@ impl Layout {
         match self {
             Layout::Live => vec![(live.to_owned(), [0.0, 0.0, width, height])],
             Layout::One(c) => vec![(c.clone(), [0.0, 0.0, width, height])],
-            Layout::Split { first, second, vertical, ratio, gap } => {
+            Layout::Split {
+                first,
+                second,
+                vertical,
+                ratio,
+                gap,
+            } => {
                 let r = ratio.clamp(0.0, 1.0);
                 if *vertical {
                     let w1 = ((width - gap) * r).max(0.0);
-                    vec![(first.clone(), [0.0, 0.0, w1, height]), (second.clone(), [w1 + gap, 0.0, (width - w1 - gap).max(0.0), height])]
+                    vec![
+                        (first.clone(), [0.0, 0.0, w1, height]),
+                        (
+                            second.clone(),
+                            [w1 + gap, 0.0, (width - w1 - gap).max(0.0), height],
+                        ),
+                    ]
                 } else {
                     let h1 = ((height - gap) * r).max(0.0);
-                    vec![(first.clone(), [0.0, 0.0, width, h1]), (second.clone(), [0.0, h1 + gap, width, (height - h1 - gap).max(0.0)])]
+                    vec![
+                        (first.clone(), [0.0, 0.0, width, h1]),
+                        (
+                            second.clone(),
+                            [0.0, h1 + gap, width, (height - h1 - gap).max(0.0)],
+                        ),
+                    ]
                 }
             }
-            Layout::Grid { cameras, columns, gap } => {
+            Layout::Grid {
+                cameras,
+                columns,
+                gap,
+            } => {
                 let cols = (*columns).max(1);
                 let rows = cameras.len().div_ceil(cols).max(1);
                 let cw = (width - gap * (cols - 1) as f32) / cols as f32;
                 let ch = (height - gap * (rows - 1) as f32) / rows as f32;
-                cameras.iter().enumerate().map(|(i, c)| (c.clone(), [(i % cols) as f32 * (cw + gap), (i / cols) as f32 * (ch + gap), cw, ch])).collect()
+                cameras
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        (
+                            c.clone(),
+                            [
+                                (i % cols) as f32 * (cw + gap),
+                                (i / cols) as f32 * (ch + gap),
+                                cw,
+                                ch,
+                            ],
+                        )
+                    })
+                    .collect()
             }
-            Layout::PictureInPicture { main, inset, corner, size, margin } => {
+            Layout::PictureInPicture {
+                main,
+                inset,
+                corner,
+                size,
+                margin,
+            } => {
                 let w = width * size.clamp(0.05, 1.0);
                 let h = w * height / width.max(1.0);
                 let x = match corner {
@@ -180,9 +270,25 @@ impl Layout {
                     Corner::TopLeft | Corner::TopRight => *margin,
                     _ => height - h - margin,
                 };
-                vec![(main.clone(), [0.0, 0.0, width, height]), (inset.clone(), [x, y, w, h])]
+                vec![
+                    (main.clone(), [0.0, 0.0, width, height]),
+                    (inset.clone(), [x, y, w, h]),
+                ]
             }
-            Layout::Custom(list) => list.iter().map(|(c, f)| (c.clone(), [f.x * width, f.y * height, f.width * width, f.height * height])).collect(),
+            Layout::Custom(list) => list
+                .iter()
+                .map(|(c, f)| {
+                    (
+                        c.clone(),
+                        [
+                            f.x * width,
+                            f.y * height,
+                            f.width * width,
+                            f.height * height,
+                        ],
+                    )
+                })
+                .collect(),
         }
     }
 }
@@ -217,7 +323,8 @@ pub struct Transition {
 impl Transition {
     /// How far along, 0 to 1, eased.
     pub fn progress(&self) -> f32 {
-        self.easing.apply((self.elapsed / self.duration.max(1e-6)).clamp(0.0, 1.0))
+        self.easing
+            .apply((self.elapsed / self.duration.max(1e-6)).clamp(0.0, 1.0))
     }
 }
 
@@ -260,7 +367,10 @@ impl CameraSet {
     }
 
     pub fn get_mut(&mut self, name: &str) -> Option<&mut PerspectiveCamera> {
-        self.cameras.iter_mut().find(|(n, _)| n == name).map(|(_, c)| c)
+        self.cameras
+            .iter_mut()
+            .find(|(n, _)| n == name)
+            .map(|(_, c)| c)
     }
 
     pub fn names(&self) -> impl Iterator<Item = &str> {
@@ -296,14 +406,29 @@ impl CameraSet {
     }
 
     /// [`transition_to`](Self::transition_to) with an easing of its own.
-    pub fn transition_eased(&mut self, name: &str, kind: TransitionKind, seconds: f32, easing: Easing) -> bool {
-        let Some(to) = self.cameras.iter().position(|(n, _)| n == name) else { return false };
+    pub fn transition_eased(
+        &mut self,
+        name: &str,
+        kind: TransitionKind,
+        seconds: f32,
+        easing: Easing,
+    ) -> bool {
+        let Some(to) = self.cameras.iter().position(|(n, _)| n == name) else {
+            return false;
+        };
         if matches!(kind, TransitionKind::Cut) || seconds <= 0.0 || to == self.live {
             return self.switch_to(name);
         }
         let from = self.live().to_owned();
         self.live = to;
-        self.transition = Some(Transition { from, to: name.to_owned(), kind, duration: seconds, easing, elapsed: 0.0 });
+        self.transition = Some(Transition {
+            from,
+            to: name.to_owned(),
+            kind,
+            duration: seconds,
+            easing,
+            elapsed: 0.0,
+        });
         true
     }
 
@@ -320,7 +445,11 @@ impl CameraSet {
     /// The camera to draw the live view with: the live one, or mid-morph,
     /// the one between.
     pub fn current(&self) -> PerspectiveCamera {
-        let live = self.cameras.get(self.live).map(|(_, c)| c.clone()).unwrap_or_else(|| PerspectiveCamera::new(50.0, 1.0, 0.1, 100.0));
+        let live = self
+            .cameras
+            .get(self.live)
+            .map(|(_, c)| c.clone())
+            .unwrap_or_else(|| PerspectiveCamera::new(50.0, 1.0, 0.1, 100.0));
         match &self.transition {
             Some(t) if t.kind == TransitionKind::Morph => match self.get(&t.from) {
                 Some(from) => between(from, &live, t.progress()),
@@ -357,7 +486,11 @@ impl CameraSet {
             if name == live && self.transition.is_some() {
                 self.render_transition(target, scene, [x, y, rw, rh], h);
             } else {
-                let mut cam = if name == live { self.current() } else { self.get(&name).cloned().unwrap_or_else(|| self.current()) };
+                let mut cam = if name == live {
+                    self.current()
+                } else {
+                    self.get(&name).cloned().unwrap_or_else(|| self.current())
+                };
                 cam.aspect = rw / rh;
                 target.draw(scene, &cam);
             }
@@ -371,8 +504,16 @@ impl CameraSet {
 
     /// The live view mid-transition, into the rectangle `rect` (top left)
     /// of a target `h` tall.
-    fn render_transition(&mut self, target: &mut dyn ViewTarget, scene: &mut Scene, rect: [f32; 4], h: f32) {
-        let Some(t) = self.transition.clone() else { return };
+    fn render_transition(
+        &mut self,
+        target: &mut dyn ViewTarget,
+        scene: &mut Scene,
+        rect: [f32; 4],
+        h: f32,
+    ) {
+        let Some(t) = self.transition.clone() else {
+            return;
+        };
         let [x, y, rw, rh] = rect;
         let aspect = rw / rh;
         let mut to = self.current();
@@ -395,7 +536,8 @@ impl CameraSet {
                     let nh = rh * p;
                     (x, if dy >= 0.0 { y } else { y + rh - nh }, rw, nh)
                 };
-                if nw >= 1.0 && nh >= 1.0
+                if nw >= 1.0
+                    && nh >= 1.0
                     && let Some(r) = target.renderer()
                 {
                     r.set_viewport(x, h - y - rh, rw, rh);
@@ -416,7 +558,10 @@ impl CameraSet {
                 // Both pictures into textures, then the two blended over the
                 // rectangle (the targets keep light untone-mapped, so the
                 // blend is tone-mapped once, as a picture is).
-                let (tw, th) = ((rw * r.pixel_ratio()).round().max(1.0) as u32, (rh * r.pixel_ratio()).round().max(1.0) as u32);
+                let (tw, th) = (
+                    (rw * r.pixel_ratio()).round().max(1.0) as u32,
+                    (rh * r.pixel_ratio()).round().max(1.0) as u32,
+                );
                 let viewport = r.viewport();
                 let scissor = (r.scissor(), r.scissor_test());
                 r.reset_viewport();
@@ -433,7 +578,9 @@ impl CameraSet {
                     r.set_scissor(s.x, s.y, s.width, s.height);
                 }
                 r.set_scissor_test(scissor.1);
-                let Fade { scene: fs, camera, .. } = fade;
+                let Fade {
+                    scene: fs, camera, ..
+                } = fade;
                 target.draw(fs, camera);
             }
         }
@@ -446,7 +593,11 @@ pub fn between(a: &PerspectiveCamera, b: &PerspectiveCamera, t: f32) -> Perspect
     c.position = a.position.lerp(b.position, t);
     c.target = a.target.lerp(b.target, t);
     let up = a.up.lerp(b.up, t);
-    c.up = if up.length() > 1e-6 { up.normalize() } else { b.up };
+    c.up = if up.length() > 1e-6 {
+        up.normalize()
+    } else {
+        b.up
+    };
     c.fov = a.fov + (b.fov - a.fov) * t;
     c.near = a.near + (b.near - a.near) * t;
     c.far = a.far + (b.far - a.far) * t;
@@ -484,17 +635,30 @@ impl CameraTexture {
     /// In a format of its own (`Rgba16Float`, the default, keeps light past
     /// white for the tone mapping where it is shown; `Rgba8Unorm` is
     /// smaller).
-    pub fn with_format(renderer: &mut Renderer, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
+    pub fn with_format(
+        renderer: &mut Renderer,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Self {
         let id = next_id();
         let device = renderer.device_arc();
-        let targets = [Arc::new(RenderTarget::new(&device, width, height, format)), Arc::new(RenderTarget::new(&device, width, height, format))];
+        let targets = [
+            Arc::new(RenderTarget::new(&device, width, height, format)),
+            Arc::new(RenderTarget::new(&device, width, height, format)),
+        ];
         renderer.register_render_target(id, &targets[0]);
         let tf = match format {
             wgpu::TextureFormat::Rgba16Float => TextureFormat::Rgba16Float,
             _ => TextureFormat::Rgba8Unorm,
         };
         let texture = Arc::new(Texture::from_render_target(id, width, height, tf));
-        Self { id, targets, texture, newest: 0 }
+        Self {
+            id,
+            targets,
+            texture,
+            newest: 0,
+        }
     }
 
     /// The texture to put on a material (it shows the newest picture).
@@ -541,7 +705,10 @@ pub struct Feedback {
 
 impl Feedback {
     pub fn new(renderer: &mut Renderer, width: u32, height: u32, levels: u32) -> Self {
-        Self { picture: CameraTexture::new(renderer, width, height), levels: levels.max(1) }
+        Self {
+            picture: CameraTexture::new(renderer, width, height),
+            levels: levels.max(1),
+        }
     }
 
     /// The texture showing the newest picture.
@@ -580,7 +747,13 @@ impl Fade {
         }
         let mut camera = OrthographicCamera::new(-1.0, 1.0, 1.0, -1.0, 0.0, 10.0);
         camera.position = Vector3::new(0.0, 0.0, 1.0);
-        Self { a, b, scene, camera, top: top.expect("two quads") }
+        Self {
+            a,
+            b,
+            scene,
+            camera,
+            top: top.expect("two quads"),
+        }
     }
 
     /// New textures if the rectangle changed size.
@@ -598,7 +771,8 @@ impl Fade {
         {
             b.opacity = p;
         }
-    }}
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -614,7 +788,11 @@ mod tests {
         assert_eq!(g[2].1, [0.0, 52.0, 50.0, 50.0]);
         let p = Layout::picture_in_picture("a", "b").rects(400.0, 200.0, "a");
         assert_eq!(p[1].0, "b");
-        assert!((p[1].1[0] + p[1].1[2] - 388.0).abs() < 1e-3, "in from the right: {:?}", p[1].1);
+        assert!(
+            (p[1].1[0] + p[1].1[2] - 388.0).abs() < 1e-3,
+            "in from the right: {:?}",
+            p[1].1
+        );
         assert_eq!(Layout::Live.rects(10.0, 10.0, "x")[0].0, "x");
     }
 

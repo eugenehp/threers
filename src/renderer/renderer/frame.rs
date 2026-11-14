@@ -2720,7 +2720,9 @@ impl Renderer {
                                     mix(k.1);
                                 });
                                 // a volume map is immutable behind its `Arc`
-                                sm.volume_maps.iter().for_each(|v| mix(std::sync::Arc::as_ptr(v) as u64));
+                                sm.volume_maps
+                                    .iter()
+                                    .for_each(|v| mix(std::sync::Arc::as_ptr(v) as u64));
                                 sm.data_slots()
                                     .iter()
                                     .flatten()
@@ -3284,9 +3286,9 @@ impl Renderer {
                         .get(t)
                         .and_then(|v| v.as_wgpu())
                         .or_else(|| {
-                            sm.maps
-                                .get(t)
-                                .map(|m| self.view_for(&Some(m.clone()), &self.default_white_linear))
+                            sm.maps.get(t).map(|m| {
+                                self.view_for(&Some(m.clone()), &self.default_white_linear)
+                            })
                         })
                         .unwrap_or(&self.default_white_linear.view)
                 });
@@ -3297,7 +3299,12 @@ impl Renderer {
                         // has nothing to bind here.
                         sm.volumes
                             .get(v)
-                            .or_else(|| sm.volume_maps.get(v).and_then(|m| self.volume_maps.get(m)).map(|g| &g.view))
+                            .or_else(|| {
+                                sm.volume_maps
+                                    .get(v)
+                                    .and_then(|m| self.volume_maps.get(m))
+                                    .map(|g| &g.view)
+                            })
                             .and_then(|v| v.as_wgpu())
                             .unwrap_or(&self.default_volume_view)
                     })
@@ -3566,7 +3573,9 @@ impl Renderer {
                     pane: pane_key.zip(pane_msaa.as_ref().map(|p| p.region)),
                     viewport: main_plan.viewport,
                     scissor: main_plan.scissor,
-                    projection_fix: pane_msaa.as_ref().map_or(vp_plan.projection_fix, |p| p.projection_fix),
+                    projection_fix: pane_msaa
+                        .as_ref()
+                        .map_or(vp_plan.projection_fix, |p| p.projection_fix),
                 });
             }
             if let super::super::viewport::ClearMode::Rect(_) = vp_plan.clear {

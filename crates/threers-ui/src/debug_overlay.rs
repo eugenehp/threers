@@ -113,7 +113,17 @@ impl FrameStats {
         ];
         let line_h = 14.0;
         let h = 8.0 + lines.len() as f32 * line_h + 6.0 + BARS + 8.0;
-        painter.fill_rounded_rect(Rect { x, y, width: W, height: h }, 4.0, 4.0, BG);
+        painter.fill_rounded_rect(
+            Rect {
+                x,
+                y,
+                width: W,
+                height: h,
+            },
+            4.0,
+            4.0,
+            BG,
+        );
         let style = TextStyle::of(&Style {
             font_family: "monospace".into(),
             font_size: 11.0,

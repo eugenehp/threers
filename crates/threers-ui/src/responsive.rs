@@ -45,7 +45,12 @@ impl Ui {
     /// ancestor): below every breakpoint, the style it has now; at or above
     /// a `rules` width, that rule's style (the widest that applies). See
     /// the [module docs](self).
-    pub fn container_query(&mut self, node: NodeId, container: NodeId, mut rules: Vec<(f32, Style)>) {
+    pub fn container_query(
+        &mut self,
+        node: NodeId,
+        container: NodeId,
+        mut rules: Vec<(f32, Style)>,
+    ) {
         self.node(container);
         rules.sort_by(|a, b| a.0.total_cmp(&b.0));
         let base = self.style(node).clone();

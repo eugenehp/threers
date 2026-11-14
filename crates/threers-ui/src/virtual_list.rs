@@ -33,8 +33,8 @@
 
 use std::ops::Range;
 
-use super::style::{Display, Length, Style};
 use super::scrolling::ScrollStrategy;
+use super::style::{Display, Length, Style};
 use super::tree::{NodeId, Ui};
 
 /// How tall a list's rows are.
@@ -181,7 +181,10 @@ impl VirtualList {
 
     /// The box of row `index`, if it is built.
     pub fn row(&self, index: usize) -> Option<NodeId> {
-        self.built.iter().find(|(i, _)| *i == index).map(|(_, n)| *n)
+        self.built
+            .iter()
+            .find(|(i, _)| *i == index)
+            .map(|(_, n)| *n)
     }
 
     /// Where row `index` starts, from the top of the content.
@@ -203,7 +206,9 @@ impl VirtualList {
             return 0;
         }
         match self.height {
-            RowHeight::Uniform(h) if h > 0.0 => ((offset.max(0.0) / h) as usize).min(self.count - 1),
+            RowHeight::Uniform(h) if h > 0.0 => {
+                ((offset.max(0.0) / h) as usize).min(self.count - 1)
+            }
             RowHeight::Uniform(_) => 0,
             RowHeight::Measured { .. } => self.sums.find(offset.max(0.0)),
         }
@@ -319,7 +324,9 @@ impl VirtualList {
     /// Scrolls to the row asked for by [`scroll_to`](Self::scroll_to), by
     /// the heights known now.
     fn apply_reveal(&self, ui: &mut Ui) {
-        let Some((index, strategy)) = self.reveal else { return };
+        let Some((index, strategy)) = self.reveal else {
+            return;
+        };
         let (_, view, _) = ui.scroll_extent(self.container);
         let (start, end) = (self.offset_of(index), self.offset_of(index + 1));
         let to = match strategy {
@@ -393,7 +400,8 @@ impl VirtualList {
             changed |= ui.style(self.container).scroll_top != before;
         }
         let visible = self.visible(ui);
-        let want = visible.start.saturating_sub(self.overscan)..(visible.end + self.overscan).min(self.count);
+        let want = visible.start.saturating_sub(self.overscan)
+            ..(visible.end + self.overscan).min(self.count);
         let before = self.built.len();
         self.built.retain(|&(i, n)| {
             let keep = want.contains(&i);

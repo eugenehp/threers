@@ -13,7 +13,10 @@ const RING_FLAT: &str = include_str!("shaders/ring_flat.wgsl");
 
 /// What the solid indicators share: their pose, a studio to reflect, ray
 /// and capsule geometry, and glass.
-const SOLID_LIB: &str = concat!(include_str!("../studio.wgsl"), include_str!("shaders/solid.wgsl"));
+const SOLID_LIB: &str = concat!(
+    include_str!("../studio.wgsl"),
+    include_str!("shaders/solid.wgsl")
+);
 
 /// A solid bar: a glass capsule, liquid inside, ray-traced exactly in a
 /// mild perspective (each intersection is a quadratic).
@@ -60,18 +63,58 @@ pub fn source_filled(shape: Shape, depth: Depth, fill: Fill, animated: bool) -> 
     // What it needs past the common parts (the 3D library, the effect's
     // kind), its body and the body's function, and whether it turns in 3D
     // (else motion turns it as a flat card).
-    let fill_body = |call: &str| format!("{}\n{}", if call == "pfx_fx" { EFFECTS } else { "" }, FILL.replace("PFX_FILL", call));
+    let fill_body = |call: &str| {
+        format!(
+            "{}\n{}",
+            if call == "pfx_fx" { EFFECTS } else { "" },
+            FILL.replace("PFX_FILL", call)
+        )
+    };
     let (needs, body, name, turns): (String, String, &str, bool) = match (fill, shape, depth) {
-        (Fill::Electric, ..) => (String::new(), ELECTRIC.to_owned(), pick("pfx_ring_electric", "pfx_bar_electric"), false),
+        (Fill::Electric, ..) => (
+            String::new(),
+            ELECTRIC.to_owned(),
+            pick("pfx_ring_electric", "pfx_bar_electric"),
+            false,
+        ),
         (Fill::Custom(c), ..) => {
             let (source, function) = custom_source(c);
-            (source, fill_body(&function), pick("pfx_ring_fx", "pfx_bar_fx"), false)
+            (
+                source,
+                fill_body(&function),
+                pick("pfx_ring_fx", "pfx_bar_fx"),
+                false,
+            )
         }
-        (f, ..) if f.kind() > 0 => (format!("const PFX_KIND: i32 = {};\n", f.kind()), fill_body("pfx_fx"), pick("pfx_ring_fx", "pfx_bar_fx"), false),
+        (f, ..) if f.kind() > 0 => (
+            format!("const PFX_KIND: i32 = {};\n", f.kind()),
+            fill_body("pfx_fx"),
+            pick("pfx_ring_fx", "pfx_bar_fx"),
+            false,
+        ),
         // Both batteries are one function, the glass in it.
-        (_, Shape::Battery, d) => (SOLID_LIB.to_owned(), BATTERY.to_owned(), if d == Depth::Solid { "pfx_battery_solid" } else { "pfx_battery_flat" }, false),
-        (_, _, Depth::Flat) => (String::new(), pick(RING_FLAT, BAR_FLAT).to_owned(), pick("pfx_ring_flat", "pfx_bar_flat"), false),
-        (_, _, Depth::Solid) => (SOLID_LIB.to_owned(), pick(RING_SOLID, BAR_SOLID).to_owned(), pick("pfx_ring_solid", "pfx_bar_solid"), true),
+        (_, Shape::Battery, d) => (
+            SOLID_LIB.to_owned(),
+            BATTERY.to_owned(),
+            if d == Depth::Solid {
+                "pfx_battery_solid"
+            } else {
+                "pfx_battery_flat"
+            },
+            false,
+        ),
+        (_, _, Depth::Flat) => (
+            String::new(),
+            pick(RING_FLAT, BAR_FLAT).to_owned(),
+            pick("pfx_ring_flat", "pfx_bar_flat"),
+            false,
+        ),
+        (_, _, Depth::Solid) => (
+            SOLID_LIB.to_owned(),
+            pick(RING_SOLID, BAR_SOLID).to_owned(),
+            pick("pfx_ring_solid", "pfx_bar_solid"),
+            true,
+        ),
     };
     let clock = if animated { "time" } else { "clock" };
     let flat = !turns;
@@ -117,13 +160,21 @@ pub(super) fn register_custom(source: &str) -> CustomFill {
             Ok(f) => (f, None),
             Err(e) => (String::new(), Some(e)),
         };
-        c.push(Custom { source: source.to_owned(), function, error });
+        c.push(Custom {
+            source: source.to_owned(),
+            function,
+            error,
+        });
         CustomFill::new(c.len() as u32 - 1)
     })
 }
 
 pub(super) fn custom_error(c: CustomFill) -> Option<String> {
-    CUSTOM.with(|x| x.borrow().get(c.id() as usize).and_then(|x| x.error.clone()))
+    CUSTOM.with(|x| {
+        x.borrow()
+            .get(c.id() as usize)
+            .and_then(|x| x.error.clone())
+    })
 }
 
 /// A custom fill's source and its function's name (a stand-in that draws
@@ -141,7 +192,9 @@ fn custom_source(c: CustomFill) -> (String, String) {
 /// The name of `source`'s last function, if it is a fill: ten parameters,
 /// returning a `vec4<f32>`.
 fn fill_signature(source: &str) -> Result<String, String> {
-    let at = source.rfind("fn ").ok_or("no function: the last `fn` in the source is the fill")?;
+    let at = source
+        .rfind("fn ")
+        .ok_or("no function: the last `fn` in the source is the fill")?;
     let rest = &source[at + 3..];
     let open = rest.find('(').ok_or("no parameter list")?;
     let name = rest[..open].trim().to_owned();
@@ -164,8 +217,17 @@ fn fill_signature(source: &str) -> Result<String, String> {
         }
     }
     let close = close.ok_or("unclosed parameter list")?;
-    let params = rest[open + 1..close].split(',').filter(|p| p.contains(':')).count();
-    let returns: String = rest[close + 1..].split('{').next().unwrap_or("").chars().filter(|c| !c.is_whitespace()).collect();
+    let params = rest[open + 1..close]
+        .split(',')
+        .filter(|p| p.contains(':'))
+        .count();
+    let returns: String = rest[close + 1..]
+        .split('{')
+        .next()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
     if params != 10 || (returns != "->vec4<f32>" && returns != "->vec4f") {
         return Err(format!(
             "`{name}` must take (along, up, half, env, cover, u, now: f32, c0, c1, c2: vec4<f32>) and return vec4<f32>; it takes {params} and returns `{}`",
@@ -181,7 +243,12 @@ thread_local! {
 }
 
 pub(super) fn shader(shape: Shape, depth: Depth, fill: Fill, animated: bool) -> Shader {
-    SHADERS.with(|m| m.borrow_mut().entry((shape, depth, fill, animated)).or_insert_with(|| Shader::new(source_filled(shape, depth, fill, animated))).clone())
+    SHADERS.with(|m| {
+        m.borrow_mut()
+            .entry((shape, depth, fill, animated))
+            .or_insert_with(|| Shader::new(source_filled(shape, depth, fill, animated)))
+            .clone()
+    })
 }
 
 /// `c` decoded: effects mix and blend in linear light.

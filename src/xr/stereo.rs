@@ -19,7 +19,14 @@ impl Renderer {
     /// The renderer is sized to the source's framebuffer; viewport,
     /// scissor, auto-clear and pixel ratio are put back after. Returns
     /// whether any eye was drawn (none while tracking is lost).
-    pub fn render_xr(&mut self, scene: &mut Scene, camera: &PerspectiveCamera, source: &(impl XrSource + ?Sized), origin: &Matrix4, target: &wgpu::TextureView) -> bool {
+    pub fn render_xr(
+        &mut self,
+        scene: &mut Scene,
+        camera: &PerspectiveCamera,
+        source: &(impl XrSource + ?Sized),
+        origin: &Matrix4,
+        target: &wgpu::TextureView,
+    ) -> bool {
         self.render_xr_with(scene, camera, source, origin, target, |_, _, _| {})
     }
 
@@ -43,7 +50,13 @@ impl Renderer {
         }
         let (w, h) = source.framebuffer_size();
         self.resize(w, h);
-        let saved = (self.viewport(), self.scissor(), self.scissor_test(), self.auto_clear(), self.pixel_ratio());
+        let saved = (
+            self.viewport(),
+            self.scissor(),
+            self.scissor_test(),
+            self.auto_clear(),
+            self.pixel_ratio(),
+        );
         self.set_pixel_ratio(1.0);
         self.set_auto_clear(true);
         self.set_scissor_test(true);

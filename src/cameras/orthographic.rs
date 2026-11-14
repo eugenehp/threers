@@ -26,8 +26,23 @@ pub struct OrthographicCamera {
 impl OrthographicCamera {
     /// Renders only the patch `(x, y, width, height)` of a `full_width` ×
     /// `full_height` picture (see [`ViewOffset`](super::ViewOffset)).
-    pub fn set_view_offset(&mut self, full_width: f32, full_height: f32, x: f32, y: f32, width: f32, height: f32) -> &mut Self {
-        self.view_offset = Some(super::ViewOffset { full_width, full_height, x, y, width, height });
+    pub fn set_view_offset(
+        &mut self,
+        full_width: f32,
+        full_height: f32,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> &mut Self {
+        self.view_offset = Some(super::ViewOffset {
+            full_width,
+            full_height,
+            x,
+            y,
+            width,
+            height,
+        });
         self
     }
 
@@ -69,7 +84,14 @@ impl Camera for OrthographicCamera {
             .unwrap_or_else(|| Matrix4::look_at(self.position, self.target, self.up))
     }
     fn projection_matrix(&self) -> Matrix4 {
-        let m = Matrix4::orthographic(self.left, self.right, self.top, self.bottom, self.near, self.far);
+        let m = Matrix4::orthographic(
+            self.left,
+            self.right,
+            self.top,
+            self.bottom,
+            self.near,
+            self.far,
+        );
         match self.view_offset {
             Some(v) => v.apply(m),
             None => m,

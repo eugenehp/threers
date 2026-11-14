@@ -36,7 +36,10 @@ pub struct ListNavigation {
 
 impl ListNavigation {
     pub fn new(len: usize) -> Self {
-        Self { len, highlighted: None }
+        Self {
+            len,
+            highlighted: None,
+        }
     }
 
     /// A key (DOM `KeyboardEvent.key`), with `page` rows to a page. `None`

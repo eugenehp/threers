@@ -47,7 +47,12 @@ impl Ui {
     /// Makes `container` (which scrolls sideways) settle on `snap` points
     /// (`None`: anywhere).
     pub fn set_scroll_snap(&mut self, container: NodeId, snap: Option<Snap>) {
-        let keep: Vec<(NodeId, Snap)> = self.snaps.iter().copied().filter(|(c, _)| *c != container && self.contains(*c)).collect();
+        let keep: Vec<(NodeId, Snap)> = self
+            .snaps
+            .iter()
+            .copied()
+            .filter(|(c, _)| *c != container && self.contains(*c))
+            .collect();
         self.snaps = keep;
         if let Some(s) = snap {
             self.snaps.push((container, s));
@@ -55,7 +60,10 @@ impl Ui {
     }
 
     pub fn scroll_snap(&self, container: NodeId) -> Option<Snap> {
-        self.snaps.iter().find(|(c, _)| *c == container).map(|(_, s)| *s)
+        self.snaps
+            .iter()
+            .find(|(c, _)| *c == container)
+            .map(|(_, s)| *s)
     }
 
     /// The snap point of `container` nearest `offset` (its offset itself
@@ -67,7 +75,9 @@ impl Ui {
             None => return offset.clamp(0.0, max),
             Some(Snap::Pages) => {
                 let page = view.max(1.0);
-                (0..=(max / page).ceil() as usize).map(|i| (i as f32 * page).min(max)).collect()
+                (0..=(max / page).ceil() as usize)
+                    .map(|i| (i as f32 * page).min(max))
+                    .collect()
             }
             Some(Snap::Items) => {
                 let r = self.rect(container);
@@ -83,7 +93,10 @@ impl Ui {
                 p
             }
         };
-        points.into_iter().min_by(|a, b| (a - offset).abs().total_cmp(&(b - offset).abs())).unwrap_or(0.0)
+        points
+            .into_iter()
+            .min_by(|a, b| (a - offset).abs().total_cmp(&(b - offset).abs()))
+            .unwrap_or(0.0)
     }
 
     /// Eases `container` onto the snap point nearest `aim`; whether it
@@ -95,10 +108,17 @@ impl Ui {
         let to = self.snap_offset_x(container, aim);
         let now = self.style(container).scroll_left;
         if (to - now).abs() > 0.5 {
-            let seconds = (SETTLE_SECONDS * ((to - now).abs() / 300.0).sqrt()).clamp(0.12, SETTLE_SECONDS);
+            let seconds =
+                (SETTLE_SECONDS * ((to - now).abs() / 300.0).sqrt()).clamp(0.12, SETTLE_SECONDS);
             self.animate(
                 container,
-                Animation::new(Property::ScrollLeft, Value::Number(now), Value::Number(to), seconds).easing(threers_math::easing::Easing::CubicOut),
+                Animation::new(
+                    Property::ScrollLeft,
+                    Value::Number(now),
+                    Value::Number(to),
+                    seconds,
+                )
+                .easing(threers_math::easing::Easing::CubicOut),
             );
         } else if now != to {
             self.style_mut(container).scroll_left = to;
@@ -126,7 +146,13 @@ impl<S: 'static> Input<S> {
             if !ui.contains(container) {
                 return false;
             }
-            let read = |ui: &Ui| if sideways { ui.style(container).scroll_left } else { ui.style(container).scroll_top };
+            let read = |ui: &Ui| {
+                if sideways {
+                    ui.style(container).scroll_left
+                } else {
+                    ui.style(container).scroll_top
+                }
+            };
             let want = offset.get(state);
             if agreed != Some(want) {
                 // The state asks for somewhere new (or this is the first
@@ -139,7 +165,11 @@ impl<S: 'static> Input<S> {
                 let reached = read(ui);
                 // Before the box is laid out its extent is nothing and the
                 // offset cannot be reached: try again later.
-                let (content, _, _) = if sideways { ui.scroll_extent_x(container) } else { ui.scroll_extent(container) };
+                let (content, _, _) = if sideways {
+                    ui.scroll_extent_x(container)
+                } else {
+                    ui.scroll_extent(container)
+                };
                 if reached == want || content > 0.0 {
                     if reached != want {
                         offset.set(state, reached);

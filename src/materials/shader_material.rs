@@ -558,7 +558,10 @@ impl ShaderMaterial {
     /// Attach CPU-side volumes for `u_vol0`/`u_vol1` — see
     /// [`volume_maps`](Self::volume_maps). At most two are used.
     #[cfg(feature = "render")]
-    pub fn with_volume_maps(mut self, volumes: Vec<std::sync::Arc<crate::volume::Data3DTexture>>) -> Self {
+    pub fn with_volume_maps(
+        mut self,
+        volumes: Vec<std::sync::Arc<crate::volume::Data3DTexture>>,
+    ) -> Self {
         self.volume_maps = volumes;
         self
     }

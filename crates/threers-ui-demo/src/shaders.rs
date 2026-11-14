@@ -26,7 +26,10 @@ fn card(ui: &mut Ui, parent: NodeId, title: &str, about: &str, k: usize) -> Node
     let (a, b) = stops[k % stops.len()];
     ui.update_style(c, |s| {
         s.background = Some([a[0], a[1], a[2], 1.0]);
-        s.background_gradient = vec![(0.0, [a[0], a[1], a[2], 1.0]), (1.0, [b[0], b[1], b[2], 1.0])];
+        s.background_gradient = vec![
+            (0.0, [a[0], a[1], a[2], 1.0]),
+            (1.0, [b[0], b[1], b[2], 1.0]),
+        ];
     });
     let big = ui.add_box(c, style! { font-size: 30px; font-weight: bold; });
     ui.add_text(big, "threers");
@@ -91,7 +94,14 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, page: NodeId)
         }
     };
     let c = card(ui, grid, "Ripple", "Rings from the pointer", 0);
-    ui.set_effect(c, Some(Effect::new(&ripple).arg("strength", 5.0).arg("centre", [90.0, 60.0])));
+    ui.set_effect(
+        c,
+        Some(
+            Effect::new(&ripple)
+                .arg("strength", 5.0)
+                .arg("centre", [90.0, 60.0]),
+        ),
+    );
     input.effect_follows_pointer(c, "centre");
 
     // Holographic foil: a rainbow sheen where the light catches the tilted
@@ -128,7 +138,14 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, page: NodeId)
         }
     };
     let c = card(ui, grid, "Lens", "Magnifies under the pointer", 1);
-    ui.set_effect(c, Some(Effect::new(&lens).arg("radius", 38.0).arg("centre", [60.0, 50.0])));
+    ui.set_effect(
+        c,
+        Some(
+            Effect::new(&lens)
+                .arg("radius", 38.0)
+                .arg("centre", [60.0, 50.0]),
+        ),
+    );
     input.effect_follows_pointer(c, "centre");
 
     // A page peeled back from its corner to the pointer: the fold is
@@ -217,7 +234,10 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, page: NodeId)
         }
     };
     let chromatic = card(ui, grid, "Split", "Colour channels apart", 2);
-    ui.set_effect(chromatic, Some(Effect::new(&split).arg("amount", state.shader_split)));
+    ui.set_effect(
+        chromatic,
+        Some(Effect::new(&split).arg("amount", state.shader_split)),
+    );
 
     // Big pixels.
     let pixels = ui_shader! {
@@ -227,7 +247,10 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, page: NodeId)
         }
     };
     let pix = card(ui, grid, "Pixels", "Blocks of a size", 1);
-    ui.set_effect(pix, Some(Effect::new(&pixels).arg("cell", state.shader_cell)));
+    ui.set_effect(
+        pix,
+        Some(Effect::new(&pixels).arg("cell", state.shader_cell)),
+    );
 
     // Burnt away through noise, embers at the edge.
     let burn = ui_shader! {
@@ -252,7 +275,10 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, page: NodeId)
         }
     };
     let burnt = card(ui, grid, "Burn", "Through noise, with embers", 2);
-    ui.set_effect(burnt, Some(Effect::new(&burn).arg("progress", state.shader_burn)));
+    ui.set_effect(
+        burnt,
+        Some(Effect::new(&burn).arg("progress", state.shader_burn)),
+    );
 
     // Twisted round the pointer, most at the middle.
     let swirl = ui_shader! {
@@ -269,7 +295,15 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, page: NodeId)
         }
     };
     let c = card(ui, grid, "Swirl", "Twists round the pointer", 0);
-    ui.set_effect(c, Some(Effect::new(&swirl).arg("radius", 70.0).arg("strength", 2.6).arg("centre", [90.0, 60.0])));
+    ui.set_effect(
+        c,
+        Some(
+            Effect::new(&swirl)
+                .arg("radius", 70.0)
+                .arg("strength", 2.6)
+                .arg("centre", [90.0, 60.0]),
+        ),
+    );
     input.effect_follows_pointer(c, "centre");
 
     // Printed in dots on a turned grid, each as large as it is bright.
@@ -374,9 +408,21 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, page: NodeId)
 
     let sliders = ui.add_box(g, style! { display: grid; grid-template-columns: 90px 1fr; column-gap: 12px; row-gap: 6px; align-items: center; max-width: 520px; });
     for (label, value, range) in [
-        ("Split", threers_ui::binding!(|s: State| s.shader_split), 0.0..=40.0),
-        ("Pixels", threers_ui::binding!(|s: State| s.shader_cell), 1.0..=16.0),
-        ("Burn", threers_ui::binding!(|s: State| s.shader_burn), 0.0..=1.0),
+        (
+            "Split",
+            threers_ui::binding!(|s: State| s.shader_split),
+            0.0..=40.0,
+        ),
+        (
+            "Pixels",
+            threers_ui::binding!(|s: State| s.shader_cell),
+            1.0..=16.0,
+        ),
+        (
+            "Burn",
+            threers_ui::binding!(|s: State| s.shader_burn),
+            0.0..=1.0,
+        ),
     ] {
         let l = ui.add_box(sliders, style! { font-size: 12px; });
         ui.add_text(l, label);
@@ -390,5 +436,10 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, page: NodeId)
     ui.token_style(code, &[("background", Token::Raised)]);
     ui.add_text(code, RIPPLE_SOURCE);
 
-    Shaders { chromatic, pixels: pix, burn: burnt, last: (state.shader_split, state.shader_cell, state.shader_burn) }
+    Shaders {
+        chromatic,
+        pixels: pix,
+        burn: burnt,
+        last: (state.shader_split, state.shader_cell, state.shader_burn),
+    }
 }

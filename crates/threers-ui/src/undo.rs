@@ -56,13 +56,22 @@ pub struct UndoManager<S> {
 
 impl<S> std::fmt::Debug for UndoManager<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UndoManager").field("undo", &self.undo.len()).field("redo", &self.redo.len()).finish()
+        f.debug_struct("UndoManager")
+            .field("undo", &self.undo.len())
+            .field("redo", &self.redo.len())
+            .finish()
     }
 }
 
 impl<S> Default for UndoManager<S> {
     fn default() -> Self {
-        UndoManager { undo: vec![], redo: vec![], group: None, limit: 200, merge_window: 1.0 }
+        UndoManager {
+            undo: vec![],
+            redo: vec![],
+            group: None,
+            limit: 200,
+            merge_window: 1.0,
+        }
     }
 }
 
@@ -73,16 +82,42 @@ impl<S> UndoManager<S> {
 
     /// Records a change already made, named for a menu ("Typing", "Move"):
     /// `undo` takes it back, `redo` makes it again.
-    pub fn record(&mut self, name: &str, undo: impl Fn(&mut S) + 'static, redo: impl Fn(&mut S) + 'static) {
-        self.push(name, None, Step { undo: Rc::new(undo), redo: Rc::new(redo) });
+    pub fn record(
+        &mut self,
+        name: &str,
+        undo: impl Fn(&mut S) + 'static,
+        redo: impl Fn(&mut S) + 'static,
+    ) {
+        self.push(
+            name,
+            None,
+            Step {
+                undo: Rc::new(undo),
+                redo: Rc::new(redo),
+            },
+        );
     }
 
     /// [`record`](Self::record), merged into the last step if that was a
     /// change of the same `kind` made less than
     /// [`merge_window`](Self::merge_window) seconds before `time` (and
     /// nothing has been undone since): one undo takes back the burst.
-    pub fn record_merging(&mut self, name: &str, kind: &str, time: f64, undo: impl Fn(&mut S) + 'static, redo: impl Fn(&mut S) + 'static) {
-        self.push(name, Some((kind.to_owned(), time)), Step { undo: Rc::new(undo), redo: Rc::new(redo) });
+    pub fn record_merging(
+        &mut self,
+        name: &str,
+        kind: &str,
+        time: f64,
+        undo: impl Fn(&mut S) + 'static,
+        redo: impl Fn(&mut S) + 'static,
+    ) {
+        self.push(
+            name,
+            Some((kind.to_owned(), time)),
+            Step {
+                undo: Rc::new(undo),
+                redo: Rc::new(redo),
+            },
+        );
     }
 
     fn push(&mut self, name: &str, merge: Option<(String, f64)>, step: Step<S>) {
@@ -100,7 +135,11 @@ impl<S> UndoManager<S> {
             last.merge = merge;
             return;
         }
-        self.undo.push(Entry { name: name.to_owned(), merge, steps: vec![step] });
+        self.undo.push(Entry {
+            name: name.to_owned(),
+            merge,
+            steps: vec![step],
+        });
         if self.undo.len() > self.limit {
             self.undo.remove(0);
         }
@@ -110,7 +149,11 @@ impl<S> UndoManager<S> {
     /// are one step named `name`.
     pub fn begin_group(&mut self, name: &str) {
         if self.group.is_none() {
-            self.group = Some(Entry { name: name.to_owned(), merge: None, steps: vec![] });
+            self.group = Some(Entry {
+                name: name.to_owned(),
+                merge: None,
+                steps: vec![],
+            });
         }
     }
 
@@ -130,7 +173,9 @@ impl<S> UndoManager<S> {
     /// there was one.
     pub fn undo(&mut self, state: &mut S) -> bool {
         self.end_group();
-        let Some(e) = self.undo.pop() else { return false };
+        let Some(e) = self.undo.pop() else {
+            return false;
+        };
         for s in e.steps.iter().rev() {
             (s.undo)(state);
         }
@@ -140,7 +185,9 @@ impl<S> UndoManager<S> {
 
     /// Makes again the last step undone. Returns whether there was one.
     pub fn redo(&mut self, state: &mut S) -> bool {
-        let Some(e) = self.redo.pop() else { return false };
+        let Some(e) = self.redo.pop() else {
+            return false;
+        };
         for s in &e.steps {
             (s.redo)(state);
         }
@@ -205,7 +252,13 @@ mod tests {
 
     fn add(m: &mut UndoManager<Doc>, d: &mut Doc, v: i32) {
         d.items.push(v);
-        m.record("Add", |d: &mut Doc| { d.items.pop(); }, move |d: &mut Doc| d.items.push(v));
+        m.record(
+            "Add",
+            |d: &mut Doc| {
+                d.items.pop();
+            },
+            move |d: &mut Doc| d.items.push(v),
+        );
     }
 
     #[test]
@@ -236,7 +289,15 @@ mod tests {
         let (mut m, mut d) = (UndoManager::<Doc>::new(), Doc::default());
         for (i, t) in [0.0, 0.3, 0.6, 2.0].into_iter().enumerate() {
             d.items.push(i as i32);
-            m.record_merging("Typing", "type", t, |d: &mut Doc| { d.items.pop(); }, move |d: &mut Doc| d.items.push(i as i32));
+            m.record_merging(
+                "Typing",
+                "type",
+                t,
+                |d: &mut Doc| {
+                    d.items.pop();
+                },
+                move |d: &mut Doc| d.items.push(i as i32),
+            );
         }
         m.undo(&mut d);
         assert_eq!(d.items, [0, 1, 2], "the late one alone");
@@ -251,9 +312,15 @@ mod tests {
         use crate::keymap::Keystroke;
         let mut k = Keymap::new();
         bind_undo_keys(&mut k);
-        let a = k.match_stroke(&Keystroke::parse("ctrl-z").unwrap(), &[]).action().unwrap();
+        let a = k
+            .match_stroke(&Keystroke::parse("ctrl-z").unwrap(), &[])
+            .action()
+            .unwrap();
         assert!(a.as_any().is::<Undo>());
-        let a = k.match_stroke(&Keystroke::parse("ctrl-y").unwrap(), &[]).action().unwrap();
+        let a = k
+            .match_stroke(&Keystroke::parse("ctrl-y").unwrap(), &[])
+            .action()
+            .unwrap();
         assert!(a.as_any().is::<Redo>());
     }
 }

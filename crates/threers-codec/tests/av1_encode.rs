@@ -191,5 +191,64 @@ fn a_webm_clip_plays() {
 #[test]
 fn awkward_sizes_are_refused() {
     assert!(Av1Encoder::new(30, 32, 40).is_err());
-    assert!(Av1Encoder::new(32, 32, 0).is_err());
+}
+
+/// The lossless mode (`qidx` 0): both decoders return the planes exactly,
+/// on the test picture (gradients, edges, flat areas, noise) and on pure
+/// noise, where residuals are large.
+#[test]
+fn qidx_0_is_lossless() {
+    let dav1d = Command::new("ffmpeg")
+        .args(["-hide_banner", "-decoders"])
+        .output()
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("libdav1d"));
+    let mut seed = 0x9E3779B9u32;
+    let mut noise = move |n: usize| -> Vec<u8> {
+        (0..n)
+            .map(|_| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                (seed >> 24) as u8
+            })
+            .collect()
+    };
+    let (nw, nh) = (48, 40);
+    let noisy = [noise(nw * nh), noise(nw * nh / 4), noise(nw * nh / 4)];
+    for (w, h, [y, u, v]) in [
+        (64, 64, picture(64, 64)),
+        (200, 136, picture(200, 136)),
+        (8, 8, picture(8, 8)),
+        (nw, nh, noisy),
+    ] {
+        let mut enc = Av1Encoder::new(w, h, 0).unwrap();
+        let tu = enc.encode(&y, &u, &v).unwrap();
+        let planes = ours(&tu);
+        assert!(
+            planes[0] == y && planes[1] == u && planes[2] == v,
+            "{w}x{h}: not lossless"
+        );
+        eprintln!("{w}x{h} lossless: {} bytes of {}", tu.len(), w * h * 3 / 2);
+        if dav1d {
+            let path = std::env::temp_dir().join(format!(
+                "threers_av1lossless_{}_{w}.obu",
+                std::process::id()
+            ));
+            std::fs::write(&path, &tu).unwrap();
+            let out = Command::new("ffmpeg")
+                .args(["-v", "error", "-c:v", "libdav1d", "-f", "obu", "-i"])
+                .arg(&path)
+                .args(["-f", "rawvideo", "-pix_fmt", "yuv420p", "-"])
+                .output()
+                .unwrap();
+            let _ = std::fs::remove_file(&path);
+            assert!(
+                out.status.success(),
+                "dav1d: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(
+                out.stdout == [y, u, v].concat(),
+                "{w}x{h}: dav1d does not return the source"
+            );
+        }
+    }
 }

@@ -532,7 +532,11 @@ impl Ui {
                 None => String::new(),
             },
         };
-        let description = s.description.clone().or_else(|| s.described_by.filter(|&d| self.contains(d)).map(|d| self.text_content(d)));
+        let description = s.description.clone().or_else(|| {
+            s.described_by
+                .filter(|&d| self.contains(d))
+                .map(|d| self.text_content(d))
+        });
         // A busy subtree (loading, a placeholder) says so.
         let busy = s.busy || self.is_redacted(id);
         let index = out.len();
@@ -581,7 +585,12 @@ impl Ui {
     /// [`Semantics::sort_priority`], highest first, else as they are.
     fn reading_order(&self, children: &[NodeId]) -> Vec<NodeId> {
         let mut kids = children.to_vec();
-        let prio = |c: &NodeId| self.nodes[c.0].semantics.as_ref().map_or(0, |s| s.sort_priority);
+        let prio = |c: &NodeId| {
+            self.nodes[c.0]
+                .semantics
+                .as_ref()
+                .map_or(0, |s| s.sort_priority)
+        };
         if kids.iter().any(|c| prio(c) != 0) {
             kids.sort_by_key(|c| -prio(c));
         }
@@ -600,11 +609,24 @@ impl Ui {
     /// index are left out.
     pub fn focus_order(&self) -> Vec<NodeId> {
         let mut order = self.focusable_in_reading_order();
-        order.retain(|&id| self.nodes[id.0].semantics.as_ref().and_then(|s| s.tab_index).unwrap_or(0) >= 0);
+        order.retain(|&id| {
+            self.nodes[id.0]
+                .semantics
+                .as_ref()
+                .and_then(|s| s.tab_index)
+                .unwrap_or(0)
+                >= 0
+        });
         // Stable: equal indices keep reading order.
-        order.sort_by_key(|&id| match self.nodes[id.0].semantics.as_ref().and_then(|s| s.tab_index) {
-            Some(i) if i > 0 => (0, i),
-            _ => (1, 0),
+        order.sort_by_key(|&id| {
+            match self.nodes[id.0]
+                .semantics
+                .as_ref()
+                .and_then(|s| s.tab_index)
+            {
+                Some(i) if i > 0 => (0, i),
+                _ => (1, 0),
+            }
         });
         order
     }
@@ -639,7 +661,12 @@ impl Ui {
 
     /// [`Ui::next_focus`] among the nodes inside `scope` only: a dialog's
     /// focus trap.
-    pub fn next_focus_within(&self, scope: Option<NodeId>, current: Option<NodeId>, backwards: bool) -> Option<NodeId> {
+    pub fn next_focus_within(
+        &self,
+        scope: Option<NodeId>,
+        current: Option<NodeId>,
+        backwards: bool,
+    ) -> Option<NodeId> {
         let mut order = self.focus_order();
         if let Some(scope) = scope {
             order.retain(|&n| self.ancestors(n).any(|a| a == scope));

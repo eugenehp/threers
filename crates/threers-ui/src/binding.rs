@@ -27,13 +27,19 @@ pub struct Binding<S, T> {
 
 impl<S, T> Clone for Binding<S, T> {
     fn clone(&self) -> Self {
-        Self { get: self.get.clone(), set: self.set.clone() }
+        Self {
+            get: self.get.clone(),
+            set: self.set.clone(),
+        }
     }
 }
 
 impl<S: 'static, T: Clone + 'static> Binding<S, T> {
     pub fn new(get: impl Fn(&S) -> T + 'static, set: impl Fn(&mut S, T) + 'static) -> Self {
-        Self { get: Rc::new(get), set: Rc::new(set) }
+        Self {
+            get: Rc::new(get),
+            set: Rc::new(set),
+        }
     }
 
     /// A value the control keeps itself, for one nothing else needs to
@@ -41,7 +47,10 @@ impl<S: 'static, T: Clone + 'static> Binding<S, T> {
     pub fn local(value: T) -> Self {
         let cell = Rc::new(RefCell::new(value));
         let c = cell.clone();
-        Self::new(move |_| cell.borrow().clone(), move |_, v| *c.borrow_mut() = v)
+        Self::new(
+            move |_| cell.borrow().clone(),
+            move |_, v| *c.borrow_mut() = v,
+        )
     }
 
     /// A value that never changes: a control shown, not used.
@@ -60,10 +69,13 @@ impl<S: 'static, T: Clone + 'static> Binding<S, T> {
     /// The same binding, calling `f` with each value written (after it is).
     pub fn on_set(self, f: impl Fn(&mut S, &T) + 'static) -> Self {
         let set = self.set.clone();
-        Self { get: self.get, set: Rc::new(move |s, v: T| {
-            set(s, v.clone());
-            f(s, &v);
-        }) }
+        Self {
+            get: self.get,
+            set: Rc::new(move |s, v: T| {
+                set(s, v.clone());
+                f(s, &v);
+            }),
+        }
     }
 }
 

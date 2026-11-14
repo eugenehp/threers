@@ -65,7 +65,12 @@ pub struct KeyboardLayout {
 
 impl KeyboardLayout {
     pub fn new(name: &str, language: &str, rows: [&str; 3]) -> Self {
-        Self { name: name.into(), language: language.into(), rows: rows.map(String::from), accents: String::new() }
+        Self {
+            name: name.into(),
+            language: language.into(),
+            rows: rows.map(String::from),
+            accents: String::new(),
+        }
     }
 
     /// With a row of accented letters over the others.
@@ -84,13 +89,18 @@ impl KeyboardLayout {
         Self::new("Deutsch", "de", ["qwertzuiopü", "asdfghjklöä", "yxcvbnmß"])
     }
     pub fn french() -> Self {
-        Self::new("Français", "fr", ["azertyuiop", "qsdfghjklm", "wxcvbnéèàç"]).with_accents("êëâùûüôîïœ«»")
+        Self::new("Français", "fr", ["azertyuiop", "qsdfghjklm", "wxcvbnéèàç"])
+            .with_accents("êëâùûüôîïœ«»")
     }
     pub fn russian() -> Self {
         Self::new("Русский", "ru", ["йцукенгшщзх", "фывапролджэ", "ячсмитьбю"])
     }
     pub fn ukrainian() -> Self {
-        Self::new("Українська", "uk", ["йцукенгшщзхї", "фівапролджє", "ячсмитьбюґ"])
+        Self::new(
+            "Українська",
+            "uk",
+            ["йцукенгшщзхї", "фівапролджє", "ячсмитьбюґ"],
+        )
     }
     pub fn greek() -> Self {
         Self::new("Ελληνικά", "el", ["ςερτυθιοπ", "ασδφγηξκλ", "ζχψωβνμ"])
@@ -98,13 +108,24 @@ impl KeyboardLayout {
 
     /// Those built in.
     pub fn all() -> Vec<Self> {
-        vec![Self::english(), Self::spanish(), Self::german(), Self::french(), Self::russian(), Self::ukrainian(), Self::greek()]
+        vec![
+            Self::english(),
+            Self::spanish(),
+            Self::german(),
+            Self::french(),
+            Self::russian(),
+            Self::ukrainian(),
+            Self::greek(),
+        ]
     }
 
     /// The one for `locale`'s language (English for one not built in).
     pub fn for_locale(locale: &str) -> Self {
         let lang = locale.split(['-', '_']).next().unwrap_or("").to_lowercase();
-        Self::all().into_iter().find(|l| l.language == lang).unwrap_or_else(Self::english)
+        Self::all()
+            .into_iter()
+            .find(|l| l.language == lang)
+            .unwrap_or_else(Self::english)
     }
 }
 
@@ -169,10 +190,15 @@ fn key_box(ui: &mut Ui, row: NodeId, label: &str, grow: f32) -> (NodeId, NodeId)
     let s = ui.style_mut(k);
     s.flex_grow = grow;
     s.height = crate::Length::Px(KEY_HEIGHT);
-    ui.token_style(k, &[("background", Token::Raised)]);
+    // Its own text colour: colour is not inherited by nodes added later,
+    // so a key's label was the root's (white on a white key in light).
+    ui.token_style(k, &[("background", Token::Raised), ("color", Token::Text)]);
     ui.active_style(k, "opacity: 0.55");
     let t = ui.add_text(k, label);
-    ui.set_semantics(k, Semantics::new(Role::Button).label(label).focusable(false));
+    ui.set_semantics(
+        k,
+        Semantics::new(Role::Button).label(label).focusable(false),
+    );
     (k, t)
 }
 
@@ -206,7 +232,10 @@ impl VirtualKeyboard {
                 border-radius: 14px; box-shadow: 0 -6px 24px rgba(0,0,0,0.35); pointer-events: auto;
             },
         );
-        ui.token_style(sheet, &[("background", Token::Separator), ("color", Token::Text)]);
+        ui.token_style(
+            sheet,
+            &[("background", Token::Separator), ("color", Token::Text)],
+        );
         ui.pad_safe_area(sheet, [false, false, true, false]);
         ui.set_semantics(sheet, Semantics::new(Role::Group).label("Keyboard"));
         // The bar: the field typed into, and Done.
@@ -217,8 +246,14 @@ impl VirtualKeyboard {
         let done = ui.add_box(bar, style! { padding: 4px 12px; border-radius: 6px; font-weight: bold; cursor: pointer; min-height: 24px; box-sizing: border-box; });
         ui.token_style(done, &[("color", Token::Accent)]);
         ui.add_text(done, "Done");
-        ui.set_semantics(done, Semantics::new(Role::Button).label("Done").focusable(false));
-        let letters_box = ui.add_box(sheet, style! { display: flex; flex-direction: column; gap: 8px; });
+        ui.set_semantics(
+            done,
+            Semantics::new(Role::Button).label("Done").focusable(false),
+        );
+        let letters_box = ui.add_box(
+            sheet,
+            style! { display: flex; flex-direction: column; gap: 8px; },
+        );
         // The bottom row: Shift, 123, 🌐, space, Return, Backspace.
         let row = ui.add_box(sheet, style! { display: flex; gap: 6px; });
         let (shift_key, _) = key_box(ui, row, "⇧", 1.4);
@@ -237,11 +272,21 @@ impl VirtualKeyboard {
         ui.semantics_mut(back).label = Some("Delete".into());
 
         let queue: Rc<RefCell<Vec<String>>> = Rc::default();
-        let lang = ui.environment::<crate::i18n::Locale>(root).map_or_else(|| "en".to_owned(), |l| l.0);
+        let lang = ui
+            .environment::<crate::i18n::Locale>(root)
+            .map_or_else(|| "en".to_owned(), |l| l.0);
         let first = KeyboardLayout::for_locale(&lang);
         let mut layouts = vec![first.clone()];
         layouts.extend(KeyboardLayout::all().into_iter().filter(|l| *l != first));
-        let board = Rc::new(RefCell::new(Board { layouts, current: 0, shift: Shift::Off, symbols: false, letters: vec![], rows: vec![letters_box], built: None }));
+        let board = Rc::new(RefCell::new(Board {
+            layouts,
+            current: 0,
+            shift: Shift::Off,
+            symbols: false,
+            letters: vec![],
+            rows: vec![letters_box],
+            built: None,
+        }));
         let kb = Self {
             panel,
             enabled: Rc::default(),
@@ -255,7 +300,11 @@ impl VirtualKeyboard {
         };
         for (k, name) in [(space, " "), (ret, "Enter"), (back, "Backspace")] {
             let q = queue.clone();
-            on_press(input, k, Rc::new(move |_| q.borrow_mut().push(name.to_owned())));
+            on_press(
+                input,
+                k,
+                Rc::new(move |_| q.borrow_mut().push(name.to_owned())),
+            );
         }
         {
             let b = board.clone();
@@ -278,18 +327,26 @@ impl VirtualKeyboard {
         }
         {
             let b = board.clone();
-            on_press(input, sym, Rc::new(move |_| {
-                let mut bd = b.borrow_mut();
-                bd.symbols = !bd.symbols;
-            }));
+            on_press(
+                input,
+                sym,
+                Rc::new(move |_| {
+                    let mut bd = b.borrow_mut();
+                    bd.symbols = !bd.symbols;
+                }),
+            );
         }
         {
             let b = board.clone();
-            on_press(input, globe, Rc::new(move |_| {
-                let mut bd = b.borrow_mut();
-                bd.current = (bd.current + 1) % bd.layouts.len().max(1);
-                bd.symbols = false;
-            }));
+            on_press(
+                input,
+                globe,
+                Rc::new(move |_| {
+                    let mut bd = b.borrow_mut();
+                    bd.current = (bd.current + 1) % bd.layouts.len().max(1);
+                    bd.symbols = false;
+                }),
+            );
         }
         let hide = Rc::new(Cell::new(false));
         let h = hide.clone();
@@ -315,7 +372,14 @@ impl VirtualKeyboard {
             // Type what was pressed, as keys, at what has focus.
             let keys: Vec<String> = me.queue.borrow_mut().drain(..).collect();
             for k in keys {
-                input.dispatch(ui, s, Event::Key { key: k, modifiers: KeyModifiers::default() });
+                input.dispatch(
+                    ui,
+                    s,
+                    Event::Key {
+                        key: k,
+                        modifiers: KeyModifiers::default(),
+                    },
+                );
             }
             let typing = input.wants_ime(ui);
             if !typing {
@@ -367,7 +431,13 @@ impl VirtualKeyboard {
     fn build_letters<S: 'static>(&self, ui: &mut Ui, input: &mut Input<S>) {
         let (want, layout) = {
             let b = self.board.borrow();
-            ((b.current, b.symbols), b.layouts.get(b.current).cloned().unwrap_or_else(KeyboardLayout::english))
+            (
+                (b.current, b.symbols),
+                b.layouts
+                    .get(b.current)
+                    .cloned()
+                    .unwrap_or_else(KeyboardLayout::english),
+            )
         };
         if self.board.borrow().built == Some(want) {
             return;
@@ -382,11 +452,20 @@ impl VirtualKeyboard {
         let accents = (!symbols && !layout.accents.is_empty()).then(|| layout.accents.clone());
         let pages: Vec<String> = accents
             .into_iter()
-            .chain(SYMBOLS.iter().enumerate().map(|(r, sym)| if symbols { sym.to_string() } else { layout.rows[r].clone() }))
+            .chain(SYMBOLS.iter().enumerate().map(|(r, sym)| {
+                if symbols {
+                    sym.to_string()
+                } else {
+                    layout.rows[r].clone()
+                }
+            }))
             .collect();
         for (r, page) in pages.iter().enumerate() {
             let chars: Vec<char> = page.chars().collect();
-            let row = ui.add_box(holder, style! { display: flex; gap: 6px; justify-content: center; });
+            let row = ui.add_box(
+                holder,
+                style! { display: flex; gap: 6px; justify-content: center; },
+            );
             for (c, ch) in chars.into_iter().enumerate() {
                 let (k, t) = key_box(ui, row, &ch.to_string(), 1.0);
                 letters.push((k, t, r, c));
@@ -414,7 +493,14 @@ impl VirtualKeyboard {
             b.letters = letters;
             b.built = Some(want);
         }
-        ui.set_text(self.space_label, if symbols { "space".to_owned() } else { layout.name.clone() });
+        ui.set_text(
+            self.space_label,
+            if symbols {
+                "space".to_owned()
+            } else {
+                layout.name.clone()
+            },
+        );
         ui.set_text(self.symbols_label, if symbols { "ABC" } else { "123" });
         ui.semantics_mut(self.panel).label = Some(format!("Keyboard: {}", layout.name));
         self.relabel(ui);
@@ -426,13 +512,24 @@ impl VirtualKeyboard {
         let upper = !b.symbols && b.shift != Shift::Off;
         for &(k, t, _, _) in &b.letters {
             let now = text_of(ui, t);
-            let want = if upper { now.to_uppercase() } else { now.to_lowercase() };
+            let want = if upper {
+                now.to_uppercase()
+            } else {
+                now.to_lowercase()
+            };
             if want != now {
                 ui.set_text(t, want.clone());
                 ui.semantics_mut(k).label = Some(want);
             }
         }
-        ui.token_style(self.shift_key, &[("background", if b.shift != Shift::Off { Token::Accent } else { Token::Raised })]);
+        let on = b.shift != Shift::Off;
+        ui.token_style(
+            self.shift_key,
+            &[
+                ("background", if on { Token::Accent } else { Token::Raised }),
+                ("color", if on { Token::OnAccent } else { Token::Text }),
+            ],
+        );
     }
 
     /// Turns it on or off. On, it shows while a text control has focus.
@@ -458,7 +555,10 @@ impl VirtualKeyboard {
     /// The layout showing.
     pub fn layout(&self) -> KeyboardLayout {
         let b = self.board.borrow();
-        b.layouts.get(b.current).cloned().unwrap_or_else(KeyboardLayout::english)
+        b.layouts
+            .get(b.current)
+            .cloned()
+            .unwrap_or_else(KeyboardLayout::english)
     }
 
     /// Whether it is showing now.
@@ -475,7 +575,12 @@ impl VirtualKeyboard {
     /// keyboard button at its right end: pressed, focus goes to the field
     /// and this keyboard comes up for it, on or not, until focus leaves it.
     /// Returns the button.
-    pub fn attach_button<S: 'static>(&self, ui: &mut Ui, input: &mut Input<S>, field: NodeId) -> NodeId {
+    pub fn attach_button<S: 'static>(
+        &self,
+        ui: &mut Ui,
+        input: &mut Input<S>,
+        field: NodeId,
+    ) -> NodeId {
         let b = ui.add_box(
             field,
             style! { position: absolute; right: 2px; top: 0px; bottom: 0px; width: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 15px; },
@@ -483,7 +588,12 @@ impl VirtualKeyboard {
         ui.token_style(b, &[("color", Token::SecondaryText)]);
         ui.hover_style(b, "opacity: 0.7");
         ui.add_text(b, "⌨");
-        ui.set_semantics(b, Semantics::new(Role::Button).label("Show the keyboard").focusable(false));
+        ui.set_semantics(
+            b,
+            Semantics::new(Role::Button)
+                .label("Show the keyboard")
+                .focusable(false),
+        );
         // Room for it: the field's text stops short of it.
         ui.update_style(field, |s| s.padding.right = s.padding.right.max(30.0));
         let summoned = self.summoned.clone();
@@ -508,6 +618,13 @@ impl VirtualKeyboard {
     /// Presses `key` (a character, `"Backspace"`, `"Enter"`, `" "`) as its
     /// key on the panel would: typed at what has focus.
     pub fn press<S: 'static>(&self, ui: &mut Ui, input: &mut Input<S>, state: &mut S, key: &str) {
-        input.dispatch(ui, state, Event::Key { key: key.to_owned(), modifiers: KeyModifiers::default() });
+        input.dispatch(
+            ui,
+            state,
+            Event::Key {
+                key: key.to_owned(),
+                modifiers: KeyModifiers::default(),
+            },
+        );
     }
 }

@@ -64,7 +64,8 @@ fn transition_at(ui: &Ui, container: NodeId) -> NavTransition {
     if ui.reduce_motion() {
         return NavTransition::Slide;
     }
-    ui.environment::<NavTransition>(container).unwrap_or_default()
+    ui.environment::<NavTransition>(container)
+        .unwrap_or_default()
 }
 
 /// How a 3D turn of a screen moves.
@@ -83,9 +84,26 @@ fn push_screen(ui: &mut Ui, how: NavTransition, screen: NodeId, below: NodeId, b
         NavTransition::Cube => {
             // The new face turns in from the right, the old one away to
             // the left, about the edge between them.
-            ui.set_transform3d(screen, Transform3d { rotate_y: FRAC_PI_2, origin: (0.0, 0.5), shade: true, perspective: w * 1.5, ..Transform3d::default() });
+            ui.set_transform3d(
+                screen,
+                Transform3d {
+                    rotate_y: FRAC_PI_2,
+                    origin: (0.0, 0.5),
+                    shade: true,
+                    perspective: w * 1.5,
+                    ..Transform3d::default()
+                },
+            );
             ui.spring_to(screen, Property::RotateY, 0.0, turn_spring());
-            ui.set_transform3d(below, Transform3d { origin: (1.0, 0.5), shade: true, perspective: w * 1.5, ..Transform3d::default() });
+            ui.set_transform3d(
+                below,
+                Transform3d {
+                    origin: (1.0, 0.5),
+                    shade: true,
+                    perspective: w * 1.5,
+                    ..Transform3d::default()
+                },
+            );
             ui.spring_to(below, Property::RotateY, -FRAC_PI_2, turn_spring());
         }
         NavTransition::PageTurn => {
@@ -94,7 +112,16 @@ fn push_screen(ui: &mut Ui, how: NavTransition, screen: NodeId, below: NodeId, b
             if let Some(at) = ui.children(body).iter().position(|&c| c == below) {
                 ui.move_child(body, screen, at);
             }
-            ui.set_transform3d(below, Transform3d { origin: (0.0, 0.5), shade: true, hide_backface: true, perspective: w * 2.0, ..Transform3d::default() });
+            ui.set_transform3d(
+                below,
+                Transform3d {
+                    origin: (0.0, 0.5),
+                    shade: true,
+                    hide_backface: true,
+                    perspective: w * 2.0,
+                    ..Transform3d::default()
+                },
+            );
             ui.spring_to(below, Property::RotateY, -PI, turn_spring());
         }
     }
@@ -109,7 +136,15 @@ fn pop_screen(ui: &mut Ui, how: NavTransition, screen: NodeId, below: NodeId, bo
     match how {
         NavTransition::Slide => ui.remove_with(screen, Transition::Move { dx: w, dy: 0.0 }, SLIDE),
         NavTransition::Cube => {
-            ui.set_transform3d(screen, Transform3d { origin: (0.0, 0.5), shade: true, perspective: w * 1.5, ..ui.transform3d(screen).unwrap_or_default() });
+            ui.set_transform3d(
+                screen,
+                Transform3d {
+                    origin: (0.0, 0.5),
+                    shade: true,
+                    perspective: w * 1.5,
+                    ..ui.transform3d(screen).unwrap_or_default()
+                },
+            );
             ui.spring_to(screen, Property::RotateY, FRAC_PI_2, turn_spring());
             ui.remove_with(screen, Transition::Fade, 0.45);
             ui.spring_to(below, Property::RotateY, 0.0, turn_spring());
@@ -166,10 +201,16 @@ pub fn nav_stack<S: 'static>(
     build_root: impl FnOnce(&mut Ui, &mut Input<S>, &S, NodeId),
 ) -> NavStack {
     let container = ui.add_box(parent, style! { display: flex; flex-direction: column; flex-grow: 1; min-height: 0; overflow: hidden; });
-    ui.set_semantics(container, Semantics::new(Role::Navigation).label(root_title));
+    ui.set_semantics(
+        container,
+        Semantics::new(Role::Navigation).label(root_title),
+    );
     let header = ui.add_box(container, style! { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 8px; border-bottom: 1px solid #3a4150; flex-shrink: 0; });
     ui.token_style(header, &[("border-color", Token::Separator)]);
-    let back = ui.add_box(header, style! { padding: 4px 8px; border-radius: 6px; cursor: pointer; display: none; });
+    let back = ui.add_box(
+        header,
+        style! { padding: 4px 8px; border-radius: 6px; cursor: pointer; display: none; },
+    );
     ui.token_style(back, &[("color", Token::Accent)]);
     ui.add_text(back, "‹ Back");
     ui.set_semantics(back, Semantics::new(Role::Button).label("Back"));
@@ -177,13 +218,22 @@ pub fn nav_stack<S: 'static>(
     let title = ui.add_box(header, style! { font-weight: bold; flex-grow: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; });
     ui.set_semantics(title, Semantics::new(Role::Heading(2)));
     let title_text = ui.add_text(title, root_title);
-    let body = ui.add_box(container, style! { position: relative; flex-grow: 1; min-height: 0; overflow: hidden; });
+    let body = ui.add_box(
+        container,
+        style! { position: relative; flex-grow: 1; min-height: 0; overflow: hidden; },
+    );
     let screen_style = style! { position: absolute; left: 0px; top: 0px; width: 100%; height: 100%; display: flex; flex-direction: column; overflow: auto; box-sizing: border-box; padding: 8px; };
     let root_screen = ui.add_box(body, screen_style.clone());
     ui.token_style(root_screen, &[("background", Token::Surface)]);
     ui.set_preference(root_screen, NavTitle(root_title.to_owned()));
     build_root(ui, input, state, root_screen);
-    let nav = NavStack { container, header, back, title_text, body };
+    let nav = NavStack {
+        container,
+        header,
+        back,
+        title_text,
+        body,
+    };
 
     // Pop: the path without its last entry.
     let pop = {
@@ -211,18 +261,32 @@ pub fn nav_stack<S: 'static>(
     let edge: Rc<Cell<Option<f32>>> = Rc::default();
     let (b, e, pp) = (built.clone(), edge.clone(), pop.clone());
     input.on(body, Phase::Bubble, move |s, ui, ev, cx| {
-        let Event::Gesture(crate::input::Gesture::Pan { x, dx, phase, .. }) = *ev else { return };
-        let Some(&(_, top)) = b.borrow().last() else { return };
+        let Event::Gesture(crate::input::Gesture::Pan { x, dx, phase, .. }) = *ev else {
+            return;
+        };
+        let Some(&(_, top)) = b.borrow().last() else {
+            return;
+        };
         match phase {
             GesturePhase::Began if x - dx - ui.rect(body).x <= EDGE && dx > 0.0 => e.set(Some(dx)),
-            GesturePhase::Changed if e.get().is_some() => e.set(Some((e.get().unwrap_or(0.0) + dx).max(0.0))),
+            GesturePhase::Changed if e.get().is_some() => {
+                e.set(Some((e.get().unwrap_or(0.0) + dx).max(0.0)))
+            }
             GesturePhase::Ended if e.get().is_some() => {
                 let pulled = e.take().unwrap_or(0.0);
                 if pulled > ui.rect(body).width / 3.0 {
                     pp(s);
                 } else {
                     let from = ui.read(top, crate::animation::Property::Left);
-                    ui.animate(top, crate::animation::Animation::new(crate::animation::Property::Left, from, crate::animation::Value::Number(0.0), 0.2));
+                    ui.animate(
+                        top,
+                        crate::animation::Animation::new(
+                            crate::animation::Property::Left,
+                            from,
+                            crate::animation::Value::Number(0.0),
+                            0.2,
+                        ),
+                    );
                 }
                 cx.prevent_default();
                 return;
@@ -248,12 +312,17 @@ pub fn nav_stack<S: 'static>(
         loop {
             let keep = {
                 let b = built.borrow();
-                b.iter().zip(&want).take_while(|((p, _), w)| p == *w).count()
+                b.iter()
+                    .zip(&want)
+                    .take_while(|((p, _), w)| p == *w)
+                    .count()
             };
             if built.borrow().len() <= keep {
                 break;
             }
-            let Some((_, screen)) = built.borrow_mut().pop() else { break };
+            let Some((_, screen)) = built.borrow_mut().pop() else {
+                break;
+            };
             let below = built.borrow().last().map_or(root_screen, |&(_, n)| n);
             pop_screen(ui, transition_at(ui, container), screen, below, body);
             changed = true;
@@ -275,7 +344,9 @@ pub fn nav_stack<S: 'static>(
         if changed {
             // Only the top screen is there for the pointer and assistive
             // technology; the ones under it wait.
-            let tops: Vec<NodeId> = std::iter::once(root_screen).chain(built.borrow().iter().map(|&(_, n)| n)).collect();
+            let tops: Vec<NodeId> = std::iter::once(root_screen)
+                .chain(built.borrow().iter().map(|&(_, n)| n))
+                .collect();
             let last = tops.len() - 1;
             for (i, &n) in tops.iter().enumerate() {
                 let on = i == last;
@@ -285,11 +356,19 @@ pub fn nav_stack<S: 'static>(
                 }
             }
             let depth = built.borrow().len();
-            ui.update_style(back, |st| st.display = if depth > 0 { Display::Flex } else { Display::None });
+            ui.update_style(back, |st| {
+                st.display = if depth > 0 {
+                    Display::Flex
+                } else {
+                    Display::None
+                }
+            });
         }
         // The title: the top screen's (or something in it), as it says now.
         let top = built.borrow().last().map_or(root_screen, |&(_, n)| n);
-        let title = ui.preference::<NavTitle>(top).map_or_else(String::new, |t| t.0);
+        let title = ui
+            .preference::<NavTitle>(top)
+            .map_or_else(String::new, |t| t.0);
         if nav_title(ui, title_text) != title {
             ui.set_text(title_text, title);
         }

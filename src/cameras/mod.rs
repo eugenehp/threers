@@ -171,7 +171,10 @@ pub struct ViewOffset {
 impl ViewOffset {
     /// `projection` narrowed to this patch.
     pub fn apply(&self, projection: Matrix4) -> Matrix4 {
-        projection.sub_view((self.full_width, self.full_height), (self.x, self.y, self.width, self.height))
+        projection.sub_view(
+            (self.full_width, self.full_height),
+            (self.x, self.y, self.width, self.height),
+        )
     }
 }
 

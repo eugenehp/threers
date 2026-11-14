@@ -48,12 +48,22 @@ impl Storage for MemoryStorage {
 
 /// A binding to the value under `key` in `storage` (`default` when there is
 /// none, or it does not parse), written back as text on each change.
-pub fn stored<S: 'static, T: Clone + FromStr + ToString + 'static>(storage: Rc<dyn Storage>, key: &str, default: T) -> Binding<S, T> {
-    let value = storage.get(key).and_then(|v| v.parse().ok()).unwrap_or(default);
+pub fn stored<S: 'static, T: Clone + FromStr + ToString + 'static>(
+    storage: Rc<dyn Storage>,
+    key: &str,
+    default: T,
+) -> Binding<S, T> {
+    let value = storage
+        .get(key)
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default);
     let cell = Rc::new(RefCell::new(value));
     let (c, key) = (cell.clone(), key.to_owned());
-    Binding::new(move |_| cell.borrow().clone(), move |_, v: T| {
-        storage.set(&key, &v.to_string());
-        *c.borrow_mut() = v;
-    })
+    Binding::new(
+        move |_| cell.borrow().clone(),
+        move |_, v: T| {
+            storage.set(&key, &v.to_string());
+            *c.borrow_mut() = v;
+        },
+    )
 }

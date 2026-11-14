@@ -1736,7 +1736,11 @@ impl OverlayInfo {
 
     /// The depth comparison that keeps what is nearer.
     pub fn depth_compare(&self) -> wgpu::CompareFunction {
-        if self.reversed { wgpu::CompareFunction::GreaterEqual } else { wgpu::CompareFunction::LessEqual }
+        if self.reversed {
+            wgpu::CompareFunction::GreaterEqual
+        } else {
+            wgpu::CompareFunction::LessEqual
+        }
     }
 }
 
@@ -2634,13 +2638,30 @@ impl Renderer {
     /// pane of its own (a partial clear drawn multisampled, as each eye of
     /// [`render_xr`](Self::render_xr) is) — the result ends up in
     /// `target_view` as the render's did. Nothing happens before a render.
-    pub fn draw_over_last(&self, target_view: &wgpu::TextureView, draw: impl FnOnce(&mut wgpu::RenderPass<'_>, &OverlayInfo)) {
-        let Some(last) = &self.last_overlay else { return };
-        let pane = last.pane.as_ref().and_then(|(key, region)| self.viewport_state.pane_target(key).map(|t| (t, key, *region)));
+    pub fn draw_over_last(
+        &self,
+        target_view: &wgpu::TextureView,
+        draw: impl FnOnce(&mut wgpu::RenderPass<'_>, &OverlayInfo),
+    ) {
+        let Some(last) = &self.last_overlay else {
+            return;
+        };
+        let pane = last.pane.as_ref().and_then(|(key, region)| {
+            self.viewport_state
+                .pane_target(key)
+                .map(|t| (t, key, *region))
+        });
         // The colour, what it resolves into, the depth (if one matches), samples.
         let (color, resolve, depth, samples) = match (&pane, &self.msaa_targets) {
-            (Some((t, ..)), _) => (&t.msaa_color, Some(&t.resolve), Some(&t.msaa_depth), self.msaa),
-            (None, Some((_, _, cv, dv))) if self.overlay_msaa => (cv, Some(target_view), Some(dv), self.msaa),
+            (Some((t, ..)), _) => (
+                &t.msaa_color,
+                Some(&t.resolve),
+                Some(&t.msaa_depth),
+                self.msaa,
+            ),
+            (None, Some((_, _, cv, dv))) if self.overlay_msaa => {
+                (cv, Some(target_view), Some(dv), self.msaa)
+            }
             // Multisampled under refraction glass: its depth has no colour to
             // go with it here; drawn without.
             _ if self.last_frame_msaa => (target_view, None, None, 1),
@@ -2653,7 +2674,11 @@ impl Renderer {
             projection_fix: last.projection_fix,
             color_format: self.color_format,
         };
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("threers overlay") });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("threers overlay"),
+            });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("threers overlay"),
@@ -2661,24 +2686,45 @@ impl Renderer {
                     view: color,
                     depth_slice: None,
                     resolve_target: resolve,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
                 })],
-                depth_stencil_attachment: depth.map(|view| wgpu::RenderPassDepthStencilAttachment {
-                    view,
-                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
-                    stencil_ops: None,
+                depth_stencil_attachment: depth.map(|view| {
+                    wgpu::RenderPassDepthStencilAttachment {
+                        view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
             let (v, sc) = (last.viewport, last.scissor);
-            pass.set_viewport(v.x as f32, v.y as f32, v.width as f32, v.height as f32, 0.0, 1.0);
+            pass.set_viewport(
+                v.x as f32,
+                v.y as f32,
+                v.width as f32,
+                v.height as f32,
+                0.0,
+                1.0,
+            );
             pass.set_scissor_rect(sc.x, sc.y, sc.width, sc.height);
             draw(&mut pass, &info);
         }
         if let Some((_, key, region)) = pane {
-            self.viewport_state.composite_pane(&mut encoder, target_view, self.color_format, key, region);
+            self.viewport_state.composite_pane(
+                &mut encoder,
+                target_view,
+                self.color_format,
+                key,
+                region,
+            );
         }
         self.queue.submit(Some(encoder.finish()));
     }

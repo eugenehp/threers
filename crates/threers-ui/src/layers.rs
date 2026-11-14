@@ -245,7 +245,11 @@ impl Ui {
                 ax += a.offset.0 * sx;
                 ay += a.offset.1 * sy;
                 // The corner's place within the node.
-                let (cx, cy) = corner.of(Rect { x: 0.0, y: 0.0, ..r });
+                let (cx, cy) = corner.of(Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    ..r
+                });
                 Some(Rect {
                     x: ax - cx,
                     y: ay - cy,
@@ -313,7 +317,13 @@ impl Ui {
         self.hit_walk_except(id, x, y, None)
     }
 
-    pub(crate) fn hit_walk_except(&self, id: NodeId, x: f32, y: f32, except: Option<NodeId>) -> Option<NodeId> {
+    pub(crate) fn hit_walk_except(
+        &self,
+        id: NodeId,
+        x: f32,
+        y: f32,
+        except: Option<NodeId>,
+    ) -> Option<NodeId> {
         let node = &self.nodes[id.0];
         if node.style.display == Display::None || Some(id) == except {
             return None;
@@ -361,7 +371,8 @@ impl HitIndex {
             let mut stack = vec![(root, None::<u32>)];
             while let Some((id, clip)) = stack.pop() {
                 let n = &ui.nodes[id.0];
-                if n.style.display == Display::None || (k > 0 && id != root && n.deferred.is_some()) {
+                if n.style.display == Display::None || (k > 0 && id != root && n.deferred.is_some())
+                {
                     continue;
                 }
                 if k == 0 && n.deferred.is_some() && id.0 != 0 {
@@ -371,14 +382,24 @@ impl HitIndex {
                 index.entries.push((id, clip));
                 // Conservatively: the box's hit region, cut by its clips;
                 // nothing for a box the pointer passes through.
-                let mut b = (n.rect.x - 1.0, n.rect.y - 1.0, n.rect.x + n.rect.width, n.rect.y + n.rect.height);
+                let mut b = (
+                    n.rect.x - 1.0,
+                    n.rect.y - 1.0,
+                    n.rect.x + n.rect.width,
+                    n.rect.y + n.rect.height,
+                );
                 if !n.style.pointer_events {
                     b = (0.0, 0.0, -1.0, -1.0);
                 }
                 let mut c = clip;
                 while let Some(i) = c {
                     let (r, up) = index.clips[i as usize];
-                    b = (b.0.max(r.x - 1.0), b.1.max(r.y - 1.0), b.2.min(r.x + r.width), b.3.min(r.y + r.height));
+                    b = (
+                        b.0.max(r.x - 1.0),
+                        b.1.max(r.y - 1.0),
+                        b.2.min(r.x + r.width),
+                        b.3.min(r.y + r.height),
+                    );
                     c = up;
                 }
                 if b.2 > b.0 && b.3 > b.1 && b.0.is_finite() && b.3.is_finite() {

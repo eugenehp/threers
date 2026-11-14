@@ -111,7 +111,8 @@ impl Candle {
 
         // The body: a cylinder with a soft shoulder and a shallow melt pool.
         let body = LatheGeometry::new(&wax_profile(h, r), 48, 0.0, std::f32::consts::TAU);
-        let mut wax = StandardMaterial::new(self.wax).with_roughness(if realistic { 0.45 } else { 0.6 });
+        let mut wax =
+            StandardMaterial::new(self.wax).with_roughness(if realistic { 0.45 } else { 0.6 });
         wax.emissive = self.wax;
         wax.emissive_intensity = 0.02;
         let mut body = Object3D::mesh(Mesh::new(body, wax.into()));
@@ -122,8 +123,19 @@ impl Candle {
         // The wick, leaning a little, and (realistic) its glowing tip.
         let wick_h = self.flame_height * 0.24;
         let mut wick = Object3D::mesh(Mesh::new(
-            CylinderGeometry::new(r * 0.045, r * 0.05, wick_h, 8, 1, false, 0.0, std::f32::consts::TAU),
-            StandardMaterial::new(Color::from_hex(0x1c1610)).with_roughness(0.9).into(),
+            CylinderGeometry::new(
+                r * 0.045,
+                r * 0.05,
+                wick_h,
+                8,
+                1,
+                false,
+                0.0,
+                std::f32::consts::TAU,
+            ),
+            StandardMaterial::new(Color::from_hex(0x1c1610))
+                .with_roughness(0.9)
+                .into(),
         ));
         wick.position = Vector3::new(0.0, h - 0.004 + wick_h / 2.0, 0.0);
         wick.quaternion = Euler::new(0.0, 0.0, 0.12).to_quaternion();
@@ -133,7 +145,10 @@ impl Candle {
             let mut ember = StandardMaterial::new(Color::from_hex(0x2a1a10));
             ember.emissive = Color::from_hex(0xff5a1a);
             ember.emissive_intensity = 2.5;
-            let mut tip = Object3D::mesh(Mesh::new(SphereGeometry::new(r * 0.06, 10, 6), ember.into()));
+            let mut tip = Object3D::mesh(Mesh::new(
+                SphereGeometry::new(r * 0.06, 10, 6),
+                ember.into(),
+            ));
             tip.position = top;
             scene.add_to(root, tip);
         }
@@ -146,11 +161,27 @@ impl Candle {
         data[0] = [0.0, 1.0, self.seed, 0.0];
         data[1] = [fw, fh, self.steps as f32, 0.0];
         let (geometry, fragment, at) = match self.style {
-            FlameStyle::Simple => (LatheGeometry::new(&flame_profile(fh, fw * 0.55), 24, 0.0, std::f32::consts::TAU), SIMPLE_FLAME.to_owned(), base),
+            FlameStyle::Simple => (
+                LatheGeometry::new(
+                    &flame_profile(fh, fw * 0.55),
+                    24,
+                    0.0,
+                    std::f32::consts::TAU,
+                ),
+                SIMPLE_FLAME.to_owned(),
+                base,
+            ),
             // A box around the volume, its middle at half the flame's height.
-            FlameStyle::Realistic => (BoxGeometry::new(fw * 2.2, fh * 1.25, fw * 2.2), format!("{}{}", threers_math::flicker::FLAME_WGSL, REALISTIC_FLAME), base + fh * 1.25 / 2.0),
+            FlameStyle::Realistic => (
+                BoxGeometry::new(fw * 2.2, fh * 1.25, fw * 2.2),
+                format!("{}{}", threers_math::flicker::FLAME_WGSL, REALISTIC_FLAME),
+                base + fh * 1.25 / 2.0,
+            ),
         };
-        let mut material = ShaderMaterial::new(fragment).with_data(data).with_transparent(true).with_depth_write(false);
+        let mut material = ShaderMaterial::new(fragment)
+            .with_data(data)
+            .with_transparent(true)
+            .with_depth_write(false);
         material.render_state.blending = Blending::Additive;
         let mut flame = Object3D::mesh(Mesh::new(geometry, Material::Shader(material.clone())));
         flame.position = Vector3::new(0.0, at, 0.0);
@@ -162,10 +193,24 @@ impl Candle {
             let mut data = vec![[0.0f32; 4]; 16];
             data[0] = [0.0, 1.0, self.seed, 0.0];
             data[1] = [h, r, 0.0, 0.0];
-            let mut m = ShaderMaterial::new(WAX_GLOW).with_data(data).with_transparent(true).with_depth_write(false);
+            let mut m = ShaderMaterial::new(WAX_GLOW)
+                .with_data(data)
+                .with_transparent(true)
+                .with_depth_write(false);
             m.render_state.blending = Blending::Additive;
-            let shell = LatheGeometry::new(&wax_profile(h, r * 1.004).iter().map(|p| Vector2::new(p.x, p.y + 0.0003)).collect::<Vec<_>>(), 48, 0.0, std::f32::consts::TAU);
-            scene.add_to(root, Object3D::mesh(Mesh::new(shell, Material::Shader(m.clone()))));
+            let shell = LatheGeometry::new(
+                &wax_profile(h, r * 1.004)
+                    .iter()
+                    .map(|p| Vector2::new(p.x, p.y + 0.0003))
+                    .collect::<Vec<_>>(),
+                48,
+                0.0,
+                std::f32::consts::TAU,
+            );
+            scene.add_to(
+                root,
+                Object3D::mesh(Mesh::new(shell, Material::Shader(m.clone()))),
+            );
             m
         });
 
@@ -179,7 +224,18 @@ impl Candle {
         light.position = light_at;
         let light = scene.add_to(root, light);
 
-        CandleHandle { root, flame, light, material, glow, style: self.style, seed: self.seed, intensity: self.light_intensity, light_at, flame_at: at }
+        CandleHandle {
+            root,
+            flame,
+            light,
+            material,
+            glow,
+            style: self.style,
+            seed: self.seed,
+            intensity: self.light_intensity,
+            light_at,
+            flame_at: at,
+        }
     }
 }
 
@@ -240,15 +296,25 @@ fn sway(time: f32, seed: f32) -> (f32, f32) {
 /// The wax body's outline (radius, height), base to top: straight sides, a
 /// rounded shoulder, a pool dipping to the wick.
 fn wax_profile(h: f32, r: f32) -> Vec<Vector2> {
-    let mut p = vec![Vector2::new(0.0, 0.0), Vector2::new(r, 0.0), Vector2::new(r, h - r * 0.25)];
+    let mut p = vec![
+        Vector2::new(0.0, 0.0),
+        Vector2::new(r, 0.0),
+        Vector2::new(r, h - r * 0.25),
+    ];
     for i in 1..=6 {
         let a = i as f32 / 6.0 * std::f32::consts::FRAC_PI_2;
-        p.push(Vector2::new(r - r * 0.25 * (1.0 - a.cos()), h - r * 0.25 + r * 0.25 * a.sin()));
+        p.push(Vector2::new(
+            r - r * 0.25 * (1.0 - a.cos()),
+            h - r * 0.25 + r * 0.25 * a.sin(),
+        ));
     }
     for i in 1..=8 {
         let s = i as f32 / 8.0;
         let x = (r * 0.75) * (1.0 - s);
-        p.push(Vector2::new(x, h - r * 0.16 * (1.0 - (1.0 - s) * (1.0 - s))));
+        p.push(Vector2::new(
+            x,
+            h - r * 0.16 * (1.0 - (1.0 - s) * (1.0 - s)),
+        ));
     }
     p
 }
@@ -366,10 +432,17 @@ mod tests {
                 c.update(&mut scene, i as f32 * 0.07);
                 seen.push(intensity(&scene));
             }
-            let spread = seen.iter().cloned().fold(f32::MIN, f32::max) - seen.iter().cloned().fold(f32::MAX, f32::min);
+            let spread = seen.iter().cloned().fold(f32::MIN, f32::max)
+                - seen.iter().cloned().fold(f32::MAX, f32::min);
             let base = Candle::new(style).light_intensity;
-            assert!(spread / base > 0.1, "{style:?}: the light flickers ({spread} of {base})");
-            assert_eq!(scene.get(c.root).unwrap().position, Vector3::new(1.0, 0.75, 0.0));
+            assert!(
+                spread / base > 0.1,
+                "{style:?}: the light flickers ({spread} of {base})"
+            );
+            assert_eq!(
+                scene.get(c.root).unwrap().position,
+                Vector3::new(1.0, 0.75, 0.0)
+            );
         }
     }
 

@@ -171,7 +171,11 @@ fn wrap_paragraph(
     let whole = font.measure(paragraph.trim_start(), size, spacing);
     if whole <= max_width && !paragraph.trim().is_empty() {
         let text = paragraph.split_whitespace().collect::<Vec<_>>().join(" ");
-        let width = if text.len() == paragraph.trim_start().len() { whole } else { font.measure(&text, size, spacing) };
+        let width = if text.len() == paragraph.trim_start().len() {
+            whole
+        } else {
+            font.measure(&text, size, spacing)
+        };
         out.push(LineBox { width, text });
         return;
     }
@@ -248,10 +252,17 @@ mod tests {
         let s = style(16.0);
         let wide = layout(&mut font, "hello world", &s, 1000.0);
         assert_eq!(wide.lines.len(), 1);
-        let red = CaptionStyle { color: [255, 0, 0, 255], ..s.clone() };
+        let red = CaptionStyle {
+            color: [255, 0, 0, 255],
+            ..s.clone()
+        };
         let again = layout(&mut font, "hello world", &red, 400.0);
         assert_eq!((again.lines.len(), again.width), (1, wide.width));
-        assert_eq!(font.layouts.len(), 1, "measured once, for both widths and colours");
+        assert_eq!(
+            font.layouts.len(),
+            1,
+            "measured once, for both widths and colours"
+        );
         // Too narrow for it: wrapped, and kept apart.
         let narrow = layout(&mut font, "hello world", &s, 80.0);
         assert_eq!(narrow.lines.len(), 2);

@@ -31,7 +31,9 @@
 //! (`threers_ui::menu::…`, `threers_ui::table::…`).
 
 pub use crate::binding::Binding;
-pub use crate::charts::{bar_chart, gauge, gauge_styled, line_chart, Gauge, GaugeKind, GaugeStyle, GaugeTint};
+pub use crate::charts::{
+    bar_chart, gauge, gauge_styled, line_chart, Gauge, GaugeKind, GaugeStyle, GaugeTint,
+};
 pub use crate::environment::Token;
 pub use crate::input::{Event, Input, Phase};
 pub use crate::spatial::{HoverRegion, SPATIAL_MIN_TARGET};
@@ -39,6 +41,7 @@ pub use crate::states::{Appearance, Theme};
 pub use crate::theme::theme_picker;
 pub use crate::{binding, style};
 pub use crate::{
-    AlignItems, ArcShape, Display, Edges, FixedWidthText, FlexDirection, FlexWrap, FontWeight, JustifyContent, Length, NodeId, NodeKind, Painter, Position, Rect, Rgba, Role, Semantics, Style,
-    TextAlign, TextMeasure, TextStyle, Ui,
+    AlignItems, ArcShape, Display, Edges, FixedWidthText, FlexDirection, FlexWrap, FontWeight,
+    JustifyContent, Length, NodeId, NodeKind, Painter, Position, Rect, Rgba, Role, Semantics,
+    Style, TextAlign, TextMeasure, TextStyle, Ui,
 };

@@ -169,8 +169,8 @@ pub use render_target::{CubeRenderTarget, RenderTarget};
 #[allow(unused_imports)] // only the Metal backend reads it from outside
 pub(crate) use renderer::stored_clear;
 pub use renderer::{halton, stratified_jitter, DEFAULT_CACHE_RETENTION};
-pub use renderer::{PostFxBlend, PostFxNoise, PostFxOp, PostFxOutput};
 pub use renderer::{OverlayInfo, PostFxCamera, Renderer, RendererOptions, ToneMapping};
+pub use renderer::{PostFxBlend, PostFxNoise, PostFxOp, PostFxOutput};
 pub use viewport::{PixelRect, ShadowMap, ViewportRect};
 
 /// Which backend a renderer draws with: [`HeadlessBuilder::backend`] and

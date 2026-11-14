@@ -36,7 +36,10 @@ struct Listeners<T: ?Sized> {
 
 impl<T: ?Sized> Default for Listeners<T> {
     fn default() -> Self {
-        Self { next: Cell::new(0), list: RefCell::new(vec![]) }
+        Self {
+            next: Cell::new(0),
+            list: RefCell::new(vec![]),
+        }
     }
 }
 
@@ -125,7 +128,9 @@ thread_local! {
 pub fn track<R>(f: impl FnOnce() -> R) -> (R, Reads) {
     let outer = READS.with(|r| r.borrow_mut().replace(vec![]));
     let out = f();
-    let reads = READS.with(|r| std::mem::replace(&mut *r.borrow_mut(), outer)).unwrap_or_default();
+    let reads = READS
+        .with(|r| std::mem::replace(&mut *r.borrow_mut(), outer))
+        .unwrap_or_default();
     // Reads inside count for the tracking around it too.
     READS.with(|r| {
         if let Some(o) = r.borrow_mut().as_mut() {
@@ -145,13 +150,21 @@ pub struct Model<T> {
 
 impl<T> Clone for Model<T> {
     fn clone(&self) -> Self {
-        Self { value: self.value.clone(), version: self.version.clone(), observers: self.observers.clone() }
+        Self {
+            value: self.value.clone(),
+            version: self.version.clone(),
+            observers: self.observers.clone(),
+        }
     }
 }
 
 impl<T: 'static> Model<T> {
     pub fn new(value: T) -> Self {
-        Self { value: Rc::new(RefCell::new(value)), version: Rc::new(Cell::new(0)), observers: Rc::default() }
+        Self {
+            value: Rc::new(RefCell::new(value)),
+            version: Rc::new(Cell::new(0)),
+            observers: Rc::default(),
+        }
     }
 
     /// The value. Not while it is being updated. Inside [`track`], the
@@ -204,13 +217,17 @@ pub struct Emitter<E> {
 
 impl<E> Clone for Emitter<E> {
     fn clone(&self) -> Self {
-        Self { subscribers: self.subscribers.clone() }
+        Self {
+            subscribers: self.subscribers.clone(),
+        }
     }
 }
 
 impl<E: 'static> Default for Emitter<E> {
     fn default() -> Self {
-        Self { subscribers: Rc::default() }
+        Self {
+            subscribers: Rc::default(),
+        }
     }
 }
 
@@ -242,10 +259,16 @@ mod tests {
         let l = log.clone();
         let a = m.observe(move |v| l.borrow_mut().push(v.len()));
         let l = log.clone();
-        other.observe(move |v| l.borrow_mut().push(100 + v.len())).detach();
+        other
+            .observe(move |v| l.borrow_mut().push(100 + v.len()))
+            .detach();
         let v0 = m.version();
         other.update(|v| v.push(2));
-        assert_eq!(*log.borrow(), [2, 102], "clones share the value and the observers");
+        assert_eq!(
+            *log.borrow(),
+            [2, 102],
+            "clones share the value and the observers"
+        );
         assert_eq!(m.version(), v0 + 1);
         drop(a);
         m.set(vec![]);

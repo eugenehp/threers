@@ -21,17 +21,27 @@ pub struct Transformation {
 
 impl Default for Transformation {
     fn default() -> Self {
-        Self { rotate: 0.0, scale: (1.0, 1.0), translate: (0.0, 0.0) }
+        Self {
+            rotate: 0.0,
+            scale: (1.0, 1.0),
+            translate: (0.0, 0.0),
+        }
     }
 }
 
 impl Transformation {
     pub fn rotate(radians: f32) -> Self {
-        Self { rotate: radians, ..Self::default() }
+        Self {
+            rotate: radians,
+            ..Self::default()
+        }
     }
 
     pub fn scale(sx: f32, sy: f32) -> Self {
-        Self { scale: (sx, sy), ..Self::default() }
+        Self {
+            scale: (sx, sy),
+            ..Self::default()
+        }
     }
 
     pub fn with_translate(mut self, dx: f32, dy: f32) -> Self {
@@ -47,7 +57,10 @@ impl Transformation {
     pub fn apply(&self, (x, y): (f32, f32), (cx, cy): (f32, f32)) -> (f32, f32) {
         let (s, c) = self.rotate.sin_cos();
         let (dx, dy) = ((x - cx) * self.scale.0, (y - cy) * self.scale.1);
-        (cx + dx * c - dy * s + self.translate.0, cy + dx * s + dy * c + self.translate.1)
+        (
+            cx + dx * c - dy * s + self.translate.0,
+            cy + dx * s + dy * c + self.translate.1,
+        )
     }
 }
 
@@ -97,10 +110,13 @@ pub fn transform_path(d: &str, t: &Transformation, centre: (f32, f32)) -> String
         }
         let rel = cmd.is_ascii_lowercase();
         let base = if rel { cur } else { (0.0, 0.0) };
-        let p = |i: &mut usize| -> Option<(f32, f32)> { Some((num(i)? + base.0, num(i)? + base.1)) };
+        let p =
+            |i: &mut usize| -> Option<(f32, f32)> { Some((num(i)? + base.0, num(i)? + base.1)) };
         match cmd.to_ascii_uppercase() {
             'M' => {
-                let Some(q) = p(&mut i) else { return d.to_owned() };
+                let Some(q) = p(&mut i) else {
+                    return d.to_owned();
+                };
                 out += &format!("M{}", pt(q));
                 cur = q;
                 start = q;
@@ -108,37 +124,53 @@ pub fn transform_path(d: &str, t: &Transformation, centre: (f32, f32)) -> String
                 cmd = if rel { 'l' } else { 'L' };
             }
             'L' | 'T' => {
-                let Some(q) = p(&mut i) else { return d.to_owned() };
+                let Some(q) = p(&mut i) else {
+                    return d.to_owned();
+                };
                 out += &format!("{}{}", cmd.to_ascii_uppercase(), pt(q));
                 cur = q;
             }
             'H' => {
-                let Some(x) = num(&mut i) else { return d.to_owned() };
+                let Some(x) = num(&mut i) else {
+                    return d.to_owned();
+                };
                 cur = (if rel { cur.0 + x } else { x }, cur.1);
                 out += &format!("L{}", pt(cur));
             }
             'V' => {
-                let Some(y) = num(&mut i) else { return d.to_owned() };
+                let Some(y) = num(&mut i) else {
+                    return d.to_owned();
+                };
                 cur = (cur.0, if rel { cur.1 + y } else { y });
                 out += &format!("L{}", pt(cur));
             }
             'C' => {
-                let (Some(a), Some(b), Some(q)) = (p(&mut i), p(&mut i), p(&mut i)) else { return d.to_owned() };
+                let (Some(a), Some(b), Some(q)) = (p(&mut i), p(&mut i), p(&mut i)) else {
+                    return d.to_owned();
+                };
                 out += &format!("C{}{}{}", pt(a), pt(b), pt(q));
                 cur = q;
             }
             'S' | 'Q' => {
-                let (Some(a), Some(q)) = (p(&mut i), p(&mut i)) else { return d.to_owned() };
+                let (Some(a), Some(q)) = (p(&mut i), p(&mut i)) else {
+                    return d.to_owned();
+                };
                 out += &format!("{}{}{}", cmd.to_ascii_uppercase(), pt(a), pt(q));
                 cur = q;
             }
             'A' => {
-                let (Some(rx), Some(ry), Some(rot), Some(large), Some(sweep)) =
-                    (num(&mut i), num(&mut i), num(&mut i), num(&mut i), num(&mut i))
-                else {
+                let (Some(rx), Some(ry), Some(rot), Some(large), Some(sweep)) = (
+                    num(&mut i),
+                    num(&mut i),
+                    num(&mut i),
+                    num(&mut i),
+                    num(&mut i),
+                ) else {
                     return d.to_owned();
                 };
-                let Some(q) = p(&mut i) else { return d.to_owned() };
+                let Some(q) = p(&mut i) else {
+                    return d.to_owned();
+                };
                 // A mirror (one scale negative) turns the sweep the other way.
                 let mirrored = (t.scale.0 < 0.0) != (t.scale.1 < 0.0);
                 let sweep = if mirrored { 1.0 - sweep } else { sweep };
@@ -165,7 +197,11 @@ pub fn transform_path(d: &str, t: &Transformation, centre: (f32, f32)) -> String
 
 fn fmt(v: f32) -> String {
     let r = (v * 1000.0).round() / 1000.0;
-    if r == r.trunc() { format!("{}", r as i64) } else { format!("{r}") }
+    if r == r.trunc() {
+        format!("{}", r as i64)
+    } else {
+        format!("{r}")
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -192,7 +228,11 @@ fn tokens(d: &str) -> Vec<Tok> {
             while i < b.len() {
                 let ch = b[i] as char;
                 let prev = b[i - 1] as char;
-                if ch.is_ascii_digit() || ((ch == '-' || ch == '+') && (prev == 'e' || prev == 'E')) || ch == 'e' || ch == 'E' {
+                if ch.is_ascii_digit()
+                    || ((ch == '-' || ch == '+') && (prev == 'e' || prev == 'E'))
+                    || ch == 'e'
+                    || ch == 'E'
+                {
                     i += 1;
                 } else if ch == '.' && !dot {
                     dot = true;
@@ -219,26 +259,47 @@ mod tests {
     fn points_turn_about_the_middle_and_relative_commands_become_absolute() {
         let quarter = Transformation::rotate(std::f32::consts::FRAC_PI_2);
         // A line from the middle to the right turns to point down.
-        assert_eq!(transform_path("M12 12 L20 12", &quarter, (12.0, 12.0)), "M12 12 L12 20");
+        assert_eq!(
+            transform_path("M12 12 L20 12", &quarter, (12.0, 12.0)),
+            "M12 12 L12 20"
+        );
         // Relative, horizontal and closing commands.
         assert_eq!(
-            transform_path("m2 2h4v4h-4z", &Transformation::default().with_translate(1.0, 0.0), (0.0, 0.0)),
+            transform_path(
+                "m2 2h4v4h-4z",
+                &Transformation::default().with_translate(1.0, 0.0),
+                (0.0, 0.0)
+            ),
             "M3 2 L7 2 L7 6 L3 6 Z"
         );
         // An arc: radii scaled, its axis turned, its end point moved.
         assert_eq!(
-            transform_path("M0 0 A5 5 0 0 1 10 0", &Transformation::scale(2.0, 2.0), (0.0, 0.0)),
+            transform_path(
+                "M0 0 A5 5 0 0 1 10 0",
+                &Transformation::scale(2.0, 2.0),
+                (0.0, 0.0)
+            ),
             "M0 0 A10 10 0 0 1 20 0"
         );
         // Packed numbers: `.5.5` is two.
-        assert_eq!(transform_path("M.5.5L1-1", &Transformation::default(), (0.0, 0.0)), "M0.5 0.5 L1 -1");
+        assert_eq!(
+            transform_path("M.5.5L1-1", &Transformation::default(), (0.0, 0.0)),
+            "M0.5 0.5 L1 -1"
+        );
     }
 
     #[test]
     fn a_node_keeps_its_transform_and_the_identity_takes_it_off() {
         let mut ui = Ui::new();
         let root = ui.root();
-        let p = ui.add_path(root, crate::Style::default(), vec!["M0 0L1 1".into()], [0.0, 0.0, 1.0, 1.0], Some(1.0), false);
+        let p = ui.add_path(
+            root,
+            crate::Style::default(),
+            vec!["M0 0L1 1".into()],
+            [0.0, 0.0, 1.0, 1.0],
+            Some(1.0),
+            false,
+        );
         ui.set_path_transform(p, Transformation::rotate(1.0));
         assert_eq!(ui.path_transform(p).rotate, 1.0);
         ui.set_path_transform(p, Transformation::default());

@@ -12,9 +12,8 @@
 //! box. Text is one line (`white-space: nowrap`).
 
 use super::style::{
-    AlignContent, FlexWrap,
-    AlignItems, BoxSizing, Display, FlexDirection, GridPlacement, JustifyContent, Length, Position, Style,
-    Track, TrackSize,
+    AlignContent, AlignItems, BoxSizing, Display, FlexDirection, FlexWrap, GridPlacement,
+    JustifyContent, Length, Position, Style, Track, TrackSize,
 };
 use super::tree::{LayoutCache, NodeId, NodeKind, Rect, Ui};
 
@@ -117,7 +116,11 @@ pub(crate) fn layout(ui: &mut Ui, width: f32, height: f32, text: &mut dyn TextMe
 /// `id`'s min-content width (see `Ctx::min_content_width`), measured
 /// outside a layout.
 pub(crate) fn min_content_width_of(ui: &mut Ui, id: NodeId, text: &mut dyn TextMeasure) -> f32 {
-    let mut ctx = Ctx { ui, text, stable: 0 };
+    let mut ctx = Ctx {
+        ui,
+        text,
+        stable: 0,
+    };
     ctx.min_content_width(id)
 }
 
@@ -135,6 +138,31 @@ struct FlexItem {
 }
 
 impl Ctx<'_> {
+    /// From the top of `id`'s border box to its first line of text's
+    /// baseline: the first text in it, down through its first in-flow
+    /// children. `None` without text (aligned by its bottom edge then).
+    fn first_baseline(&self, id: NodeId) -> Option<f32> {
+        let st = self.style(id);
+        if let NodeKind::Text(_) = &self.ui.nodes[id.0].kind {
+            let lh = st.line_height.unwrap_or(st.font_size * 1.2);
+            // Half the leading, then the ascent (about 0.8 em in the usual faces).
+            return Some((lh - st.font_size) / 2.0 + st.font_size * 0.8);
+        }
+        let inset = st.border.top + st.padding.top;
+        self.ui.nodes[id.0]
+            .children
+            .iter()
+            .copied()
+            .filter(|&c| {
+                let cs = self.style(c);
+                cs.display != Display::None && cs.position != Position::Absolute
+            })
+            .find_map(|c| {
+                self.first_baseline(c)
+                    .map(|b| inset + self.style(c).margin.top + b)
+            })
+    }
+
     fn style(&self, id: NodeId) -> &Style {
         &self.ui.nodes[id.0].style
     }
@@ -142,7 +170,10 @@ impl Ctx<'_> {
     /// Whether `id` is a replaced element (an image): sized by its content
     /// rather than stretched in block flow.
     fn replaced(&self, id: NodeId) -> bool {
-        matches!(self.ui.nodes[id.0].kind, NodeKind::Image { .. } | NodeKind::Surface { .. })
+        matches!(
+            self.ui.nodes[id.0].kind,
+            NodeKind::Image { .. } | NodeKind::Surface { .. }
+        )
     }
 
     fn in_flow(&self, id: NodeId) -> Vec<NodeId> {
@@ -216,7 +247,9 @@ impl Ctx<'_> {
             let w = (w * 64.0).ceil() / 64.0;
             if let (true, Some(width)) = (style.wrap, width) {
                 let lines = self.wrap(id.0, &t, &style, (width - fx).max(0.0));
-                let shown = style.line_clamp.map_or(lines.len(), |n| lines.len().min(n as usize));
+                let shown = style
+                    .line_clamp
+                    .map_or(lines.len(), |n| lines.len().min(n as usize));
                 return (width, shown.max(1) as f32 * h + fy);
             }
             if style.vertical {
@@ -233,7 +266,8 @@ impl Ctx<'_> {
             // A replaced element: its own size, or the other side by its
             // aspect ratio when one side is set, as `<img>` sizes.
             let inner_w = width.map(|w| (w - fx).max(0.0));
-            let inner_h = border_box(&style, style.height, height_base, false).map(|h| (h - fy).max(0.0));
+            let inner_h =
+                border_box(&style, style.height, height_base, false).map(|h| (h - fy).max(0.0));
             let (cw, ch) = match (inner_w, inner_h) {
                 (Some(w), Some(h)) => (w, h),
                 (Some(w), None) => (w, w * ih / iw),
@@ -249,13 +283,18 @@ impl Ctx<'_> {
             // flexing gives them (wrapping text grows its line), as CSS
             // sizes the container's cross axis after its main sizes.
             // Wrapping: its lines' heights, one under another.
-            Display::Flex if style.flex_direction == FlexDirection::Row && inner_w.is_some() && style.flex_wrap != FlexWrap::NoWrap => {
+            Display::Flex
+                if style.flex_direction == FlexDirection::Row
+                    && inner_w.is_some()
+                    && style.flex_wrap != FlexWrap::NoWrap =>
+            {
                 let inner = inner_w.unwrap();
                 let cross_gap = Self::flex_gaps(&style).1;
                 let lines = self.flex_lines(id, &style, inner, height_base.unwrap_or(0.0));
                 let mut total = 0.0f32;
                 for (k, l) in lines.iter().enumerate() {
-                    total += self.flex_line_cross(&style, l, height_base.unwrap_or(0.0)) + if k > 0 { cross_gap } else { 0.0 };
+                    total += self.flex_line_cross(&style, l, height_base.unwrap_or(0.0))
+                        + if k > 0 { cross_gap } else { 0.0 };
                 }
                 (inner, total)
             }
@@ -281,7 +320,15 @@ impl Ctx<'_> {
                     let cs = self.style(c).clone();
                     // In a column, each at its own width (a card of 520 px
                     // in a wide column is as tall as it is at 520).
-                    let (w, h) = self.outer_size(c, if row { None } else { inner_w.map(|iw| own_width(&cs, iw)) }, height_base);
+                    let (w, h) = self.outer_size(
+                        c,
+                        if row {
+                            None
+                        } else {
+                            inner_w.map(|iw| own_width(&cs, iw))
+                        },
+                        height_base,
+                    );
                     let (m_main, m_cross) = if row {
                         (cs.margin.horizontal(), cs.margin.vertical())
                     } else {
@@ -291,7 +338,13 @@ impl Ctx<'_> {
                     // `column-gap` in a row, `row-gap` in a column, as
                     // flexing spaces them (the shorthand alone left a
                     // row's words narrower than their gaps).
-                    main += a + m_main + if i > 0 { Self::flex_gaps(&style).0 } else { 0.0 };
+                    main += a
+                        + m_main
+                        + if i > 0 {
+                            Self::flex_gaps(&style).0
+                        } else {
+                            0.0
+                        };
                     cross = cross.max(b + m_cross);
                 }
                 if row {
@@ -338,7 +391,10 @@ impl Ctx<'_> {
                 let mut widest = 0.0f32;
                 let mut at = 0;
                 for line in self.wrap(id.0, &t, &style, 0.0) {
-                    let offset = t.get(at..).and_then(|rest| rest.find(line.as_str())).map_or(at, |i| at + i);
+                    let offset = t
+                        .get(at..)
+                        .and_then(|rest| rest.find(line.as_str()))
+                        .map_or(at, |i| at + i);
                     widest = widest.max(self.run_width(id.0, offset, line.trim_end(), &style));
                     at = offset + line.len();
                 }
@@ -358,7 +414,11 @@ impl Ctx<'_> {
             for (i, &c) in children.iter().enumerate() {
                 let m = self.min_content_width(c) + self.style(c).margin.horizontal();
                 if row {
-                    w += m + if i > 0 { Self::flex_gaps(&style).0 } else { 0.0 };
+                    w += m + if i > 0 {
+                        Self::flex_gaps(&style).0
+                    } else {
+                        0.0
+                    };
                 } else {
                     w = w.max(m);
                 }
@@ -458,7 +518,13 @@ impl Ctx<'_> {
         for piece in pieces {
             let candidate = format!("{line}{piece}");
             let margin = 1.0 + 0.1 * style.font_size.max(1.0) * (line_pieces + 1) as f32;
-            let est = (!styled).then(|| line_est + self.text.measure(piece.trim_end_matches([' ', '\u{200b}']), style).0);
+            let est = (!styled).then(|| {
+                line_est
+                    + self
+                        .text
+                        .measure(piece.trim_end_matches([' ', '\u{200b}']), style)
+                        .0
+            });
             let fit = match est {
                 Some(e) if e <= width - margin => true,
                 Some(e) if e > width + margin => false,
@@ -490,7 +556,11 @@ impl Ctx<'_> {
                 lines.push(head);
                 rest = chars[n..].iter().collect();
             }
-            line_est = if styled || rest.is_empty() { 0.0 } else { self.text.measure(&rest, style).0 };
+            line_est = if styled || rest.is_empty() {
+                0.0
+            } else {
+                self.text.measure(&rest, style).0
+            };
             line_pieces = usize::from(!rest.is_empty());
             line = rest;
         }
@@ -503,7 +573,9 @@ impl Ctx<'_> {
     /// `line-clamp`: at most that many of `lines`, the last ending in `…`
     /// (fitted to `width`) when lines were cut.
     fn clamp_lines(&mut self, style: &Style, mut lines: Vec<String>, width: f32) -> Vec<String> {
-        let Some(n) = style.line_clamp.map(|n| n as usize) else { return lines };
+        let Some(n) = style.line_clamp.map(|n| n as usize) else {
+            return lines;
+        };
         if lines.len() <= n {
             return lines;
         }
@@ -564,7 +636,11 @@ impl Ctx<'_> {
             return self.text.measure(s, style).0;
         };
         let rest = text.get(offset..).unwrap_or("");
-        let same = rest.bytes().zip(s.bytes()).take_while(|(a, b)| a == b).count();
+        let same = rest
+            .bytes()
+            .zip(s.bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
         let mut same = same;
         while !s.is_char_boundary(same) {
             same -= 1;
@@ -572,7 +648,9 @@ impl Ctx<'_> {
         let (text, runs) = (text.clone(), runs.clone());
         let mut w = 0.0;
         for (a, b, k) in crate::rich_text::split(&text, &runs, offset, offset + same) {
-            let st = runs.get(k as usize).map_or_else(|| style.clone(), |r| r.style(style));
+            let st = runs
+                .get(k as usize)
+                .map_or_else(|| style.clone(), |r| r.style(style));
             w += self.text.measure(&text[a..b], &st).0;
         }
         if same < s.len() {
@@ -600,7 +678,10 @@ impl Ctx<'_> {
             let lines: Vec<String> = if n.lines.is_empty() {
                 vec![t.clone()]
             } else {
-                n.lines.iter().map(|l| l.trim_end_matches([' ', '\u{200b}']).to_string()).collect()
+                n.lines
+                    .iter()
+                    .map(|l| l.trim_end_matches([' ', '\u{200b}']).to_string())
+                    .collect()
             };
             let mut widths = Vec::with_capacity(lines.len());
             let mut offset = 0;
@@ -617,13 +698,22 @@ impl Ctx<'_> {
             self.ui.nodes[i].line_widths = widths;
             // Where each run's piece of each line goes.
             let mut pieces = vec![];
-            if let (Some(runs), NodeKind::Text(text)) = (self.ui.nodes[i].runs.clone(), self.ui.nodes[i].kind.clone()) {
+            if let (Some(runs), NodeKind::Text(text)) =
+                (self.ui.nodes[i].runs.clone(), self.ui.nodes[i].kind.clone())
+            {
                 let mut offset = 0;
                 for (li, line) in lines.iter().enumerate() {
-                    if text.get(offset..).is_some_and(|r| r.starts_with(line.as_str())) {
+                    if text
+                        .get(offset..)
+                        .is_some_and(|r| r.starts_with(line.as_str()))
+                    {
                         let mut x = 0.0;
-                        for (a, b, k) in crate::rich_text::split(&text, &runs, offset, offset + line.len()) {
-                            let st = runs.get(k as usize).map_or_else(|| style.clone(), |r| r.style(&style));
+                        for (a, b, k) in
+                            crate::rich_text::split(&text, &runs, offset, offset + line.len())
+                        {
+                            let st = runs
+                                .get(k as usize)
+                                .map_or_else(|| style.clone(), |r| r.style(&style));
                             let w = self.text.measure(&text[a..b], &st).0;
                             pieces.push(crate::rich_text::Piece {
                                 line: li as u32,
@@ -656,9 +746,10 @@ impl Ctx<'_> {
             return;
         }
         let hit = !node.dirty
-            && node.cache.as_ref().is_some_and(|c| {
-                c.layout_units == self.ui.layout_units && same_rect(c.rect, rect)
-            });
+            && node
+                .cache
+                .as_ref()
+                .is_some_and(|c| c.layout_units == self.ui.layout_units && same_rect(c.rect, rect));
         if hit {
             let cache = self.ui.nodes[id.0].cache.take().expect("checked");
             for (i, r, lines, scroll_height, scrolled) in &cache.nodes {
@@ -726,7 +817,10 @@ impl Ctx<'_> {
         match style.display {
             Display::Flex => self.flex(id, &style, content),
             Display::Grid => self.grid(id, &style, content),
-            _ => self.block(id, content),
+            _ => {
+                self.block(id, content);
+                self.centre_button(id, content);
+            }
         }
         self.absolute(id, rect, &style);
         // `display: none` generates no box: an empty one at the origin, as
@@ -820,6 +914,43 @@ impl Ctx<'_> {
         }
     }
 
+    /// Whether `id` is a button (its role): its content centred up and
+    /// down, as a page's `<button>` centres it, when it is taller than its
+    /// content — stretched by its row, or given a height.
+    fn is_button(&self, id: NodeId) -> bool {
+        use crate::Role;
+        self.ui.semantics(id).is_some_and(|s| {
+            matches!(
+                s.role,
+                Role::Button | Role::Tab | Role::Checkbox | Role::Radio | Role::Option
+            )
+        })
+    }
+
+    /// A block button's content moved down by half the room under it.
+    fn centre_button(&mut self, id: NodeId, content: Rect) {
+        if !self.is_button(id) || self.style(id).scroll {
+            return;
+        }
+        let kids = self.in_flow(id);
+        let Some(bottom) = kids
+            .iter()
+            .map(|c| {
+                let r = self.ui.nodes[c.0].rect;
+                r.y + r.height + self.style(*c).margin.bottom
+            })
+            .reduce(f32::max)
+        else {
+            return;
+        };
+        let slack = content.y + content.height - bottom;
+        if slack > 0.5 {
+            for c in kids {
+                self.translate(c, slack / 2.0);
+            }
+        }
+    }
+
     fn translate(&mut self, id: NodeId, dy: f32) {
         if self.style(id).display == Display::None {
             return;
@@ -862,7 +993,10 @@ impl Ctx<'_> {
     /// with min/max clamping).
     /// The gap along a flex container's main axis, and between its lines.
     fn flex_gaps(style: &Style) -> (f32, f32) {
-        let (column, row) = (style.column_gap.unwrap_or(style.gap), style.row_gap.unwrap_or(style.gap));
+        let (column, row) = (
+            style.column_gap.unwrap_or(style.gap),
+            style.row_gap.unwrap_or(style.gap),
+        );
         if style.flex_direction == FlexDirection::Row {
             (column, row)
         } else {
@@ -872,7 +1006,13 @@ impl Ctx<'_> {
 
     /// `id`'s flex items, in `order`, at their resolved main sizes on one
     /// line.
-    fn flex_items(&mut self, id: NodeId, style: &Style, main_size: f32, cross_size: f32) -> Vec<FlexItem> {
+    fn flex_items(
+        &mut self,
+        id: NodeId,
+        style: &Style,
+        main_size: f32,
+        cross_size: f32,
+    ) -> Vec<FlexItem> {
         let mut list = self.flex_collect(id, style, main_size, cross_size);
         Self::flex_resolve(&mut list, Self::flex_gaps(style).0, main_size);
         list
@@ -880,7 +1020,13 @@ impl Ctx<'_> {
 
     /// `id`'s flex items in `order` (then tree order), at their hypothetical
     /// main sizes: before free space is shared.
-    fn flex_collect(&mut self, id: NodeId, style: &Style, main_size: f32, cross_size: f32) -> Vec<FlexItem> {
+    fn flex_collect(
+        &mut self,
+        id: NodeId,
+        style: &Style,
+        main_size: f32,
+        cross_size: f32,
+    ) -> Vec<FlexItem> {
         let row = style.flex_direction == FlexDirection::Row;
         let mut items = self.in_flow(id);
         // `order`: stable, so equal orders keep the tree's.
@@ -923,7 +1069,11 @@ impl Ctx<'_> {
             let automatic = if cs.clip {
                 0.0
             } else {
-                let min_content = if row { self.min_content_width(c) } else { content_main };
+                let min_content = if row {
+                    self.min_content_width(c)
+                } else {
+                    content_main
+                };
                 let suggestion = min_content.min(content_main).min(max);
                 specified.map_or(suggestion, |v| suggestion.min(v))
             };
@@ -1036,6 +1186,7 @@ impl Ctx<'_> {
     }
 
     fn flex(&mut self, id: NodeId, style: &Style, content: Rect) {
+        let button = self.is_button(id);
         let row = style.flex_direction == FlexDirection::Row;
         let (main_size, cross_size) = if row {
             (content.width, content.height)
@@ -1045,13 +1196,16 @@ impl Ctx<'_> {
         let cross_gap = Self::flex_gaps(style).1;
         if style.flex_wrap == FlexWrap::NoWrap {
             let list = self.flex_items(id, style, main_size, cross_size);
-            self.flex_line(style, &list, content, 0.0, cross_size);
+            self.flex_line(style, &list, content, 0.0, cross_size, button);
             return;
         }
         // Wrapping: lines by the items' hypothetical sizes, each sharing its
         // own free space, as tall (in a row) as its tallest item.
         let lines = self.flex_lines(id, style, main_size, cross_size);
-        let mut crosses: Vec<f32> = lines.iter().map(|l| self.flex_line_cross(style, l, cross_size)).collect();
+        let mut crosses: Vec<f32> = lines
+            .iter()
+            .map(|l| self.flex_line_cross(style, l, cross_size))
+            .collect();
         let n = lines.len();
         let total: f32 = crosses.iter().sum::<f32>() + cross_gap * n.saturating_sub(1) as f32;
         let free = cross_size - total;
@@ -1070,20 +1224,32 @@ impl Ctx<'_> {
             AlignContent::SpaceBetween if n > 1 => (0.0, free.max(0.0) / (n - 1) as f32),
             AlignContent::SpaceBetween => (0.0, 0.0),
             AlignContent::SpaceAround if free > 0.0 => (free / n as f32 / 2.0, free / n as f32),
-            AlignContent::SpaceEvenly if free > 0.0 => (free / (n + 1) as f32, free / (n + 1) as f32),
+            AlignContent::SpaceEvenly if free > 0.0 => {
+                (free / (n + 1) as f32, free / (n + 1) as f32)
+            }
             AlignContent::SpaceAround | AlignContent::SpaceEvenly => (0.0, 0.0),
         };
         for (k, line) in lines.iter().enumerate() {
             // `wrap-reverse`: the first line at the far side.
-            let start = if style.flex_wrap == FlexWrap::WrapReverse { cross_size - at - crosses[k] } else { at };
-            self.flex_line(style, line, content, start, crosses[k]);
+            let start = if style.flex_wrap == FlexWrap::WrapReverse {
+                cross_size - at - crosses[k]
+            } else {
+                at
+            };
+            self.flex_line(style, line, content, start, crosses[k], button);
             at += crosses[k] + cross_gap + between;
         }
     }
 
     /// `id`'s flex items broken into lines along `main_size`, each line's
     /// main sizes resolved.
-    fn flex_lines(&mut self, id: NodeId, style: &Style, main_size: f32, cross_size: f32) -> Vec<Vec<FlexItem>> {
+    fn flex_lines(
+        &mut self,
+        id: NodeId,
+        style: &Style,
+        main_size: f32,
+        cross_size: f32,
+    ) -> Vec<Vec<FlexItem>> {
         let gap = Self::flex_gaps(style).0;
         let all = self.flex_collect(id, style, main_size, cross_size);
         let mut lines: Vec<Vec<FlexItem>> = vec![];
@@ -1123,7 +1289,11 @@ impl Ctx<'_> {
                     } else {
                         self.content_size(item.id, None, Some(item.main))
                     };
-                    if row { h } else { w }
+                    if row {
+                        h
+                    } else {
+                        w
+                    }
                 }
             };
             let cross = self.clamp(&cs, cross, !row, Some(cross_size));
@@ -1135,9 +1305,21 @@ impl Ctx<'_> {
     /// Places one line of items: `line_cross` of the cross axis from
     /// `cross_start`, justified along the main axis (from its end when the
     /// direction is reversed).
-    fn flex_line(&mut self, style: &Style, list: &[FlexItem], content: Rect, cross_start: f32, line_cross: f32) {
+    fn flex_line(
+        &mut self,
+        style: &Style,
+        list: &[FlexItem],
+        content: Rect,
+        cross_start: f32,
+        line_cross: f32,
+        button: bool,
+    ) {
         let row = style.flex_direction == FlexDirection::Row;
-        let (main_size, cross_size) = if row { (content.width, content.height) } else { (content.height, content.width) };
+        let (main_size, cross_size) = if row {
+            (content.width, content.height)
+        } else {
+            (content.height, content.width)
+        };
         let gap = Self::flex_gaps(style).0;
         let gaps = gap * list.len().saturating_sub(1) as f32;
         // Main-axis placement.
@@ -1156,13 +1338,47 @@ impl Ctx<'_> {
             JustifyContent::FlexEnd => (leftover, 0.0),
             JustifyContent::SpaceBetween if n > 1 => (0.0, leftover.max(0.0) / (n - 1) as f32),
             JustifyContent::SpaceBetween => (0.0, 0.0),
-            JustifyContent::SpaceAround if leftover > 0.0 && n > 0 => (leftover / n as f32 / 2.0, leftover / n as f32),
-            JustifyContent::SpaceEvenly if leftover > 0.0 => (leftover / (n + 1) as f32, leftover / (n + 1) as f32),
+            JustifyContent::SpaceAround if leftover > 0.0 && n > 0 => {
+                (leftover / n as f32 / 2.0, leftover / n as f32)
+            }
+            JustifyContent::SpaceEvenly if leftover > 0.0 => {
+                (leftover / (n + 1) as f32, leftover / (n + 1) as f32)
+            }
             JustifyContent::SpaceAround | JustifyContent::SpaceEvenly => (0.0, 0.0),
         };
+        // Baseline-aligned items of a row: their baselines on the lowest
+        // one's (each item's own, from its top).
+        let baseline_of = |ctx: &Self, item: &FlexItem, cross: f32| {
+            ctx.first_baseline(item.id).unwrap_or(cross) + item.margin_cross.0
+        };
+        let mut line_baseline: Option<f32> = None;
+        if row {
+            for i in list {
+                let cs = self.style(i.id).clone();
+                if cs.align_self.unwrap_or(style.align_items) != AlignItems::Baseline {
+                    continue;
+                }
+                let cross = match border_box(&cs, cs.height, Some(cross_size), false) {
+                    Some(c) => c,
+                    None => self.content_size(i.id, Some(i.main), Some(cross_size)).1,
+                };
+                let b = baseline_of(self, i, cross);
+                line_baseline = Some(line_baseline.map_or(b, |m| m.max(b)));
+            }
+        }
+        // In a button laid out as a row, its text centred up and down (as in
+        // a page's `<button>`), not stretched to its height and drawn at
+        // its top.
+        let button_row = row && button;
         for item in list {
             let cs = self.style(item.id).clone();
-            let align = cs.align_self.unwrap_or(style.align_items);
+            let mut align = cs.align_self.unwrap_or(style.align_items);
+            if button_row
+                && align == AlignItems::Stretch
+                && matches!(self.ui.nodes[item.id.0].kind, NodeKind::Text(_))
+            {
+                align = AlignItems::Center;
+            }
             let cross_len = if row { cs.height } else { cs.width };
             let avail_cross = line_cross - item.margin_cross.0 - item.margin_cross.1;
             let cross = match border_box(&cs, cross_len, Some(cross_size), !row) {
@@ -1187,11 +1403,19 @@ impl Ctx<'_> {
                     AlignItems::Stretch | AlignItems::FlexStart => 0.0,
                     AlignItems::Center => (avail_cross - cross) / 2.0,
                     AlignItems::FlexEnd => avail_cross - cross,
+                    AlignItems::Baseline => match line_baseline {
+                        Some(line) => line - baseline_of(self, item, cross),
+                        None => 0.0,
+                    },
                 }
                 + item.margin_cross.0;
             pos += item.margin_main.0;
             // Reversed: the same places, counted from the end.
-            let main_at = if style.flex_reverse { main_size - pos - item.main } else { pos };
+            let main_at = if style.flex_reverse {
+                main_size - pos - item.main
+            } else {
+                pos
+            };
             let mut r = if row {
                 Rect {
                     x: content.x + main_at,
@@ -1336,7 +1560,13 @@ fn resolve_placement(p: GridPlacement, explicit: usize) -> (Option<usize>, usize
 impl Ctx<'_> {
     /// The tracks of a grid with content box `inner_w × inner_h` (each
     /// `None` when not definite), and where its items go.
-    fn grid_plan(&mut self, id: NodeId, style: &Style, inner_w: Option<f32>, inner_h: Option<f32>) -> GridPlan {
+    fn grid_plan(
+        &mut self,
+        id: NodeId,
+        style: &Style,
+        inner_w: Option<f32>,
+        inner_h: Option<f32>,
+    ) -> GridPlan {
         let children = self.in_flow(id);
         let col_gap = style.column_gap.unwrap_or(style.gap);
         let row_gap = style.row_gap.unwrap_or(style.gap);
@@ -1347,7 +1577,11 @@ impl Ctx<'_> {
             .iter()
             .map(|&c| {
                 let cs = self.style(c);
-                (c, resolve_placement(cs.grid_column, explicit_cols), resolve_placement(cs.grid_row, explicit_rows))
+                (
+                    c,
+                    resolve_placement(cs.grid_column, explicit_cols),
+                    resolve_placement(cs.grid_row, explicit_rows),
+                )
             })
             .collect();
         let mut ncols = explicit_cols.max(1);
@@ -1383,11 +1617,15 @@ impl Ctx<'_> {
             let cspan = cspan.min(ncols);
             let (r, cc) = match (col, row) {
                 (Some(col), None) => {
-                    let r = (0..).find(|&r| free(&mut used, r, col, rspan, cspan)).expect("rows are unbounded");
+                    let r = (0..)
+                        .find(|&r| free(&mut used, r, col, rspan, cspan))
+                        .expect("rows are unbounded");
                     (r, col)
                 }
                 (None, Some(r)) => {
-                    let cc = (0..=ncols - cspan).find(|&cc| free(&mut used, r, cc, rspan, cspan)).unwrap_or(0);
+                    let cc = (0..=ncols - cspan)
+                        .find(|&cc| free(&mut used, r, cc, rspan, cspan))
+                        .unwrap_or(0);
                     (r, cc)
                 }
                 _ => loop {
@@ -1429,7 +1667,11 @@ impl Ctx<'_> {
         }
         for i in 0..ncols {
             let t = template(&style.grid_columns, i);
-            let min = resolve(t.min, inner_w).unwrap_or(if t.min == TrackSize::Auto { need[i] } else { 0.0 });
+            let min = resolve(t.min, inner_w).unwrap_or(if t.min == TrackSize::Auto {
+                need[i]
+            } else {
+                0.0
+            });
             cols[i] = match t.max {
                 TrackSize::Fr(f) if inner_w.is_some() => {
                     col_fr[i] = f;
@@ -1439,12 +1681,24 @@ impl Ctx<'_> {
                 m => resolve(m, inner_w).unwrap_or(need[i]).max(min),
             };
         }
-        grow_spans(&mut cols, &col_fr, col_gap, items.iter().map(|&(c, cols, _)| (c, cols)), |ctx: &mut Self, c| {
-            let cs = ctx.style(c).clone();
-            ctx.outer_size(c, None, inner_h).0 + cs.margin.horizontal()
-        }, self);
+        grow_spans(
+            &mut cols,
+            &col_fr,
+            col_gap,
+            items.iter().map(|&(c, cols, _)| (c, cols)),
+            |ctx: &mut Self, c| {
+                let cs = ctx.style(c).clone();
+                ctx.outer_size(c, None, inner_h).0 + cs.margin.horizontal()
+            },
+            self,
+        );
         if let Some(w) = inner_w {
-            share_free(&mut cols, &col_fr, w - col_gap * (ncols - 1) as f32, &style.grid_columns);
+            share_free(
+                &mut cols,
+                &col_fr,
+                w - col_gap * (ncols - 1) as f32,
+                &style.grid_columns,
+            );
         }
 
         // Rows, with items at the widths their columns give them.
@@ -1461,9 +1715,18 @@ impl Ctx<'_> {
             let w = cs
                 .width
                 .resolve(Some(GridPlan::span(&cols, col_gap, ca)))
-                .map_or((GridPlan::span(&cols, col_gap, ca) - cs.margin.horizontal()).max(0.0), |_| {
-                    border_box(&cs, cs.width, Some(GridPlan::span(&cols, col_gap, ca)), true).unwrap_or(0.0)
-                });
+                .map_or(
+                    (GridPlan::span(&cols, col_gap, ca) - cs.margin.horizontal()).max(0.0),
+                    |_| {
+                        border_box(
+                            &cs,
+                            cs.width,
+                            Some(GridPlan::span(&cols, col_gap, ca)),
+                            true,
+                        )
+                        .unwrap_or(0.0)
+                    },
+                );
             let (_, h) = self.outer_size(c, Some(w), inner_h);
             let h = h + cs.margin.vertical();
             if b - a == 1 {
@@ -1479,13 +1742,21 @@ impl Ctx<'_> {
         }
         for i in 0..nrows {
             let t = template(&style.grid_rows, i);
-            let min = resolve(t.min, inner_h).unwrap_or(if t.min == TrackSize::Auto { need[i] } else { 0.0 });
+            let min = resolve(t.min, inner_h).unwrap_or(if t.min == TrackSize::Auto {
+                need[i]
+            } else {
+                0.0
+            });
             rows[i] = match t.max {
                 TrackSize::Fr(f) if inner_h.is_some() => {
                     row_fr[i] = f;
                     // A flexible row in a box of known height starts from
                     // what its items must have, and shares the rest.
-                    resolve(t.min, inner_h).unwrap_or(if t.min == TrackSize::Auto { need_min[i] } else { 0.0 })
+                    resolve(t.min, inner_h).unwrap_or(if t.min == TrackSize::Auto {
+                        need_min[i]
+                    } else {
+                        0.0
+                    })
                 }
                 TrackSize::Fr(_) | TrackSize::Auto => min.max(need[i]),
                 m => resolve(m, inner_h).unwrap_or(need[i]).max(min),
@@ -1496,12 +1767,20 @@ impl Ctx<'_> {
         for (_, (a, b), h) in heights {
             let have = GridPlan::span(&rows, row_gap, (a, b));
             if h > have && b - a > 1 {
-                let i = (a..b).rev().find(|&i| template(&style.grid_rows, i).max == TrackSize::Auto).unwrap_or(b - 1);
+                let i = (a..b)
+                    .rev()
+                    .find(|&i| template(&style.grid_rows, i).max == TrackSize::Auto)
+                    .unwrap_or(b - 1);
                 rows[i] += h - have;
             }
         }
         if let Some(hh) = inner_h {
-            share_free(&mut rows, &row_fr, hh - row_gap * (nrows - 1) as f32, &style.grid_rows);
+            share_free(
+                &mut rows,
+                &row_fr,
+                hh - row_gap * (nrows - 1) as f32,
+                &style.grid_rows,
+            );
         }
         GridPlan {
             cols,
@@ -1587,15 +1866,26 @@ fn share_free(sizes: &mut [f32], fr: &[f32], space: f32, template: &[Track]) {
     let total_fr: f32 = fr.iter().sum();
     if total_fr > 0.0 {
         // Flexible tracks start from their minimums (already in `sizes`).
-        let fixed: f32 = sizes.iter().zip(fr).filter(|(_, f)| **f == 0.0).map(|(s, _)| *s).sum();
+        let fixed: f32 = sizes
+            .iter()
+            .zip(fr)
+            .filter(|(_, f)| **f == 0.0)
+            .map(|(s, _)| *s)
+            .sum();
         let mut flexible: Vec<usize> = (0..sizes.len()).filter(|&i| fr[i] > 0.0).collect();
         // A track whose minimum beats its share keeps its minimum, and the
         // rest share what is left: repeat until all fit.
         loop {
-            let left = space - fixed - (0..sizes.len()).filter(|i| fr[*i] > 0.0 && !flexible.contains(i)).map(|i| sizes[i]).sum::<f32>();
+            let left = space
+                - fixed
+                - (0..sizes.len())
+                    .filter(|i| fr[*i] > 0.0 && !flexible.contains(i))
+                    .map(|i| sizes[i])
+                    .sum::<f32>();
             let share: f32 = flexible.iter().map(|&i| fr[i]).sum();
             let unit = (left / share.max(1e-6)).max(0.0);
-            let (stuck, ok): (Vec<usize>, Vec<usize>) = flexible.iter().partition(|&&i| sizes[i] > fr[i] * unit);
+            let (stuck, ok): (Vec<usize>, Vec<usize>) =
+                flexible.iter().partition(|&&i| sizes[i] > fr[i] * unit);
             if stuck.is_empty() {
                 for i in ok {
                     sizes[i] = fr[i] * unit;
@@ -1645,14 +1935,19 @@ mod tests {
     impl TextMeasure for Kerned {
         fn measure(&mut self, text: &str, _: &Style) -> (f32, f32) {
             let c: Vec<char> = text.chars().collect();
-            let kerns = c.windows(2).filter(|p| matches!(p, ['A', 'V'] | [' ', 'T'])).count();
+            let kerns = c
+                .windows(2)
+                .filter(|p| matches!(p, ['A', 'V'] | [' ', 'T']))
+                .count();
             (c.len() as f32 * 7.0 - kerns as f32, 16.0)
         }
     }
 
     #[test]
     fn wrapped_lines_fit_and_could_take_no_more_words() {
-        let words = ["AV", "Tea", "A", "VAT", "word", "T", "AVAV", "longer", "TT", "x"];
+        let words = [
+            "AV", "Tea", "A", "VAT", "word", "T", "AVAV", "longer", "TT", "x",
+        ];
         let mut seed = 7u32;
         let mut next = move || {
             seed ^= seed << 13;
@@ -1661,14 +1956,20 @@ mod tests {
             seed
         };
         for case in 0..300 {
-            let text: Vec<&str> = (0..5 + next() % 30).map(|_| words[(next() % words.len() as u32) as usize]).collect();
+            let text: Vec<&str> = (0..5 + next() % 30)
+                .map(|_| words[(next() % words.len() as u32) as usize])
+                .collect();
             let text = text.join(" ");
             let width = 20.0 + (next() % 200) as f32;
             for units in [false, true] {
                 let mut ui = Ui::new();
                 ui.set_layout_units(units);
                 let root = ui.root();
-                let st = Style { width: px(width), wrap: true, ..Style::default() };
+                let st = Style {
+                    width: px(width),
+                    wrap: true,
+                    ..Style::default()
+                };
                 let b = ui.add_box(root, st);
                 let t = ui.add_text(b, text.clone());
                 ui.layout(800.0, 600.0, &mut Kerned);
@@ -1684,12 +1985,19 @@ mod tests {
                 for (i, l) in lines.iter().enumerate() {
                     // A line holding one word may be too wide only when that
                     // word was broken to fit (it is then no wider).
-                    assert!(w(l) <= width + 1e-3 || !l.trim().contains(' ') && l.trim().chars().count() == 1, "case {case}: {l:?} wider than {width} in {lines:?}");
+                    assert!(
+                        w(l) <= width + 1e-3
+                            || !l.trim().contains(' ') && l.trim().chars().count() == 1,
+                        "case {case}: {l:?} wider than {width} in {lines:?}"
+                    );
                     if let Some(next_line) = lines.get(i + 1)
                         && let Some(word) = next_line.split(' ').next()
                     {
                         let more = format!("{}{word}", l);
-                        assert!(w(&more) > width + 1e-3, "case {case}: {more:?} fits {width}; {lines:?}");
+                        assert!(
+                            w(&more) > width + 1e-3,
+                            "case {case}: {more:?} fits {width}; {lines:?}"
+                        );
                     }
                 }
             }

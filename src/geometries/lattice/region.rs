@@ -728,11 +728,17 @@ mod tests {
         for k in 0..200 {
             let t = k as f32 / 200.0 * std::f32::consts::TAU;
             let p = Vector3::new(0.3 * t.cos(), 0.8 * t.sin(), 0.2);
-            assert!(soft.distance(p) <= hard.distance(p) + 1e-6, "smooth intersection added material at {p:?}");
+            assert!(
+                soft.distance(p) <= hard.distance(p) + 1e-6,
+                "smooth intersection added material at {p:?}"
+            );
         }
         // the sharp rim where the two spheres meet is pulled in...
         let rim = Vector3::new(0.0, 0.795, 0.0);
-        assert!(hard.contains(rim) && !soft.contains(rim), "the edge was not rounded");
+        assert!(
+            hard.contains(rim) && !soft.contains(rim),
+            "the edge was not rounded"
+        );
         // ...and where one boundary is much nearer than the other (by more than the blend) nothing changes
         let p = Vector3::new(-0.3, 0.0, 0.0);
         assert!((soft.distance(p) - hard.distance(p)).abs() < 1e-5);

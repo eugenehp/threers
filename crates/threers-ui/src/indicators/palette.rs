@@ -8,7 +8,12 @@ use super::*;
 pub struct Palette(pub [Rgba; 3]);
 
 pub(super) const fn hex(c: u32) -> Rgba {
-    [((c >> 16) & 255) as f32 / 255.0, ((c >> 8) & 255) as f32 / 255.0, (c & 255) as f32 / 255.0, 1.0]
+    [
+        ((c >> 16) & 255) as f32 / 255.0,
+        ((c >> 8) & 255) as f32 / 255.0,
+        (c & 255) as f32 / 255.0,
+        1.0,
+    ]
 }
 
 /// `a` mixed `t` of the way to `b`.
@@ -81,7 +86,10 @@ impl Palette {
 
     /// The palette called `name` (any case), of [`NAMED`](Self::NAMED).
     pub fn named(name: &str) -> Option<Palette> {
-        Palette::NAMED.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|&(_, p)| p)
+        Palette::NAMED
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|&(_, p)| p)
     }
 
     /// One colour, end to end.
@@ -104,7 +112,10 @@ impl Palette {
     /// through all three. `None` if one does not parse, or there are none
     /// or more than three.
     pub fn css(colours: &[&str]) -> Option<Palette> {
-        let c: Vec<Rgba> = colours.iter().map(|c| crate::css::color(c)).collect::<Option<_>>()?;
+        let c: Vec<Rgba> = colours
+            .iter()
+            .map(|c| crate::css::color(c))
+            .collect::<Option<_>>()?;
         match c.as_slice() {
             [a] => Some(Palette::solid(*a)),
             [a, b] => Some(Palette::two(*a, *b)),
@@ -132,7 +143,11 @@ impl Palette {
 
     /// Shades of one colour: darker at the start, lighter at the end.
     pub fn shades(c: Rgba) -> Palette {
-        Palette([mix(c, [0.0, 0.0, 0.0, c[3]], 0.45), c, mix(c, [1.0, 1.0, 1.0, c[3]], 0.55)])
+        Palette([
+            mix(c, [0.0, 0.0, 0.0, c[3]], 0.45),
+            c,
+            mix(c, [1.0, 1.0, 1.0, c[3]], 0.55),
+        ])
     }
 
     /// End to start.
@@ -161,7 +176,11 @@ impl Palette {
     pub fn at(&self, t: f32) -> Rgba {
         let t = t.clamp(0.0, 1.0);
         let [a, b, c] = self.0;
-        let (from, to, f) = if t < 0.5 { (a, b, t * 2.0) } else { (b, c, t * 2.0 - 1.0) };
+        let (from, to, f) = if t < 0.5 {
+            (a, b, t * 2.0)
+        } else {
+            (b, c, t * 2.0 - 1.0)
+        };
         std::array::from_fn(|i| from[i] + (to[i] - from[i]) * f)
     }
 }

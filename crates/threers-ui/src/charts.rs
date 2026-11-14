@@ -20,8 +20,8 @@
 use std::ops::RangeInclusive;
 
 use crate::environment::Token;
-use crate::tree::{NodeId, Ui};
 use crate::style::Rgba;
+use crate::tree::{NodeId, Ui};
 use crate::{style, Length, Role, Semantics};
 
 /// How a gauge shows its value.
@@ -73,13 +73,21 @@ impl GaugeTint {
         match self {
             GaugeTint::Accent => None,
             GaugeTint::Color(c) => Some(*c),
-            GaugeTint::Bands(b) => b.iter().rev().find(|(from, _)| f >= *from).or(b.first()).map(|(_, c)| *c),
+            GaugeTint::Bands(b) => b
+                .iter()
+                .rev()
+                .find(|(from, _)| f >= *from)
+                .or(b.first())
+                .map(|(_, c)| *c),
             GaugeTint::Gradient(stops) => {
                 let (first, last) = (stops.first()?, stops.last()?);
                 if f <= first.0 {
                     return Some(first.1);
                 }
-                let i = stops.iter().position(|(at, _)| *at >= f).unwrap_or(stops.len() - 1);
+                let i = stops
+                    .iter()
+                    .position(|(at, _)| *at >= f)
+                    .unwrap_or(stops.len() - 1);
                 let ((a, ca), (b, cb)) = (stops[i.saturating_sub(1)], stops[i]);
                 if f >= last.0 || b <= a {
                     return Some(if f >= last.0 { last.1 } else { cb });
@@ -122,7 +130,16 @@ pub struct GaugeStyle {
 
 impl Default for GaugeStyle {
     fn default() -> Self {
-        GaugeStyle { tint: GaugeTint::Accent, size: 96.0, unit: String::new(), decimals: None, show_range: true, animate: true, ticks: 0, needle: false }
+        GaugeStyle {
+            tint: GaugeTint::Accent,
+            size: 96.0,
+            unit: String::new(),
+            decimals: None,
+            show_range: true,
+            animate: true,
+            ticks: 0,
+            needle: false,
+        }
     }
 }
 
@@ -181,28 +198,47 @@ fn arc(start: f32, sweep: f32, fraction: f32) -> Vec<String> {
     }
     if turn >= std::f32::consts::TAU - 1e-3 {
         let (xm, ym) = point(start + std::f32::consts::PI);
-        return vec![format!("M{x0:.3} {y0:.3} A40 40 0 0 1 {xm:.3} {ym:.3} A40 40 0 0 1 {x0:.3} {y0:.3}")];
+        return vec![format!(
+            "M{x0:.3} {y0:.3} A40 40 0 0 1 {xm:.3} {ym:.3} A40 40 0 0 1 {x0:.3} {y0:.3}"
+        )];
     }
     let (x1, y1) = point(start + turn);
     let large = u8::from(turn > std::f32::consts::PI);
-    vec![format!("M{x0:.3} {y0:.3} A40 40 0 {large} 1 {x1:.3} {y1:.3}")]
+    vec![format!(
+        "M{x0:.3} {y0:.3} A40 40 0 {large} 1 {x1:.3} {y1:.3}"
+    )]
 }
 
 /// The dial's arc from its start to `fraction` round.
 #[cfg(test)]
 fn dial_arc(fraction: f32) -> String {
-    arc(DIAL_START, DIAL_SWEEP, fraction).pop().unwrap_or_default()
+    arc(DIAL_START, DIAL_SWEEP, fraction)
+        .pop()
+        .unwrap_or_default()
 }
 
 /// A gauge for a value in `range` under `parent`, named `label`, in the
 /// default [`GaugeStyle`] (it starts at the range's low end; give it a
 /// value with [`Gauge::set`]).
-pub fn gauge(ui: &mut Ui, parent: NodeId, label: &str, range: RangeInclusive<f32>, kind: GaugeKind) -> Gauge {
+pub fn gauge(
+    ui: &mut Ui,
+    parent: NodeId,
+    label: &str,
+    range: RangeInclusive<f32>,
+    kind: GaugeKind,
+) -> Gauge {
     gauge_styled(ui, parent, label, range, kind, GaugeStyle::default())
 }
 
 /// [`gauge`] in `style`.
-pub fn gauge_styled(ui: &mut Ui, parent: NodeId, label: &str, range: RangeInclusive<f32>, kind: GaugeKind, style: GaugeStyle) -> Gauge {
+pub fn gauge_styled(
+    ui: &mut Ui,
+    parent: NodeId,
+    label: &str,
+    range: RangeInclusive<f32>,
+    kind: GaugeKind,
+    style: GaugeStyle,
+) -> Gauge {
     let (lo, hi) = (*range.start(), *range.end());
     let text = |ui: &mut Ui, at: NodeId, s: &str, css: &str, token: Token| {
         let mut st = style! {};
@@ -218,13 +254,31 @@ pub fn gauge_styled(ui: &mut Ui, parent: NodeId, label: &str, range: RangeInclus
         b
     };
     let number = |v: f32| format_value(v, style.decimals, "");
-    let mut parts = Parts { kind, range: (lo, hi), style: style.clone(), fill: node_placeholder(ui), inner: None, knob: None, needle: None, readout: None };
+    let mut parts = Parts {
+        kind,
+        range: (lo, hi),
+        style: style.clone(),
+        fill: node_placeholder(ui),
+        inner: None,
+        knob: None,
+        needle: None,
+        readout: None,
+    };
     let node = match kind {
         GaugeKind::Linear | GaugeKind::Marker => {
-            let node = ui.add_box(parent, style! { display: flex; flex-direction: column; gap: 4px; min-width: 80px; });
+            let node = ui.add_box(
+                parent,
+                style! { display: flex; flex-direction: column; gap: 4px; min-width: 80px; },
+            );
             let head = ui.add_box(node, style! { display: flex; justify-content: space-between; align-items: flex-end; gap: 8px; });
             text(ui, head, label, "font-size: 12px", Token::SecondaryText);
-            let value = text(ui, head, "", "font-size: 13px; font-weight: bold", Token::Text);
+            let value = text(
+                ui,
+                head,
+                "",
+                "font-size: 13px; font-weight: bold",
+                Token::Text,
+            );
             parts.readout = Some(ui.children(value)[0]);
             if kind == GaugeKind::Linear {
                 let track = ui.add_box(node, style! { position: relative; height: 8px; border-radius: 4px; overflow: hidden; });
@@ -249,7 +303,11 @@ pub fn gauge_styled(ui: &mut Ui, parent: NodeId, label: &str, range: RangeInclus
                 let bar = ui.add_box(track, style! { position: absolute; left: 0px; right: 0px; top: 5px; height: 6px; border-radius: 3px; });
                 match &style.tint {
                     GaugeTint::Gradient(stops) | GaugeTint::Bands(stops) => {
-                        let stops = if let GaugeTint::Bands(b) = &style.tint { hard_stops(b) } else { stops.clone() };
+                        let stops = if let GaugeTint::Bands(b) = &style.tint {
+                            hard_stops(b)
+                        } else {
+                            stops.clone()
+                        };
                         ui.update_style(bar, |s| {
                             s.background_gradient = stops;
                             s.gradient_shape = crate::GradientShape::Linear(90.0);
@@ -266,9 +324,24 @@ pub fn gauge_styled(ui: &mut Ui, parent: NodeId, label: &str, range: RangeInclus
                 parts.knob = Some(knob);
             }
             if style.show_range {
-                let ends = ui.add_box(node, style! { display: flex; justify-content: space-between; });
-                text(ui, ends, &number(lo), "font-size: 11px", Token::SecondaryText);
-                text(ui, ends, &number(hi), "font-size: 11px", Token::SecondaryText);
+                let ends = ui.add_box(
+                    node,
+                    style! { display: flex; justify-content: space-between; },
+                );
+                text(
+                    ui,
+                    ends,
+                    &number(lo),
+                    "font-size: 11px",
+                    Token::SecondaryText,
+                );
+                text(
+                    ui,
+                    ends,
+                    &number(hi),
+                    "font-size: 11px",
+                    Token::SecondaryText,
+                );
             }
             node
         }
@@ -286,10 +359,28 @@ pub fn gauge_styled(ui: &mut Ui, parent: NodeId, label: &str, range: RangeInclus
                 s.height = Length::Px(size);
                 s
             };
-            let (start, sweep) = if kind == GaugeKind::Ring { (0.0, std::f32::consts::TAU) } else { (DIAL_START, DIAL_SWEEP) };
-            let track = ui.add_path(dial, whole(), arc(start, sweep, 1.0), [0.0, 0.0, 100.0, 100.0], Some(10.0), false);
+            let (start, sweep) = if kind == GaugeKind::Ring {
+                (0.0, std::f32::consts::TAU)
+            } else {
+                (DIAL_START, DIAL_SWEEP)
+            };
+            let track = ui.add_path(
+                dial,
+                whole(),
+                arc(start, sweep, 1.0),
+                [0.0, 0.0, 100.0, 100.0],
+                Some(10.0),
+                false,
+            );
             ui.token_style(track, &[("color", Token::Separator)]);
-            let fill = ui.add_path(dial, whole(), vec![], [0.0, 0.0, 100.0, 100.0], Some(10.0), false);
+            let fill = ui.add_path(
+                dial,
+                whole(),
+                vec![],
+                [0.0, 0.0, 100.0, 100.0],
+                Some(10.0),
+                false,
+            );
             if style.tint == GaugeTint::Accent {
                 ui.token_style(fill, &[("color", Token::Accent)]);
             }
@@ -300,16 +391,43 @@ pub fn gauge_styled(ui: &mut Ui, parent: NodeId, label: &str, range: RangeInclus
                 for k in 0..=style.ticks {
                     let a = DIAL_START + DIAL_SWEEP * k as f32 / style.ticks as f32;
                     let (s, c) = a.sin_cos();
-                    d.push_str(&format!("M{:.2} {:.2} L{:.2} {:.2} ", 50.0 + 27.0 * s, 50.0 - 27.0 * c, 50.0 + 31.0 * s, 50.0 - 31.0 * c));
+                    d.push_str(&format!(
+                        "M{:.2} {:.2} L{:.2} {:.2} ",
+                        50.0 + 27.0 * s,
+                        50.0 - 27.0 * c,
+                        50.0 + 31.0 * s,
+                        50.0 - 31.0 * c
+                    ));
                 }
-                let marks = ui.add_path(dial, whole(), vec![d], [0.0, 0.0, 100.0, 100.0], Some(1.6), false);
+                let marks = ui.add_path(
+                    dial,
+                    whole(),
+                    vec![d],
+                    [0.0, 0.0, 100.0, 100.0],
+                    Some(1.6),
+                    false,
+                );
                 ui.token_style(marks, &[("color", Token::SecondaryText)]);
                 ui.semantics_mut(marks).hidden = true;
             }
             // A needle from the middle, pointing up until turned, and its pivot.
             if kind == GaugeKind::Circular && style.needle {
-                let needle = ui.add_path(dial, whole(), vec!["M50 54 L50 20".to_owned()], [0.0, 0.0, 100.0, 100.0], Some(3.0), false);
-                let pivot = ui.add_path(dial, whole(), vec!["M47 50 A3 3 0 0 1 53 50 A3 3 0 0 1 47 50".to_owned()], [0.0, 0.0, 100.0, 100.0], Some(6.0), false);
+                let needle = ui.add_path(
+                    dial,
+                    whole(),
+                    vec!["M50 54 L50 20".to_owned()],
+                    [0.0, 0.0, 100.0, 100.0],
+                    Some(3.0),
+                    false,
+                );
+                let pivot = ui.add_path(
+                    dial,
+                    whole(),
+                    vec!["M47 50 A3 3 0 0 1 53 50 A3 3 0 0 1 47 50".to_owned()],
+                    [0.0, 0.0, 100.0, 100.0],
+                    Some(6.0),
+                    false,
+                );
                 for n in [needle, pivot] {
                     ui.token_style(n, &[("color", Token::Text)]);
                     ui.semantics_mut(n).hidden = true;
@@ -321,7 +439,10 @@ pub fn gauge_styled(ui: &mut Ui, parent: NodeId, label: &str, range: RangeInclus
             // the middle).
             let needle = parts.needle.is_some();
             let mid = if needle {
-                ui.add_box(node, style! { display: flex; align-items: flex-end; gap: 3px; margin-top: 2px; })
+                ui.add_box(
+                    node,
+                    style! { display: flex; align-items: flex-end; gap: 3px; margin-top: 2px; },
+                )
             } else {
                 let m = ui.add_box(dial, whole());
                 ui.update_style(m, |s| {
@@ -333,11 +454,33 @@ pub fn gauge_styled(ui: &mut Ui, parent: NodeId, label: &str, range: RangeInclus
                 m
             };
             let big = if needle { 0.15 } else { 0.24 };
-            let value = text(ui, mid, "", &format!("font-size: {:.0}px; font-weight: bold; line-height: 1", (size * big).round()), Token::Text);
+            let value = text(
+                ui,
+                mid,
+                "",
+                &format!(
+                    "font-size: {:.0}px; font-weight: bold; line-height: 1",
+                    (size * big).round()
+                ),
+                Token::Text,
+            );
             parts.readout = Some(ui.children(value)[0]);
-            let unit = if kind == GaugeKind::Ring { "%" } else { style.unit.trim() };
+            let unit = if kind == GaugeKind::Ring {
+                "%"
+            } else {
+                style.unit.trim()
+            };
             if !unit.is_empty() {
-                text(ui, mid, unit, &format!("font-size: {:.0}px", (size * if needle { 0.09 } else { 0.12 }).round().max(9.0)), Token::SecondaryText);
+                text(
+                    ui,
+                    mid,
+                    unit,
+                    &format!(
+                        "font-size: {:.0}px",
+                        (size * if needle { 0.09 } else { 0.12 }).round().max(9.0)
+                    ),
+                    Token::SecondaryText,
+                );
             }
             for n in [track, fill, mid] {
                 ui.semantics_mut(n).hidden = true;
@@ -345,7 +488,10 @@ pub fn gauge_styled(ui: &mut Ui, parent: NodeId, label: &str, range: RangeInclus
             // The range's ends in the gap, under where the ring starts and stops.
             if kind == GaugeKind::Circular && style.show_range {
                 let foot = 50.0 + 40.0 * (-DIAL_START).cos().abs();
-                for (v, x) in [(lo, 50.0 + 40.0 * DIAL_START.sin()), (hi, 50.0 - 40.0 * DIAL_START.sin())] {
+                for (v, x) in [
+                    (lo, 50.0 + 40.0 * DIAL_START.sin()),
+                    (hi, 50.0 - 40.0 * DIAL_START.sin()),
+                ] {
                     let css = format!("position: absolute; top: {:.1}px; left: {:.1}px; width: 40px; text-align: center; font-size: 11px", size * (foot + 4.0) / 100.0, size * x / 100.0 - 20.0);
                     text(ui, dial, &number(v), &css, Token::SecondaryText);
                 }
@@ -355,11 +501,20 @@ pub fn gauge_styled(ui: &mut Ui, parent: NodeId, label: &str, range: RangeInclus
         }
     };
     let mut sem = Semantics::new(Role::ProgressBar).label(label);
-    sem.range = Some(crate::a11y::RangeValue { min: lo.min(hi), max: hi.max(lo), now: lo });
+    sem.range = Some(crate::a11y::RangeValue {
+        min: lo.min(hi),
+        max: hi.max(lo),
+        now: lo,
+    });
     ui.set_semantics(node, sem);
     show(ui, &parts, lo);
     let fill = parts.fill;
-    let mut g = Gauge { node, fill, parts, value: f32::NAN };
+    let mut g = Gauge {
+        node,
+        fill,
+        parts,
+        value: f32::NAN,
+    };
     g.value = lo;
     g.say(ui);
     g
@@ -395,13 +550,19 @@ fn format_value(v: f32, decimals: Option<usize>, unit: &str) -> String {
 /// `parts` showing `v`: the fill, the knob, the colour, the number.
 fn show(ui: &mut Ui, parts: &Parts, v: f32) {
     let (lo, hi) = parts.range;
-    let f = if hi != lo { ((v - lo) / (hi - lo)).clamp(0.0, 1.0) } else { 0.0 };
+    let f = if hi != lo {
+        ((v - lo) / (hi - lo)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let colour = parts.style.tint.at(f);
     match parts.kind {
         GaugeKind::Linear => {
             ui.update_style(parts.fill, |s| {
                 s.width = Length::Percent(f * 100.0);
-                if let (Some(c), GaugeTint::Color(_) | GaugeTint::Bands(_)) = (colour, &parts.style.tint) {
+                if let (Some(c), GaugeTint::Color(_) | GaugeTint::Bands(_)) =
+                    (colour, &parts.style.tint)
+                {
                     s.background = Some(c);
                 }
             });
@@ -420,10 +581,20 @@ fn show(ui: &mut Ui, parts: &Parts, v: f32) {
             });
         }
         GaugeKind::Circular | GaugeKind::Ring => {
-            let (start, sweep) = if parts.kind == GaugeKind::Ring { (0.0, std::f32::consts::TAU) } else { (DIAL_START, DIAL_SWEEP) };
+            let (start, sweep) = if parts.kind == GaugeKind::Ring {
+                (0.0, std::f32::consts::TAU)
+            } else {
+                (DIAL_START, DIAL_SWEEP)
+            };
             ui.set_path_data(parts.fill, arc(start, sweep, f));
             if let Some(n) = parts.needle {
-                ui.set_path_transform(n, crate::transform::Transformation { rotate: start + sweep * f, ..Default::default() });
+                ui.set_path_transform(
+                    n,
+                    crate::transform::Transformation {
+                        rotate: start + sweep * f,
+                        ..Default::default()
+                    },
+                );
             }
             if let Some(c) = colour {
                 ui.update_style(parts.fill, |s| {
@@ -453,11 +624,21 @@ impl Gauge {
             return;
         }
         // From where it shows now: a glide under way, or the last value.
-        let from = ui.env.glides.iter().find(|g| g.parts.fill == self.parts.fill).map_or(self.value, Glide::now);
+        let from = ui
+            .env
+            .glides
+            .iter()
+            .find(|g| g.parts.fill == self.parts.fill)
+            .map_or(self.value, Glide::now);
         ui.env.glides.retain(|g| g.parts.fill != self.parts.fill);
         self.value = v;
         if self.parts.style.animate && !ui.reduce_motion() && from.is_finite() {
-            ui.env.glides.push(Glide { parts: self.parts.clone(), from, to: v, elapsed: 0.0 });
+            ui.env.glides.push(Glide {
+                parts: self.parts.clone(),
+                from,
+                to: v,
+                elapsed: 0.0,
+            });
             ui.env.repaint.set(true);
         } else {
             show(ui, &self.parts, v);
@@ -471,7 +652,11 @@ impl Gauge {
 
     /// The value, to assistive technology: at once, not as it glides.
     fn say(&self, ui: &mut Ui) {
-        let unit = if self.parts.kind == GaugeKind::Ring { "" } else { self.parts.style.unit.as_str() };
+        let unit = if self.parts.kind == GaugeKind::Ring {
+            ""
+        } else {
+            self.parts.style.unit.as_str()
+        };
         let s = ui.semantics_mut(self.node);
         s.value = Some(format_value(self.value, self.parts.style.decimals, unit));
         if let Some(r) = &mut s.range {
@@ -509,11 +694,25 @@ pub(crate) fn step_glides(ui: &mut Ui, dt: f32) -> bool {
 
 /// What a chart of `values` says to assistive technology.
 fn summary(label: &str, points: &[(String, f32)]) -> String {
-    let list: Vec<String> = points.iter().map(|(n, v)| if n.is_empty() { format!("{v}") } else { format!("{n} {v}") }).collect();
+    let list: Vec<String> = points
+        .iter()
+        .map(|(n, v)| {
+            if n.is_empty() {
+                format!("{v}")
+            } else {
+                format!("{n} {v}")
+            }
+        })
+        .collect();
     let max = points.iter().max_by(|a, b| a.1.total_cmp(&b.1));
     let min = points.iter().min_by(|a, b| a.1.total_cmp(&b.1));
     match (max, min) {
-        (Some(hi), Some(lo)) => format!("{label}: {}. Highest {}, lowest {}.", list.join(", "), hi.1, lo.1),
+        (Some(hi), Some(lo)) => format!(
+            "{label}: {}. Highest {}, lowest {}.",
+            list.join(", "),
+            hi.1,
+            lo.1
+        ),
         _ => format!("{label}: no values."),
     }
 }
@@ -525,10 +724,22 @@ fn summary(label: &str, points: &[(String, f32)]) -> String {
 /// reduced motion). To assistive technology a list, named for its values
 /// in order and their highest and lowest, its items each a bar's name and
 /// value, to step through.
-pub fn bar_chart(ui: &mut Ui, parent: NodeId, label: &str, data: &[(&str, f32)], height: f32) -> NodeId {
+pub fn bar_chart(
+    ui: &mut Ui,
+    parent: NodeId,
+    label: &str,
+    data: &[(&str, f32)],
+    height: f32,
+) -> NodeId {
     let points: Vec<(String, f32)> = data.iter().map(|(n, v)| (n.to_string(), *v)).collect();
-    let node = ui.add_box(parent, style! { display: flex; flex-direction: column; gap: 3px; });
-    ui.set_semantics(node, Semantics::new(Role::List).label(summary(label, &points)));
+    let node = ui.add_box(
+        parent,
+        style! { display: flex; flex-direction: column; gap: 3px; },
+    );
+    ui.set_semantics(
+        node,
+        Semantics::new(Role::List).label(summary(label, &points)),
+    );
     let (step, top) = nice_scale(data.iter().map(|d| d.1).fold(0.0f32, f32::max));
     // Room for the axis's values on the left, and a value over the tallest bar.
     let axis = 28.0;
@@ -537,7 +748,10 @@ pub fn bar_chart(ui: &mut Ui, parent: NodeId, label: &str, data: &[(&str, f32)],
     let mut v = 0.0;
     while v <= top + step * 0.01 {
         let y = 14.0 + height * (1.0 - v / top);
-        let line = ui.add_box(plot, style! { position: absolute; right: 0px; height: 1px; });
+        let line = ui.add_box(
+            plot,
+            style! { position: absolute; right: 0px; height: 1px; },
+        );
         ui.update_style(line, |s| {
             s.left = Length::Px(axis);
             s.top = Length::Px(y);
@@ -559,15 +773,29 @@ pub fn bar_chart(ui: &mut Ui, parent: NodeId, label: &str, data: &[(&str, f32)],
     ui.semantics_mut(names).hidden = true;
     for (i, &(name, v)) in data.iter().enumerate() {
         let col = ui.add_box(bars, style! { display: flex; flex-direction: column; align-items: center; gap: 2px; flex-grow: 1; flex-basis: 0px; min-width: 14px; });
-        ui.set_semantics(col, Semantics::new(Role::ListItem).label(format!("{name}, {}", format_value(v, None, ""))));
-        let shown = text_box(ui, col, &format_value(v, None, ""), "font-size: 10px", Token::SecondaryText);
+        ui.set_semantics(
+            col,
+            Semantics::new(Role::ListItem).label(format!("{name}, {}", format_value(v, None, ""))),
+        );
+        let shown = text_box(
+            ui,
+            col,
+            &format_value(v, None, ""),
+            "font-size: 10px",
+            Token::SecondaryText,
+        );
         ui.semantics_mut(shown).hidden = true;
         let bar = ui.add_box(col, style! { width: 100%; border-radius: 3px; });
         ui.token_style(bar, &[("background", Token::Accent)]);
         let h = (v.max(0.0) / top * height).max(1.0);
         ui.update_style(bar, |s| s.height = Length::Px(h));
         // Grown in, one after another.
-        let mut grow = crate::animation::Animation::new(crate::animation::Property::Height, crate::animation::Value::Number(1.0), crate::animation::Value::Number(h), 0.45);
+        let mut grow = crate::animation::Animation::new(
+            crate::animation::Property::Height,
+            crate::animation::Value::Number(1.0),
+            crate::animation::Value::Number(h),
+            0.45,
+        );
         grow.easing = threers_math::easing::Easing::CubicOut;
         grow.delay = 0.04 * i as f32;
         ui.animate(bar, grow);
@@ -582,10 +810,18 @@ pub fn bar_chart(ui: &mut Ui, parent: NodeId, label: &str, data: &[(&str, f32)],
 /// ten, three or four of them), and the scale's top: `top` rounded up to a
 /// step.
 fn nice_scale(top: f32) -> (f32, f32) {
-    let top = if top.is_finite() && top > 0.0 { top } else { 1.0 };
+    let top = if top.is_finite() && top > 0.0 {
+        top
+    } else {
+        1.0
+    };
     let raw = top / 3.0;
     let pow = 10f32.powf(raw.log10().floor());
-    let step = [1.0, 2.0, 2.5, 5.0, 10.0].into_iter().map(|m| m * pow).find(|&s| s >= raw).unwrap_or(10.0 * pow);
+    let step = [1.0, 2.0, 2.5, 5.0, 10.0]
+        .into_iter()
+        .map(|m| m * pow)
+        .find(|&s| s >= raw)
+        .unwrap_or(10.0 * pow);
     (step, (top / step).ceil().max(1.0) * step)
 }
 
@@ -613,7 +849,13 @@ fn over(w: f32, h: f32) -> crate::Style {
 
 /// A line through `values` (left to right, evenly spaced), the area under
 /// it shaded, `size` pixels; small and bare, a sparkline.
-pub fn line_chart(ui: &mut Ui, parent: NodeId, label: &str, values: &[f32], size: (f32, f32)) -> NodeId {
+pub fn line_chart(
+    ui: &mut Ui,
+    parent: NodeId,
+    label: &str,
+    values: &[f32],
+    size: (f32, f32),
+) -> NodeId {
     let (w, h) = size;
     let node = ui.add_box(parent, style! { position: relative; flex-shrink: 0; });
     ui.update_style(node, |s| {
@@ -621,16 +863,25 @@ pub fn line_chart(ui: &mut Ui, parent: NodeId, label: &str, values: &[f32], size
         s.height = Length::Px(h);
     });
     let points: Vec<(String, f32)> = values.iter().map(|v| (String::new(), *v)).collect();
-    ui.set_semantics(node, Semantics::new(Role::Image).label(summary(label, &points)));
+    ui.set_semantics(
+        node,
+        Semantics::new(Role::Image).label(summary(label, &points)),
+    );
     if values.is_empty() {
         return node;
     }
-    let (lo, hi) = values.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+    let (lo, hi) = values
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
     let span = (hi - lo).max(1e-6);
     // In a view box the size of the chart, a little in from its edges.
     let pad = 2.0;
     let at = |i: usize, v: f32| {
-        let x = if values.len() > 1 { pad + (w - 2.0 * pad) * i as f32 / (values.len() - 1) as f32 } else { w / 2.0 };
+        let x = if values.len() > 1 {
+            pad + (w - 2.0 * pad) * i as f32 / (values.len() - 1) as f32
+        } else {
+            w / 2.0
+        };
         (x, pad + (h - 2.0 * pad) * (1.0 - (v - lo) / span))
     };
     let pts: Vec<(f32, f32)> = values.iter().enumerate().map(|(i, &v)| at(i, v)).collect();
@@ -640,12 +891,31 @@ pub fn line_chart(ui: &mut Ui, parent: NodeId, label: &str, values: &[f32], size
     let shade = ui.add_path(node, over(w, h), vec![area], [0.0, 0.0, w, h], None, true);
     ui.token_style(shade, &[("color", Token::Accent)]);
     ui.update_style(shade, |s| s.opacity = 0.18);
-    let stroke = ui.add_path(node, over(w, h), vec![line], [0.0, 0.0, w, h], Some(1.5), false);
+    let stroke = ui.add_path(
+        node,
+        over(w, h),
+        vec![line],
+        [0.0, 0.0, w, h],
+        Some(1.5),
+        false,
+    );
     ui.token_style(stroke, &[("color", Token::Accent)]);
     // The latest value, marked: a disc (a ring as wide as it is round).
     let r = 1.5;
-    let dot = format!("M{:.2} {y_end:.2} A{r} {r} 0 0 1 {:.2} {y_end:.2} A{r} {r} 0 0 1 {:.2} {y_end:.2}", x_end - r, x_end + r, x_end - r);
-    let end = ui.add_path(node, over(w, h), vec![dot], [0.0, 0.0, w, h], Some(2.0 * r), false);
+    let dot = format!(
+        "M{:.2} {y_end:.2} A{r} {r} 0 0 1 {:.2} {y_end:.2} A{r} {r} 0 0 1 {:.2} {y_end:.2}",
+        x_end - r,
+        x_end + r,
+        x_end - r
+    );
+    let end = ui.add_path(
+        node,
+        over(w, h),
+        vec![dot],
+        [0.0, 0.0, w, h],
+        Some(2.0 * r),
+        false,
+    );
     ui.token_style(end, &[("color", Token::Accent)]);
     ui.semantics_mut(end).hidden = true;
     for n in [shade, stroke] {
@@ -668,12 +938,19 @@ fn smooth_line(points: &[(f32, f32)]) -> String {
         return d;
     }
     // Each piece's slope, then each point's tangent.
-    let slope: Vec<f32> = points.windows(2).map(|w| (w[1].1 - w[0].1) / (w[1].0 - w[0].0).max(1e-6)).collect();
+    let slope: Vec<f32> = points
+        .windows(2)
+        .map(|w| (w[1].1 - w[0].1) / (w[1].0 - w[0].0).max(1e-6))
+        .collect();
     let mut m = vec![0.0f32; n];
     m[0] = slope[0];
     m[n - 1] = slope[n - 2];
     for i in 1..n - 1 {
-        m[i] = if slope[i - 1] * slope[i] <= 0.0 { 0.0 } else { (slope[i - 1] + slope[i]) / 2.0 };
+        m[i] = if slope[i - 1] * slope[i] <= 0.0 {
+            0.0
+        } else {
+            (slope[i - 1] + slope[i]) / 2.0
+        };
     }
     for i in 0..n - 1 {
         if slope[i] == 0.0 {
@@ -692,7 +969,13 @@ fn smooth_line(points: &[(f32, f32)]) -> String {
     for i in 0..n - 1 {
         let ((x0, y0), (x1, y1)) = (points[i], points[i + 1]);
         let dx = (x1 - x0) / 3.0;
-        d.push_str(&format!(" C{:.2} {:.2} {:.2} {:.2} {x1:.2} {y1:.2}", x0 + dx, y0 + m[i] * dx, x1 - dx, y1 - m[i + 1] * dx));
+        d.push_str(&format!(
+            " C{:.2} {:.2} {:.2} {:.2} {x1:.2} {y1:.2}",
+            x0 + dx,
+            y0 + m[i] * dx,
+            x1 - dx,
+            y1 - m[i + 1] * dx
+        ));
     }
     d
 }
@@ -704,15 +987,28 @@ mod tests {
 
     #[test]
     fn a_smooth_line_stays_within_its_data() {
-        let pts: Vec<(f32, f32)> = [11.0, 10.5, 10.0, 11.5, 14.0, 17.5, 19.0, 18.0, 16.5, 14.0, 12.5, 12.0].iter().enumerate().map(|(i, &v)| (i as f32 * 20.0, 100.0 - v * 4.0)).collect();
+        let pts: Vec<(f32, f32)> = [
+            11.0, 10.5, 10.0, 11.5, 14.0, 17.5, 19.0, 18.0, 16.5, 14.0, 12.5, 12.0,
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| (i as f32 * 20.0, 100.0 - v * 4.0))
+        .collect();
         let d = smooth_line(&pts);
         assert_eq!(d.matches('C').count(), 11);
         // Every control point between its piece's ends in y: no overshoot.
-        let nums: Vec<f32> = d.split(|c: char| c.is_ascii_alphabetic() || c == ' ').filter(|t| !t.is_empty()).map(|t| t.parse().unwrap()).collect();
+        let nums: Vec<f32> = d
+            .split(|c: char| c.is_ascii_alphabetic() || c == ' ')
+            .filter(|t| !t.is_empty())
+            .map(|t| t.parse().unwrap())
+            .collect();
         for (i, piece) in nums[2..].chunks(6).enumerate() {
             let (ya, yb) = (pts[i].1, pts[i + 1].1);
             let (lo, hi) = (ya.min(yb) - 1e-3, ya.max(yb) + 1e-3);
-            assert!((lo..=hi).contains(&piece[1]) && (lo..=hi).contains(&piece[3]), "piece {i}: {piece:?} outside {ya}..{yb}");
+            assert!(
+                (lo..=hi).contains(&piece[1]) && (lo..=hi).contains(&piece[3]),
+                "piece {i}: {piece:?} outside {ya}..{yb}"
+            );
         }
     }
 
@@ -732,10 +1028,17 @@ mod tests {
         ui.layout(400.0, 100.0, &mut FixedWidthText(7.0));
         let track = ui.rect(ui.parent(bar.fill).unwrap());
         let fill = ui.rect(bar.fill);
-        assert!((fill.width - track.width * 0.25).abs() < 0.5, "{fill:?} of {track:?}");
+        assert!(
+            (fill.width - track.width * 0.25).abs() < 0.5,
+            "{fill:?} of {track:?}"
+        );
         assert_eq!(ui.semantics_mut(bar.node).value.as_deref(), Some("2.5"));
         // The dial's arc: three quarters of the ring is the whole range.
-        assert!(dial_arc(1.0).contains(" 1 1 "), "the long way round: {}", dial_arc(1.0));
+        assert!(
+            dial_arc(1.0).contains(" 1 1 "),
+            "the long way round: {}",
+            dial_arc(1.0)
+        );
         assert!(dial_arc(0.25).contains(" 0 1 "));
         // A whole ring is two halves, closing where it began; none is nothing.
         let full = arc(0.0, std::f32::consts::TAU, 1.0);
@@ -748,14 +1051,33 @@ mod tests {
     fn every_kind_and_tint_shows_its_value() {
         let mut ui = Ui::new();
         let root = ui.root();
-        let kinds = [GaugeKind::Linear, GaugeKind::Marker, GaugeKind::Circular, GaugeKind::Ring];
-        let tints = [GaugeTint::Accent, GaugeTint::Color(RED), GaugeTint::levels(), GaugeTint::heat()];
+        let kinds = [
+            GaugeKind::Linear,
+            GaugeKind::Marker,
+            GaugeKind::Circular,
+            GaugeKind::Ring,
+        ];
+        let tints = [
+            GaugeTint::Accent,
+            GaugeTint::Color(RED),
+            GaugeTint::levels(),
+            GaugeTint::heat(),
+        ];
         let mut gauges = vec![];
         for kind in kinds {
             for tint in &tints {
-                let st = GaugeStyle { tint: tint.clone(), unit: "%".into(), animate: false, ..Default::default() };
+                let st = GaugeStyle {
+                    tint: tint.clone(),
+                    unit: "%".into(),
+                    animate: false,
+                    ..Default::default()
+                };
                 let b = ui.add_box(root, style! { width: 200px; });
-                gauges.push((kind, tint.clone(), gauge_styled(&mut ui, b, "Load", 0.0..=200.0, kind, st)));
+                gauges.push((
+                    kind,
+                    tint.clone(),
+                    gauge_styled(&mut ui, b, "Load", 0.0..=200.0, kind, st),
+                ));
             }
         }
         for (_, _, g) in &mut gauges {
@@ -774,7 +1096,14 @@ mod tests {
                 _ => "180%",
             };
             assert_eq!(readout, want, "{kind:?} {tint:?}");
-            assert_eq!(ui.semantics(g.node).unwrap().value.as_deref(), Some(if *kind == GaugeKind::Ring { "180" } else { "180%" }));
+            assert_eq!(
+                ui.semantics(g.node).unwrap().value.as_deref(),
+                Some(if *kind == GaugeKind::Ring {
+                    "180"
+                } else {
+                    "180%"
+                })
+            );
             // Past 85 %: a level is red.
             if *tint == GaugeTint::levels() {
                 let c = match kind {
@@ -791,13 +1120,25 @@ mod tests {
         let bar = &gauges[3].2;
         let inner = bar.parts.inner.unwrap();
         let track = ui.rect(ui.parent(bar.fill).unwrap());
-        assert!((ui.rect(inner).width - track.width).abs() < 0.5, "{:?} {track:?}", ui.rect(inner));
+        assert!(
+            (ui.rect(inner).width - track.width).abs() < 0.5,
+            "{:?} {track:?}",
+            ui.rect(inner)
+        );
         // A needle points at the value: 90 % of the way round the dial.
-        let st = GaugeStyle { needle: true, ticks: 10, animate: false, ..Default::default() };
+        let st = GaugeStyle {
+            needle: true,
+            ticks: 10,
+            animate: false,
+            ..Default::default()
+        };
         let mut speedo = gauge_styled(&mut ui, root, "Speed", 0.0..=200.0, GaugeKind::Circular, st);
         speedo.set(&mut ui, 180.0);
         let turn = ui.path_transform(speedo.parts.needle.unwrap()).rotate;
-        assert!((turn - (DIAL_START + DIAL_SWEEP * 0.9)).abs() < 1e-5, "{turn}");
+        assert!(
+            (turn - (DIAL_START + DIAL_SWEEP * 0.9)).abs() < 1e-5,
+            "{turn}"
+        );
         // The heat at 90 % is between amber and red.
         let c = GaugeTint::heat().at(0.9).unwrap();
         assert!(c[0] > AMBER[0] && c[1] < AMBER[1] && c[1] > RED[1], "{c:?}");
@@ -816,7 +1157,11 @@ mod tests {
         g.set(&mut ui, 80.0);
         assert!(ui.needs_frame());
         assert_eq!(g.value(), 80.0, "the value at once");
-        assert_eq!(ui.semantics(g.node).unwrap().value.as_deref(), Some("80"), "and what is said");
+        assert_eq!(
+            ui.semantics(g.node).unwrap().value.as_deref(),
+            Some("80"),
+            "and what is said"
+        );
         ui.step(0.08);
         let mid = shown(&ui);
         assert!(mid > 0.0 && mid < 80.0, "on its way: {mid}");
@@ -839,7 +1184,13 @@ mod tests {
         let bars = bar_chart(&mut ui, root, "Steps", &[("Mon", 4.0), ("Tue", 8.0)], 80.0);
         let spark = line_chart(&mut ui, root, "Price", &[3.0, 1.0, 4.0, 1.5], (120.0, 30.0));
         ui.layout(400.0, 300.0, &mut FixedWidthText(7.0));
-        let label = |n| ui.accessibility_tree().into_iter().find(|a| a.id == n).unwrap().name;
+        let label = |n| {
+            ui.accessibility_tree()
+                .into_iter()
+                .find(|a| a.id == n)
+                .unwrap()
+                .name
+        };
         assert_eq!(label(bars), "Steps: Mon 4, Tue 8. Highest 8, lowest 4.");
         assert_eq!(label(spark), "Price: 3, 1, 4, 1.5. Highest 4, lowest 1.");
         // The bars grown in, the taller twice the shorter, on a scale
@@ -848,8 +1199,15 @@ mod tests {
             ui.step(0.05);
         }
         ui.layout(400.0, 300.0, &mut FixedWidthText(7.0));
-        let items: Vec<_> = ui.accessibility_tree().into_iter().filter(|a| a.role == Role::ListItem).collect();
-        assert_eq!(items.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Mon, 4", "Tue, 8"]);
+        let items: Vec<_> = ui
+            .accessibility_tree()
+            .into_iter()
+            .filter(|a| a.role == Role::ListItem)
+            .collect();
+        assert_eq!(
+            items.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(),
+            ["Mon, 4", "Tue, 8"]
+        );
         let h = |c: NodeId| ui.rect(ui.children(c)[1]).height;
         assert_eq!((h(items[0].id), h(items[1].id)), (32.0, 64.0));
         assert_eq!(nice_scale(8.0), (5.0, 10.0));

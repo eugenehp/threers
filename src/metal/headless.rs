@@ -127,6 +127,10 @@ pub struct MetalHeadlessRenderer {
     /// Previous frame's readback, returned on the next call.
     pending: Option<PendingMetalReadback>,
     staging_bytes: usize,
+    /// [`copy_into`](Self::copy_into)'s event, made on first use, and the
+    /// frames it has signalled.
+    copy_event: Option<Owned>,
+    copy_count: u64,
 }
 
 impl MetalHeadlessRenderer {
@@ -180,6 +184,8 @@ impl MetalHeadlessRenderer {
             staging_pool: Vec::new(),
             pending: None,
             staging_bytes: 0,
+            copy_event: None,
+            copy_count: 0,
         })
     }
 
@@ -493,6 +499,50 @@ impl MetalHeadlessRenderer {
             Some(p) => unsafe { crate::metal::device::wait_until_completed(p.cmd.id()) },
             None => Ok(()),
         }
+    }
+
+    /// Copy the frame just drawn into `texture`'s first level (same size
+    /// and format: a
+    /// texture someone else shows — RealityKit's `LowLevelTexture`), the
+    /// copy encoded into `command_buffer`, theirs, on the same device: this
+    /// renderer's frame is waited for on the GPU (a shared event), as
+    /// theirs runs on another queue.
+    ///
+    /// # Safety
+    /// `texture` must be a live `MTLTexture` and `command_buffer` a live,
+    /// uncommitted `MTLCommandBuffer`, both on this renderer's device.
+    pub unsafe fn copy_into(&mut self, texture: super::objc::Id, command_buffer: super::objc::Id) -> Result<(), MetalError> {
+        let _pool = AutoreleasePool::new();
+        // the queue runs in order: an event signalled after the frame is
+        // the frame done; their buffer waits for it on the GPU, so neither
+        // side's CPU stalls
+        let event = self.copy_event.get_or_insert_with(|| unsafe { Owned::from_retained(msg0(self.device.device_id(), sel!("newSharedEvent"))) }.expect("MTLSharedEvent")).id();
+        self.copy_count += 1;
+        let n = self.copy_count;
+        let signal = self.device.command_buffer();
+        unsafe {
+            let _: () = super::objc::msg2(signal, sel!("encodeSignalEvent:value:"), event, n);
+            let _: () = msg0(signal, sel!("commit"));
+            let _: () = super::objc::msg2(command_buffer, sel!("encodeWaitForEvent:value:"), event, n);
+            let blit: super::objc::Id = msg0(command_buffer, sel!("blitCommandEncoder"));
+            // into its first level: it may carry mips (made from it after)
+            let (w, h) = (self.export_w as NSUInteger, self.export_h as NSUInteger);
+            let _: () = super::objc::msg9(
+                blit,
+                sel!("copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:"),
+                self.target.color_texture(),
+                0 as NSUInteger,
+                0 as NSUInteger,
+                MTLOrigin::default(),
+                MTLSize { width: w, height: h, depth: 1 },
+                texture,
+                0 as NSUInteger,
+                0 as NSUInteger,
+                MTLOrigin::default(),
+            );
+            let _: () = msg0(blit, sel!("endEncoding"));
+        }
+        Ok(())
     }
 
     /// Drop a queued frame unread.

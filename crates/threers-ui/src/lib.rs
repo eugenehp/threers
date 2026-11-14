@@ -58,6 +58,10 @@
 //!   `on_click_outside` closes popups.
 //! - **Native accessibility:** `a11y_accesskit`, with the `accesskit`
 //!   feature.
+//! - **Tailwind:** [`tailwind`] reads utility classes (`"flex gap-2 p-4
+//!   bg-blue-500 hover:bg-blue-600 md:flex-row hover:rotate-y-12"`) into
+//!   styles, stacking state and breakpoint styles, and 3D transforms, with
+//!   Tailwind's theme, shadcn/ui's, or your own ([`Ui::tw`], [`tw`]).
 //!
 //! ```
 //! use threers_ui::{FlexDirection, Length, Style, Ui};
@@ -74,110 +78,115 @@
 //! ```
 
 pub mod a11y;
-pub mod a11y_core;
-pub mod anchors;
 #[cfg(feature = "accesskit")]
 pub mod a11y_accesskit;
+pub mod a11y_core;
 #[cfg(target_arch = "wasm32")]
 pub mod a11y_dom;
+pub mod anchors;
 pub mod anim;
 pub mod animation;
+pub mod binding;
+pub mod button;
+pub mod candle;
 #[cfg(target_arch = "wasm32")]
 pub mod canvas;
+pub mod charts;
 pub mod code;
 pub mod components;
+pub mod content_transition;
 pub mod controls;
 pub mod css;
 pub mod damage;
+pub mod debug_overlay;
+pub mod depth;
+pub mod environment;
+pub mod fits;
+pub mod focus_state;
+pub mod globals;
+pub mod i18n;
 pub mod image;
 pub mod ime;
-pub mod input;
-pub mod globals;
-pub mod environment;
-pub mod transitions;
-pub mod binding;
-pub mod preview;
-pub mod view;
-pub mod fits;
-pub mod matched;
-pub mod button;
-pub mod focus_state;
-pub mod depth;
-pub mod springs;
-pub mod model3d;
-pub mod jobs;
-pub mod material;
-pub mod content_transition;
-pub mod keyframes;
-pub mod scroll_transition;
-pub mod prelude;
-pub mod search;
-pub mod spatial;
-pub mod theme;
-pub mod svg;
-pub mod native;
-pub mod undo;
-pub mod candle;
-pub mod charts;
-pub mod table;
-pub mod virtual_keyboard;
-pub mod i18n;
-pub mod storage;
-pub mod preferences;
-pub mod nav_stack;
-pub mod sheet;
-pub mod pickers;
 pub mod indicators;
-pub mod motion;
-pub mod patch;
-pub mod solid;
-pub mod scroll_snap;
-pub mod keymap;
-pub mod model;
-pub mod palette;
-pub mod split;
-pub mod prompt;
-pub mod notifications;
-pub mod navigation;
-pub mod layers;
-pub mod legibility;
-pub mod menu;
-mod layout;
-mod paint;
-pub mod debug_overlay;
+pub mod input;
 pub mod inspector;
+pub mod jobs;
+pub mod keyframes;
+pub mod keymap;
+pub mod layers;
+mod layout;
+pub mod legibility;
+pub mod matched;
+pub mod material;
+pub mod menu;
+pub mod model;
+pub mod model3d;
+pub mod motion;
+pub mod native;
+pub mod nav_stack;
+pub mod navigation;
+pub mod notifications;
+mod paint;
+pub mod palette;
+pub mod patch;
+pub mod pickers;
+pub mod preferences;
+pub mod prelude;
+pub mod preview;
+pub mod prompt;
 pub mod region;
 pub mod responsive;
 pub mod rich_text;
-pub mod state;
-pub mod states;
-pub mod testing;
 pub mod scene;
+pub mod scroll_snap;
+pub mod scroll_transition;
+pub mod scrolling;
+pub mod search;
 pub mod shader;
 pub mod shader_lib;
-pub mod scrolling;
+pub mod sheet;
+pub mod solid;
+pub mod spatial;
+pub mod split;
+pub mod springs;
+pub mod state;
+pub mod states;
+pub mod storage;
+mod style;
+pub mod svg;
+pub mod table;
+pub mod tailwind;
+pub mod testing;
+mod text_area;
 pub mod text_cache;
+#[cfg(feature = "text-touch")]
+pub mod text_editing;
+mod text_field;
 pub mod text_hit;
 #[cfg(feature = "text-touch")]
 pub mod text_touch;
-#[cfg(feature = "text-touch")]
-pub mod text_editing;
+pub mod theme;
 pub mod transform;
-pub mod virtual_list;
-mod style;
-mod text_area;
-mod text_field;
+pub mod transitions;
 mod tree;
+pub mod undo;
+pub mod view;
+pub mod virtual_keyboard;
+pub mod virtual_list;
 
 pub use a11y::{contrast_ratio, AccessNode, ContrastIssue, Role, Semantics};
 pub use layout::{layout_unit, FixedWidthText, TextMeasure};
 pub use paint::{
-    circle_path, parse_circle, underline_position, ArcShape, Painter, TextStyle, WAVE_AMPLITUDE, WAVE_PERIOD,
+    circle_path, parse_circle, underline_position, ArcShape, Painter, TextStyle, WAVE_AMPLITUDE,
+    WAVE_PERIOD,
 };
 pub use style::{
-    gradient_at, AlignContent, AlignItems, BlendMode, BoxShadow, BoxSizing, ClipShape, Cursor, GradientShape, FlexWrap, Display, GridPlacement, Scrollbar, ScrollbarVisibility, Track, UserSelect, TrackSize, Edges, FlexDirection, FontWeight, JustifyContent, TextAlign,
-    Length, ObjectFit, Position, Rgba, Style,
+    gradient_at, AlignContent, AlignItems, BlendMode, BoxShadow, BoxSizing, ClipShape, Cursor,
+    Display, Edges, FlexDirection, FlexWrap, FontWeight, GradientShape, GridPlacement,
+    JustifyContent, Length, ObjectFit, Position, Rgba, Scrollbar, ScrollbarVisibility, Style,
+    TextAlign, Track, TrackSize, UserSelect,
 };
+pub use tailwind::tw;
 pub use text_area::TextArea;
 pub use text_field::{FieldKey, KeyModifiers, TextField};
 pub use tree::{NodeId, NodeKind, Rect, Ui};

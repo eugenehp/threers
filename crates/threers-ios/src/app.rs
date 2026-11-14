@@ -10,8 +10,8 @@
 //! put on the panel as a texture. An app has no GPU code of its own.
 
 use threers::math::{Matrix4, Vector3};
-use threers::ui::Ui;
 use threers::ui::input::Event;
+use threers::ui::Ui;
 use threers::xr::Frame;
 use threers::{PerspectiveCamera, Scene, ToneMapping};
 
@@ -74,7 +74,14 @@ pub struct PanelSpec {
 
 impl Default for PanelSpec {
     fn default() -> Self {
-        PanelSpec { width: 640.0, height: 400.0, metres_per_pixel: 0.0008, distance: 0.6, drop: 0.3, side: 0.0 }
+        PanelSpec {
+            width: 640.0,
+            height: 400.0,
+            metres_per_pixel: 0.0008,
+            distance: 0.6,
+            drop: 0.3,
+            side: 0.0,
+        }
     }
 }
 
@@ -98,6 +105,29 @@ pub trait App: Sized + 'static {
     /// scene's world.
     fn origin(&self) -> Matrix4 {
         Matrix4::identity()
+    }
+
+    /// A drag in the volume, turning the model `radians` about the
+    /// vertical: `true` when the app turned it itself (about its own
+    /// upright, before any tip toward the viewer, as an orbit about it
+    /// would), else the volume turns the whole scene about the room's
+    /// vertical — which shows a tipped model rolled.
+    fn turn(&mut self, _radians: f32) -> bool {
+        false
+    }
+
+    /// Whether [`focus`](Self::focus) is a point the app chose to frame (a
+    /// scene's, a double tap's) rather than its model's resting place: the
+    /// volume's quad then looks there, not at the middle of what is shown.
+    fn framing(&self) -> bool {
+        false
+    }
+
+    /// How far in the user has zoomed (1: not at all): when it frames no
+    /// point of its own, the volume's quad fits what is shown, this much
+    /// closer.
+    fn zoom(&self) -> f32 {
+        1.0
     }
 
     /// What the window's camera frames, and how big it is, once known:

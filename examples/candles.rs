@@ -33,19 +33,29 @@ fn room() -> (Scene, Vec<CandleHandle>) {
     // Something to cast a shadow between them.
     let mut cup = Object3D::mesh(Mesh::new(
         CylinderGeometry::new(0.035, 0.03, 0.09, 32, 1, false, 0.0, std::f32::consts::TAU),
-        StandardMaterial::new(Color::from_hex(0x2d5d7b)).with_roughness(0.3).into(),
+        StandardMaterial::new(Color::from_hex(0x2d5d7b))
+            .with_roughness(0.3)
+            .into(),
     ));
     cup.position = Vector3::new(0.0, 0.795, -0.12);
     cup.cast_shadow = true;
     cup.receive_shadow = true;
     scene.add(cup);
-    let simple = Candle::new(FlameStyle::Simple).with_seed(1.0).add_to(&mut scene, Vector3::new(-0.2, 0.75, 0.0));
-    let realistic = Candle::new(FlameStyle::Realistic).with_seed(2.0).add_to(&mut scene, Vector3::new(0.2, 0.75, 0.0));
+    let simple = Candle::new(FlameStyle::Simple)
+        .with_seed(1.0)
+        .add_to(&mut scene, Vector3::new(-0.2, 0.75, 0.0));
+    let realistic = Candle::new(FlameStyle::Realistic)
+        .with_seed(2.0)
+        .add_to(&mut scene, Vector3::new(0.2, 0.75, 0.0));
     (scene, vec![simple, realistic])
 }
 
 fn render(scene: &mut Scene, camera: &PerspectiveCamera, w: u32, h: u32) -> Vec<u8> {
-    let mut hr = HeadlessRenderer::builder().size(w, h).color_format(FORMAT).build().expect("a GPU adapter");
+    let mut hr = HeadlessRenderer::builder()
+        .size(w, h)
+        .color_format(FORMAT)
+        .build()
+        .expect("a GPU adapter");
     hr.set_msaa(4);
     hr.renderer().set_tone_mapping(ToneMapping::AcesFilmic, 1.0);
     let mut composer = EffectComposer::with_size(w, h);
@@ -67,17 +77,28 @@ fn main() {
     let mut camera = PerspectiveCamera::new(35.0, w as f32 / h as f32, 0.02, 20.0);
     camera.position = Vector3::new(0.0, 1.05, 0.75);
     camera.look_at(Vector3::new(0.0, 0.86, 0.0));
-    std::fs::write("out/candles.png", encode_png(w, h, &render(&mut scene, &camera, w, h))).unwrap();
+    std::fs::write(
+        "out/candles.png",
+        encode_png(w, h, &render(&mut scene, &camera, w, h)),
+    )
+    .unwrap();
     println!("wrote out/candles.png");
     for (name, x) in [("simple", -0.2), ("realistic", 0.2)] {
         let mut close = PerspectiveCamera::new(30.0, 1.0, 0.01, 10.0);
         close.position = Vector3::new(x, 0.9, 0.16);
         close.look_at(Vector3::new(x, 0.89, 0.0));
         let path = format!("out/candle_{name}.png");
-        std::fs::write(&path, encode_png(720, 720, &render(&mut scene, &close, 720, 720))).unwrap();
+        std::fs::write(
+            &path,
+            encode_png(720, 720, &render(&mut scene, &close, 720, 720)),
+        )
+        .unwrap();
         println!("wrote {path}");
     }
-    let frames: usize = std::env::var("CANDLE_FRAMES").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let frames: usize = std::env::var("CANDLE_FRAMES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
     if frames > 0 {
         std::fs::create_dir_all("out/candle_frames").unwrap();
         let mut close = PerspectiveCamera::new(30.0, 1.0, 0.01, 10.0);
@@ -88,7 +109,11 @@ fn main() {
                 c.update(&mut scene, time + i as f32 / 30.0);
             }
             let path = format!("out/candle_frames/{i:03}.png");
-            std::fs::write(&path, encode_png(360, 360, &render(&mut scene, &close, 360, 360))).unwrap();
+            std::fs::write(
+                &path,
+                encode_png(360, 360, &render(&mut scene, &close, 360, 360)),
+            )
+            .unwrap();
         }
         println!("wrote {frames} frames to out/candle_frames/");
     }

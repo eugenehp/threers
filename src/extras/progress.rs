@@ -50,12 +50,20 @@ impl Palette3d {
 
     /// From three `0xRRGGBB` sRGB colours.
     pub fn hex(from: u32, mid: u32, to: u32) -> Palette3d {
-        Palette3d([Color::from_hex(from), Color::from_hex(mid), Color::from_hex(to)])
+        Palette3d([
+            Color::from_hex(from),
+            Color::from_hex(mid),
+            Color::from_hex(to),
+        ])
     }
 
     /// From one colour to another, through their mix.
     pub fn two(from: Color, to: Color) -> Palette3d {
-        let mid = Color { r: (from.r + to.r) * 0.5, g: (from.g + to.g) * 0.5, b: (from.b + to.b) * 0.5 };
+        let mid = Color {
+            r: (from.r + to.r) * 0.5,
+            g: (from.g + to.g) * 0.5,
+            b: (from.b + to.b) * 0.5,
+        };
         Palette3d([from, mid, to])
     }
 }
@@ -63,7 +71,11 @@ impl Palette3d {
 /// `0xRRGGBB` decoded to linear, at compile time (the sRGB curve as
 /// [`Color::from_hex`] has it, to within a part in a thousand).
 const fn hex(c: u32) -> Color {
-    Color { r: lin(((c >> 16) & 255) as f32 / 255.0), g: lin(((c >> 8) & 255) as f32 / 255.0), b: lin((c & 255) as f32 / 255.0) }
+    Color {
+        r: lin(((c >> 16) & 255) as f32 / 255.0),
+        g: lin(((c >> 8) & 255) as f32 / 255.0),
+        b: lin((c & 255) as f32 / 255.0),
+    }
 }
 
 const fn lin(v: f32) -> f32 {
@@ -118,7 +130,16 @@ impl Indicator3d {
     }
 
     fn new(shape: Shape3d) -> Self {
-        Self { shape, palette: Palette3d::AURORA, glow: 2.5, intensity: 1.0, shimmer: false, spin: 0.0, bob: 0.0, steps: 64 }
+        Self {
+            shape,
+            palette: Palette3d::AURORA,
+            glow: 2.5,
+            intensity: 1.0,
+            shimmer: false,
+            spin: 0.0,
+            bob: 0.0,
+            steps: 64,
+        }
     }
 
     pub fn palette(mut self, palette: Palette3d) -> Self {
@@ -166,11 +187,21 @@ impl Indicator3d {
             Shape3d::Bar { length, radius } => {
                 let half = (length * 0.5 - radius).max(0.0);
                 let e = radius + reach;
-                (0.0, half, radius, Vector3::new((half + e) * 2.0, e * 2.0, e * 2.0))
+                (
+                    0.0,
+                    half,
+                    radius,
+                    Vector3::new((half + e) * 2.0, e * 2.0, e * 2.0),
+                )
             }
             Shape3d::Ring { radius, tube } => {
                 let e = radius + tube + reach;
-                (1.0, radius, tube, Vector3::new(e * 2.0, e * 2.0, (tube + reach) * 2.0))
+                (
+                    1.0,
+                    radius,
+                    tube,
+                    Vector3::new(e * 2.0, e * 2.0, (tube + reach) * 2.0),
+                )
             }
         };
         let [c0, c1, c2] = self.palette.0;
@@ -182,12 +213,26 @@ impl Indicator3d {
         data[4] = [c2.r, c2.g, c2.b, 0.0];
         data[5] = [size.x * 0.5, size.y * 0.5, size.z * 0.5, self.steps as f32];
         data[6] = [self.intensity, self.glow.clamp(0.0, 1.0), 0.0, 0.0];
-        let mut material = ShaderMaterial::new(FRAGMENT).with_data(data).with_transparent(true).with_depth_write(false);
+        let mut material = ShaderMaterial::new(FRAGMENT)
+            .with_data(data)
+            .with_transparent(true)
+            .with_depth_write(false);
         material.render_state.blending = Blending::Additive;
-        let mut object = Object3D::mesh(Mesh::new(BoxGeometry::new(size.x, size.y, size.z), Material::Shader(material.clone())));
+        let mut object = Object3D::mesh(Mesh::new(
+            BoxGeometry::new(size.x, size.y, size.z),
+            Material::Shader(material.clone()),
+        ));
         object.position = position;
         let id = scene.add(object);
-        IndicatorHandle3d { id, material, at: position, spin: self.spin, bob: self.bob, shimmer: self.shimmer, value: std::cell::Cell::new(Some(0.0)) }
+        IndicatorHandle3d {
+            id,
+            material,
+            at: position,
+            spin: self.spin,
+            bob: self.bob,
+            shimmer: self.shimmer,
+            value: std::cell::Cell::new(Some(0.0)),
+        }
     }
 }
 
@@ -219,12 +264,21 @@ impl IndicatorHandle3d {
     /// The liquid, the shimmer, and the spin and bob, at `time` seconds.
     pub fn update(&self, scene: &mut Scene, time: f32) {
         let v = self.value.get();
-        self.material.set_uniform(0, [time, v.unwrap_or(0.0), if v.is_none() { 1.0 } else { 0.0 }, if self.shimmer { 1.0 } else { 0.0 }]);
+        self.material.set_uniform(
+            0,
+            [
+                time,
+                v.unwrap_or(0.0),
+                if v.is_none() { 1.0 } else { 0.0 },
+                if self.shimmer { 1.0 } else { 0.0 },
+            ],
+        );
         if (self.spin != 0.0 || self.bob != 0.0)
             && let Some(o) = scene.get_mut(self.id)
         {
             if self.spin != 0.0 {
-                o.quaternion = Euler::new(0.0, time * self.spin * std::f32::consts::TAU, 0.0).to_quaternion();
+                o.quaternion =
+                    Euler::new(0.0, time * self.spin * std::f32::consts::TAU, 0.0).to_quaternion();
             }
             o.position = self.at + Vector3::new(0.0, (time * 1.7).sin() * self.bob, 0.0);
         }
@@ -477,7 +531,10 @@ mod tests {
 
     #[test]
     fn the_palette_constants_match_color_from_hex() {
-        for (c, h) in [(Palette3d::EMBER.0[1], 0xff8a00), (Palette3d::AURORA.0[2], 0xa855f7)] {
+        for (c, h) in [
+            (Palette3d::EMBER.0[1], 0xff8a00),
+            (Palette3d::AURORA.0[2], 0xa855f7),
+        ] {
             let want = Color::from_hex(h);
             for (a, b) in [(c.r, want.r), (c.g, want.g), (c.b, want.b)] {
                 assert!((a - b).abs() < 1e-3, "{a} vs {b}");
@@ -488,7 +545,9 @@ mod tests {
     #[test]
     fn it_is_added_as_one_box_and_takes_its_value() {
         let mut scene = Scene::new();
-        let h = Indicator3d::bar(1.0, 0.05).spin(0.25).add_to(&mut scene, Vector3::new(0.0, 1.0, 0.0));
+        let h = Indicator3d::bar(1.0, 0.05)
+            .spin(0.25)
+            .add_to(&mut scene, Vector3::new(0.0, 1.0, 0.0));
         h.set(Some(1.5));
         assert_eq!(h.value(), Some(1.0));
         h.set(None);

@@ -66,12 +66,24 @@ enum Kind {
 impl<S: 'static> El<S> {
     /// A box styled by `css` (declarations, as `style!` takes them).
     pub fn div(css: &str) -> Self {
-        Self { kind: Kind::Box, css: css.to_owned(), key: None, semantics: None, hover: None, tokens: vec![], on_click: None, children: vec![] }
+        Self {
+            kind: Kind::Box,
+            css: css.to_owned(),
+            key: None,
+            semantics: None,
+            hover: None,
+            tokens: vec![],
+            on_click: None,
+            children: vec![],
+        }
     }
 
     /// Text, styled as the box it is in.
     pub fn label(text: impl Into<String>) -> Self {
-        Self { kind: Kind::Text(text.into()), ..Self::div("") }
+        Self {
+            kind: Kind::Text(text.into()),
+            ..Self::div("")
+        }
     }
 
     /// Who it is among its siblings, kept as they come and go and move
@@ -170,7 +182,12 @@ impl<S: 'static> View<S> {
     /// A box under `parent`, styled by `css`, to hold what is described.
     pub fn new(ui: &mut Ui, parent: NodeId, css: &str) -> Self {
         let root = ui.add_box(parent, style_of(css));
-        Self { root, built: vec![], handlers: Rc::default(), reads: None }
+        Self {
+            root,
+            built: vec![],
+            handlers: Rc::default(),
+            reads: None,
+        }
     }
 
     pub fn root(&self) -> NodeId {
@@ -188,8 +205,17 @@ impl<S: 'static> View<S> {
     /// are tracked, so a view built from models costs nothing until they
     /// change. One that reads no model is described every time. Returns
     /// whether it was.
-    pub fn update_tracked(&mut self, ui: &mut Ui, input: &mut Input<S>, describe: impl FnOnce() -> Vec<El<S>>) -> bool {
-        if self.reads.as_ref().is_some_and(|r| !r.is_empty() && !r.changed()) {
+    pub fn update_tracked(
+        &mut self,
+        ui: &mut Ui,
+        input: &mut Input<S>,
+        describe: impl FnOnce() -> Vec<El<S>>,
+    ) -> bool {
+        if self
+            .reads
+            .as_ref()
+            .is_some_and(|r| !r.is_empty() && !r.changed())
+        {
             return false;
         }
         let (children, reads) = crate::model::track(describe);
@@ -214,16 +240,28 @@ impl<S: 'static> View<S> {
         self.handlers.borrow_mut().retain(|n, _| nodes.contains(n));
     }
 
-    fn reconcile(&mut self, ui: &mut Ui, input: &mut Input<S>, parent: NodeId, old: Vec<Built>, new: Vec<El<S>>) -> Vec<Built> {
+    fn reconcile(
+        &mut self,
+        ui: &mut Ui,
+        input: &mut Input<S>,
+        parent: NodeId,
+        old: Vec<Built>,
+        new: Vec<El<S>>,
+    ) -> Vec<Built> {
         let mut old: Vec<Option<Built>> = old.into_iter().map(Some).collect();
         let mut out = Vec::with_capacity(new.len());
         for (i, el) in new.into_iter().enumerate() {
             // By key, else the next unkeyed one of the same kind in place.
             let found = match &el.key {
-                Some(k) => old.iter().position(|b| b.as_ref().is_some_and(|b| b.key.as_ref() == Some(k))),
-                None => old
+                Some(k) => old
                     .iter()
-                    .position(|b| b.as_ref().is_some_and(|b| b.key.is_none() && std::mem::discriminant(&b.kind) == std::mem::discriminant(&el.kind))),
+                    .position(|b| b.as_ref().is_some_and(|b| b.key.as_ref() == Some(k))),
+                None => old.iter().position(|b| {
+                    b.as_ref().is_some_and(|b| {
+                        b.key.is_none()
+                            && std::mem::discriminant(&b.kind) == std::mem::discriminant(&el.kind)
+                    })
+                }),
             };
             let built = match found.and_then(|f| old[f].take()) {
                 Some(b) => self.patch(ui, input, b, el),

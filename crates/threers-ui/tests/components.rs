@@ -21,11 +21,17 @@ fn layout(ui: &mut Ui) {
 }
 
 fn node(ui: &Ui, id: NodeId) -> AccessNode {
-    ui.accessibility_tree().into_iter().find(|a| a.id == id).expect("in the accessibility tree")
+    ui.accessibility_tree()
+        .into_iter()
+        .find(|a| a.id == id)
+        .expect("in the accessibility tree")
 }
 
 fn with_role(ui: &Ui, role: Role) -> Vec<AccessNode> {
-    ui.accessibility_tree().into_iter().filter(|a| a.role == role).collect()
+    ui.accessibility_tree()
+        .into_iter()
+        .filter(|a| a.role == role)
+        .collect()
 }
 
 fn centre(ui: &Ui, id: NodeId) -> (f32, f32) {
@@ -57,10 +63,20 @@ fn a_switch_toggles_by_click_and_keys_and_says_so() {
     let mut input: Input<Log> = Input::new();
     let mut log = vec![];
     let root = ui.root();
-    let s = switch(&mut ui, &mut input, &log, root, "Wi-Fi", Binding::local(false).on_set(|log: &mut Log, on| log.push(format!("{on}"))));
+    let s = switch(
+        &mut ui,
+        &mut input,
+        &log,
+        root,
+        "Wi-Fi",
+        Binding::local(false).on_set(|log: &mut Log, on| log.push(format!("{on}"))),
+    );
     layout(&mut ui);
     let a = node(&ui, s);
-    assert_eq!((a.role, a.name.as_str(), a.checked, a.focusable), (Role::Switch, "Wi-Fi", Some(false), true));
+    assert_eq!(
+        (a.role, a.name.as_str(), a.checked, a.focusable),
+        (Role::Switch, "Wi-Fi", Some(false), true)
+    );
     tap(&mut input, &mut ui, &mut log, s);
     assert_eq!(node(&ui, s).checked, Some(true));
     input.set_focus(&mut ui, &mut log, Some(s));
@@ -75,7 +91,14 @@ fn a_disclosure_shows_and_hides_its_body() {
     let mut input: Input<Log> = Input::new();
     let mut log = vec![];
     let root = ui.root();
-    let (head, body) = disclosure(&mut ui, &mut input, &log, root, "Advanced", Binding::local(false));
+    let (head, body) = disclosure(
+        &mut ui,
+        &mut input,
+        &log,
+        root,
+        "Advanced",
+        Binding::local(false),
+    );
     ui.add_text(body, "hidden things");
     layout(&mut ui);
     assert_eq!(ui.style(body).display, Display::None);
@@ -93,13 +116,20 @@ fn a_disclosure_shows_and_hides_its_body() {
     assert_ne!(ui.style(body).display, Display::None);
     assert_eq!(node(&ui, head).expanded, Some(true));
     // It unfolds from its top edge, then lies flat.
-    assert!(ui.transform3d(body).is_some_and(|t| t.rotate_x < -1.0), "folded to start with");
+    assert!(
+        ui.transform3d(body).is_some_and(|t| t.rotate_x < -1.0),
+        "folded to start with"
+    );
     settle(&mut input, &mut ui, &mut log, &mut t);
     assert!(ui.transform3d(body).is_none(), "flat once open");
     input.set_focus(&mut ui, &mut log, Some(head));
     keys(&mut input, &mut ui, &mut log, "enter");
     assert_eq!(node(&ui, head).expanded, Some(false));
-    assert_ne!(ui.style(body).display, Display::None, "still there while it folds");
+    assert_ne!(
+        ui.style(body).display,
+        Display::None,
+        "still there while it folds"
+    );
     settle(&mut input, &mut ui, &mut log, &mut t);
     assert_eq!(ui.style(body).display, Display::None);
 }
@@ -110,12 +140,29 @@ fn tabs_select_by_click_and_arrows_with_one_tab_stop() {
     let mut input: Input<Log> = Input::new();
     let mut log = vec![];
     let root = ui.root();
-    let t = tabs(&mut ui, &mut input, &log, root, &["One", "Two", "Three"], Binding::local(0).on_set(|log: &mut Log, i| log.push(i.to_string())));
+    let t = tabs(
+        &mut ui,
+        &mut input,
+        &log,
+        root,
+        &["One", "Two", "Three"],
+        Binding::local(0).on_set(|log: &mut Log, i| log.push(i.to_string())),
+    );
     layout(&mut ui);
     assert_eq!(node(&ui, t.list).role, Role::TabList);
-    let selected = |ui: &Ui| with_role(ui, Role::Tab).iter().map(|a| a.selected == Some(true)).collect::<Vec<_>>();
+    let selected = |ui: &Ui| {
+        with_role(ui, Role::Tab)
+            .iter()
+            .map(|a| a.selected == Some(true))
+            .collect::<Vec<_>>()
+    };
     assert_eq!(selected(&ui), [true, false, false]);
-    let shown = |ui: &Ui| t.panels.iter().map(|&p| ui.style(p).display != Display::None).collect::<Vec<_>>();
+    let shown = |ui: &Ui| {
+        t.panels
+            .iter()
+            .map(|&p| ui.style(p).display != Display::None)
+            .collect::<Vec<_>>()
+    };
     assert_eq!(shown(&ui), [true, false, false]);
     // Only the selected tab is in the tab order.
     assert_eq!(ui.focus_order(), [t.tabs[0]]);
@@ -152,18 +199,31 @@ fn a_popover_takes_focus_and_gives_it_back_on_escape_or_outside() {
     let mut log = vec![];
     let root = ui.root();
     let button = ui.add_box(root, style! { width: 80px; height: 24px; });
-    ui.set_semantics(button, threers_ui::Semantics::new(Role::Button).label("Open"));
+    ui.set_semantics(
+        button,
+        threers_ui::Semantics::new(Role::Button).label("Open"),
+    );
     ui.add_box(root, style! { height: 300px; });
     layout(&mut ui);
     input.set_focus(&mut ui, &mut log, Some(button));
-    let p = popover(&mut ui, &mut input, &mut log, button, "Details", |ui, panel| {
-        ui.add_text(panel, "Inside");
-    });
+    let p = popover(
+        &mut ui,
+        &mut input,
+        &mut log,
+        button,
+        "Details",
+        |ui, panel| {
+            ui.add_text(panel, "Inside");
+        },
+    );
     layout(&mut ui);
     assert_eq!(node(&ui, p.panel).role, Role::Dialog);
     assert_eq!(node(&ui, p.panel).name, "Details");
     assert_eq!(input.focused(), Some(p.panel));
-    assert!(ui.rect(p.panel).y >= ui.rect(button).y + ui.rect(button).height, "under its anchor");
+    assert!(
+        ui.rect(p.panel).y >= ui.rect(button).y + ui.rect(button).height,
+        "under its anchor"
+    );
     keys(&mut input, &mut ui, &mut log, "escape");
     assert!(!p.is_open(&ui));
     assert_eq!(input.focused(), Some(button));
@@ -190,16 +250,48 @@ fn a_split_handle_drags_keys_and_resets() {
     // Dragged to x = 403: the pane is 400 (the pointer at the handle's middle).
     let (hx, hy) = centre(&ui, sp.handle);
     let b = PointerButton::Primary;
-    input.dispatch(&mut ui, &mut log, Event::PointerDown { x: hx, y: hy, button: b });
+    input.dispatch(
+        &mut ui,
+        &mut log,
+        Event::PointerDown {
+            x: hx,
+            y: hy,
+            button: b,
+        },
+    );
     input.dispatch(&mut ui, &mut log, Event::PointerMove { x: 403.0, y: hy });
-    input.dispatch(&mut ui, &mut log, Event::PointerUp { x: 403.0, y: hy, button: b });
+    input.dispatch(
+        &mut ui,
+        &mut log,
+        Event::PointerUp {
+            x: 403.0,
+            y: hy,
+            button: b,
+        },
+    );
     layout(&mut ui);
     assert_eq!(ui.rect(sp.first).width, 400.0);
     assert_eq!(node(&ui, sp.handle).range.map(|r| r.now), Some(67.0));
     // Not past the second pane's minimum.
-    input.dispatch(&mut ui, &mut log, Event::PointerDown { x: 403.0, y: hy, button: b });
+    input.dispatch(
+        &mut ui,
+        &mut log,
+        Event::PointerDown {
+            x: 403.0,
+            y: hy,
+            button: b,
+        },
+    );
     input.dispatch(&mut ui, &mut log, Event::PointerMove { x: 590.0, y: hy });
-    input.dispatch(&mut ui, &mut log, Event::PointerUp { x: 590.0, y: hy, button: b });
+    input.dispatch(
+        &mut ui,
+        &mut log,
+        Event::PointerUp {
+            x: 590.0,
+            y: hy,
+            button: b,
+        },
+    );
     layout(&mut ui);
     assert_eq!(ui.rect(sp.first).width, 500.0);
     input.set_focus(&mut ui, &mut log, Some(sp.handle));
@@ -219,8 +311,16 @@ fn a_split_handle_drags_keys_and_resets() {
 fn list_navigation_moves_pages_and_activates() {
     let mut nav = ListNavigation::new(5);
     assert_eq!(nav.key("Enter", 2), None, "nothing highlighted yet");
-    assert_eq!(nav.key("ArrowUp", 2), Some(Nav::Moved(4)), "from nothing, up is the last");
-    assert_eq!(nav.key("ArrowDown", 2), Some(Nav::Moved(4)), "stays at the end");
+    assert_eq!(
+        nav.key("ArrowUp", 2),
+        Some(Nav::Moved(4)),
+        "from nothing, up is the last"
+    );
+    assert_eq!(
+        nav.key("ArrowDown", 2),
+        Some(Nav::Moved(4)),
+        "stays at the end"
+    );
     assert_eq!(nav.key("PageUp", 2), Some(Nav::Moved(2)));
     assert_eq!(nav.key("Home", 2), Some(Nav::Moved(0)));
     assert_eq!(nav.key(" ", 2), Some(Nav::Activated(0)));
@@ -236,21 +336,48 @@ fn notifications_stack_time_out_and_act() {
     input.tick(&mut ui, &mut log, 0.0);
     let mut stack: Notifications<Log> = Notifications::new(&mut ui);
     stack.max = 2;
-    let a = stack.push(&mut ui, &mut input, Notice::new("Saved", "All changes"), None);
-    let b = stack.push(&mut ui, &mut input, Notice::new("Failed", "Disk full").tone(Tone::Error).action("Retry"), Some(Box::new(|log: &mut Log, _: &mut Ui| log.push("retry".into()))));
+    let a = stack.push(
+        &mut ui,
+        &mut input,
+        Notice::new("Saved", "All changes"),
+        None,
+    );
+    let b = stack.push(
+        &mut ui,
+        &mut input,
+        Notice::new("Failed", "Disk full")
+            .tone(Tone::Error)
+            .action("Retry"),
+        Some(Box::new(|log: &mut Log, _: &mut Ui| {
+            log.push("retry".into())
+        })),
+    );
     layout(&mut ui);
     let na = node(&ui, a);
-    assert_eq!((na.role, na.live, na.name.as_str()), (Role::Status, true, "Saved. All changes"));
+    assert_eq!(
+        (na.role, na.live, na.name.as_str()),
+        (Role::Status, true, "Saved. All changes")
+    );
     assert_eq!(node(&ui, b).role, Role::Alert);
     // A third pushes out the oldest.
-    let c = stack.push(&mut ui, &mut input, Notice::new("Third", "").timeout(Some(1.0)), None);
+    let c = stack.push(
+        &mut ui,
+        &mut input,
+        Notice::new("Third", "").timeout(Some(1.0)),
+        None,
+    );
     assert_eq!(stack.shown(&ui), [b, c]);
     // The info one times out; the error stays.
     input.tick(&mut ui, &mut log, 6.0);
     input.tick(&mut ui, &mut log, 6.1);
     layout(&mut ui);
     assert_eq!(stack.shown(&ui), [b]);
-    let retry = ui.accessibility_tree().into_iter().find(|n| n.name == "Retry").unwrap().id;
+    let retry = ui
+        .accessibility_tree()
+        .into_iter()
+        .find(|n| n.name == "Retry")
+        .unwrap()
+        .id;
     tap(&mut input, &mut ui, &mut log, retry);
     assert_eq!(log, ["retry"]);
     assert!(stack.shown(&ui).is_empty(), "acted on, it closes");
@@ -266,14 +393,29 @@ fn a_prompt_is_modal_and_answers_once() {
     ui.set_semantics(field, threers_ui::Semantics::new(Role::TextBox));
     layout(&mut ui);
     input.set_focus(&mut ui, &mut log, Some(field));
-    let p = prompt(&mut ui, &mut input, &mut log, "Delete?", "It cannot be undone.", &["Delete", "Cancel"], |log, _, i| log.push(i.to_string()));
+    let p = prompt(
+        &mut ui,
+        &mut input,
+        &mut log,
+        "Delete?",
+        "It cannot be undone.",
+        &["Delete", "Cancel"],
+        |log, _, i| log.push(i.to_string()),
+    );
     layout(&mut ui);
     let d = node(&ui, p.dialog);
-    assert_eq!((d.role, d.name.as_str(), d.description.as_deref()), (Role::AlertDialog, "Delete?", Some("It cannot be undone.")));
+    assert_eq!(
+        (d.role, d.name.as_str(), d.description.as_deref()),
+        (Role::AlertDialog, "Delete?", Some("It cannot be undone."))
+    );
     assert_eq!(input.modal(), Some(p.dialog));
     ui.set_system_appearance(threers_ui::states::Appearance::Light);
     layout(&mut ui);
-    assert_eq!((ui.rect(p.dialog).x, ui.rect(p.dialog).y), (140.0, 100.0), "centred, in either appearance");
+    assert_eq!(
+        (ui.rect(p.dialog).x, ui.rect(p.dialog).y),
+        (140.0, 100.0),
+        "centred, in either appearance"
+    );
     let buttons = with_role(&ui, Role::Button);
     assert_eq!(input.focused(), Some(buttons[0].id), "the first button");
     // Tab keeps to the dialog; Enter presses the focused button.
@@ -297,7 +439,13 @@ fn the_palette_filters_navigates_and_runs() {
         Command::new("sidebar", "Toggle Sidebar"),
         Command::new("settings", "Open Settings").shortcut("⌘,"),
     ];
-    let panel = open_palette(&mut ui, &mut input, &mut log, commands.clone(), |log, _, id| log.push(id.to_owned()));
+    let panel = open_palette(
+        &mut ui,
+        &mut input,
+        &mut log,
+        commands.clone(),
+        |log, _, id| log.push(id.to_owned()),
+    );
     layout(&mut ui);
     assert_eq!(node(&ui, panel).role, Role::Dialog);
     // Centred, in either appearance (its place is in the base under its
@@ -306,32 +454,63 @@ fn the_palette_filters_navigates_and_runs() {
     layout(&mut ui);
     assert_eq!((ui.rect(panel).x, ui.rect(panel).y), (80.0, 48.0));
     assert_eq!(with_role(&ui, Role::ComboBox).len(), 1);
-    let options = |ui: &Ui| with_role(ui, Role::Option).into_iter().map(|a| (a.name, a.selected == Some(true))).collect::<Vec<_>>();
+    let options = |ui: &Ui| {
+        with_role(ui, Role::Option)
+            .into_iter()
+            .map(|a| (a.name, a.selected == Some(true)))
+            .collect::<Vec<_>>()
+    };
     assert_eq!(options(&ui).len(), 3);
     let opt = with_role(&ui, Role::Option);
-    assert_eq!(opt[0].description.as_deref(), Some("⌘O"), "its shortcut read out");
+    assert_eq!(
+        opt[0].description.as_deref(),
+        Some("⌘O"),
+        "its shortcut read out"
+    );
     // To the byte: tokens reach a style as CSS colours.
     let shortcut = |ui: &Ui, k: usize| {
         let o = with_role(ui, Role::Option)[k].id;
-        ui.color_of(ui.children(*ui.children(o).last().unwrap())[0]).map(|c| (c * 255.0).round() as u8)
+        ui.color_of(ui.children(*ui.children(o).last().unwrap())[0])
+            .map(|c| (c * 255.0).round() as u8)
     };
     let byte = |c: [f32; 4]| c.map(|c| (c * 255.0).round() as u8);
-    assert_eq!(shortcut(&ui, 0), byte(ui.token(threers_ui::environment::Token::OnAccent)), "white on the highlight");
-    assert_eq!(shortcut(&ui, 1), byte(ui.token(threers_ui::environment::Token::SecondaryText)));
+    assert_eq!(
+        shortcut(&ui, 0),
+        byte(ui.token(threers_ui::environment::Token::OnAccent)),
+        "white on the highlight"
+    );
+    assert_eq!(
+        shortcut(&ui, 1),
+        byte(ui.token(threers_ui::environment::Token::SecondaryText))
+    );
     keys(&mut input, &mut ui, &mut log, "o p");
     let names: Vec<String> = options(&ui).into_iter().map(|o| o.0).collect();
     assert_eq!(names, ["Open File", "Open Settings"]);
     keys(&mut input, &mut ui, &mut log, "down");
-    assert_eq!(options(&ui), [("Open File".to_owned(), false), ("Open Settings".to_owned(), true)]);
+    assert_eq!(
+        options(&ui),
+        [
+            ("Open File".to_owned(), false),
+            ("Open Settings".to_owned(), true)
+        ]
+    );
     keys(&mut input, &mut ui, &mut log, "enter");
     assert_eq!(log, ["settings"]);
     assert!(!ui.contains(panel));
     // Escape closes without running; a click on a row runs it.
-    let panel = open_palette(&mut ui, &mut input, &mut log, commands.clone(), |log, _, id| log.push(id.to_owned()));
+    let panel = open_palette(
+        &mut ui,
+        &mut input,
+        &mut log,
+        commands.clone(),
+        |log, _, id| log.push(id.to_owned()),
+    );
     layout(&mut ui);
     keys(&mut input, &mut ui, &mut log, "escape");
     assert!(!ui.contains(panel));
-    let panel = open_palette(&mut ui, &mut input, &mut log, commands, |log, _, id| log.push(id.to_owned()));
+    let panel = open_palette(&mut ui, &mut input, &mut log, commands, |log, _, id| {
+        log.push(id.to_owned())
+    });
     layout(&mut ui);
     let row = with_role(&ui, Role::Option)[1].id;
     tap(&mut input, &mut ui, &mut log, row);
@@ -352,20 +531,63 @@ fn bound_controls_show_the_state_however_it_changes() {
     let mut input: Input<S> = Input::new();
     let mut s = S::default();
     let root = ui.root();
-    let a = switch(&mut ui, &mut input, &s, root, "Wi-Fi", threers_ui::binding!(|s: S| s.wifi));
-    let b = switch(&mut ui, &mut input, &s, root, "Wi-Fi too", threers_ui::binding!(|s: S| s.wifi));
-    let t = tabs(&mut ui, &mut input, &s, root, &["One", "Two"], threers_ui::binding!(|s: S| s.tab));
+    let a = switch(
+        &mut ui,
+        &mut input,
+        &s,
+        root,
+        "Wi-Fi",
+        threers_ui::binding!(|s: S| s.wifi),
+    );
+    let b = switch(
+        &mut ui,
+        &mut input,
+        &s,
+        root,
+        "Wi-Fi too",
+        threers_ui::binding!(|s: S| s.wifi),
+    );
+    let t = tabs(
+        &mut ui,
+        &mut input,
+        &s,
+        root,
+        &["One", "Two"],
+        threers_ui::binding!(|s: S| s.tab),
+    );
     ui.layout(600.0, 400.0, &mut FixedWidthText(7.0));
     let (x, y) = centre(&ui, a);
-    input.dispatch(&mut ui, &mut s, Event::PointerDown { x, y, button: PointerButton::Primary });
-    input.dispatch(&mut ui, &mut s, Event::PointerUp { x, y, button: PointerButton::Primary });
+    input.dispatch(
+        &mut ui,
+        &mut s,
+        Event::PointerDown {
+            x,
+            y,
+            button: PointerButton::Primary,
+        },
+    );
+    input.dispatch(
+        &mut ui,
+        &mut s,
+        Event::PointerUp {
+            x,
+            y,
+            button: PointerButton::Primary,
+        },
+    );
     assert!(s.wifi);
-    assert_eq!((node(&ui, a).checked, node(&ui, b).checked), (Some(true), Some(true)));
+    assert_eq!(
+        (node(&ui, a).checked, node(&ui, b).checked),
+        (Some(true), Some(true))
+    );
     // The app changes it: shown on the next tick.
     s.wifi = false;
     s.tab = 1;
     input.tick(&mut ui, &mut s, 0.1);
-    assert_eq!((node(&ui, a).checked, node(&ui, b).checked), (Some(false), Some(false)));
+    assert_eq!(
+        (node(&ui, a).checked, node(&ui, b).checked),
+        (Some(false), Some(false))
+    );
     assert_eq!(node(&ui, t.tabs[1]).selected, Some(true));
 }
 
@@ -386,9 +608,22 @@ fn a_prompt_presented_from_state() {
     ui.set_semantics(field, threers_ui::Semantics::new(Role::TextBox));
     ui.layout(600.0, 400.0, &mut FixedWidthText(7.0));
     input.set_focus(&mut ui, &mut s, Some(field));
-    input.present(|s: &S| s.asking, |s| s.asking = false, |ui, input, s| {
-        prompt(ui, input, s, "Sure?", "", &["Yes", "No"], |s: &mut S, _, i| s.answers.push(i)).dialog
-    });
+    input.present(
+        |s: &S| s.asking,
+        |s| s.asking = false,
+        |ui, input, s| {
+            prompt(
+                ui,
+                input,
+                s,
+                "Sure?",
+                "",
+                &["Yes", "No"],
+                |s: &mut S, _, i| s.answers.push(i),
+            )
+            .dialog
+        },
+    );
     let dialogs = |ui: &Ui| with_role(ui, Role::AlertDialog).len();
     input.tick(&mut ui, &mut s, 0.0);
     assert_eq!(dialogs(&ui), 0);
@@ -398,7 +633,11 @@ fn a_prompt_presented_from_state() {
     assert_eq!(dialogs(&ui), 1);
     input.simulate_keystrokes(&mut ui, &mut s, "enter").unwrap();
     input.tick(&mut ui, &mut s, 0.2);
-    assert_eq!((dialogs(&ui), s.asking, s.answers.clone()), (0, false, vec![0]), "answered: the flag is cleared");
+    assert_eq!(
+        (dialogs(&ui), s.asking, s.answers.clone()),
+        (0, false, vec![0]),
+        "answered: the flag is cleared"
+    );
     assert_eq!(input.focused(), Some(field));
     // Asked again, then withdrawn by the app.
     s.asking = true;
@@ -443,15 +682,38 @@ fn a_view_keeps_keyed_nodes_and_patches_what_changed() {
     let root = ui.root();
     let mut view = View::new(&mut ui, root, "display: flex; flex-direction: column");
     let rows = |items: &[(&str, &str)]| -> Vec<El<Log>> {
-        items.iter().map(|(k, t)| El::div("padding: 2px").key(*k).role(Role::ListItem, *t).text(*t)).collect()
+        items
+            .iter()
+            .map(|(k, t)| {
+                El::div("padding: 2px")
+                    .key(*k)
+                    .role(Role::ListItem, *t)
+                    .text(*t)
+            })
+            .collect()
     };
-    view.update(&mut ui, &mut input, rows(&[("a", "Apple"), ("b", "Banana"), ("c", "Cherry")]));
+    view.update(
+        &mut ui,
+        &mut input,
+        rows(&[("a", "Apple"), ("b", "Banana"), ("c", "Cherry")]),
+    );
     let before: Vec<NodeId> = ui.children(view.root()).to_vec();
-    view.update(&mut ui, &mut input, rows(&[("c", "Cherry"), ("a", "Apricot")]));
+    view.update(
+        &mut ui,
+        &mut input,
+        rows(&[("c", "Cherry"), ("a", "Apricot")]),
+    );
     let after: Vec<NodeId> = ui.children(view.root()).to_vec();
-    assert_eq!(after, [before[2], before[0]], "the same nodes, reordered; b's gone");
+    assert_eq!(
+        after,
+        [before[2], before[0]],
+        "the same nodes, reordered; b's gone"
+    );
     assert!(!ui.contains(before[1]));
-    let names: Vec<String> = with_role(&ui, Role::ListItem).into_iter().map(|a| a.name).collect();
+    let names: Vec<String> = with_role(&ui, Role::ListItem)
+        .into_iter()
+        .map(|a| a.name)
+        .collect();
     assert_eq!(names, ["Cherry", "Apricot"]);
     assert_eq!(ui.text_lines_of(ui.children(after[1])[0]), ["Apricot"]);
 }
@@ -466,17 +728,55 @@ fn component_previews_match_their_snapshots() {
         on: bool,
         tab: usize,
     }
-    let out = Preview::new().size(600.0, 400.0).text_scales(&[1.0, 1.5]).render(|ui, input, s: &mut S| {
-        let root = ui.root();
-        let col = ui.add_box(root, style! { display: flex; flex-direction: column; gap: 8px; padding: 8px; });
-        switch(ui, input, s, col, "Wi-Fi", threers_ui::binding!(|s: S| s.on));
-        tabs(ui, input, s, col, &["One", "Two"], threers_ui::binding!(|s: S| s.tab));
-    });
+    let out = Preview::new()
+        .size(600.0, 400.0)
+        .text_scales(&[1.0, 1.5])
+        .render(|ui, input, s: &mut S| {
+            let root = ui.root();
+            let col = ui.add_box(
+                root,
+                style! { display: flex; flex-direction: column; gap: 8px; padding: 8px; },
+            );
+            switch(
+                ui,
+                input,
+                s,
+                col,
+                "Wi-Fi",
+                threers_ui::binding!(|s: S| s.on),
+            );
+            tabs(
+                ui,
+                input,
+                s,
+                col,
+                &["One", "Two"],
+                threers_ui::binding!(|s: S| s.tab),
+            );
+        });
     // A modal prompt is all assistive technology sees while it is open.
-    let out = out + &Preview::new().size(600.0, 400.0).text_scales(&[1.0, 1.5]).render(|ui, input, s: &mut S| {
-        prompt(ui, input, s, "Delete?", "It cannot be undone.", &["Delete", "Cancel"], |_, _, _| {});
-    });
-    assert_snapshot(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/snapshots/components.txt"), &out);
+    let out = out
+        + &Preview::new()
+            .size(600.0, 400.0)
+            .text_scales(&[1.0, 1.5])
+            .render(|ui, input, s: &mut S| {
+                prompt(
+                    ui,
+                    input,
+                    s,
+                    "Delete?",
+                    "It cannot be undone.",
+                    &["Delete", "Cancel"],
+                    |_, _, _| {},
+                );
+            });
+    assert_snapshot(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/snapshots/components.txt"
+        ),
+        &out,
+    );
 }
 
 /// On a phone the palette is the window's width less a margin, a long name
@@ -489,15 +789,24 @@ fn the_palette_fits_a_narrow_window_and_follows_it() {
     let mut log = vec![];
     let small = |ui: &mut Ui| ui.layout(300.0, 500.0, &mut FixedWidthText(7.0));
     small(&mut ui);
-    let commands = vec![Command::new("long", "Open the Recently Closed Project in a New Window").shortcut("⌘⇧O")];
+    let commands = vec![
+        Command::new("long", "Open the Recently Closed Project in a New Window").shortcut("⌘⇧O"),
+    ];
     let panel = open_palette(&mut ui, &mut input, &mut log, commands, |_, _, _| {});
     small(&mut ui);
     let r = ui.rect(panel);
-    assert_eq!((r.x, r.width), (8.0, 284.0), "the window less a margin each side");
+    assert_eq!(
+        (r.x, r.width),
+        (8.0, 284.0),
+        "the window less a margin each side"
+    );
     let option = with_role(&ui, Role::Option)[0].id;
     let row = ui.rect(option);
     let keys = ui.rect(*ui.children(option).last().unwrap());
-    assert!(keys.x + keys.width <= row.x + row.width + 0.5, "the shortcut shows: {keys:?} in {row:?}");
+    assert!(
+        keys.x + keys.width <= row.x + row.width + 0.5,
+        "the shortcut shows: {keys:?} in {row:?}"
+    );
     // Wider: back to its own width, centred.
     input.tick(&mut ui, &mut log, 0.0);
     ui.layout(1000.0, 600.0, &mut FixedWidthText(7.0));

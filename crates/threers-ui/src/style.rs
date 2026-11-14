@@ -67,10 +67,15 @@ impl GradientShape {
             }
             GradientShape::Radial { cx, cy } => {
                 let (px, py) = (r.x + r.width * cx, r.y + r.height * cy);
-                let far = [(r.x, r.y), (r.x + r.width, r.y), (r.x, r.y + r.height), (r.x + r.width, r.y + r.height)]
-                    .iter()
-                    .map(|&(qx, qy)| ((qx - px).powi(2) + (qy - py).powi(2)).sqrt())
-                    .fold(0.0f32, f32::max);
+                let far = [
+                    (r.x, r.y),
+                    (r.x + r.width, r.y),
+                    (r.x, r.y + r.height),
+                    (r.x + r.width, r.y + r.height),
+                ]
+                .iter()
+                .map(|&(qx, qy)| ((qx - px).powi(2) + (qy - py).powi(2)).sqrt())
+                .fold(0.0f32, f32::max);
                 ((x - px).powi(2) + (y - py).powi(2)).sqrt() / far.max(1e-6)
             }
             GradientShape::Conic { cx, cy, from } => {
@@ -85,14 +90,19 @@ impl GradientShape {
 /// The colour of `stops` (positions ascending) at `t`, mixed as encoded,
 /// the ends carried out.
 pub fn gradient_at(stops: &[(f32, Rgba)], t: f32) -> Rgba {
-    let (Some(first), Some(last)) = (stops.first(), stops.last()) else { return [0.0; 4] };
+    let (Some(first), Some(last)) = (stops.first(), stops.last()) else {
+        return [0.0; 4];
+    };
     if t <= first.0 {
         return first.1;
     }
     if t >= last.0 {
         return last.1;
     }
-    let i = stops.windows(2).position(|w| t >= w[0].0 && t < w[1].0).unwrap_or(0);
+    let i = stops
+        .windows(2)
+        .position(|w| t >= w[0].0 && t < w[1].0)
+        .unwrap_or(0);
     let ((t0, c0), (t1, c1)) = (stops[i], stops[i + 1]);
     let f = if t1 > t0 { (t - t0) / (t1 - t0) } else { 0.0 };
     std::array::from_fn(|c| c0[c] + (c1[c] - c0[c]) * f)
@@ -137,7 +147,16 @@ impl ClipShape {
         match self {
             ClipShape::Circle => {
                 let d = r.width.min(r.height);
-                (Rect { x: r.x + (r.width - d) / 2.0, y: r.y + (r.height - d) / 2.0, width: d, height: d }, d / 2.0, d / 2.0)
+                (
+                    Rect {
+                        x: r.x + (r.width - d) / 2.0,
+                        y: r.y + (r.height - d) / 2.0,
+                        width: d,
+                        height: d,
+                    },
+                    d / 2.0,
+                    d / 2.0,
+                )
             }
             ClipShape::Ellipse => (r, r.width / 2.0, r.height / 2.0),
             ClipShape::Capsule => {
@@ -145,7 +164,12 @@ impl ClipShape {
                 (r, h, h)
             }
             ClipShape::Inset(e, radius) => {
-                let inner = Rect { x: r.x + e.left, y: r.y + e.top, width: (r.width - e.horizontal()).max(0.0), height: (r.height - e.vertical()).max(0.0) };
+                let inner = Rect {
+                    x: r.x + e.left,
+                    y: r.y + e.top,
+                    width: (r.width - e.horizontal()).max(0.0),
+                    height: (r.height - e.vertical()).max(0.0),
+                };
                 let rr = radius.min(inner.width.min(inner.height) / 2.0);
                 (inner, rr, rr)
             }
@@ -241,13 +265,22 @@ pub struct Track {
 
 impl Track {
     pub fn px(v: f32) -> Self {
-        Track { min: TrackSize::Px(v), max: TrackSize::Px(v) }
+        Track {
+            min: TrackSize::Px(v),
+            max: TrackSize::Px(v),
+        }
     }
     pub fn fr(v: f32) -> Self {
-        Track { min: TrackSize::Px(0.0), max: TrackSize::Fr(v) }
+        Track {
+            min: TrackSize::Px(0.0),
+            max: TrackSize::Fr(v),
+        }
     }
     pub fn auto() -> Self {
-        Track { min: TrackSize::Auto, max: TrackSize::Auto }
+        Track {
+            min: TrackSize::Auto,
+            max: TrackSize::Auto,
+        }
     }
 }
 
@@ -276,6 +309,9 @@ pub enum AlignItems {
     FlexStart,
     Center,
     FlexEnd,
+    /// In a row, the first lines of text on one line (`baseline`); in a
+    /// column or grid, `flex-start`, as browsers have it.
+    Baseline,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -543,12 +579,25 @@ pub struct Style {
     pub padding: Edges,
     pub border: Edges,
     pub border_color: Rgba,
+    /// `border-style: dashed` (else solid): dashes along the outline,
+    /// round its corners too, as a browser draws them.
+    pub border_dashed: bool,
     pub background: Option<Rgba>,
     pub color: Rgba,
     /// `color` was given, so the text inside takes it even when it is the
     /// default white (see [`Ui::color_of`](crate::Ui::color_of)).
     pub color_set: bool,
     pub font_family: String,
+    /// `font-family` was given; a box without one takes its parent's, as
+    /// CSS inherits it (see [`Ui::set_style`](crate::Ui::set_style)).
+    pub font_family_set: bool,
+    /// These were given; a box without them takes its parent's, as CSS
+    /// inherits them (line height only with the font size: threers keeps
+    /// it in pixels, and a size of its own wants its own).
+    pub font_size_set: bool,
+    pub font_weight_set: bool,
+    pub line_height_set: bool,
+    pub text_align_set: bool,
     pub font_size: f32,
     pub font_weight: FontWeight,
     /// `line-height` in pixels; `None` is `normal` (the font's own).
@@ -695,10 +744,16 @@ impl Default for Style {
             padding: Edges::ZERO,
             border: Edges::ZERO,
             border_color: [0.0, 0.0, 0.0, 1.0],
+            border_dashed: false,
             background: None,
             color: [1.0, 1.0, 1.0, 1.0],
             color_set: false,
             font_family: "sans-serif".into(),
+            font_family_set: false,
+            font_size_set: false,
+            font_weight_set: false,
+            line_height_set: false,
+            text_align_set: false,
             font_size: 16.0,
             font_weight: FontWeight::Normal,
             line_height: None,

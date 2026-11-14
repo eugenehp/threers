@@ -226,7 +226,9 @@ fn a_shader_material_reads_a_volume_on_either_backend() {
 fn a_shader_material_uploads_its_own_volume_maps() {
     use std::sync::Arc;
     use threers::volume::{Data3DTexture, VolumeFormat};
-    use threers::{Material, Mesh, Object3D, OrthographicCamera, PlaneGeometry, ShaderMaterial, Vector3 as V};
+    use threers::{
+        Material, Mesh, Object3D, OrthographicCamera, PlaneGeometry, ShaderMaterial, Vector3 as V,
+    };
     if threers::metal::MetalDevice::new().is_err() {
         eprintln!("skipping: no Metal device");
         return;
@@ -250,19 +252,108 @@ fn a_shader_material_uploads_its_own_volume_maps() {
         let mut scene = Scene::new();
         let mut m = ShaderMaterial::new(fragment);
         m.tone_mapped = false;
-        m.volume_maps = vec![Arc::new(Data3DTexture::new(4, 1, 1, VolumeFormat::R8Unorm, vec![0, 85, 170, 255]))];
-        let id = scene.add(Object3D::mesh(Mesh::new(PlaneGeometry::new(2.0, 2.0), Material::Shader(m))));
+        m.volume_maps = vec![Arc::new(Data3DTexture::new(
+            4,
+            1,
+            1,
+            VolumeFormat::R8Unorm,
+            vec![0, 85, 170, 255],
+        ))];
+        let id = scene.add(Object3D::mesh(Mesh::new(
+            PlaneGeometry::new(2.0, 2.0),
+            Material::Shader(m),
+        )));
         let first = hr.render_to_rgba(&mut scene, &camera);
         assert_eq!(hr.is_native_metal(), metal);
         // texel 1 of 4, 85/255, through the sRGB target
-        assert!(red(&first).abs_diff(156) <= 2, "metal {metal}: {}", red(&first));
+        assert!(
+            red(&first).abs_diff(156) <= 2,
+            "metal {metal}: {}",
+            red(&first)
+        );
         if let Some(o) = scene.get_mut(id)
             && let threers::ObjectKind::Mesh(mesh) = &mut o.kind
             && let Material::Shader(m) = Arc::make_mut(&mut mesh.material)
         {
-            m.volume_maps = vec![Arc::new(Data3DTexture::new(4, 1, 1, VolumeFormat::R8Unorm, vec![0, 255, 0, 0]))];
+            m.volume_maps = vec![Arc::new(Data3DTexture::new(
+                4,
+                1,
+                1,
+                VolumeFormat::R8Unorm,
+                vec![0, 255, 0, 0],
+            ))];
         }
         let next = hr.render_to_rgba(&mut scene, &camera);
-        assert!(red(&next) >= 253, "metal {metal}: the next frame's: {}", red(&next));
+        assert!(
+            red(&next) >= 253,
+            "metal {metal}: the next frame's: {}",
+            red(&next)
+        );
+    }
+}
+
+/// A volume whose rows are an odd number of bytes (67 wide, as the mouse's
+/// gene maps are) reads back voxel for voxel on both backends.
+#[test]
+fn an_odd_width_volume_reads_back_voxel_for_voxel() {
+    use std::sync::Arc;
+    use threers::volume::{Data3DTexture, VolumeFormat};
+    use threers::{
+        Material, Mesh, Object3D, OrthographicCamera, PlaneGeometry, ShaderMaterial, Vector3 as V,
+    };
+    if threers::metal::MetalDevice::new().is_err() {
+        eprintln!("skipping: no Metal device");
+        return;
+    }
+    let (w, h, d) = (67usize, 3usize, 2usize);
+    let value = |x: usize, y: usize, z: usize| ((x * 3 + y * 50 + z * 100) % 251) as u8;
+    let data: Vec<u8> = (0..w * h * d)
+        .map(|i| value(i % w, (i / w) % h, i / (w * h)))
+        .collect();
+    // the row y = 2 of slice z = 1, a voxel a pixel column
+    let fragment = "@fragment fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+        let x = min(i32(in.uv.x * 67.0), 66);
+        return vec4<f32>(textureLoad(u_vol0, vec3<i32>(x, 2, 1), 0).r, 0.0, 0.0, 1.0);
+    }";
+    let mut camera = OrthographicCamera::new(-1.0, 1.0, 1.0, -1.0, 0.1, 10.0);
+    camera.position = V::new(0.0, 0.0, 5.0);
+    camera.look_at(V::ZERO);
+    for metal in [false, true] {
+        let mut hr = build(metal);
+        let mut m = ShaderMaterial::new(fragment);
+        m.tone_mapped = false;
+        m.volume_maps = vec![Arc::new(Data3DTexture::new(
+            w as u32,
+            h as u32,
+            d as u32,
+            VolumeFormat::R8Unorm,
+            data.clone(),
+        ))];
+        let mut scene = Scene::new();
+        scene.add(Object3D::mesh(Mesh::new(
+            PlaneGeometry::new(2.0, 2.0),
+            Material::Shader(m),
+        )));
+        let f = hr.render_to_rgba(&mut scene, &camera);
+        // through the sRGB target: compare encoded
+        let enc = |v: u8| {
+            let c = v as f32 / 255.0;
+            let s = if c <= 0.003_130_8 {
+                c * 12.92
+            } else {
+                1.055 * c.powf(1.0 / 2.4) - 0.055
+            };
+            (s * 255.0).round() as i32
+        };
+        let mut bad = vec![];
+        // each pixel column reads the voxel its uv falls in
+        for px in 0..SIZE {
+            let x = (((px as f32 + 0.5) / SIZE as f32) * 67.0) as usize;
+            let got = f[(((SIZE / 2) * SIZE + px) * 4) as usize] as i32;
+            if (got - enc(value(x.min(66), 2, 1))).abs() > 2 {
+                bad.push((x, got, enc(value(x.min(66), 2, 1))));
+            }
+        }
+        assert!(bad.is_empty(), "metal {metal}: (x, got, want) {bad:?}");
     }
 }

@@ -93,11 +93,153 @@ impl Default for Transform3d {
     }
 }
 
+/// The declarations [`apply_property`] reads.
+const PROPERTIES: [&str; 13] = [
+    "rotate-x",
+    "rotate-y",
+    "rotate",
+    "translate-x",
+    "translate-y",
+    "translate-z",
+    "scale",
+    "perspective",
+    "backface-visibility",
+    "transform-origin",
+    "glare",
+    "shading",
+    "depth-shadow",
+];
+
+/// Whether `name` is a declaration of a [`Transform3d`] (see
+/// [`apply_property`]).
+pub fn is_property(name: &str) -> bool {
+    PROPERTIES.contains(&name)
+}
+
+/// Sets part of a [`Transform3d`] from a declaration in CSS terms, as state
+/// styles and Tailwind classes give them; whether the value was read.
+///
+/// - `rotate-x`, `rotate-y`, `rotate` (in its own plane): `12deg`,
+///   `0.25turn`, `0.2rad`.
+/// - `translate-x`, `translate-y`: pixels. `translate-z`: pixels toward the
+///   viewer (the lift, [`depth`](Transform3d::depth)).
+/// - `scale`: `1.05` or `105%`.
+/// - `perspective`: the viewer's distance in pixels, or `none` (flat).
+/// - `backface-visibility`: `hidden` or `visible`.
+/// - `transform-origin`: keywords (`top left`, `center`, `right`) or two
+///   percentages.
+/// - `glare`, `shading`, `depth-shadow`: `on` or `off` (the glare, the
+///   shading by the light and the shadow under a lifted box).
+///
+/// ```
+/// use threers_ui::depth::{apply_property, Transform3d};
+///
+/// let mut t = Transform3d::default();
+/// assert!(apply_property(&mut t, "rotate-y", "90deg"));
+/// assert!(apply_property(&mut t, "transform-origin", "left"));
+/// assert!((t.rotate_y - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+/// assert_eq!(t.origin, (0.0, 0.5));
+/// ```
+pub fn apply_property(t: &mut Transform3d, name: &str, value: &str) -> bool {
+    let v = value.trim();
+    let angle = || -> Option<f32> {
+        let (n, unit) = match v.find(|c: char| c.is_ascii_alphabetic()) {
+            Some(i) => v.split_at(i),
+            None => (v, "deg"),
+        };
+        let n: f32 = n.trim().parse().ok()?;
+        Some(match unit {
+            "deg" => n.to_radians(),
+            "turn" => n * std::f32::consts::TAU,
+            "rad" => n,
+            "grad" => n * std::f32::consts::PI / 200.0,
+            _ => return None,
+        })
+    };
+    let pixels = || {
+        v.strip_suffix("px")
+            .unwrap_or(v)
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .filter(|n| n.is_finite())
+    };
+    let switch = || match v {
+        "on" | "true" => Some(true),
+        "off" | "false" | "none" => Some(false),
+        _ => None,
+    };
+    let done = (|| -> Option<()> {
+        match name {
+            "rotate-x" => t.rotate_x = angle()?,
+            "rotate-y" => t.rotate_y = angle()?,
+            "rotate" => t.rotate_z = angle()?,
+            "translate-x" => t.translate_x = pixels()?,
+            "translate-y" => t.translate_y = pixels()?,
+            "translate-z" => t.depth = pixels()?,
+            "scale" => {
+                t.scale = match v.strip_suffix('%') {
+                    Some(p) => p.trim().parse::<f32>().ok()? / 100.0,
+                    None => v.parse().ok()?,
+                }
+            }
+            "perspective" => {
+                t.perspective = if v == "none" {
+                    1e6
+                } else {
+                    pixels().filter(|p| *p > 0.0)?
+                }
+            }
+            "backface-visibility" => {
+                t.hide_backface = match v {
+                    "hidden" => true,
+                    "visible" => false,
+                    _ => return None,
+                }
+            }
+            "transform-origin" => {
+                let mut o = (0.5, 0.5);
+                let words: Vec<&str> = v.split_whitespace().collect();
+                if words.is_empty() || words.len() > 2 {
+                    return None;
+                }
+                for (i, w) in words.iter().enumerate() {
+                    match *w {
+                        "left" => o.0 = 0.0,
+                        "right" => o.0 = 1.0,
+                        "top" => o.1 = 0.0,
+                        "bottom" => o.1 = 1.0,
+                        "center" => {}
+                        p => {
+                            let f = p.strip_suffix('%')?.parse::<f32>().ok()? / 100.0;
+                            if i == 0 {
+                                o.0 = f
+                            } else {
+                                o.1 = f
+                            }
+                        }
+                    }
+                }
+                t.origin = o;
+            }
+            "glare" => t.glare = switch()?,
+            "shading" => t.shade = switch()?,
+            "depth-shadow" => t.shadow = switch()?,
+            _ => return None,
+        }
+        Some(())
+    })();
+    done.is_some()
+}
+
 impl Transform3d {
     /// Where a point `(x, y)` of a box `rect` is seen, turned, lifted and
     /// in perspective (about the window point it pivots on).
     pub fn project(&self, rect: Rect, x: f32, y: f32) -> (f32, f32) {
-        let (px, py) = (rect.x + rect.width * self.origin.0, rect.y + rect.height * self.origin.1);
+        let (px, py) = (
+            rect.x + rect.width * self.origin.0,
+            rect.y + rect.height * self.origin.1,
+        );
         let p = self.perspective.max(1.0);
         let (x, y) = (x - px, y - py);
         // In its plane, then about its horizontal axis, then its vertical.
@@ -108,7 +250,10 @@ impl Transform3d {
         let (y1, z1) = (y * cxr, y * sx);
         let (x2, z2) = (x * cyr + z1 * sy, -x * sy + z1 * cyr);
         // Seen from in front of the box's middle.
-        let (cx, cy) = (rect.x + rect.width / 2.0 - px, rect.y + rect.height / 2.0 - py);
+        let (cx, cy) = (
+            rect.x + rect.width / 2.0 - px,
+            rect.y + rect.height / 2.0 - py,
+        );
         let x2 = x2 + self.translate_x;
         let y1 = y1 + self.translate_y;
         let z = z2 + self.depth;
@@ -122,11 +267,24 @@ impl Transform3d {
         let (cx, cy) = (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
         let (hw, hh) = (rect.width.max(1.0) / 2.0, rect.height.max(1.0) / 2.0);
         let o = self.project(rect, cx, cy);
-        let (l, r) = (self.project(rect, cx - hw, cy), self.project(rect, cx + hw, cy));
-        let (t, b) = (self.project(rect, cx, cy - hh), self.project(rect, cx, cy + hh));
+        let (l, r) = (
+            self.project(rect, cx - hw, cy),
+            self.project(rect, cx + hw, cy),
+        );
+        let (t, b) = (
+            self.project(rect, cx, cy - hh),
+            self.project(rect, cx, cy + hh),
+        );
         let (a, bb) = ((r.0 - l.0) / (2.0 * hw), (r.1 - l.1) / (2.0 * hw));
         let (c, d) = ((b.0 - t.0) / (2.0 * hh), (b.1 - t.1) / (2.0 * hh));
-        [a, bb, c, d, o.0 - (a * cx + c * cy), o.1 - (bb * cx + d * cy)]
+        [
+            a,
+            bb,
+            c,
+            d,
+            o.0 - (a * cx + c * cy),
+            o.1 - (bb * cx + d * cy),
+        ]
     }
 
     /// The projective transform taking the box `rect` exactly to where its
@@ -189,7 +347,9 @@ impl Ui {
     /// turned a right angle off to one side of the eye shows its back, as
     /// a sliver); turns of the boxes around it add to the angle.
     pub(crate) fn faces_viewer(&self, node: NodeId) -> bool {
-        let Some(t) = self.transform3d(node).filter(|t| t.hide_backface) else { return true };
+        let Some(t) = self.transform3d(node).filter(|t| t.hide_backface) else {
+            return true;
+        };
         let (mut rx, mut ry) = (0.0, 0.0);
         for a in self.ancestors(node).skip(1) {
             if let Some(at) = self.transform3d(a) {
@@ -198,12 +358,24 @@ impl Ui {
             }
         }
         let r = self.rect(node);
-        let p = [(r.x, r.y), (r.x + r.width, r.y), (r.x + r.width, r.y + r.height), (r.x, r.y + r.height)].map(|(x, y)| t.project(r, x, y));
-        let area: f32 = (0..4).map(|i| p[i].0 * p[(i + 1) % 4].1 - p[(i + 1) % 4].0 * p[i].1).sum();
+        let p = [
+            (r.x, r.y),
+            (r.x + r.width, r.y),
+            (r.x + r.width, r.y + r.height),
+            (r.x, r.y + r.height),
+        ]
+        .map(|(x, y)| t.project(r, x, y));
+        let area: f32 = (0..4)
+            .map(|i| p[i].0 * p[(i + 1) % 4].1 - p[(i + 1) % 4].0 * p[i].1)
+            .sum();
         // Facing: wound as the box itself is, by more than a sliver; or the
         // other way, when the boxes around it have turned it over.
         let sliver = 1e-3 * (r.width * r.height).max(1.0);
-        if rx.cos() * ry.cos() >= 0.0 { area > sliver } else { area < -sliver }
+        if rx.cos() * ry.cos() >= 0.0 {
+            area > sliver
+        } else {
+            area < -sliver
+        }
     }
 
     /// The transform to paint `node` through, its own and its parallax:
@@ -213,13 +385,32 @@ impl Ui {
         // A solid box turns in its own shader, walls and all: drawn here
         // unturned (rolled, moved and scaled still).
         let solid = self.env.solids.contains_key(&node);
-        let own = self.transform3d(node).map(|t| if solid { Transform3d { rotate_x: 0.0, rotate_y: 0.0, ..t } } else { t }).map(|t| (t.homography(r), t.affine(r)));
+        let own = self
+            .transform3d(node)
+            .map(|t| {
+                if solid {
+                    Transform3d {
+                        rotate_x: 0.0,
+                        rotate_y: 0.0,
+                        ..t
+                    }
+                } else {
+                    t
+                }
+            })
+            .map(|t| (t.homography(r), t.affine(r)));
         let shift = self.env.parallax.get(&node).and_then(|&z| {
             // The nearest box around it that turns.
-            let t = self.ancestors(node).skip(1).find_map(|a| self.transform3d(a))?;
+            let t = self
+                .ancestors(node)
+                .skip(1)
+                .find_map(|a| self.transform3d(a))?;
             Some((t.rotate_y.sin() * z, -t.rotate_x.sin() * z))
         });
-        let identity = ([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        let identity = (
+            [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        );
         match (own, shift) {
             (None, None) => None,
             (own, shift) => {
@@ -277,11 +468,22 @@ impl Ui {
 
     /// Under a lifted box: a shadow as far below as it is lifted, cast away
     /// from the light.
-    pub(crate) fn paint_lift_shadow(&self, node: NodeId, painter: &mut dyn crate::Painter, opacity: f32) {
-        let Some(t) = self.transform3d(node).filter(|t| t.shadow) else { return };
+    pub(crate) fn paint_lift_shadow(
+        &self,
+        node: NodeId,
+        painter: &mut dyn crate::Painter,
+        opacity: f32,
+    ) {
+        let Some(t) = self.transform3d(node).filter(|t| t.shadow) else {
+            return;
+        };
         let r = self.rect(node);
         let lift = t.depth.max(0.0) + 4.0;
-        let radius = self.style(node).border_radius.resolve(Some(r.width.min(r.height))).unwrap_or(0.0);
+        let radius = self
+            .style(node)
+            .border_radius
+            .resolve(Some(r.width.min(r.height)))
+            .unwrap_or(0.0);
         // As large as the box is drawn: a lifted box is drawn nearer, so
         // larger, and its shadow with it (a little smaller, as the light
         // is above).
@@ -297,30 +499,49 @@ impl Ui {
             width: r.width * k,
             height: r.height * k,
         };
-        let alpha = if t.depth > 0.0 { (0.16 + lift * 0.002).min(0.3) } else { 0.1 };
-        painter.shadow(rect, radius, 4.0 + drop * 1.6, [0.0, 0.0, 0.0, alpha * opacity]);
+        let alpha = if t.depth > 0.0 {
+            (0.16 + lift * 0.002).min(0.3)
+        } else {
+            0.1
+        };
+        painter.shadow(
+            rect,
+            radius,
+            4.0 + drop * 1.6,
+            [0.0, 0.0, 0.0, alpha * opacity],
+        );
     }
 
     /// Over a shaded box: darker by how far it has turned from the light.
     pub(crate) fn paint_shade(&self, node: NodeId, painter: &mut dyn crate::Painter, opacity: f32) {
-        let Some(t) = self.transform3d(node).filter(|t| t.shade) else { return };
+        let Some(t) = self.transform3d(node).filter(|t| t.shade) else {
+            return;
+        };
         let (n, l) = (t.normal(), self.env.light.direction());
         let lit = |n: [f32; 3]| (n[0] * l[0] + n[1] * l[1] + n[2] * l[2]).max(0.0);
         // Darker than it is flat on, never lighter; a face turned edge on
         // goes dark.
-        let dark = ((lit([0.0, 0.0, 1.0]) - lit(n)) * 0.9 + (1.0 - n[2].abs()) * 0.3).clamp(0.0, 0.75) * self.env.light.intensity;
+        let dark = ((lit([0.0, 0.0, 1.0]) - lit(n)) * 0.9 + (1.0 - n[2].abs()) * 0.3)
+            .clamp(0.0, 0.75)
+            * self.env.light.intensity;
         if dark < 0.01 {
             return;
         }
         let r = self.rect(node);
-        let radius = self.style(node).border_radius.resolve(Some(r.width.min(r.height))).unwrap_or(0.0);
+        let radius = self
+            .style(node)
+            .border_radius
+            .resolve(Some(r.width.min(r.height)))
+            .unwrap_or(0.0);
         painter.fill_rounded_rect(r, radius, radius, [0.0, 0.0, 0.0, dark * opacity]);
     }
 
     /// Over a box with glare: a band of light where the turn catches it,
     /// strongest as the face turns toward the light.
     pub(crate) fn paint_glare(&self, node: NodeId, painter: &mut dyn crate::Painter, opacity: f32) {
-        let Some(t) = self.transform3d(node).filter(|t| t.glare) else { return };
+        let Some(t) = self.transform3d(node).filter(|t| t.glare) else {
+            return;
+        };
         let (n, l) = (t.normal(), self.env.light.direction());
         // Halfway between the light and the viewer: the shine is brightest
         // where the face points there.
@@ -330,18 +551,32 @@ impl Ui {
             v.map(|c| c / m)
         };
         let spec = |n: [f32; 3]| (n[0] * h[0] + n[1] * h[1] + n[2] * h[2]).max(0.0).powi(12);
-        let strength = ((spec(n) - spec([0.0, 0.0, 1.0])).max(0.0) * 3.0 + (t.rotate_y.sin().abs() + t.rotate_x.sin().abs()) * 0.5).min(1.0)
+        let strength = ((spec(n) - spec([0.0, 0.0, 1.0])).max(0.0) * 3.0
+            + (t.rotate_y.sin().abs() + t.rotate_x.sin().abs()) * 0.5)
+            .min(1.0)
             * self.env.light.intensity;
         if strength < 0.01 {
             return;
         }
         let r = self.rect(node);
-        let radius = self.style(node).border_radius.resolve(Some(r.width.min(r.height))).unwrap_or(0.0);
+        let radius = self
+            .style(node)
+            .border_radius
+            .resolve(Some(r.width.min(r.height)))
+            .unwrap_or(0.0);
         // Across the face, toward where the light is.
         let at = (0.5 + (h[0] - n[0]) * 1.4).clamp(-0.2, 1.2);
         let a = 0.35 * strength * opacity;
         painter.push_clip_rounded(r, radius, radius);
-        painter.fill_linear_gradient(r, &[(at - 0.45, [1.0, 1.0, 1.0, 0.0]), (at, [1.0, 1.0, 1.0, a]), (at + 0.45, [1.0, 1.0, 1.0, 0.0])], 0.0);
+        painter.fill_linear_gradient(
+            r,
+            &[
+                (at - 0.45, [1.0, 1.0, 1.0, 0.0]),
+                (at, [1.0, 1.0, 1.0, a]),
+                (at + 0.45, [1.0, 1.0, 1.0, 0.0]),
+            ],
+            0.0,
+        );
         painter.pop_clip();
     }
 
@@ -349,7 +584,11 @@ impl Ui {
     /// drawn: the point is taken back through each transform around a box
     /// into its own (unturned) place before it is tested.
     pub(crate) fn hit_through_transforms(&self, x: f32, y: f32) -> Option<NodeId> {
-        let index = || self.hits.get_or_init(|| crate::layers::HitIndex::build(self)).hit(self, x, y);
+        let index = || {
+            self.hits
+                .get_or_init(|| crate::layers::HitIndex::build(self))
+                .hit(self, x, y)
+        };
         // The turned boxes that show (from the few that have transforms, not
         // a walk of the tree: this runs on every pointer move), in tree
         // order, so the last painted is tried first below.
@@ -359,12 +598,20 @@ impl Ui {
             .keys()
             .chain(self.env.parallax.keys())
             .copied()
-            .filter(|&n| self.contains(n) && self.ancestors(n).all(|a| self.style(a).display != crate::Display::None))
+            .filter(|&n| {
+                self.contains(n)
+                    && self
+                        .ancestors(n)
+                        .all(|a| self.style(a).display != crate::Display::None)
+            })
             .map(|n| {
                 // Its path from the root, child indices: tree order.
                 let mut path: Vec<usize> = self
                     .ancestors(n)
-                    .filter_map(|a| self.parent(a).map(|p| self.children(p).iter().position(|&c| c == a).unwrap_or(0)))
+                    .filter_map(|a| {
+                        self.parent(a)
+                            .map(|p| self.children(p).iter().position(|&c| c == a).unwrap_or(0))
+                    })
                     .collect();
                 path.reverse();
                 (path, n)
@@ -376,7 +623,10 @@ impl Ui {
         // The point in a box's own place: back through each transform from
         // the outermost.
         let local = |n: NodeId| -> Option<(f32, f32)> {
-            let mut chain: Vec<NodeId> = self.ancestors(n).filter(|&a| self.paint_transform(a).is_some()).collect();
+            let mut chain: Vec<NodeId> = self
+                .ancestors(n)
+                .filter(|&a| self.paint_transform(a).is_some())
+                .collect();
             chain.reverse();
             let mut p = (x, y);
             for a in chain {
@@ -389,7 +639,9 @@ impl Ui {
         // it is painted last, unless it is itself turned.
         let flat = index();
         if let Some(h) = flat
-            && self.ancestors(h).any(|a| self.nodes[a.0].deferred.is_some())
+            && self
+                .ancestors(h)
+                .any(|a| self.nodes[a.0].deferred.is_some())
             && !self.ancestors(h).any(|a| self.paint_transform(a).is_some())
         {
             return Some(h);
@@ -410,7 +662,10 @@ impl Ui {
         // Not on any turned box where it is drawn: what is under, leaving
         // out a turned box the unturned point would have hit.
         let h = flat?;
-        match self.ancestors(h).find(|&a| self.paint_transform(a).is_some()) {
+        match self
+            .ancestors(h)
+            .find(|&a| self.paint_transform(a).is_some())
+        {
             None => Some(h),
             Some(t) => self.hit_test_except(x, y, t),
         }
@@ -446,8 +701,15 @@ impl Ui {
     }
 
     /// The reflection of `node`, painted after it (from `paint_node`).
-    pub(crate) fn paint_reflection(&self, node: NodeId, painter: &mut dyn crate::Painter, opacity: f32) {
-        let Some(&(strength, height)) = self.env.reflections.get(&node) else { return };
+    pub(crate) fn paint_reflection(
+        &self,
+        node: NodeId,
+        painter: &mut dyn crate::Painter,
+        opacity: f32,
+    ) {
+        let Some(&(strength, height)) = self.env.reflections.get(&node) else {
+            return;
+        };
         if self.env.reflecting.get() {
             return;
         }
@@ -456,18 +718,32 @@ impl Ui {
         let shown = r.height * height.clamp(0.0, 1.0);
         let floor = r.y + r.height + gap;
         // Mirrored about the line under it.
-        painter.push_clip(Rect { x: r.x - 2.0, y: floor, width: r.width + 4.0, height: shown });
+        painter.push_clip(Rect {
+            x: r.x - 2.0,
+            y: floor,
+            width: r.width + 4.0,
+            height: shown,
+        });
         painter.push_transform([1.0, 0.0, 0.0, -1.0, 0.0, 2.0 * (r.y + r.height) + gap]);
         self.env.reflecting.set(true);
         self.paint_node_pub(node, painter, opacity * strength.clamp(0.0, 1.0));
         self.env.reflecting.set(false);
         painter.pop_transform();
         // Faded into what is behind it: bands of its colour, thicker down.
-        let behind = self.ancestors(node).skip(1).find_map(|a| self.style(a).background).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+        let behind = self
+            .ancestors(node)
+            .skip(1)
+            .find_map(|a| self.style(a).background)
+            .unwrap_or([0.0, 0.0, 0.0, 1.0]);
         let bands = 16;
         for k in 0..bands {
             let t = (k as f32 + 0.5) / bands as f32;
-            let band = Rect { x: r.x - 2.0, y: floor + shown * k as f32 / bands as f32, width: r.width + 4.0, height: shown / bands as f32 + 0.5 };
+            let band = Rect {
+                x: r.x - 2.0,
+                y: floor + shown * k as f32 / bands as f32,
+                width: r.width + 4.0,
+                height: shown / bands as f32 + 0.5,
+            };
             painter.fill_rect(band, [behind[0], behind[1], behind[2], t.powf(0.7)]);
         }
         painter.pop_clip();
@@ -475,7 +751,13 @@ impl Ui {
 
     /// The cylinders' items placed by where they now are.
     pub(crate) fn place_cylinders(&mut self) {
-        let lists: Vec<NodeId> = self.env.cylinders.iter().copied().filter(|&s| self.contains(s)).collect();
+        let lists: Vec<NodeId> = self
+            .env
+            .cylinders
+            .iter()
+            .copied()
+            .filter(|&s| self.contains(s))
+            .collect();
         self.env.cylinders = lists.clone();
         for l in lists {
             let r = self.rect(l);
@@ -500,7 +782,13 @@ impl Ui {
 
     /// The carousels' items placed by where they now are.
     pub(crate) fn place_carousels(&mut self) {
-        let strips: Vec<NodeId> = self.env.carousels.iter().copied().filter(|&s| self.contains(s)).collect();
+        let strips: Vec<NodeId> = self
+            .env
+            .carousels
+            .iter()
+            .copied()
+            .filter(|&s| self.contains(s))
+            .collect();
         self.env.carousels = strips.clone();
         for s in strips {
             let r = self.rect(s);
@@ -526,7 +814,11 @@ impl<S: 'static> Input<S> {
     /// `max_degrees`, lifted a little with a glare and a shadow, and settle
     /// back flat when it leaves. Reduced motion leaves it flat.
     pub fn tilt_on_hover(&mut self, ui: &mut Ui, node: NodeId, max_degrees: f32) {
-        let base = ui.transform3d(node).unwrap_or(Transform3d { glare: true, shadow: true, ..Transform3d::default() });
+        let base = ui.transform3d(node).unwrap_or(Transform3d {
+            glare: true,
+            shadow: true,
+            ..Transform3d::default()
+        });
         ui.set_transform3d(node, base);
         let max = max_degrees.to_radians();
         let tilted = Rc::new(Cell::new(false));
@@ -536,11 +828,24 @@ impl<S: 'static> Input<S> {
                 return;
             }
             let r = ui.rect(node);
-            let (u, v) = (((x - r.x) / r.width.max(1.0)) * 2.0 - 1.0, ((y - r.y) / r.height.max(1.0)) * 2.0 - 1.0);
+            let (u, v) = (
+                ((x - r.x) / r.width.max(1.0)) * 2.0 - 1.0,
+                ((y - r.y) / r.height.max(1.0)) * 2.0 - 1.0,
+            );
             // The side under the pointer comes toward it, on springs: it
             // follows the pointer with the speed it has.
-            ui.spring_to(node, Property::RotateY, -u.clamp(-1.0, 1.0) * max, Spring::snappy());
-            ui.spring_to(node, Property::RotateX, v.clamp(-1.0, 1.0) * max, Spring::snappy());
+            ui.spring_to(
+                node,
+                Property::RotateY,
+                -u.clamp(-1.0, 1.0) * max,
+                Spring::snappy(),
+            );
+            ui.spring_to(
+                node,
+                Property::RotateX,
+                v.clamp(-1.0, 1.0) * max,
+                Spring::snappy(),
+            );
             ui.spring_to(node, Property::Depth, 18.0, Spring::snappy());
             t.set(true);
         });
@@ -548,7 +853,9 @@ impl<S: 'static> Input<S> {
             if !ui.contains(node) {
                 return false;
             }
-            let over = input.hovered().is_some_and(|h| ui.contains(h) && ui.ancestors(h).any(|a| a == node));
+            let over = input
+                .hovered()
+                .is_some_and(|h| ui.contains(h) && ui.ancestors(h).any(|a| a == node));
             if tilted.get() && !over {
                 tilted.set(false);
                 // Back flat, with a little wobble.
@@ -572,8 +879,15 @@ impl<S: 'static> Input<S> {
             if p != last && p.0.is_finite() && p.1.is_finite() {
                 last = p;
                 let w = ui.rect(ui.root());
-                let (x, y) = ((p.0 / w.width.max(1.0)) * 2.0 - 1.0, (p.1 / w.height.max(1.0)) * 2.0 - 1.0);
-                ui.set_light(Light { x: x.clamp(-1.0, 1.0), y: y.clamp(-1.0, 1.0), ..ui.light() });
+                let (x, y) = (
+                    (p.0 / w.width.max(1.0)) * 2.0 - 1.0,
+                    (p.1 / w.height.max(1.0)) * 2.0 - 1.0,
+                );
+                ui.set_light(Light {
+                    x: x.clamp(-1.0, 1.0),
+                    y: y.clamp(-1.0, 1.0),
+                    ..ui.light()
+                });
             }
             true
         });
@@ -584,7 +898,14 @@ impl<S: 'static> Input<S> {
     /// how it was held when this began. Reduced motion leaves it flat.
     pub fn tilt_with_device(&mut self, ui: &mut Ui, node: NodeId, max_degrees: f32) {
         if ui.transform3d(node).is_none() {
-            ui.set_transform3d(node, Transform3d { glare: true, shadow: true, ..Transform3d::default() });
+            ui.set_transform3d(
+                node,
+                Transform3d {
+                    glare: true,
+                    shadow: true,
+                    ..Transform3d::default()
+                },
+            );
         }
         let max = max_degrees.to_radians();
         let mut rest: Option<(f32, f32)> = None;
@@ -609,14 +930,17 @@ impl<S: 'static> Input<S> {
     }
 }
 
-fn input_on_move<S: 'static>(input: &mut Input<S>, node: NodeId, mut f: impl FnMut(&mut Ui, f32, f32) + 'static) {
+fn input_on_move<S: 'static>(
+    input: &mut Input<S>,
+    node: NodeId,
+    mut f: impl FnMut(&mut Ui, f32, f32) + 'static,
+) {
     input.on(node, Phase::Bubble, move |_, ui, e, _| {
         if let Event::PointerMove { x, y } = *e {
             f(ui, x, y);
         }
     });
 }
-
 
 /// A card with two faces, turned over (about its vertical axis) when
 /// `flipped` changes: by a click, a tap, Space or Enter on it, or the app.
@@ -645,15 +969,41 @@ pub fn flip_card<S: 'static>(
     let f = ui.add_box(card, face.clone());
     let b = ui.add_box(card, face);
     for n in [f, b] {
-        ui.token_style(n, &[("background", crate::environment::Token::Raised), ("color", crate::environment::Token::Text)]);
+        ui.token_style(
+            n,
+            &[
+                ("background", crate::environment::Token::Raised),
+                ("color", crate::environment::Token::Text),
+            ],
+        );
     }
     front(ui, f);
     back(ui, b);
-    ui.set_transform3d(card, Transform3d { shadow: true, glare: true, ..Transform3d::default() });
-    ui.set_transform3d(f, Transform3d { hide_backface: true, ..Transform3d::default() });
+    ui.set_transform3d(
+        card,
+        Transform3d {
+            shadow: true,
+            glare: true,
+            ..Transform3d::default()
+        },
+    );
+    ui.set_transform3d(
+        f,
+        Transform3d {
+            hide_backface: true,
+            ..Transform3d::default()
+        },
+    );
     // The back is turned half round within the card: when the card turns
     // over, it faces the viewer the right way round.
-    ui.set_transform3d(b, Transform3d { rotate_y: std::f32::consts::PI, hide_backface: true, ..Transform3d::default() });
+    ui.set_transform3d(
+        b,
+        Transform3d {
+            rotate_y: std::f32::consts::PI,
+            hide_backface: true,
+            ..Transform3d::default()
+        },
+    );
     let mut sem = Semantics::new(Role::Button).label(label);
     sem.description = Some("Flips the card".into());
     ui.set_semantics(card, sem);
@@ -690,7 +1040,11 @@ pub fn flip_card<S: 'static>(
         }
         true
     });
-    FlipCard { card, front: f, back: b }
+    FlipCard {
+        card,
+        front: f,
+        back: b,
+    }
 }
 
 /// The projective map from the box `(x, y, w, h)` to the quad `q` (its
@@ -700,7 +1054,11 @@ pub(crate) fn homography_to(q: [(f32, f32); 4], (x0, y0, w, h): (f32, f32, f32, 
     let (sx, sy) = (ax - bx + cx - dx, ay - by + cy - dy);
     let (dx1, dy1, dx2, dy2) = (bx - cx, by - cy, dx - cx, dy - cy);
     let den = dx1 * dy2 - dx2 * dy1;
-    let (g, hh) = if den.abs() < 1e-12 { (0.0, 0.0) } else { ((sx * dy2 - dx2 * sy) / den, (dx1 * sy - sx * dy1) / den) };
+    let (g, hh) = if den.abs() < 1e-12 {
+        (0.0, 0.0)
+    } else {
+        ((sx * dy2 - dx2 * sy) / den, (dx1 * sy - sx * dy1) / den)
+    };
     let (a, b, c) = (bx - ax + g * bx, dx - ax + hh * dx, ax);
     let (d, e, f) = (by - ay + g * by, dy - ay + hh * dy, ay);
     // After (x, y) ↦ ((x − x0) / w, (y − y0) / h).
@@ -722,7 +1080,10 @@ pub(crate) fn homography_to(q: [(f32, f32); 4], (x0, y0, w, h): (f32, f32, f32, 
 /// Where a projective map `h` takes `(x, y)`.
 pub fn apply_homography(h: [f32; 9], x: f32, y: f32) -> (f32, f32) {
     let w = h[6] * x + h[7] * y + h[8];
-    ((h[0] * x + h[1] * y + h[2]) / w, (h[3] * x + h[4] * y + h[5]) / w)
+    (
+        (h[0] * x + h[1] * y + h[2]) / w,
+        (h[3] * x + h[4] * y + h[5]) / w,
+    )
 }
 
 /// Where a 2D transform `m` takes `(x, y)`.
@@ -754,7 +1115,11 @@ pub struct Light {
 impl Default for Light {
     fn default() -> Self {
         // From the top left, as a window's light usually is.
-        Self { x: -0.4, y: -0.6, intensity: 1.0 }
+        Self {
+            x: -0.4,
+            y: -0.6,
+            intensity: 1.0,
+        }
     }
 }
 
@@ -821,11 +1186,21 @@ pub fn card_deck<S: 'static>(
                 b.remove(0)
             };
             let w = ui.rect(deck).width.max(1.0);
-            let sign = if dir == SwipeDirection::Right { 1.0 } else { -1.0 };
+            let sign = if dir == SwipeDirection::Right {
+                1.0
+            } else {
+                -1.0
+            };
             let spring = Spring::new(120.0, 18.0, 1.0);
             ui.spring_to(top.1, Property::Left, sign * w * 1.6, spring);
             if let Some(t) = ui.transform3d(top.1) {
-                ui.set_transform3d(top.1, Transform3d { rotate_z: t.rotate_z, ..t });
+                ui.set_transform3d(
+                    top.1,
+                    Transform3d {
+                        rotate_z: t.rotate_z,
+                        ..t
+                    },
+                );
             }
             ui.remove_with(top.1, crate::transitions::Transition::Fade, 0.4);
             let mut list = cards.get(s);
@@ -839,7 +1214,9 @@ pub fn card_deck<S: 'static>(
     // Dragged: the top card follows, tipping; let go, it goes or comes back.
     let (b, d, f) = (built.clone(), drag.clone(), fly.clone());
     input.on(deck, Phase::Bubble, move |s, ui, e, cx| {
-        let Some(&(_, top)) = b.borrow().first() else { return };
+        let Some(&(_, top)) = b.borrow().first() else {
+            return;
+        };
         match *e {
             Event::PointerDown { x, y, .. } => {
                 d.set(Some((x, y)));
@@ -854,7 +1231,13 @@ pub fn card_deck<S: 'static>(
                         st.top = crate::Length::Px(dy * 0.3);
                     });
                     if let Some(t) = ui.transform3d(top) {
-                        ui.set_transform3d(top, Transform3d { rotate_z: dx / w * 0.35, ..t });
+                        ui.set_transform3d(
+                            top,
+                            Transform3d {
+                                rotate_z: dx / w * 0.35,
+                                ..t
+                            },
+                        );
                     }
                 }
             }
@@ -863,7 +1246,15 @@ pub fn card_deck<S: 'static>(
                     let w = ui.rect(deck).width.max(1.0);
                     let dx = x - x0;
                     if dx.abs() > w / 3.0 {
-                        f(s, ui, if dx > 0.0 { SwipeDirection::Right } else { SwipeDirection::Left });
+                        f(
+                            s,
+                            ui,
+                            if dx > 0.0 {
+                                SwipeDirection::Right
+                            } else {
+                                SwipeDirection::Left
+                            },
+                        );
                     } else {
                         let spring = Spring::snappy();
                         ui.spring_to(top, Property::Left, 0.0, spring);
@@ -994,7 +1385,13 @@ pub fn cube<S: 'static>(
     // What turns: an angle, on a node of its own that is never drawn.
     let driver = ui.add_box(cube, style! { display: none; });
     let step = std::f32::consts::TAU / n as f32;
-    ui.set_transform3d(driver, Transform3d { rotate_y: -(selected.get(state).min(n - 1) as f32) * step, ..Transform3d::default() });
+    ui.set_transform3d(
+        driver,
+        Transform3d {
+            rotate_y: -(selected.get(state).min(n - 1) as f32) * step,
+            ..Transform3d::default()
+        },
+    );
     let sel = selected.clone();
     input.on_key(cube, move |s, _, key, _, _| {
         let k = sel.get(s);
@@ -1023,7 +1420,12 @@ pub fn cube<S: 'static>(
             while now - target > std::f32::consts::PI {
                 target += std::f32::consts::TAU;
             }
-            ui.spring_to(driver, Property::RotateY, target, Spring::new(140.0, 20.0, 1.0));
+            ui.spring_to(
+                driver,
+                Property::RotateY,
+                target,
+                Spring::new(140.0, 20.0, 1.0),
+            );
             aimed = Some(want);
         }
         // Each face where the angle puts it round the cube's middle.
@@ -1048,7 +1450,11 @@ pub fn cube<S: 'static>(
             ui.semantics_mut(f).hidden = k != want;
         }
         // Painted far faces first, so the nearest covers them as they turn.
-        let mut by_depth: Vec<(f32, NodeId)> = faces2.iter().enumerate().map(|(k, &f)| ((angle + k as f32 * step).cos(), f)).collect();
+        let mut by_depth: Vec<(f32, NodeId)> = faces2
+            .iter()
+            .enumerate()
+            .map(|(k, &f)| ((angle + k as f32 * step).cos(), f))
+            .collect();
         by_depth.sort_by(|a, b| a.0.total_cmp(&b.0));
         for (i, &(_, f)) in by_depth.iter().enumerate() {
             if ui.children(cube).get(i) != Some(&f) {
@@ -1058,7 +1464,10 @@ pub fn cube<S: 'static>(
         ui.semantics_mut(cube).value = Some(format!("{} of {n}", want + 1));
         true
     });
-    Cube { cube, faces: face_nodes }
+    Cube {
+        cube,
+        faces: face_nodes,
+    }
 }
 
 /// A split-flap display: a character a cell, each cut across its middle,
@@ -1083,7 +1492,14 @@ struct FlapCell {
 /// A split-flap display of `cells` characters, each `width` × `height`,
 /// under `parent`; `label` names it for assistive technology, which hears
 /// what it shows as its value (the halves are hidden from it).
-pub fn split_flap(ui: &mut Ui, parent: NodeId, label: &str, cells: usize, width: f32, height: f32) -> SplitFlap {
+pub fn split_flap(
+    ui: &mut Ui,
+    parent: NodeId,
+    label: &str,
+    cells: usize,
+    width: f32,
+    height: f32,
+) -> SplitFlap {
     use crate::environment::Token;
     let node = ui.add_box(parent, style! { display: flex; gap: 4px; flex-shrink: 0; });
     let mut sem = Semantics::new(Role::Status).label(label);
@@ -1092,7 +1508,10 @@ pub fn split_flap(ui: &mut Ui, parent: NodeId, label: &str, cells: usize, width:
     let half = height / 2.0;
     let mut out = vec![];
     for _ in 0..cells {
-        let cell = ui.add_box(node, style! { position: relative; border-radius: 6px; overflow: hidden; flex-shrink: 0; });
+        let cell = ui.add_box(
+            node,
+            style! { position: relative; border-radius: 6px; overflow: hidden; flex-shrink: 0; },
+        );
         ui.update_style(cell, |s| {
             s.width = crate::Length::Px(width);
             s.height = crate::Length::Px(height);
@@ -1100,7 +1519,10 @@ pub fn split_flap(ui: &mut Ui, parent: NodeId, label: &str, cells: usize, width:
         // A half: a box as wide as the cell and half as tall, showing the
         // top or the bottom of a character as tall as the cell.
         let mut half_box = |lower: bool| {
-            let h = ui.add_box(cell, style! { position: absolute; left: 0px; overflow: hidden; });
+            let h = ui.add_box(
+                cell,
+                style! { position: absolute; left: 0px; overflow: hidden; },
+            );
             ui.token_style(h, &[("background", Token::Raised), ("color", Token::Text)]);
             ui.update_style(h, |s| {
                 s.width = crate::Length::Px(width);
@@ -1123,19 +1545,37 @@ pub fn split_flap(ui: &mut Ui, parent: NodeId, label: &str, cells: usize, width:
         let falling = half_box(false);
         let landing = half_box(true);
         // The seam.
-        let seam = ui.add_box(cell, style! { position: absolute; left: 0px; height: 1px; background: rgba(0,0,0,0.45); });
+        let seam = ui.add_box(
+            cell,
+            style! { position: absolute; left: 0px; height: 1px; background: rgba(0,0,0,0.45); },
+        );
         ui.update_style(seam, |s| {
             s.width = crate::Length::Px(width);
             s.top = crate::Length::Px(half - 0.5);
         });
         // The falling half turns on its lower edge, the landing one on its
         // upper; both darken as they turn from the light.
-        let hinge = |origin_y: f32, rotate_x: f32| Transform3d { origin: (0.5, origin_y), rotate_x, perspective: height * 6.0, shade: true, ..Transform3d::default() };
+        let hinge = |origin_y: f32, rotate_x: f32| Transform3d {
+            origin: (0.5, origin_y),
+            rotate_x,
+            perspective: height * 6.0,
+            shade: true,
+            ..Transform3d::default()
+        };
         ui.set_transform3d(falling, hinge(1.0, -FLAT));
         ui.set_transform3d(landing, hinge(0.0, 0.0));
-        out.push(FlapCell { top, bottom, falling, landing });
+        out.push(FlapCell {
+            top,
+            bottom,
+            falling,
+            landing,
+        });
     }
-    SplitFlap { node, cells: out, shown: vec![' '; cells] }
+    SplitFlap {
+        node,
+        cells: out,
+        shown: vec![' '; cells],
+    }
 }
 
 /// A quarter turn, a little short of edge-on so the box stays drawable.
@@ -1147,7 +1587,11 @@ impl SplitFlap {
     pub fn set(&mut self, ui: &mut Ui, text: &str) {
         use crate::animation::{Animation, Value};
         use threers_math::easing::Easing;
-        let want: Vec<char> = text.chars().chain(std::iter::repeat(' ')).take(self.cells.len()).collect();
+        let want: Vec<char> = text
+            .chars()
+            .chain(std::iter::repeat(' '))
+            .take(self.cells.len())
+            .collect();
         if want == self.shown {
             return;
         }
@@ -1160,23 +1604,46 @@ impl SplitFlap {
             if old == new {
                 continue;
             }
-            for (half, s) in [(cell.top, &new), (cell.bottom, &old), (cell.falling, &old), (cell.landing, &new)] {
+            for (half, s) in [
+                (cell.top, &new),
+                (cell.bottom, &old),
+                (cell.falling, &old),
+                (cell.landing, &new),
+            ] {
                 let g = glyph(ui, half);
                 ui.set_text(g, s.as_str());
             }
             if ui.reduce_motion() {
                 for (n, angle) in [(cell.falling, -FLAT), (cell.landing, 0.0)] {
                     let t = ui.transform3d(n).unwrap_or_default();
-                    ui.set_transform3d(n, Transform3d { rotate_x: angle, ..t });
+                    ui.set_transform3d(
+                        n,
+                        Transform3d {
+                            rotate_x: angle,
+                            ..t
+                        },
+                    );
                 }
                 continue;
             }
             let delay = order * 0.04;
             order += 1.0;
-            let mut down = Animation::new(Property::RotateX, Value::Number(0.0), Value::Number(-FLAT), fall).easing(Easing::QuadIn);
+            let mut down = Animation::new(
+                Property::RotateX,
+                Value::Number(0.0),
+                Value::Number(-FLAT),
+                fall,
+            )
+            .easing(Easing::QuadIn);
             down.delay = delay;
             ui.animate(cell.falling, down);
-            let mut land = Animation::new(Property::RotateX, Value::Number(FLAT), Value::Number(0.0), fall * 1.2).easing(Easing::BounceOut);
+            let mut land = Animation::new(
+                Property::RotateX,
+                Value::Number(FLAT),
+                Value::Number(0.0),
+                fall * 1.2,
+            )
+            .easing(Easing::BounceOut);
             land.delay = delay + fall;
             ui.animate(cell.landing, land);
         }
@@ -1202,7 +1669,10 @@ mod split_flap_tests {
         board.set(&mut ui, "AB");
         ui.layout(400.0, 200.0, &mut FixedWidthText(7.0));
         assert_eq!(board.text(), "AB ");
-        assert_eq!(ui.semantics(board.node).and_then(|s| s.value.as_deref()), Some("AB"));
+        assert_eq!(
+            ui.semantics(board.node).and_then(|s| s.value.as_deref()),
+            Some("AB")
+        );
         for _ in 0..60 {
             ui.step(1.0 / 60.0);
         }
@@ -1222,10 +1692,19 @@ mod split_flap_tests {
         for _ in 0..60 {
             ui.step(1.0 / 60.0);
         }
-        assert!(ui.transform3d(c.landing).unwrap().rotate_x.abs() < 1e-3, "landed");
+        assert!(
+            ui.transform3d(c.landing).unwrap().rotate_x.abs() < 1e-3,
+            "landed"
+        );
         // What each half shows: the new top and, landed, the new bottom.
-        let text = |half: NodeId| ui.text_lines_of(ui.children(ui.children(half)[0])[0]).concat();
-        assert_eq!((text(c.top), text(c.landing)), ("C".to_string(), "C".to_string()));
+        let text = |half: NodeId| {
+            ui.text_lines_of(ui.children(ui.children(half)[0])[0])
+                .concat()
+        };
+        assert_eq!(
+            (text(c.top), text(c.landing)),
+            ("C".to_string(), "C".to_string())
+        );
     }
 }
 
@@ -1243,8 +1722,22 @@ mod backface_tests {
         // As the cube puts its faces: turned by `a` about its middle, `d`
         // out from the cube's centre.
         let d = 100.0;
-        let face = |a: f32| Transform3d { rotate_y: a, translate_x: d * a.sin(), depth: d * (a.cos() - 1.0), perspective: 500.0, hide_backface: true, ..Transform3d::default() };
-        for (a, shows) in [(0.0, true), (0.6, true), (-0.6, true), (std::f32::consts::FRAC_PI_2, false), (-std::f32::consts::FRAC_PI_2, false), (std::f32::consts::PI, false)] {
+        let face = |a: f32| Transform3d {
+            rotate_y: a,
+            translate_x: d * a.sin(),
+            depth: d * (a.cos() - 1.0),
+            perspective: 500.0,
+            hide_backface: true,
+            ..Transform3d::default()
+        };
+        for (a, shows) in [
+            (0.0, true),
+            (0.6, true),
+            (-0.6, true),
+            (std::f32::consts::FRAC_PI_2, false),
+            (-std::f32::consts::FRAC_PI_2, false),
+            (std::f32::consts::PI, false),
+        ] {
             ui.set_transform3d(f, face(a));
             assert_eq!(ui.faces_viewer(f), shows, "turned {a}");
         }

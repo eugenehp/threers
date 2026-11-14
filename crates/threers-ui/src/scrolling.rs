@@ -115,7 +115,11 @@ impl Ui {
             // Out to whole device pixels, as layout puts the offset: else
             // the rounding can leave a fraction of it out of view.
             let ratio = self.pixel_ratio;
-            let delta = if delta > 0.0 { (delta * ratio - 1e-3).ceil() / ratio } else { (delta * ratio + 1e-3).floor() / ratio };
+            let delta = if delta > 0.0 {
+                (delta * ratio - 1e-3).ceil() / ratio
+            } else {
+                (delta * ratio + 1e-3).floor() / ratio
+            };
             if delta != 0.0 {
                 self.scroll_to(c, now + delta);
                 let moved = self.style(c).scroll_top - now;
@@ -151,7 +155,9 @@ impl Ui {
             width,
             height: view,
         };
-        let h = (view / content * track.height).max(MIN_THUMB).min(track.height);
+        let h = (view / content * track.height)
+            .max(MIN_THUMB)
+            .min(track.height);
         let travel = (content - view).max(1e-6);
         let thumb = Rect {
             y: track.y + scrolled / travel * (track.height - h),
@@ -169,11 +175,20 @@ impl Ui {
 
     /// [`scrollbar_at`](Self::scrollbar_at), with the thumb taking points up
     /// to `reach` to its left too (for a finger).
-    pub(crate) fn scrollbar_reach(&self, x: f32, y: f32, reach: f32) -> Option<(NodeId, ScrollbarPart)> {
+    pub(crate) fn scrollbar_reach(
+        &self,
+        x: f32,
+        y: f32,
+        reach: f32,
+    ) -> Option<(NodeId, ScrollbarPart)> {
         let hit = self.hit_test(x, y)?;
         self.ancestors(hit).find_map(|n| {
             let g = self.scrollbar(n)?;
-            let grab = Rect { x: g.thumb.x - reach, width: g.thumb.width + reach, ..g.thumb };
+            let grab = Rect {
+                x: g.thumb.x - reach,
+                width: g.thumb.width + reach,
+                ..g.thumb
+            };
             if grab.contains(x, y) {
                 Some((n, ScrollbarPart::Thumb))
             } else if g.track.contains(x, y) {
@@ -195,7 +210,9 @@ impl Ui {
     /// Shows `container`'s `auto` scrollbar as if just used: the pointer is
     /// over it, or drags its thumb. It fades again after `scrollbar-fade`.
     pub fn reveal_scrollbar(&mut self, container: NodeId) {
-        if self.contains(container) && self.style(container).scrollbar_visibility == ScrollbarVisibility::Auto {
+        if self.contains(container)
+            && self.style(container).scrollbar_visibility == ScrollbarVisibility::Auto
+        {
             let top = self.style(container).scroll_top;
             self.scrollbar_use.insert(container, (top, self.clock));
         }
@@ -247,13 +264,19 @@ impl Ui {
         let mut showing = false;
         for i in 0..self.nodes.len() {
             let node = &self.nodes[i];
-            if node.removed || !node.style.scroll || node.style.scrollbar_visibility != ScrollbarVisibility::Auto {
+            if node.removed
+                || !node.style.scroll
+                || node.style.scrollbar_visibility != ScrollbarVisibility::Auto
+            {
                 continue;
             }
             let id = self.id_at(i);
             let top = node.style.scroll_top;
             let clock = self.clock;
-            let used = self.scrollbar_use.entry(id).or_insert((top, f64::NEG_INFINITY));
+            let used = self
+                .scrollbar_use
+                .entry(id)
+                .or_insert((top, f64::NEG_INFINITY));
             if used.0 != top {
                 *used = (top, clock);
             }
@@ -276,7 +299,11 @@ impl Ui {
     fn scroll_into_view_x(&mut self, id: NodeId) {
         let target = self.rect(id);
         let (mut left, mut right) = (target.x, target.x + target.width);
-        let containers: Vec<NodeId> = self.ancestors(id).skip(1).filter(|&n| self.style(n).scroll_x).collect();
+        let containers: Vec<NodeId> = self
+            .ancestors(id)
+            .skip(1)
+            .filter(|&n| self.style(n).scroll_x)
+            .collect();
         for c in containers {
             let r = self.rect(c);
             let b = self.style(c).border;
@@ -290,7 +317,11 @@ impl Ui {
                 0.0
             };
             let ratio = self.pixel_ratio;
-            let delta = if delta > 0.0 { (delta * ratio - 1e-3).ceil() / ratio } else { (delta * ratio + 1e-3).floor() / ratio };
+            let delta = if delta > 0.0 {
+                (delta * ratio - 1e-3).ceil() / ratio
+            } else {
+                (delta * ratio + 1e-3).floor() / ratio
+            };
             if delta != 0.0 {
                 self.scroll_to_x(c, now + delta);
                 let moved = self.style(c).scroll_left - now;
@@ -302,4 +333,3 @@ impl Ui {
         }
     }
 }
-

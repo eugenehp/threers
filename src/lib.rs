@@ -243,10 +243,10 @@ pub mod overlay;
 #[cfg(feature = "render")]
 pub mod renderer;
 // Many cameras: layouts, transitions, cameras as textures, feedback.
-#[cfg(feature = "render")]
-pub mod views;
 #[cfg(winit_window)]
 pub mod sketch;
+#[cfg(feature = "render")]
+pub mod views;
 // A retained UI: the `threers-ui` crate plus its painter onto `overlay`.
 // (Its docs are the module's own `//!`; an outer `///` here would make their
 // intra-doc links resolve in this scope, where `Ui` is not.)

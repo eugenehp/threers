@@ -117,6 +117,9 @@ pub(crate) struct Node {
     /// wrapping) follows its parent's when that is restyled, as CSS
     /// inherits them, until it is given a style of its own.
     pub inherit_font: bool,
+    /// For a box: which of its font's parts it takes from its parent (see
+    /// [`inheritable`]), decided from the style it was given.
+    pub inherits: u8,
     /// A path node's shape turned, scaled or moved (see
     /// [`Ui::set_path_transform`]).
     pub transform: Option<super::transform::Transformation>,
@@ -170,6 +173,7 @@ impl Node {
             group: None,
             inherit_color: false,
             inherit_font: false,
+            inherits: 0,
             transform: None,
         }
     }
@@ -286,7 +290,11 @@ impl Ui {
     /// Device pixels per UI pixel (a display's scale factor): scroll
     /// offsets are laid out on whole device pixels, as a browser scrolls.
     pub fn set_pixel_ratio(&mut self, ratio: f32) {
-        let ratio = if ratio.is_finite() && ratio > 0.0 { ratio } else { 1.0 };
+        let ratio = if ratio.is_finite() && ratio > 0.0 {
+            ratio
+        } else {
+            1.0
+        };
         if self.pixel_ratio != ratio {
             self.pixel_ratio = ratio;
             self.invalidate_layout();
@@ -316,13 +324,19 @@ impl Ui {
     /// another).
     #[track_caller]
     pub(crate) fn node(&self, id: NodeId) -> &Node {
-        assert!(self.contains(id), "{id:?} is not in this Ui: it was removed, or is another tree's");
+        assert!(
+            self.contains(id),
+            "{id:?} is not in this Ui: it was removed, or is another tree's"
+        );
         &self.nodes[id.0]
     }
 
     #[track_caller]
     pub(crate) fn node_mut(&mut self, id: NodeId) -> &mut Node {
-        assert!(self.contains(id), "{id:?} is not in this Ui: it was removed, or is another tree's");
+        assert!(
+            self.contains(id),
+            "{id:?} is not in this Ui: it was removed, or is another tree's"
+        );
         &mut self.nodes[id.0]
     }
 
@@ -403,12 +417,22 @@ impl Ui {
     /// How many nodes the last [`Ui::layout`] laid out itself, as against
     /// putting back from a [`Ui::cache_layout`] boundary.
     pub fn laid_out_last(&self) -> usize {
-        self.nodes.iter().filter(|n| n.placed_pass == self.pass && !n.removed).count()
+        self.nodes
+            .iter()
+            .filter(|n| n.placed_pass == self.pass && !n.removed)
+            .count()
     }
 
     #[track_caller]
-    fn add(&mut self, parent: NodeId, style: Style, kind: NodeKind) -> NodeId {
+    fn add(&mut self, parent: NodeId, mut style: Style, kind: NodeKind) -> NodeId {
         self.node(parent);
+        // A box without a font of its own: its parent's (CSS inherits it).
+        let inherits = if matches!(kind, NodeKind::Box) {
+            inheritable(&style)
+        } else {
+            0
+        };
+        inherit_into(&self.nodes[parent.0].style, &mut style, inherits);
         let origin = Some(std::panic::Location::caller());
         let id = match self.free.pop() {
             Some(i) => {
@@ -428,6 +452,7 @@ impl Ui {
             }
         };
         self.nodes[parent.0].children.push(id);
+        self.nodes[id.0].inherits = inherits;
         self.touch(parent);
         id
     }
@@ -519,10 +544,23 @@ impl Ui {
     /// Replaces a path node's data (`d`), keeping its view box, stroke and
     /// fill. Does nothing to a node that is not a path.
     pub fn set_path_data(&mut self, id: NodeId, d: Vec<String>) {
-        if let NodeKind::Path { view_box, stroke, fill, d: old } = self.kind(id).clone()
+        if let NodeKind::Path {
+            view_box,
+            stroke,
+            fill,
+            d: old,
+        } = self.kind(id).clone()
             && old != d
         {
-            self.set_kind(id, NodeKind::Path { d, view_box, stroke, fill });
+            self.set_kind(
+                id,
+                NodeKind::Path {
+                    d,
+                    view_box,
+                    stroke,
+                    fill,
+                },
+            );
         }
     }
 
@@ -549,7 +587,12 @@ impl Ui {
             // the next generation, so its old ids stop naming it.
             *n = Node {
                 removed: true,
-                ..Node::new(Style::default(), NodeKind::Box, None, n.generation.wrapping_add(1))
+                ..Node::new(
+                    Style::default(),
+                    NodeKind::Box,
+                    None,
+                    n.generation.wrapping_add(1),
+                )
             };
             self.free.push(i);
         }
@@ -627,7 +670,13 @@ impl Ui {
     /// would not: the next change of state puts that back), and they go
     /// over it again.
     pub fn update_style(&mut self, id: NodeId, f: impl FnOnce(&mut Style)) {
-        if let Some(base) = self.node_mut(id).states.as_mut().and_then(|s| s.base.as_mut()) {
+        let font_before = inherited_of(&self.node(id).style);
+        if let Some(base) = self
+            .node_mut(id)
+            .states
+            .as_mut()
+            .and_then(|s| s.base.as_mut())
+        {
             f(base);
             self.restyle(id);
         } else {
@@ -642,14 +691,34 @@ impl Ui {
                 self.touch(id);
             }
         }
+        // A new font: on to what inherits it.
+        if inherited_of(&self.nodes[id.0].style) != font_before
+            && matches!(self.nodes[id.0].kind, NodeKind::Box)
+        {
+            self.inherit_text_style(id);
+            self.pass_inherited_down(id);
+        }
     }
 
-    pub fn set_style(&mut self, id: NodeId, style: Style) {
+    pub fn set_style(&mut self, id: NodeId, mut style: Style) {
+        // A box without a font family of its own takes its parent's (before
+        // comparing, or every restyle would look like a change).
+        let font_before = inherited_of(&self.nodes[id.0].style);
+        if matches!(self.nodes[id.0].kind, NodeKind::Box) {
+            let inherits = inheritable(&style);
+            self.nodes[id.0].inherits = inherits;
+            if let Some(p) = self.nodes[id.0].parent {
+                inherit_into(&self.nodes[p.0].style.clone(), &mut style, inherits);
+            }
+        }
         // A node with state styles takes this as its style out of every
         // state, and the state it is in goes on top.
         if let Some(states) = &mut self.node_mut(id).states {
             states.base = Some(style);
             self.restyle(id);
+            if inherited_of(&self.nodes[id.0].style) != font_before {
+                self.pass_inherited_down(id);
+            }
             return;
         }
         if self.node(id).style != style {
@@ -674,7 +743,38 @@ impl Ui {
                 self.reembolden_text(id, weight);
             } else {
                 self.inherit_text_style(id);
+                if inherited_of(&self.nodes[id.0].style) != font_before {
+                    self.pass_inherited_down(id);
+                }
             }
+        }
+    }
+
+    /// `id`'s font (family, size, weight, line height, alignment), on to
+    /// the boxes under it that do not set their own (and on to their text),
+    /// as CSS inherits it.
+    pub(crate) fn pass_inherited_down(&mut self, id: NodeId) {
+        let parent = self.nodes[id.0].style.clone();
+        for c in self.nodes[id.0].children.clone() {
+            if !matches!(self.nodes[c.0].kind, NodeKind::Box) {
+                continue;
+            }
+            let before = inherited_of(&self.nodes[c.0].style);
+            let inherits = self.nodes[c.0].inherits;
+            if let Some(base) = self.nodes[c.0]
+                .states
+                .as_mut()
+                .and_then(|s| s.base.as_mut())
+            {
+                inherit_into(&parent, base, inherits);
+            }
+            inherit_into(&parent, &mut self.nodes[c.0].style, inherits);
+            if inherited_of(&self.nodes[c.0].style) == before {
+                continue;
+            }
+            self.touch(c);
+            self.inherit_text_style(c);
+            self.pass_inherited_down(c);
         }
     }
 
@@ -686,7 +786,9 @@ impl Ui {
             .children(id)
             .iter()
             .copied()
-            .filter(|&c| matches!(self.nodes[c.0].kind, NodeKind::Text(_)) && self.nodes[c.0].inherit_font)
+            .filter(|&c| {
+                matches!(self.nodes[c.0].kind, NodeKind::Text(_)) && self.nodes[c.0].inherit_font
+            })
             .collect();
         for c in texts {
             let s = &self.nodes[c.0].style;
@@ -695,7 +797,12 @@ impl Ui {
                 && self.own_weight(c) == p.font_weight
                 && s.italic == p.italic
                 && s.wrap == p.wrap
-                && self.env.unscaled.get(&c).map_or((s.font_size, s.line_height), |u| *u) == (p.font_size, p.line_height);
+                && self
+                    .env
+                    .unscaled
+                    .get(&c)
+                    .map_or((s.font_size, s.line_height), |u| *u)
+                    == (p.font_size, p.line_height);
             if same {
                 continue;
             }
@@ -781,7 +888,13 @@ impl Ui {
         if self.pass > 0 && !self.nodes[0].dirty && self.viewport == (width, height) {
             return;
         }
+        let new_width = self.viewport.0 != width;
         self.viewport = (width, height);
+        // Styles for window widths (`When::min_width`) before the layout
+        // that uses them.
+        if new_width {
+            self.restyle_for_width();
+        }
         super::layout::layout(self, width, height, text);
         // Container queries restyle by what layout found, and a restyle can
         // move what they read: lay out again until they settle (in two
@@ -903,7 +1016,11 @@ impl Ui {
     /// the view's, and how far it is scrolled, as last laid out.
     pub fn scroll_extent_x(&self, id: NodeId) -> (f32, f32, f32) {
         let n = self.node(id);
-        (n.scroll_width, (n.rect.width - n.style.border.horizontal()).max(0.0), n.scrolled_x)
+        (
+            n.scroll_width,
+            (n.rect.width - n.style.border.horizontal()).max(0.0),
+            n.scrolled_x,
+        )
     }
 
     /// Scrolls `container` sideways to `offset`, inside its extent.
@@ -925,4 +1042,80 @@ impl Ui {
         self.node(id);
         std::iter::successors(Some(id), move |n| self.nodes[n.0].parent)
     }
+}
+
+/// What a box inherits, for telling whether it changed.
+fn inherited_of(
+    s: &Style,
+) -> (
+    String,
+    u32,
+    crate::FontWeight,
+    Option<u32>,
+    crate::style::TextAlign,
+) {
+    (
+        s.font_family.clone(),
+        s.font_size.to_bits(),
+        s.font_weight,
+        s.line_height.map(f32::to_bits),
+        s.text_align,
+    )
+}
+
+const FAMILY: u8 = 1;
+const SIZE: u8 = 2;
+const LINE: u8 = 4;
+const WEIGHT: u8 = 8;
+const ALIGN: u8 = 16;
+
+/// Which parts of its font a box given `s` takes from its parent: those
+/// neither given in CSS (`*_set`) nor given another value than the default
+/// in code (a `Style { font_size: 13.0, .. }` keeps its own); the line
+/// height only with the size (kept in pixels, it is not the parent's for a
+/// size of its own).
+pub(crate) fn inheritable(s: &Style) -> u8 {
+    let d = default_font();
+    let mut m = 0;
+    if !s.font_family_set && s.font_family == d.font_family {
+        m |= FAMILY;
+    }
+    if !s.font_size_set && s.font_size == d.font_size {
+        m |= SIZE;
+        if !s.line_height_set && s.line_height.is_none() {
+            m |= LINE;
+        }
+    }
+    if !s.font_weight_set && s.font_weight == d.font_weight {
+        m |= WEIGHT;
+    }
+    if !s.text_align_set && s.text_align == d.text_align {
+        m |= ALIGN;
+    }
+    m
+}
+
+/// `s` given the parts of `parent`'s font that `inherits` names.
+pub(crate) fn inherit_into(parent: &Style, s: &mut Style, inherits: u8) {
+    if inherits & FAMILY != 0 {
+        s.font_family.clone_from(&parent.font_family);
+    }
+    if inherits & SIZE != 0 {
+        s.font_size = parent.font_size;
+    }
+    if inherits & LINE != 0 {
+        s.line_height = parent.line_height;
+    }
+    if inherits & WEIGHT != 0 {
+        s.font_weight = parent.font_weight;
+    }
+    if inherits & ALIGN != 0 {
+        s.text_align = parent.text_align;
+    }
+}
+
+/// The defaults of what is inherited, made once.
+fn default_font() -> &'static Style {
+    static D: std::sync::OnceLock<Style> = std::sync::OnceLock::new();
+    D.get_or_init(Style::default)
 }

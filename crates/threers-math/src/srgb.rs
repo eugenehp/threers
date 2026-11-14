@@ -88,12 +88,19 @@ mod tests {
     #[test]
     fn the_tables_agree_with_the_curve() {
         for byte in 0..=255u8 {
-            assert_eq!(srgb_to_linear(byte), srgb_to_linear_f32(byte as f32 / 255.0));
+            assert_eq!(
+                srgb_to_linear(byte),
+                srgb_to_linear_f32(byte as f32 / 255.0)
+            );
         }
         let curve = |v: f32| (linear_to_srgb_f32(v) * 255.0).round().clamp(0.0, 255.0) as u8;
         let mut values: Vec<f32> = (0..=1_000_000).map(|i| i as f32 / 1_000_000.0).collect();
         for &t in &tables().steps {
-            values.extend([t, f32::from_bits(t.to_bits() - 1), f32::from_bits(t.to_bits() + 1)]);
+            values.extend([
+                t,
+                f32::from_bits(t.to_bits() - 1),
+                f32::from_bits(t.to_bits() + 1),
+            ]);
         }
         values.extend([-1.0, 2.0, f32::INFINITY, f32::NEG_INFINITY]);
         for v in values {

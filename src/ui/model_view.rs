@@ -42,7 +42,12 @@ impl ModelView {
     pub fn new(ui: &mut Ui, parent: NodeId, style: Style) -> Self {
         let blank = Image::new(1, 1, vec![0; 4]).expect("sized");
         let node = ui.add_image(parent, style, blank);
-        Self { node, renderer: None, size: (0, 0), fov: 40.0 }
+        Self {
+            node,
+            renderer: None,
+            size: (0, 0),
+            fov: 40.0,
+        }
     }
 
     /// The camera `orbit` puts round `target`, for a box `aspect` wide to
@@ -58,9 +63,19 @@ impl ModelView {
     /// Renders `scene` from `orbit` round `target` into the box, at `scale`
     /// device pixels per UI pixel, as the box is laid out now. The renderer
     /// is made (or remade) at the box's size.
-    pub fn render(&mut self, ui: &mut Ui, scene: &mut Scene, orbit: &Orbit, target: Vector3, scale: f32) -> Result<(), String> {
+    pub fn render(
+        &mut self,
+        ui: &mut Ui,
+        scene: &mut Scene,
+        orbit: &Orbit,
+        target: Vector3,
+        scale: f32,
+    ) -> Result<(), String> {
         let r = ui.rect(self.node);
-        let size = (((r.width * scale).round() as u32).max(1), ((r.height * scale).round() as u32).max(1));
+        let size = (
+            ((r.width * scale).round() as u32).max(1),
+            ((r.height * scale).round() as u32).max(1),
+        );
         if self.renderer.is_none() || self.size != size {
             let mut hr = HeadlessRenderer::builder().size(size.0, size.1).build()?;
             hr.set_msaa(4);

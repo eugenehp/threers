@@ -61,7 +61,6 @@ impl<T: Any + Clone + fmt::Debug> Action for T {
     }
 }
 
-
 /// One key with the modifiers held, as bindings spell it: `ctrl-shift-z`,
 /// `cmd-s`, `alt-left`, `shift-tab`, `f5`, `space`.
 ///
@@ -113,13 +112,19 @@ impl Keystroke {
             k if k.chars().count() == 1 => k.to_uppercase(),
             k => {
                 let mut c = k.chars();
-                c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
+                c.next()
+                    .map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
             }
         };
         if mac {
             // Apple's order: control, option, shift, command.
             let mut out = String::new();
-            for (on, sign) in [(m.control, "⌃"), (m.alt, "⌥"), (m.shift, "⇧"), (m.meta, "⌘")] {
+            for (on, sign) in [
+                (m.control, "⌃"),
+                (m.alt, "⌥"),
+                (m.shift, "⇧"),
+                (m.meta, "⌘"),
+            ] {
                 if on {
                     out.push_str(sign);
                 }
@@ -127,7 +132,12 @@ impl Keystroke {
             out + &key
         } else {
             let mut parts: Vec<&str> = vec![];
-            for (on, name) in [(m.control, "Ctrl"), (m.alt, "Alt"), (m.shift, "Shift"), (m.meta, "Win")] {
+            for (on, name) in [
+                (m.control, "Ctrl"),
+                (m.alt, "Alt"),
+                (m.shift, "Shift"),
+                (m.meta, "Win"),
+            ] {
                 if on {
                     parts.push(name);
                 }
@@ -303,7 +313,13 @@ impl Keymap {
     pub fn label_for(&self, action: &str, mac: bool) -> Option<String> {
         let named = |n: &str| n == action || n.rsplit("::").next() == Some(action);
         let b = self.bindings().iter().find(|b| named(b.action.name()))?;
-        Some(b.keys.iter().map(|k| k.label(mac)).collect::<Vec<_>>().join(" "))
+        Some(
+            b.keys
+                .iter()
+                .map(|k| k.label(mac))
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
     }
 
     pub fn bindings(&self) -> &[Binding] {
@@ -329,7 +345,8 @@ impl Keymap {
         match &b.predicate {
             None => Some(contexts.len()),
             Some(p) => {
-                let stack: Vec<KeyContext> = contexts.iter().map(|c| KeyContext::parse(c)).collect();
+                let stack: Vec<KeyContext> =
+                    contexts.iter().map(|c| KeyContext::parse(c)).collect();
                 (0..stack.len()).find(|&i| p.eval(&stack, i))
             }
         }
@@ -371,8 +388,13 @@ impl Keymap {
     pub fn available(&self, contexts: &[&str]) -> Vec<&Binding> {
         let mut best: Vec<(usize, usize)> = vec![];
         for (i, b) in self.bindings.iter().enumerate() {
-            let Some(depth) = Self::depth(b, contexts) else { continue };
-            match best.iter_mut().find(|(j, _)| self.bindings[*j].keys == b.keys) {
+            let Some(depth) = Self::depth(b, contexts) else {
+                continue;
+            };
+            match best
+                .iter_mut()
+                .find(|(j, _)| self.bindings[*j].keys == b.keys)
+            {
                 Some(slot) if depth <= slot.1 => *slot = (i, depth),
                 Some(_) => {}
                 None => best.push((i, depth)),
@@ -390,7 +412,10 @@ impl Keymap {
             return vec![];
         }
         let n = self.pending.len();
-        self.available(contexts).into_iter().filter(|b| b.keys.len() > n && b.keys[..n] == self.pending[..]).collect()
+        self.available(contexts)
+            .into_iter()
+            .filter(|b| b.keys.len() > n && b.keys[..n] == self.pending[..])
+            .collect()
     }
 
     fn lookup(&self, typed: &[Keystroke], contexts: &[&str]) -> Match {
@@ -423,7 +448,10 @@ impl Keymap {
 #[derive(Default)]
 pub struct ActionRegistry {
     #[allow(clippy::type_complexity)]
-    makers: std::collections::HashMap<String, Box<dyn Fn(Option<&ActionArgs>) -> Result<Box<dyn Action>, String>>>,
+    makers: std::collections::HashMap<
+        String,
+        Box<dyn Fn(Option<&ActionArgs>) -> Result<Box<dyn Action>, String>>,
+    >,
 }
 
 /// An action's arguments in a keymap file.
@@ -439,8 +467,10 @@ impl ActionRegistry {
 
     /// `name` makes a copy of `action`, which takes no arguments.
     pub fn register<A: Action + Clone>(&mut self, name: &str, action: A) {
-        self.makers
-            .insert(name.to_owned(), Box::new(move |_| Ok(Box::new(action.clone()) as Box<dyn Action>)));
+        self.makers.insert(
+            name.to_owned(),
+            Box::new(move |_| Ok(Box::new(action.clone()) as Box<dyn Action>)),
+        );
     }
 
     /// `name` makes an action from its arguments with `make`.
@@ -460,14 +490,22 @@ impl ActionRegistry {
 
     /// The action `name` names, made with `args`.
     pub fn make(&self, name: &str, args: Option<&ActionArgs>) -> Result<Box<dyn Action>, String> {
-        let maker = self.makers.get(name).ok_or_else(|| format!("no action named `{name}`"))?;
+        let maker = self
+            .makers
+            .get(name)
+            .ok_or_else(|| format!("no action named `{name}`"))?;
         maker(args)
     }
 }
 
 impl Keymap {
     /// Binds an action already boxed (one made by name).
-    pub fn bind_boxed(&mut self, keys: &str, action: Box<dyn Action>, context: Option<&str>) -> Result<(), String> {
+    pub fn bind_boxed(
+        &mut self,
+        keys: &str,
+        action: Box<dyn Action>,
+        context: Option<&str>,
+    ) -> Result<(), String> {
         let keys = keys
             .split_whitespace()
             .map(Keystroke::parse)
@@ -520,12 +558,17 @@ impl Keymap {
                     serde_json::Value::Array(a) => match a.as_slice() {
                         [serde_json::Value::String(name)] => actions.make(name, None),
                         [serde_json::Value::String(name), args] => actions.make(name, Some(args)),
-                        _ => Err(format!("`{keys}`: an action is a name or [name, arguments]")),
+                        _ => Err(format!(
+                            "`{keys}`: an action is a name or [name, arguments]"
+                        )),
                     },
-                    _ => Err(format!("`{keys}`: an action is a name or [name, arguments]")),
+                    _ => Err(format!(
+                        "`{keys}`: an action is a name or [name, arguments]"
+                    )),
                 };
                 let action = made.map_err(|e| format!("`{keys}`: {e}"))?;
-                self.bind_boxed(keys, action, context).map_err(|e| format!("`{keys}`: {e}"))?;
+                self.bind_boxed(keys, action, context)
+                    .map_err(|e| format!("`{keys}`: {e}"))?;
                 added += 1;
             }
         }
@@ -558,7 +601,10 @@ impl KeyContext {
     }
 
     fn get(&self, key: &str) -> Option<&str> {
-        self.pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+        self.pairs
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -614,7 +660,10 @@ fn tokenize(s: &str) -> Result<Vec<String>, String> {
         let c = chars[i];
         if c.is_whitespace() {
             i += 1;
-        } else if let Some(two) = ["&&", "||", "==", "!="].iter().find(|t| s[s.char_indices().nth(i).unwrap().0..].starts_with(**t)) {
+        } else if let Some(two) = ["&&", "||", "==", "!="]
+            .iter()
+            .find(|t| s[s.char_indices().nth(i).unwrap().0..].starts_with(**t))
+        {
             out.push(two.to_string());
             i += 2;
         } else if "()!>".contains(c) {
@@ -709,7 +758,8 @@ mod tests {
     }
 
     fn fired(m: Match) -> Option<u32> {
-        m.action().map(|a| a.as_any().downcast_ref::<A>().unwrap().0)
+        m.action()
+            .map(|a| a.as_any().downcast_ref::<A>().unwrap().0)
     }
 
     #[test]
@@ -720,7 +770,10 @@ mod tests {
         assert_eq!(stroke("cmd-=").key, "=");
         assert_eq!(stroke("ctrl--").key, "-");
         assert_eq!(stroke("ctrl-minus").key, "-");
-        assert_eq!(stroke("space"), Keystroke::from_event(" ", KeyModifiers::default()));
+        assert_eq!(
+            stroke("space"),
+            Keystroke::from_event(" ", KeyModifiers::default())
+        );
         assert_eq!(stroke("ctrl-alt-delete").to_string(), "ctrl-alt-delete");
         assert!(Keystroke::parse("hyper-x").is_err());
         assert!(Keystroke::parse("").is_err());
@@ -728,7 +781,13 @@ mod tests {
 
     #[test]
     fn a_shifted_letter_is_the_letter_with_shift() {
-        let k = Keystroke::from_event("Z", KeyModifiers { control: true, ..Default::default() });
+        let k = Keystroke::from_event(
+            "Z",
+            KeyModifiers {
+                control: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(k, stroke("ctrl-shift-z"));
     }
 
@@ -741,7 +800,10 @@ mod tests {
         km.bind("enter", A(4), Some("Editor")).unwrap();
         let enter = stroke("enter");
         assert_eq!(fired(km.match_stroke(&enter, &[])), Some(1));
-        assert_eq!(fired(km.match_stroke(&enter, &["List", "Workspace"])), Some(2));
+        assert_eq!(
+            fired(km.match_stroke(&enter, &["List", "Workspace"])),
+            Some(2)
+        );
         assert_eq!(fired(km.match_stroke(&enter, &["Editor", "List"])), Some(4));
         assert_eq!(km.keys_for::<A>(&["List"]).unwrap(), &[enter]);
     }
@@ -781,11 +843,18 @@ mod tests {
         assert!(Predicate::parse("(Editor").is_err());
 
         let mut km = Keymap::new();
-        km.bind("escape", A(1), Some("Editor && mode == insert")).unwrap();
+        km.bind("escape", A(1), Some("Editor && mode == insert"))
+            .unwrap();
         km.bind("escape", A(2), Some("Workspace")).unwrap();
         let esc = stroke("escape");
-        assert_eq!(fired(km.match_stroke(&esc, &["Editor mode=insert", "Workspace"])), Some(1));
-        assert_eq!(fired(km.match_stroke(&esc, &["Editor mode=normal", "Workspace"])), Some(2));
+        assert_eq!(
+            fired(km.match_stroke(&esc, &["Editor mode=insert", "Workspace"])),
+            Some(1)
+        );
+        assert_eq!(
+            fired(km.match_stroke(&esc, &["Editor mode=normal", "Workspace"])),
+            Some(2)
+        );
     }
 
     #[cfg(feature = "json")]
@@ -798,7 +867,10 @@ mod tests {
         let mut reg = ActionRegistry::new();
         reg.register("app::Save", Save);
         reg.register_with("app::Go", |a| {
-            a["line"].as_u64().map(|l| Go(l as u32)).ok_or_else(|| "`line` is a number".to_string())
+            a["line"]
+                .as_u64()
+                .map(|l| Go(l as u32))
+                .ok_or_else(|| "`line` is a number".to_string())
         });
         let mut km = Keymap::new();
         let defaults = r#"[
@@ -807,14 +879,28 @@ mod tests {
         ]"#;
         assert_eq!(km.load_json(defaults, &reg), Ok(3));
         let g = stroke("ctrl-g");
-        let go = |m: Match| m.action().map(|a| a.as_any().downcast_ref::<Go>().unwrap().0);
+        let go = |m: Match| {
+            m.action()
+                .map(|a| a.as_any().downcast_ref::<Go>().unwrap().0)
+        };
         assert_eq!(go(km.match_stroke(&g, &["Editor mode=insert"])), Some(9));
         assert_eq!(go(km.match_stroke(&g, &[])), Some(1));
         // A user file switches one off.
-        assert_eq!(km.load_json(r#"[{ "bindings": { "ctrl-s": null } }]"#, &reg), Ok(0));
+        assert_eq!(
+            km.load_json(r#"[{ "bindings": { "ctrl-s": null } }]"#, &reg),
+            Ok(0)
+        );
         assert!(km.match_stroke(&stroke("ctrl-s"), &[]).action().is_none());
-        assert!(km.load_json(r#"[{ "bindings": { "ctrl-x": "app::Nothing" } }]"#, &reg).unwrap_err().contains("no action"));
-        assert!(km.load_json(r#"[{ "bindings": { "ctrl-y": ["app::Go", { "line": "x" }] } }]"#, &reg).is_err());
+        assert!(km
+            .load_json(r#"[{ "bindings": { "ctrl-x": "app::Nothing" } }]"#, &reg)
+            .unwrap_err()
+            .contains("no action"));
+        assert!(km
+            .load_json(
+                r#"[{ "bindings": { "ctrl-y": ["app::Go", { "line": "x" }] } }]"#,
+                &reg
+            )
+            .is_err());
     }
 }
 
@@ -832,7 +918,19 @@ mod available_tests {
     struct Close;
 
     fn names(b: &[&Binding]) -> Vec<String> {
-        b.iter().map(|b| format!("{}={}", b.keys.iter().map(|k| k.label(false)).collect::<Vec<_>>().join(" "), b.action.name().rsplit("::").next().unwrap())).collect()
+        b.iter()
+            .map(|b| {
+                format!(
+                    "{}={}",
+                    b.keys
+                        .iter()
+                        .map(|k| k.label(false))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    b.action.name().rsplit("::").next().unwrap()
+                )
+            })
+            .collect()
     }
 
     #[test]
@@ -843,10 +941,21 @@ mod available_tests {
         k.bind("ctrl-f", FindInList, Some("List")).unwrap();
         k.bind("ctrl-k ctrl-w", Close, Some("Editor")).unwrap();
         assert_eq!(names(&k.available(&[])), ["Ctrl+S=Save", "Ctrl+F=Find"]);
-        assert_eq!(names(&k.available(&["List"])), ["Ctrl+S=Save", "Ctrl+F=FindInList"]);
-        assert_eq!(names(&k.available(&["Editor"])), ["Ctrl+S=Save", "Ctrl+F=Find", "Ctrl+K Ctrl+W=Close"]);
+        assert_eq!(
+            names(&k.available(&["List"])),
+            ["Ctrl+S=Save", "Ctrl+F=FindInList"]
+        );
+        assert_eq!(
+            names(&k.available(&["Editor"])),
+            ["Ctrl+S=Save", "Ctrl+F=Find", "Ctrl+K Ctrl+W=Close"]
+        );
         assert!(k.continuations(&["Editor"]).is_empty());
-        assert!(k.match_stroke(&Keystroke::parse("ctrl-k").unwrap(), &["Editor"]).is_pending());
-        assert_eq!(names(&k.continuations(&["Editor"])), ["Ctrl+K Ctrl+W=Close"]);
+        assert!(k
+            .match_stroke(&Keystroke::parse("ctrl-k").unwrap(), &["Editor"])
+            .is_pending());
+        assert_eq!(
+            names(&k.continuations(&["Editor"])),
+            ["Ctrl+K Ctrl+W=Close"]
+        );
     }
 }

@@ -56,20 +56,36 @@ mod app {
 
     impl XrApp for VisionDemo {
         fn setup(scene: &mut Scene) -> Self {
-            if let Err(e) = threers::captions::CaptionFont::set_ui(FONT).and_then(|_| threers::captions::CaptionFont::set_ui_style(true, false, BOLD)) {
+            if let Err(e) = threers::captions::CaptionFont::set_ui(FONT)
+                .and_then(|_| threers::captions::CaptionFont::set_ui_style(true, false, BOLD))
+            {
                 eprintln!("threers: no UI font: {e:?}");
             }
             let mut app = App::new();
-            app.state.xr_status = "Running natively on Apple Vision Pro: look at something and pinch, or touch it.".into();
+            app.state.xr_status =
+                "Running natively on Apple Vision Pro: look at something and pinch, or touch it."
+                    .into();
             app.ui.set_pixel_ratio(PANEL_SCALE);
             // Eyes point less precisely than fingers: the audit holds
             // controls to visionOS's 60 points.
-            app.ui.set_min_target(threers_ui::spatial::SPATIAL_MIN_TARGET);
+            app.ui
+                .set_min_target(threers_ui::spatial::SPATIAL_MIN_TARGET);
             let to_candles = std::env::var("THREERS_DEMO_SHOW").is_ok_and(|v| v == "candles");
             if to_candles {
                 app.state.page = DEPTH;
             }
-            VisionDemo { app, room: Room::furnish(scene), ui: UiPanel::default(), pass: None, player: Player::from_env(), to_candles, shown_page: usize::MAX, start: Instant::now(), system: None, announced: 0 }
+            VisionDemo {
+                app,
+                room: Room::furnish(scene),
+                ui: UiPanel::default(),
+                pass: None,
+                player: Player::from_env(),
+                to_candles,
+                shown_page: usize::MAX,
+                start: Instant::now(),
+                system: None,
+                announced: 0,
+            }
         }
 
         fn lens(&self) -> PerspectiveCamera {
@@ -79,8 +95,16 @@ mod app {
         fn update(&mut self, scene: &mut Scene, frame: &Frame) {
             self.follow_system();
             self.room.animate(scene, frame.time, frame.see_through);
-            if let (Some(p), Some(head), Some(plane)) = (&mut self.player, frame.head, self.ui.panel.plane()) {
-                for done in p.step(frame.time, &head, &plane, PANEL_PX, &mut threers::xr::visionos::set_scripted_fingertip) {
+            if let (Some(p), Some(head), Some(plane)) =
+                (&mut self.player, frame.head, self.ui.panel.plane())
+            {
+                for done in p.step(
+                    frame.time,
+                    &head,
+                    &plane,
+                    PANEL_PX,
+                    &mut threers::xr::visionos::set_scripted_fingertip,
+                ) {
                     eprintln!("threers script: {:?} at {:.1}s", done.gesture, frame.time);
                 }
                 if p.done() {
@@ -97,27 +121,55 @@ mod app {
                 self.app.ui.set_pixel_ratio(self.ui.scale);
             }
             let scale = self.ui.scale;
-            self.ui.input(&mut self.app, frame, &mut pass.text_measure(scale));
+            self.ui
+                .input(&mut self.app, frame, &mut pass.text_measure(scale));
             // Already here: the XR page's Enter and Exit have nothing to do.
             if self.app.state.xr_request.take().is_some() {
                 self.app.state.toast = Some("Close the space from the visionOS menu".into());
             }
             let start = self.start;
             let clock = move || start.elapsed().as_secs_f64() * 1000.0;
-            self.app.frame_timed(frame.time, PANEL_PX.0, PANEL_PX.1, &mut pass.text_measure(scale), &clock);
-            if self.to_candles && let Some(c) = self.app.showcase.candles.first() {
+            self.app.frame_timed(
+                frame.time,
+                PANEL_PX.0,
+                PANEL_PX.1,
+                &mut pass.text_measure(scale),
+                &clock,
+            );
+            if self.to_candles
+                && let Some(c) = self.app.showcase.candles.first()
+            {
                 self.app.ui.scroll_into_view(c.root);
                 self.to_candles = false;
             }
             let mut ui_scene = threers::ui::scene::Scene::default();
             self.app.paint(&mut ui_scene.recorder());
-            let clear = self.app.ui.style(self.app.ui.root()).background.unwrap_or([0.0, 0.0, 0.0, 1.0]);
-            self.ui.draw(gpu, pass, &ui_scene, scale, clear, scene, &threers_ui_demo::xr::lens());
+            let clear = self
+                .app
+                .ui
+                .style(self.app.ui.root())
+                .background
+                .unwrap_or([0.0, 0.0, 0.0, 1.0]);
+            self.ui.draw(
+                gpu,
+                pass,
+                &ui_scene,
+                scale,
+                clear,
+                scene,
+                &threers_ui_demo::xr::lens(),
+            );
             // The controls, for the system to light up the one looked at.
             let regions = self.app.ui.hover_regions();
             let marked = self.ui.mark_hover(gpu, &regions);
-            if std::env::var_os("THREERS_XR_DEBUG").is_some() && (frame.time * 2.0).fract() < frame.dt * 2.0 {
-                eprintln!("threers demo: {marked} of {} controls marked, texture scale {}", regions.len(), self.ui.scale);
+            if std::env::var_os("THREERS_XR_DEBUG").is_some()
+                && (frame.time * 2.0).fract() < frame.dt * 2.0
+            {
+                eprintln!(
+                    "threers demo: {marked} of {} controls marked, texture scale {}",
+                    regions.len(),
+                    self.ui.scale
+                );
             }
             // What the UI announces ("Saved"), read out by VoiceOver.
             for (n, message, assertive) in self.app.ui.announcements_since(self.announced) {
@@ -126,7 +178,10 @@ mod app {
             }
             if self.app.state.page != self.shown_page {
                 self.shown_page = self.app.state.page;
-                eprintln!("threers: page {}", PAGES[self.shown_page.min(PAGES.len() - 1)].0);
+                eprintln!(
+                    "threers: page {}",
+                    PAGES[self.shown_page.min(PAGES.len() - 1)].0
+                );
             }
             for line in self.app.take_log() {
                 eprintln!("{line}");
@@ -139,7 +194,9 @@ mod app {
         /// Contrast, when they change (the Accessibility page's own text
         /// steps and motion setting can still be changed there).
         fn follow_system(&mut self) {
-            let Some(a) = system_accessibility().filter(|a| Some(*a) != self.system) else { return };
+            let Some(a) = system_accessibility().filter(|a| Some(*a) != self.system) else {
+                return;
+            };
             self.system = Some(a);
             if std::env::var_os("THREERS_XR_DEBUG").is_some() {
                 eprintln!("threers demo: system settings {a:?}");
@@ -148,7 +205,11 @@ mod app {
             // The system's size as it is, under the page's own steps.
             self.app.state.system_text_scale = a.text_scale;
             self.app.ui.set_bold_text(a.bold_text);
-            self.app.ui.set_system_appearance(if a.dark { threers_ui::states::Appearance::Dark } else { threers_ui::states::Appearance::Light });
+            self.app.ui.set_system_appearance(if a.dark {
+                threers_ui::states::Appearance::Dark
+            } else {
+                threers_ui::states::Appearance::Light
+            });
             self.app.ui.set_increase_contrast(a.increase_contrast);
         }
     }

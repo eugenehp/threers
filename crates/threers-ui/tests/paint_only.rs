@@ -8,9 +8,19 @@ use threers_ui::{style, FixedWidthText, Length, Ui};
 fn looks_repaint_and_sizes_lay_out() {
     let mut ui = Ui::new();
     let root = ui.root();
-    let card = ui.add_box(root, style! { width: 120px; height: 40px; background: #334155; });
+    let card = ui.add_box(
+        root,
+        style! { width: 120px; height: 40px; background: #334155; },
+    );
     let label = ui.add_text(card, "Hello");
-    let icon = ui.add_path(card, style! { width: 16px; height: 16px; }, vec!["M0 0 L10 0 L10 10 Z".into()], [0.0, 0.0, 10.0, 10.0], None, true);
+    let icon = ui.add_path(
+        card,
+        style! { width: 16px; height: 16px; },
+        vec!["M0 0 L10 0 L10 10 Z".into()],
+        [0.0, 0.0, 10.0, 10.0],
+        None,
+        true,
+    );
     let m = &mut FixedWidthText(7.0);
     ui.layout(400.0, 300.0, m);
     let laid = ui.layout_passes();
@@ -23,7 +33,13 @@ fn looks_repaint_and_sizes_lay_out() {
     s.border_radius = Length::Px(8.0);
     ui.set_style(card, s);
     ui.update_style(label, |s| s.color = [0.1, 0.1, 0.1, 1.0]);
-    ui.set_path_transform(icon, Transformation { rotate: 0.4, ..Default::default() });
+    ui.set_path_transform(
+        icon,
+        Transformation {
+            rotate: 0.4,
+            ..Default::default()
+        },
+    );
     assert!(ui.needs_frame(), "a repaint is asked for");
     ui.layout(400.0, 300.0, m);
     assert_eq!(ui.layout_passes(), laid, "only the look changed");

@@ -22,11 +22,18 @@ const H: u32 = 360;
 fn main() {
     let mut ui = Ui::new();
     let root = ui.root();
-    ui.set_style(root, style! { background: #12151b; padding: 20px; display: flex; flex-direction: column; });
+    ui.set_style(
+        root,
+        style! { background: #12151b; padding: 20px; display: flex; flex-direction: column; },
+    );
     let card = ui.add_box(root, style! { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 14px; background: #1f2430; color: #e5e7eb; font-size: 14px; });
     let title = ui.add_box(card, style! { font-weight: bold; font-size: 16px; });
     ui.add_text(title, "Torus knot");
-    let mut view = ModelView::new(&mut ui, card, style! { width: 352px; height: 240px; border-radius: 10px; });
+    let mut view = ModelView::new(
+        &mut ui,
+        card,
+        style! { width: 352px; height: 240px; border-radius: 10px; },
+    );
     let caption = ui.add_box(card, style! { font-size: 12px; color: rgb(151, 158, 175); });
     ui.add_text(caption, "Drag to turn it, as you would in the app.");
     ui.layout(W as f32, H as f32, &mut FixedWidthText(7.0));
@@ -36,19 +43,29 @@ fn main() {
     scene.environment = Some(threers::extras::RoomEnvironment::pmrem(128));
     scene.environment_intensity = 0.5;
     scene.add_light(AmbientLight::new(Color::WHITE, 0.25));
-    let mut l = Object3D::light(Light::Directional(DirectionalLight::new(Color::from_hex(0xfff0e0), 2.4)));
+    let mut l = Object3D::light(Light::Directional(DirectionalLight::new(
+        Color::from_hex(0xfff0e0),
+        2.4,
+    )));
     l.position = Vector3::new(-3.0, 5.0, 4.0);
     scene.add(l);
     let mut m = StandardMaterial::new(Color::from_hex(0x2563eb));
     m.roughness = 0.35;
     m.metalness = 0.2;
-    scene.add(Object3D::mesh(Mesh::new(TorusKnotGeometry::new(0.8, 0.26, 220, 32, 2, 3), m.into())));
+    scene.add(Object3D::mesh(Mesh::new(
+        TorusKnotGeometry::new(0.8, 0.26, 220, 32, 2, 3),
+        m.into(),
+    )));
 
     let target = Vector3::new(0.0, 0.0, 0.0);
-    let mut orbit = Orbit { distance: 4.6, ..Orbit::default() };
+    let mut orbit = Orbit {
+        distance: 4.6,
+        ..Orbit::default()
+    };
     let mut frames = vec![];
     for _ in 0..2 {
-        view.render(&mut ui, &mut scene, &orbit, target, 1.0).expect("a GPU adapter");
+        view.render(&mut ui, &mut scene, &orbit, target, 1.0)
+            .expect("a GPU adapter");
         frames.push(paint_to_rgba(&ui, 1.0, W, H));
         // A drag to the right, and down a little.
         orbit = orbit.turned(1.1, 0.35);

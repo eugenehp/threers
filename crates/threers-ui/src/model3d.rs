@@ -44,7 +44,11 @@ pub struct Orbit {
 
 impl Default for Orbit {
     fn default() -> Self {
-        Self { yaw: 0.6, pitch: 0.35, distance: 4.0 }
+        Self {
+            yaw: 0.6,
+            pitch: 0.35,
+            distance: 4.0,
+        }
     }
 }
 
@@ -53,18 +57,29 @@ impl Orbit {
     pub fn eye(&self) -> [f32; 3] {
         let (sy, cy) = self.yaw.sin_cos();
         let (sp, cp) = self.pitch.sin_cos();
-        [self.distance * cp * sy, self.distance * sp, self.distance * cp * cy]
+        [
+            self.distance * cp * sy,
+            self.distance * sp,
+            self.distance * cp * cy,
+        ]
     }
 
     /// Turned by `dyaw` and `dpitch` (pitch kept short of straight up or
     /// down).
     pub fn turned(self, dyaw: f32, dpitch: f32) -> Self {
-        Self { yaw: self.yaw + dyaw, pitch: (self.pitch + dpitch).clamp(-1.45, 1.45), ..self }
+        Self {
+            yaw: self.yaw + dyaw,
+            pitch: (self.pitch + dpitch).clamp(-1.45, 1.45),
+            ..self
+        }
     }
 
     /// Nearer by `factor` (below 1) or further (above), within reason.
     pub fn zoomed(self, factor: f32) -> Self {
-        Self { distance: (self.distance * factor).clamp(1.2, 30.0), ..self }
+        Self {
+            distance: (self.distance * factor).clamp(1.2, 30.0),
+            ..self
+        }
     }
 }
 
@@ -81,15 +96,35 @@ impl Mesh3 {
     pub fn cube(size: f32, color: [f32; 3]) -> Self {
         let h = size / 2.0;
         let p = |x: f32, y: f32, z: f32| [x * h, y * h, z * h];
-        let positions = vec![p(-1., -1., -1.), p(1., -1., -1.), p(1., 1., -1.), p(-1., 1., -1.), p(-1., -1., 1.), p(1., -1., 1.), p(1., 1., 1.), p(-1., 1., 1.)];
-        let quads = [[4, 5, 6, 7], [1, 0, 3, 2], [5, 1, 2, 6], [0, 4, 7, 3], [7, 6, 2, 3], [0, 1, 5, 4]];
+        let positions = vec![
+            p(-1., -1., -1.),
+            p(1., -1., -1.),
+            p(1., 1., -1.),
+            p(-1., 1., -1.),
+            p(-1., -1., 1.),
+            p(1., -1., 1.),
+            p(1., 1., 1.),
+            p(-1., 1., 1.),
+        ];
+        let quads = [
+            [4, 5, 6, 7],
+            [1, 0, 3, 2],
+            [5, 1, 2, 6],
+            [0, 4, 7, 3],
+            [7, 6, 2, 3],
+            [0, 1, 5, 4],
+        ];
         let mut triangles = vec![];
         for q in quads {
             triangles.push([q[0], q[1], q[2]]);
             triangles.push([q[0], q[2], q[3]]);
         }
         let colors = vec![color; triangles.len()];
-        Self { positions, triangles, colors }
+        Self {
+            positions,
+            triangles,
+            colors,
+        }
     }
 
     /// A torus around the vertical axis: `radius` to its tube's middle,
@@ -115,7 +150,11 @@ impl Mesh3 {
             }
         }
         let colors = vec![color; triangles.len()];
-        Self { positions, triangles, colors }
+        Self {
+            positions,
+            triangles,
+            colors,
+        }
     }
 }
 
@@ -123,7 +162,11 @@ fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
@@ -146,7 +189,12 @@ pub fn render(mesh: &Mesh3, orbit: &Orbit, width: u32, height: u32, light: [f32;
 /// edges get as many steps as there are samples).
 fn sample_pattern(samples: u32) -> &'static [(f32, f32)] {
     const ONE: [(f32, f32); 1] = [(0.0, 0.0)];
-    const FOUR: [(f32, f32); 4] = [(-2.0 / 16.0, -6.0 / 16.0), (6.0 / 16.0, -2.0 / 16.0), (-6.0 / 16.0, 2.0 / 16.0), (2.0 / 16.0, 6.0 / 16.0)];
+    const FOUR: [(f32, f32); 4] = [
+        (-2.0 / 16.0, -6.0 / 16.0),
+        (6.0 / 16.0, -2.0 / 16.0),
+        (-6.0 / 16.0, 2.0 / 16.0),
+        (2.0 / 16.0, 6.0 / 16.0),
+    ];
     const EIGHT: [(f32, f32); 8] = [
         (1.0 / 16.0, -3.0 / 16.0),
         (-1.0 / 16.0, 3.0 / 16.0),
@@ -169,7 +217,14 @@ fn sample_pattern(samples: u32) -> &'static [(f32, f32)] {
 /// shaded once and only its edges are tested sample by sample: a pixel
 /// wholly inside a face costs one test, so smooth edges cost little more
 /// than rough ones.
-pub fn render_smooth(mesh: &Mesh3, orbit: &Orbit, width: u32, height: u32, light: [f32; 3], samples: u32) -> Vec<u8> {
+pub fn render_smooth(
+    mesh: &Mesh3,
+    orbit: &Orbit,
+    width: u32,
+    height: u32,
+    light: [f32; 3],
+    samples: u32,
+) -> Vec<u8> {
     render_rows(mesh, orbit, width, height, light, samples, 0..height)
 }
 
@@ -195,8 +250,25 @@ const CREASE: f32 = 40.0;
 /// band of the picture, so that several can be drawn at once (each as its
 /// own job) and stacked. Every band sees the same faces, so bands meet
 /// without a seam.
-pub fn render_rows(mesh: &Mesh3, orbit: &Orbit, width: u32, height: u32, light: [f32; 3], samples: u32, rows: std::ops::Range<u32>) -> Vec<u8> {
-    render_rows_with(mesh, &corner_normals(mesh), orbit, width, height, light, samples, rows)
+pub fn render_rows(
+    mesh: &Mesh3,
+    orbit: &Orbit,
+    width: u32,
+    height: u32,
+    light: [f32; 3],
+    samples: u32,
+    rows: std::ops::Range<u32>,
+) -> Vec<u8> {
+    render_rows_with(
+        mesh,
+        &corner_normals(mesh),
+        orbit,
+        width,
+        height,
+        light,
+        samples,
+        rows,
+    )
 }
 
 /// The normal of the surface at each face's corners: the face's own,
@@ -244,7 +316,9 @@ pub fn corner_normals(mesh: &Mesh3) -> Vec<[[f32; 3]; 3]> {
         .map(|(t, &n)| {
             let own = norm(n);
             t.map(|v| {
-                let Some(around) = start.get(v as usize..v as usize + 2) else { return own };
+                let Some(around) = start.get(v as usize..v as usize + 2) else {
+                    return own;
+                };
                 let mut sum = [0.0f32; 3];
                 for &f in &at_corner[around[0] as usize..around[1] as usize] {
                     let m = normals[f as usize];
@@ -253,7 +327,11 @@ pub fn corner_normals(mesh: &Mesh3) -> Vec<[[f32; 3]; 3]> {
                     }
                 }
                 let s = norm(sum);
-                if s.iter().all(|c| c.is_finite()) && dot(s, s) > 0.5 { s } else { own }
+                if s.iter().all(|c| c.is_finite()) && dot(s, s) > 0.5 {
+                    s
+                } else {
+                    own
+                }
             })
         })
         .collect()
@@ -262,9 +340,21 @@ pub fn corner_normals(mesh: &Mesh3) -> Vec<[[f32; 3]; 3]> {
 /// [`render_rows`] with the corners' normals worked out already
 /// ([`corner_normals`]): what each band of a model shares.
 #[allow(clippy::too_many_arguments)]
-pub fn render_rows_with(mesh: &Mesh3, normals: &[[[f32; 3]; 3]], orbit: &Orbit, width: u32, height: u32, light: [f32; 3], samples: u32, rows: std::ops::Range<u32>) -> Vec<u8> {
+pub fn render_rows_with(
+    mesh: &Mesh3,
+    normals: &[[[f32; 3]; 3]],
+    orbit: &Orbit,
+    width: u32,
+    height: u32,
+    light: [f32; 3],
+    samples: u32,
+    rows: std::ops::Range<u32>,
+) -> Vec<u8> {
     let (w, h) = (width as usize, height as usize);
-    let (r0, r1) = (rows.start.min(height) as usize, rows.end.min(height) as usize);
+    let (r0, r1) = (
+        rows.start.min(height) as usize,
+        rows.end.min(height) as usize,
+    );
     if r1 <= r0 || w == 0 {
         return vec![];
     }
@@ -283,18 +373,37 @@ pub fn render_rows_with(mesh: &Mesh3, normals: &[[[f32; 3]; 3]], orbit: &Orbit, 
         .map(|&p| {
             let d = sub(p, eye);
             let v = [dot(d, right), dot(d, up), dot(d, fwd)];
-            (v[2] > 1e-3).then(|| ((v[0] / v[2] * f / aspect * 0.5 + 0.5) * w as f32, (0.5 - v[1] / v[2] * f * 0.5) * h as f32, v[2]))
+            (v[2] > 1e-3).then(|| {
+                (
+                    (v[0] / v[2] * f / aspect * 0.5 + 0.5) * w as f32,
+                    (0.5 - v[1] / v[2] * f * 0.5) * h as f32,
+                    v[2],
+                )
+            })
         })
         .collect();
     // The light, from the camera's space (y down) to the world's.
     let l_cam = norm([light[0], -light[1], light[2]]);
-    let l = norm([right[0] * l_cam[0] + up[0] * l_cam[1] - fwd[0] * l_cam[2], right[1] * l_cam[0] + up[1] * l_cam[1] - fwd[1] * l_cam[2], right[2] * l_cam[0] + up[2] * l_cam[1] - fwd[2] * l_cam[2]]);
+    let l = norm([
+        right[0] * l_cam[0] + up[0] * l_cam[1] - fwd[0] * l_cam[2],
+        right[1] * l_cam[0] + up[1] * l_cam[1] - fwd[1] * l_cam[2],
+        right[2] * l_cam[0] + up[2] * l_cam[1] - fwd[2] * l_cam[2],
+    ]);
     // The faces this band can show.
     let mut faces = Vec::with_capacity(mesh.triangles.len() / 2);
     for (t, tri) in mesh.triangles.iter().enumerate() {
-        let (Some(a), Some(b), Some(c)) = (screen[tri[0] as usize], screen[tri[1] as usize], screen[tri[2] as usize]) else { continue };
+        let (Some(a), Some(b), Some(c)) = (
+            screen[tri[0] as usize],
+            screen[tri[1] as usize],
+            screen[tri[2] as usize],
+        ) else {
+            continue;
+        };
         let s = [a, b, c];
-        let (lo_y, hi_y) = (s[0].1.min(s[1].1).min(s[2].1), s[0].1.max(s[1].1).max(s[2].1));
+        let (lo_y, hi_y) = (
+            s[0].1.min(s[1].1).min(s[2].1),
+            s[0].1.max(s[1].1).max(s[2].1),
+        );
         if hi_y < r0 as f32 || lo_y > r1 as f32 {
             continue;
         }
@@ -306,7 +415,8 @@ pub fn render_rows_with(mesh: &Mesh3, normals: &[[[f32; 3]; 3]], orbit: &Orbit, 
         }
         // Edge functions, each zero along one edge and the whole area at
         // the corner across from it; turned to be positive inside.
-        let edge = |a: (f32, f32, f32), b: (f32, f32, f32)| (a.1 - b.1, b.0 - a.0, a.0 * b.1 - b.0 * a.1);
+        let edge =
+            |a: (f32, f32, f32), b: (f32, f32, f32)| (a.1 - b.1, b.0 - a.0, a.0 * b.1 - b.0 * a.1);
         let mut e = [edge(s[1], s[2]), edge(s[2], s[0]), edge(s[0], s[1])];
         let mut area = e[0].2 + e[1].2 + e[2].2;
         if area.abs() < 1e-6 || !area.is_finite() {
@@ -316,8 +426,18 @@ pub fn render_rows_with(mesh: &Mesh3, normals: &[[[f32; 3]; 3]], orbit: &Orbit, 
             e = e.map(|(a, b, c)| (-a, -b, -c));
             area = -area;
         }
-        let x0 = s.iter().map(|v| v.0).fold(f32::MAX, f32::min).floor().max(0.0);
-        let x1 = s.iter().map(|v| v.0).fold(f32::MIN, f32::max).ceil().min(w as f32);
+        let x0 = s
+            .iter()
+            .map(|v| v.0)
+            .fold(f32::MAX, f32::min)
+            .floor()
+            .max(0.0);
+        let x1 = s
+            .iter()
+            .map(|v| v.0)
+            .fold(f32::MIN, f32::max)
+            .ceil()
+            .min(w as f32);
         let y0 = lo_y.floor().max(r0 as f32);
         let y1 = hi_y.ceil().min(r1 as f32);
         if x0 >= x1 || y0 >= y1 {
@@ -332,12 +452,22 @@ pub fn render_rows_with(mesh: &Mesh3, normals: &[[[f32; 3]; 3]], orbit: &Orbit, 
         let corner = normals.get(t).copied().unwrap_or_default().map(lit_at);
         // Depth and colour across the face as planes in the screen.
         let plane = |v: [f32; 3]| {
-            let k = |f: fn(&(f32, f32, f32)) -> f32| (f(&e[0]) * v[0] + f(&e[1]) * v[1] + f(&e[2]) * v[2]) / area;
+            let k = |f: fn(&(f32, f32, f32)) -> f32| {
+                (f(&e[0]) * v[0] + f(&e[1]) * v[1] + f(&e[2]) * v[2]) / area
+            };
             (k(|e| e.0), k(|e| e.1), k(|e| e.2))
         };
         let z = plane([s[0].2, s[1].2, s[2].2]);
         let rgb = [0, 1, 2].map(|ch| plane([corner[0][ch], corner[1][ch], corner[2][ch]]));
-        faces.push(Face { e, z, rgb, x0: x0 as usize, x1: x1 as usize, y0: y0 as usize, y1: y1 as usize });
+        faces.push(Face {
+            e,
+            z,
+            rgb,
+            x0: x0 as usize,
+            x1: x1 as usize,
+            y0: y0 as usize,
+            y1: y1 as usize,
+        });
     }
     let band = (w, r0, r1);
     match sample_pattern(samples).len() {
@@ -352,19 +482,32 @@ pub fn render_rows_with(mesh: &Mesh3, normals: &[[[f32; 3]; 3]], orbit: &Orbit, 
 /// as it is, several averaged as light, coverage as alpha. A face is shaded
 /// once a pixel, at its centre, as a GPU multisamples. `N` is a constant so
 /// the per-sample loops unroll.
-fn raster<const N: usize>(faces: &[Face], (w, r0, r1): (usize, usize, usize), pattern: [(f32, f32); N]) -> Vec<u8> {
+fn raster<const N: usize>(
+    faces: &[Face],
+    (w, r0, r1): (usize, usize, usize),
+    pattern: [(f32, f32); N],
+) -> Vec<u8> {
     use threers_math::srgb::{linear_to_srgb, srgb_to_linear};
     let rows = r1 - r0;
     // Each sample's depth, and its colour (sRGB bytes, opaque; 0: none).
     let mut depth = vec![[f32::INFINITY; N]; w * rows];
     let mut color = vec![[0u32; N]; w * rows];
-    let pack = |rgb: [f32; 3]| u32::from_le_bytes([linear_to_srgb(rgb[0]), linear_to_srgb(rgb[1]), linear_to_srgb(rgb[2]), 255]);
+    let pack = |rgb: [f32; 3]| {
+        u32::from_le_bytes([
+            linear_to_srgb(rgb[0]),
+            linear_to_srgb(rgb[1]),
+            linear_to_srgb(rgb[2]),
+            255,
+        ])
+    };
     for fc in faces {
         let e = fc.e;
         let (za, zb, zc) = fc.z;
         // How each edge function and the depth change from a pixel's centre
         // to each of its samples.
-        let off: [[f32; N]; 3] = std::array::from_fn(|i| std::array::from_fn(|k| e[i].0 * pattern[k].0 + e[i].1 * pattern[k].1));
+        let off: [[f32; N]; 3] = std::array::from_fn(|i| {
+            std::array::from_fn(|k| e[i].0 * pattern[k].0 + e[i].1 * pattern[k].1)
+        });
         let zoff: [f32; N] = std::array::from_fn(|k| za * pattern[k].0 + zb * pattern[k].1);
         // How far an edge function changes across half a pixel: a centre
         // further than that inside every edge has the whole pixel inside.
@@ -404,7 +547,10 @@ fn raster<const N: usize>(faces: &[Face], (w, r0, r1): (usize, usize, usize), pa
                     let (d, col) = (&mut depth[at], &mut color[at]);
                     let mut here = None;
                     for k in 0..N {
-                        let inside = inner || (c[0] + off[0][k] >= 0.0 && c[1] + off[1][k] >= 0.0 && c[2] + off[2][k] >= 0.0);
+                        let inside = inner
+                            || (c[0] + off[0][k] >= 0.0
+                                && c[1] + off[1][k] >= 0.0
+                                && c[2] + off[2][k] >= 0.0);
                         let zs = z + zoff[k];
                         if inside && zs < d[k] {
                             d[k] = zs;
@@ -526,7 +672,11 @@ pub fn model_view<S: 'static>(
         busy: std::cell::Cell::new(false),
     });
     let draw = move |ui: &mut Ui, s: &S| {
-        view.wanted.set(Some(Seen { orbit: orbit.get(s), light: ui.light().direction(), ratio: ui.pixel_ratio }));
+        view.wanted.set(Some(Seen {
+            orbit: orbit.get(s),
+            light: ui.light().direction(),
+            ratio: ui.pixel_ratio,
+        }));
         view.clone().start(ui);
     };
     draw(ui, state);
@@ -569,7 +719,16 @@ struct Seen {
 impl Seen {
     fn bits(&self) -> [u32; 7] {
         let o = self.orbit;
-        [o.yaw, o.pitch, o.distance, self.light[0], self.light[1], self.light[2], self.ratio].map(f32::to_bits)
+        [
+            o.yaw,
+            o.pitch,
+            o.distance,
+            self.light[0],
+            self.light[1],
+            self.light[2],
+            self.ratio,
+        ]
+        .map(f32::to_bits)
     }
 }
 
@@ -586,18 +745,42 @@ impl View {
         // At the display's resolution, multisampled for smooth edges (more
         // samples where pixels are large).
         let (w, h) = self.size;
-        let ratio = if now.ratio.is_finite() { now.ratio.clamp(0.5, 4.0) } else { 1.0 };
-        let (pw, ph) = (((w as f32 * ratio).round() as u32).clamp(1, 2048), ((h as f32 * ratio).round() as u32).clamp(1, 2048));
+        let ratio = if now.ratio.is_finite() {
+            now.ratio.clamp(0.5, 4.0)
+        } else {
+            1.0
+        };
+        let (pw, ph) = (
+            ((w as f32 * ratio).round() as u32).clamp(1, 2048),
+            ((h as f32 * ratio).round() as u32).clamp(1, 2048),
+        );
         let samples: u32 = if ratio < 1.5 { 8 } else { 4 };
-        let orbit = Orbit { distance: now.orbit.distance * self.fit, ..now.orbit };
+        let orbit = Orbit {
+            distance: now.orbit.distance * self.fit,
+            ..now.orbit
+        };
         // A dense model or a large picture in bands of rows, each its own
         // job: with workers, drawn side by side; stacked when all are in.
-        let bands = if self.faces >= 4096 || pw * ph >= 250_000 { 4.min(ph) } else { 1 };
-        let parts = Rc::new(std::cell::RefCell::new(vec![None::<Vec<u8>>; bands as usize]));
+        let bands = if self.faces >= 4096 || pw * ph >= 250_000 {
+            4.min(ph)
+        } else {
+            1
+        };
+        let parts = Rc::new(std::cell::RefCell::new(vec![
+            None::<Vec<u8>>;
+            bands as usize
+        ]));
         for b in 0..bands {
             let rows = (ph * b / bands, ph * (b + 1) / bands);
             let mut input = Vec::with_capacity(self.mesh.len() + 56);
-            for v in [orbit.yaw, orbit.pitch, orbit.distance, now.light[0], now.light[1], now.light[2]] {
+            for v in [
+                orbit.yaw,
+                orbit.pitch,
+                orbit.distance,
+                now.light[0],
+                now.light[1],
+                now.light[2],
+            ] {
                 input.extend_from_slice(&v.to_le_bytes());
             }
             for v in [pw, ph, samples, rows.0, rows.1] {
@@ -610,7 +793,11 @@ impl View {
                 if parts.borrow().iter().any(Option::is_none) {
                     return;
                 }
-                let px: Vec<u8> = parts.borrow_mut().iter_mut().flat_map(|p| p.take().unwrap_or_default()).collect();
+                let px: Vec<u8> = parts
+                    .borrow_mut()
+                    .iter_mut()
+                    .flat_map(|p| p.take().unwrap_or_default())
+                    .collect();
                 view.busy.set(false);
                 if ui.contains(view.node)
                     && let Ok(img) = Image::new(pw, ph, px)
@@ -638,7 +825,11 @@ fn encode_mesh(mesh: &Mesh3) -> Vec<u8> {
 /// The mesh alone: counts, then positions, colours and triangles.
 fn encode_geometry(mesh: &Mesh3) -> Vec<u8> {
     let mut b = Vec::new();
-    for n in [mesh.positions.len(), mesh.triangles.len(), mesh.colors.len()] {
+    for n in [
+        mesh.positions.len(),
+        mesh.triangles.len(),
+        mesh.colors.len(),
+    ] {
         b.extend_from_slice(&(n as u32).to_le_bytes());
     }
     for v in mesh.positions.iter().chain(&mesh.colors).flatten() {
@@ -655,7 +846,10 @@ struct Words<'a>(&'a [u8]);
 
 impl Words<'_> {
     fn u32(&mut self) -> u32 {
-        let (w, rest) = self.0.split_at_checked(4).unwrap_or((&[0u8; 4][..], &[][..]));
+        let (w, rest) = self
+            .0
+            .split_at_checked(4)
+            .unwrap_or((&[0u8; 4][..], &[][..]));
         self.0 = rest;
         u32::from_le_bytes(w.try_into().expect("four bytes"))
     }
@@ -673,7 +867,11 @@ impl Words<'_> {
 /// Indices outside the mesh are dropped rather than trusted.
 fn render_job(input: &[u8]) -> Vec<u8> {
     let mut r = Words(input);
-    let orbit = Orbit { yaw: r.f32(), pitch: r.f32(), distance: r.f32() };
+    let orbit = Orbit {
+        yaw: r.f32(),
+        pitch: r.f32(),
+        distance: r.f32(),
+    };
     let light = r.vec3();
     let (w, h) = (r.u32().clamp(1, 2048), r.u32().clamp(1, 2048));
     let samples = r.u32().clamp(1, 8);
@@ -687,11 +885,19 @@ fn render_job(input: &[u8]) -> Vec<u8> {
         .map(|_| [r.u32(), r.u32(), r.u32()])
         .filter(|t| t.iter().all(|&i| (i as usize) < positions.len()))
         .collect();
-    let mesh = Mesh3 { positions, triangles, colors };
+    let mesh = Mesh3 {
+        positions,
+        triangles,
+        colors,
+    };
     // The corners' normals, sent with the mesh (one per corner of every
     // face it was sent with); worked out here if they did not come, or do
     // not match.
-    let sent = (r.0.len() / 36 == nt && nt == mesh.triangles.len()).then(|| (0..nt).map(|_| [r.vec3(), r.vec3(), r.vec3()]).collect::<Vec<_>>());
+    let sent = (r.0.len() / 36 == nt && nt == mesh.triangles.len()).then(|| {
+        (0..nt)
+            .map(|_| [r.vec3(), r.vec3(), r.vec3()])
+            .collect::<Vec<_>>()
+    });
     let normals = sent.unwrap_or_else(|| corner_normals(&mesh));
     render_rows_with(&mesh, &normals, &orbit, w, h, light, samples, rows)
 }
@@ -701,7 +907,12 @@ fn render_job(input: &[u8]) -> Vec<u8> {
 /// the camera looks at) to show in a view `aspect` wide for each unit high,
 /// with a little room.
 fn fit_scale(mesh: &Mesh3, aspect: f32) -> f32 {
-    let radius = mesh.positions.iter().map(|p| dot(*p, *p)).fold(0.0f32, f32::max).sqrt();
+    let radius = mesh
+        .positions
+        .iter()
+        .map(|p| dot(*p, *p))
+        .fold(0.0f32, f32::max)
+        .sqrt();
     // None, or NaN: as it is.
     if radius.is_nan() || radius <= 0.0 {
         return 1.0;
@@ -745,15 +956,30 @@ mod tests {
         for n in [4, 8] {
             let smooth = render_smooth(&cube, &o, 96, 72, [-0.4, -0.6, 1.0], n);
             let partial = smooth.chunks(4).filter(|p| p[3] > 0 && p[3] < 255).count();
-            assert!(partial > 60, "{n} samples: {partial} edge pixels part covered");
+            assert!(
+                partial > 60,
+                "{n} samples: {partial} edge pixels part covered"
+            );
             // Coverage in steps of a sample.
-            assert!(smooth.chunks(4).all(|p| (0..=n).any(|k| (k as f32 / n as f32 * 255.0).round() as u8 == p[3])));
+            assert!(smooth
+                .chunks(4)
+                .all(|p| (0..=n).any(|k| (k as f32 / n as f32 * 255.0).round() as u8 == p[3])));
             // Away from edges, as one sample draws it.
             let w = 96;
-            let inside = |img: &[u8], i: usize| (img[i * 4 + 3] == 255) && [1, w, w + 1].iter().all(|&d| i >= d && img[(i - d) * 4 + 3] == 255 && img.get((i + d) * 4 + 3) == Some(&255));
+            let inside = |img: &[u8], i: usize| {
+                (img[i * 4 + 3] == 255)
+                    && [1, w, w + 1].iter().all(|&d| {
+                        i >= d
+                            && img[(i - d) * 4 + 3] == 255
+                            && img.get((i + d) * 4 + 3) == Some(&255)
+                    })
+            };
             let mut same = 0;
             for i in 0..96 * 72 {
-                if inside(&one, i) && inside(&smooth, i) && one[i * 4..i * 4 + 3] == smooth[i * 4..i * 4 + 3] {
+                if inside(&one, i)
+                    && inside(&smooth, i)
+                    && one[i * 4..i * 4 + 3] == smooth[i * 4..i * 4 + 3]
+                {
                     same += 1;
                 }
             }
@@ -773,11 +999,23 @@ mod tests {
         // seen from above so nothing stands in front of anything:
         // flat-shaded, its facets would step by many levels.
         let torus = Mesh3::torus(1.0, 0.4, 16, 12, [0.6, 0.6, 0.6]);
-        let img = render(&torus, &Orbit { pitch: 1.4, ..Orbit::default() }, 160, 120, l);
+        let img = render(
+            &torus,
+            &Orbit {
+                pitch: 1.4,
+                ..Orbit::default()
+            },
+            160,
+            120,
+            l,
+        );
         let mut worst = 0u8;
         for y in 0..120 {
             for x in 1..160 {
-                let (a, b) = (&img[(y * 160 + x - 1) * 4..][..4], &img[(y * 160 + x) * 4..][..4]);
+                let (a, b) = (
+                    &img[(y * 160 + x - 1) * 4..][..4],
+                    &img[(y * 160 + x) * 4..][..4],
+                );
                 // Neighbours both inside, on the same side of a silhouette.
                 if a[3] == 255 && b[3] == 255 {
                     worst = worst.max(a[0].abs_diff(b[0]));
@@ -790,7 +1028,11 @@ mod tests {
         // A cube's faces meet at 90°: each stays one colour.
         let cube = Mesh3::cube(1.5, [0.6, 0.6, 0.6]);
         let img = render(&cube, &Orbit::default().turned(0.6, 0.4), 120, 90, l);
-        let mut shades: Vec<u8> = img.chunks(4).filter(|p| p[3] == 255).map(|p| p[0]).collect();
+        let mut shades: Vec<u8> = img
+            .chunks(4)
+            .filter(|p| p[3] == 255)
+            .map(|p| p[0])
+            .collect();
         shades.sort();
         shades.dedup();
         assert!(shades.len() <= 3, "three faces, three shades: {shades:?}");
@@ -823,7 +1065,10 @@ mod tests {
             input.extend_from_slice(&v.to_le_bytes());
         }
         input.extend_from_slice(&encode_mesh(&torus));
-        assert_eq!(render_job(&input), render(&torus, &o, 80, 60, [-0.4, -0.6, 1.0]));
+        assert_eq!(
+            render_job(&input),
+            render(&torus, &o, 80, 60, [-0.4, -0.6, 1.0])
+        );
         // Cut short or nonsense, it still draws (nothing) rather than fail.
         for n in [0, 7, 30, input.len() - 5] {
             assert_eq!(render_job(&input[..n]).len() % 4, 0);
@@ -842,7 +1087,16 @@ mod tests {
         let mut input: Input<S> = Input::new();
         let mut s = S::default();
         let root = ui.root();
-        let view = model_view(&mut ui, &mut input, &s, root, "A cube", Mesh3::cube(1.5, [0.8, 0.3, 0.2]), binding!(|s: S| s.orbit), (64, 48));
+        let view = model_view(
+            &mut ui,
+            &mut input,
+            &s,
+            root,
+            "A cube",
+            Mesh3::cube(1.5, [0.8, 0.3, 0.2]),
+            binding!(|s: S| s.orbit),
+            (64, 48),
+        );
         ui.layout(400.0, 300.0, &mut FixedWidthText(7.0));
         let pixels = |ui: &Ui| match ui.kind(view) {
             crate::NodeKind::Image { image } => image.rgba.clone(),
@@ -861,13 +1115,24 @@ mod tests {
         assert!(covered(&ui) > 300);
         // Turned twice while the first turn draws: the last one shows.
         input.set_focus(&mut ui, &mut s, Some(view));
-        input.simulate_keystrokes(&mut ui, &mut s, "right right right").unwrap();
+        input
+            .simulate_keystrokes(&mut ui, &mut s, "right right right")
+            .unwrap();
         settle(&mut ui);
         // As it is drawn on the spot, turned the same.
         let mut here = Ui::new();
         let mut input2: Input<S> = Input::new();
         let root2 = here.root();
-        let view2 = model_view(&mut here, &mut input2, &s, root2, "A cube", Mesh3::cube(1.5, [0.8, 0.3, 0.2]), binding!(|s: S| s.orbit), (64, 48));
+        let view2 = model_view(
+            &mut here,
+            &mut input2,
+            &s,
+            root2,
+            "A cube",
+            Mesh3::cube(1.5, [0.8, 0.3, 0.2]),
+            binding!(|s: S| s.orbit),
+            (64, 48),
+        );
         let want = match here.kind(view2) {
             crate::NodeKind::Image { image } => image.rgba.clone(),
             _ => vec![],
@@ -884,7 +1149,9 @@ mod tests {
         }
         let dense = || Mesh3::torus(1.0, 0.4, 96, 48, [0.2, 0.5, 0.8]);
         assert!(dense().triangles.len() >= 4096);
-        let s = S { orbit: Orbit::default().turned(0.5, 0.3) };
+        let s = S {
+            orbit: Orbit::default().turned(0.5, 0.3),
+        };
         let image = |ui: &Ui, n: NodeId| match ui.kind(n) {
             crate::NodeKind::Image { image } => image.rgba.clone(),
             _ => vec![],
@@ -893,7 +1160,16 @@ mod tests {
         threaded.set_job_runner(crate::jobs::Threads::new(4));
         let mut input: Input<S> = Input::new();
         let root = threaded.root();
-        let view = model_view(&mut threaded, &mut input, &s, root, "A torus", dense(), binding!(|s: S| s.orbit), (90, 70));
+        let view = model_view(
+            &mut threaded,
+            &mut input,
+            &s,
+            root,
+            "A torus",
+            dense(),
+            binding!(|s: S| s.orbit),
+            (90, 70),
+        );
         let start = std::time::Instant::now();
         while threaded.jobs_pending() {
             threaded.poll_jobs();
@@ -902,7 +1178,16 @@ mod tests {
         let mut here = Ui::new();
         let mut input2: Input<S> = Input::new();
         let root2 = here.root();
-        let view2 = model_view(&mut here, &mut input2, &s, root2, "A torus", dense(), binding!(|s: S| s.orbit), (90, 70));
+        let view2 = model_view(
+            &mut here,
+            &mut input2,
+            &s,
+            root2,
+            "A torus",
+            dense(),
+            binding!(|s: S| s.orbit),
+            (90, 70),
+        );
         let (a, b) = (image(&threaded, view), image(&here, view2));
         assert_eq!(a.len(), 90 * 70 * 4);
         assert!(a.chunks(4).filter(|p| p[3] == 255).count() > 1000);
@@ -930,17 +1215,36 @@ mod tests {
             let mut s = S::default();
             let root = ui.root();
             let torus = Mesh3::torus(1.0, 0.38, 36, 18, [0.15, 0.39, 0.92]);
-            let view = model_view(&mut ui, &mut input, &s, root, "A torus", torus, binding!(|s: S| s.orbit), size);
+            let view = model_view(
+                &mut ui,
+                &mut input,
+                &s,
+                root,
+                "A torus",
+                torus,
+                binding!(|s: S| s.orbit),
+                size,
+            );
             for turn in [0.0, 0.8, 1.6] {
                 s.orbit = Orbit::default().turned(turn, turn - 0.5);
                 input.set_focus(&mut ui, &mut s, Some(view));
                 input.simulate_keystrokes(&mut ui, &mut s, "right").unwrap();
                 let (w, h, px) = drawn(&ui, view);
-                assert_eq!((w, h), ((size.0 as f32 * ratio) as u32, (size.1 as f32 * ratio) as u32));
+                assert_eq!(
+                    (w, h),
+                    (
+                        (size.0 as f32 * ratio) as u32,
+                        (size.1 as f32 * ratio) as u32
+                    )
+                );
                 // Nothing on the edges: none of it is cut off.
                 let at = |x: u32, y: u32| px[((y * w + x) * 4 + 3) as usize];
-                let edge = (0..w).any(|x| at(x, 0) > 0 || at(x, h - 1) > 0) || (0..h).any(|y| at(0, y) > 0 || at(w - 1, y) > 0);
-                assert!(!edge, "{size:?} at {ratio}x, turned {turn}: the model reaches the edge");
+                let edge = (0..w).any(|x| at(x, 0) > 0 || at(x, h - 1) > 0)
+                    || (0..h).any(|y| at(0, y) > 0 || at(w - 1, y) > 0);
+                assert!(
+                    !edge,
+                    "{size:?} at {ratio}x, turned {turn}: the model reaches the edge"
+                );
                 // Its outline in between: partly covered pixels.
                 let partial = px.chunks(4).filter(|p| p[3] > 20 && p[3] < 235).count();
                 assert!(partial > 100, "{partial} smooth edge pixels");
@@ -961,11 +1265,28 @@ mod tests {
             }
             // NaN is never equal to itself: a view that kept asking would
             // draw for ever (on the spot, without end).
-            ui.set_light(Light { x: f32::NAN, ..Light::default() });
+            ui.set_light(Light {
+                x: f32::NAN,
+                ..Light::default()
+            });
             let mut input: Input<S> = Input::new();
-            let s = S { orbit: Orbit { yaw: f32::NAN, ..Orbit::default() } };
+            let s = S {
+                orbit: Orbit {
+                    yaw: f32::NAN,
+                    ..Orbit::default()
+                },
+            };
             let root = ui.root();
-            model_view(&mut ui, &mut input, &s, root, "A cube", Mesh3::cube(1.0, [0.5; 3]), binding!(|s: S| s.orbit), (16, 16));
+            model_view(
+                &mut ui,
+                &mut input,
+                &s,
+                root,
+                "A cube",
+                Mesh3::cube(1.0, [0.5; 3]),
+                binding!(|s: S| s.orbit),
+                (16, 16),
+            );
             let start = std::time::Instant::now();
             while ui.jobs_pending() {
                 ui.poll_jobs();

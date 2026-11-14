@@ -53,9 +53,21 @@ pub(crate) struct Matched {
 impl Ui {
     /// Places `indicator` over `target` (as `shape` says) after each
     /// layout, animating over `seconds` when the place changes.
-    pub fn match_geometry(&mut self, indicator: NodeId, target: NodeId, shape: MatchShape, seconds: f32) {
+    pub fn match_geometry(
+        &mut self,
+        indicator: NodeId,
+        target: NodeId,
+        shape: MatchShape,
+        seconds: f32,
+    ) {
         self.matched.retain(|m| m.indicator != indicator);
-        self.matched.push(Matched { indicator, target, shape, seconds, last: None });
+        self.matched.push(Matched {
+            indicator,
+            target,
+            shape,
+            seconds,
+            last: None,
+        });
         self.invalidate_layout();
     }
 
@@ -79,19 +91,43 @@ impl Ui {
         let width = self.rect(self.root()).width;
         let rtl = self.layout_direction() == LayoutDirection::RightToLeft;
         // Laid out left to right, then mirrored: placed in the unmirrored.
-        let unmirror = |r: Rect| if rtl { Rect { x: width - r.x - r.width, ..r } } else { r };
+        let unmirror = |r: Rect| {
+            if rtl {
+                Rect {
+                    x: width - r.x - r.width,
+                    ..r
+                }
+            } else {
+                r
+            }
+        };
         let mut moved = false;
         for m in &mut all {
-            let Some(parent) = self.parent(m.indicator) else { continue };
+            let Some(parent) = self.parent(m.indicator) else {
+                continue;
+            };
             let (p, t) = (unmirror(self.rect(parent)), unmirror(self.rect(m.target)));
             let ps = self.style(parent);
             let node = &self.nodes[parent.0];
             // Inside the parent's border, and where its content would be
             // unscrolled: the indicator scrolls with it.
-            let (ox, oy) = (p.x + ps.border.left - node.scrolled_x, p.y + ps.border.top - node.scrolled);
+            let (ox, oy) = (
+                p.x + ps.border.left - node.scrolled_x,
+                p.y + ps.border.top - node.scrolled,
+            );
             let want = match m.shape {
-                MatchShape::Fill => Rect { x: t.x - ox, y: t.y - oy, width: t.width, height: t.height },
-                MatchShape::Underline(h) => Rect { x: t.x - ox, y: t.y + t.height - h - oy, width: t.width, height: h },
+                MatchShape::Fill => Rect {
+                    x: t.x - ox,
+                    y: t.y - oy,
+                    width: t.width,
+                    height: t.height,
+                },
+                MatchShape::Underline(h) => Rect {
+                    x: t.x - ox,
+                    y: t.y + t.height - h - oy,
+                    width: t.width,
+                    height: h,
+                },
             };
             if m.last == Some(want) {
                 continue;
@@ -99,15 +135,29 @@ impl Ui {
             let first = m.last.is_none();
             m.last = Some(want);
             moved = true;
-            let props = [(Property::Left, want.x), (Property::Top, want.y), (Property::Width, want.width), (Property::Height, want.height)];
+            let props = [
+                (Property::Left, want.x),
+                (Property::Top, want.y),
+                (Property::Width, want.width),
+                (Property::Height, want.height),
+            ];
             if first || m.seconds <= 0.0 {
                 self.update_style(m.indicator, |s| {
-                    (s.left, s.top, s.width, s.height) = (Length::Px(want.x), Length::Px(want.y), Length::Px(want.width), Length::Px(want.height));
+                    (s.left, s.top, s.width, s.height) = (
+                        Length::Px(want.x),
+                        Length::Px(want.y),
+                        Length::Px(want.width),
+                        Length::Px(want.height),
+                    );
                 });
             } else {
                 for (p, to) in props {
                     let from = self.read(m.indicator, p);
-                    self.animate(m.indicator, Animation::new(p, from, Value::Number(to), m.seconds).easing(threers_math::easing::Easing::CubicOut));
+                    self.animate(
+                        m.indicator,
+                        Animation::new(p, from, Value::Number(to), m.seconds)
+                            .easing(threers_math::easing::Easing::CubicOut),
+                    );
                 }
             }
         }

@@ -53,7 +53,16 @@ pub enum Motion {
 
 impl Motion {
     /// Every motion, in order.
-    pub const ALL: [Motion; 8] = [Motion::None, Motion::Spin, Motion::Rock, Motion::Roll, Motion::Bounce, Motion::Buzz, Motion::Pulse, Motion::Float];
+    pub const ALL: [Motion; 8] = [
+        Motion::None,
+        Motion::Spin,
+        Motion::Rock,
+        Motion::Roll,
+        Motion::Bounce,
+        Motion::Buzz,
+        Motion::Pulse,
+        Motion::Float,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -81,15 +90,25 @@ pub struct MotionSpec {
 
 impl MotionSpec {
     pub fn new(motion: Motion) -> Self {
-        Self { motion, speed: 1.0, amount: 1.0 }
+        Self {
+            motion,
+            speed: 1.0,
+            amount: 1.0,
+        }
     }
 
     pub fn speed(self, speed: f32) -> Self {
-        Self { speed: speed.max(0.0), ..self }
+        Self {
+            speed: speed.max(0.0),
+            ..self
+        }
     }
 
     pub fn amount(self, amount: f32) -> Self {
-        Self { amount: amount.max(0.0), ..self }
+        Self {
+            amount: amount.max(0.0),
+            ..self
+        }
     }
 }
 
@@ -115,7 +134,10 @@ impl MotionSpec {
     pub fn pose(&self, time: f32, hop: f32) -> Pose {
         let t = time * self.speed;
         let a = self.amount;
-        let mut p = Pose { scale: (1.0, 1.0), ..Pose::default() };
+        let mut p = Pose {
+            scale: (1.0, 1.0),
+            ..Pose::default()
+        };
         match self.motion {
             Motion::None => {}
             Motion::Spin => p.yaw = t * 2.4,
@@ -135,7 +157,10 @@ impl MotionSpec {
             Motion::Buzz => {
                 let b = (t * 0.9).rem_euclid(1.0);
                 let burst = smoothstep(0.0, 0.03, b) * (1.0 - smoothstep(0.3, 0.36, b));
-                p.offset = ((t * 97.0).sin() * hop * 0.12 * a * burst, (t * 83.0).cos() * hop * 0.12 * a * burst);
+                p.offset = (
+                    (t * 97.0).sin() * hop * 0.12 * a * burst,
+                    (t * 83.0).cos() * hop * 0.12 * a * burst,
+                );
                 p.roll = (t * 71.0).sin() * 0.05 * a * burst;
             }
             Motion::Pulse => {
@@ -197,7 +222,13 @@ impl Ui {
         if self.env.motions.is_empty() {
             return;
         }
-        let gone: Vec<NodeId> = self.env.motions.keys().copied().filter(|&n| !self.contains(n)).collect();
+        let gone: Vec<NodeId> = self
+            .env
+            .motions
+            .keys()
+            .copied()
+            .filter(|&n| !self.contains(n))
+            .collect();
         for n in gone {
             self.env.motions.remove(&n);
         }
@@ -212,7 +243,9 @@ impl Ui {
     /// `node`'s transform: its own, moved where its motion is now (or
     /// still, with reduced motion).
     fn place_motion(&mut self, node: NodeId) {
-        let Some(&(spec, base)) = self.env.motions.get(&node) else { return };
+        let Some(&(spec, base)) = self.env.motions.get(&node) else {
+            return;
+        };
         let mut t = base.unwrap_or_default();
         if !self.env.reduce_motion {
             let r = self.rect(node);
@@ -285,7 +318,10 @@ mod tests {
         let mut ui = Ui::new();
         let root = ui.root();
         let b = ui.add_box(root, style! { width: 40px; height: 40px; });
-        let own = Transform3d { rotate_x: 0.3, ..Transform3d::default() };
+        let own = Transform3d {
+            rotate_x: 0.3,
+            ..Transform3d::default()
+        };
         ui.set_transform3d(b, own);
         ui.set_motion(b, MotionSpec::new(Motion::Rock));
         ui.layout(300.0, 300.0, &mut FixedWidthText(7.0));

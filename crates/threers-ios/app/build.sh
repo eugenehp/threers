@@ -20,6 +20,8 @@
 # features (NO_DEFAULT_FEATURES=1 without its default ones),
 # CARGO_TARGET_DIR. Variables named
 # APP_ENV_<NAME> reach the app in the simulator as <NAME>.
+# APP_LINK adds linker words (frameworks or libraries the crate's own
+# dependencies need, e.g. "-framework Accelerate" for BLAS).
 set -eu
 here=${0:A:h}
 crate=${1:?usage: app/build.sh path/to/crate [ios|ios-device|vision|vision-device]}
@@ -59,7 +61,7 @@ xcrun --sdk $sdk swiftc -O -parse-as-library -target $swift_target $flags \
   "$here/Harness.swift" "$target_dir/$rust_target/release/lib$lib.a" \
   $frameworks -framework UIKit -framework SwiftUI -framework Metal -framework QuartzCore \
   -framework CoreGraphics -framework CoreFoundation -framework Foundation -framework Security \
-  -lobjc -liconv -lc++ -Xlinker -dead_strip -o "$app/$lib"
+  -lobjc -liconv -lc++ ${=APP_LINK:-} -Xlinker -dead_strip -o "$app/$lib"
 # the symbols are for the debugger, not the device
 [[ ${STRIP:-1} == 1 ]] && strip "$app/$lib"
 plist=$app/Info.plist
@@ -75,6 +77,16 @@ plutil -replace UIDeviceFamily -json "$families" "$plist"
 # a volume opens first: say so, or visionOS hands the app a window scene it has no window for
 [[ $kind == vision || $kind == vision-device ]] && \
   plutil -replace UIApplicationSceneManifest.UIApplicationPreferredDefaultSceneSessionRole -string UIWindowSceneSessionRoleVolumetricApplication "$plist"
+# the app's icons (and any images): its asset catalog, app/Assets.xcassets
+# (`AppIcon`: an .appiconset for iOS, a layered .solidimagestack for
+# visionOS), compiled for this platform, its keys merged into the plist
+if [[ -d "$crate/app/Assets.xcassets" ]]; then
+  if [[ $kind == ios* ]]; then devices=(--target-device iphone --target-device ipad); else devices=(--target-device vision); fi
+  partial=$target_dir/threers-ios/$kind/assets.plist
+  xcrun actool "$crate/app/Assets.xcassets" --compile "$app" --platform $sdk --minimum-deployment-target $min_os \
+    --app-icon AppIcon $devices --output-partial-info-plist "$partial" --errors --notices > /dev/null
+  /usr/libexec/PlistBuddy -c "Merge $partial" "$plist" > /dev/null
+fi
 printf 'APPL????' > "$app/PkgInfo"
 [[ $kind == vision* ]] && cp "$here/VertexColor.usda" "$app/"
 if [[ $kind == *-device ]]; then

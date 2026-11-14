@@ -54,7 +54,9 @@ impl Theme {
 
     /// A name back ([`name`](Self::name)'s, any case); `None` for others.
     pub fn parse(name: &str) -> Option<Theme> {
-        Theme::ALL.into_iter().find(|t| t.name().eq_ignore_ascii_case(name.trim()))
+        Theme::ALL
+            .into_iter()
+            .find(|t| t.name().eq_ignore_ascii_case(name.trim()))
     }
 }
 
@@ -62,10 +64,21 @@ impl Theme {
 /// `theme` in the app's state (`Binding::local(Theme::System)` where the app
 /// keeps none); the UI's theme follows it after every event. Named
 /// "Appearance" to assistive technology, a radio group.
-pub fn theme_picker<S: 'static>(ui: &mut Ui, input: &mut Input<S>, state: &S, parent: NodeId, theme: Binding<S, Theme>) -> NodeId {
+pub fn theme_picker<S: 'static>(
+    ui: &mut Ui,
+    input: &mut Input<S>,
+    state: &S,
+    parent: NodeId,
+    theme: Binding<S, Theme>,
+) -> NodeId {
     let (get, set) = (theme.clone(), theme.clone());
     let index = Binding::new(
-        move |s: &S| Theme::ALL.iter().position(|&t| t == get.get(s)).unwrap_or(0),
+        move |s: &S| {
+            Theme::ALL
+                .iter()
+                .position(|&t| t == get.get(s))
+                .unwrap_or(0)
+        },
         move |s: &mut S, i: usize| set.set(s, Theme::ALL[i.min(2)]),
     );
     let names = Theme::ALL.map(Theme::name);
@@ -152,15 +165,27 @@ mod tests {
         ui.token_style(card, &[("background", Token::Surface)]);
         let dark = ui.add_box(root, style! {});
         let inside = ui.add_box(dark, style! {});
-        ui.token_style(inside, &[("background", Token::Surface), ("color", Token::Text)]);
+        ui.token_style(
+            inside,
+            &[("background", Token::Surface), ("color", Token::Text)],
+        );
         ui.appearance_style(inside, Appearance::Dark, "border-radius: 9px");
         ui.set_subtree_theme(dark, Some(Theme::Dark));
         let light_surface = ui.token_in(Appearance::Light, Token::Surface);
         let dark_surface = ui.token_in(Appearance::Dark, Token::Surface);
-        let near = |a: Option<Rgba>, b: Rgba| a.is_some_and(|a| (0..4).all(|i| (a[i] - b[i]).abs() < 1.0 / 255.0));
+        let near = |a: Option<Rgba>, b: Rgba| {
+            a.is_some_and(|a| (0..4).all(|i| (a[i] - b[i]).abs() < 1.0 / 255.0))
+        };
         assert!(near(ui.style(card).background, light_surface));
-        assert!(near(ui.style(inside).background, dark_surface), "inside the dark part, dark");
-        assert_eq!(ui.style(inside).border_radius, crate::Length::Px(9.0), "and its dark appearance style");
+        assert!(
+            near(ui.style(inside).background, dark_surface),
+            "inside the dark part, dark"
+        );
+        assert_eq!(
+            ui.style(inside).border_radius,
+            crate::Length::Px(9.0),
+            "and its dark appearance style"
+        );
         // The system goes dark, then the app holds Light: the part stays dark.
         ui.set_system_appearance(Appearance::Dark);
         assert!(near(ui.style(card).background, dark_surface));
@@ -183,16 +208,34 @@ mod tests {
         let mut input: Input<S> = Input::new();
         let mut s = S::default();
         let root = ui.root();
-        let picker = theme_picker(&mut ui, &mut input, &s, root, crate::binding!(|s: S| s.theme));
+        let picker = theme_picker(
+            &mut ui,
+            &mut input,
+            &s,
+            root,
+            crate::binding!(|s: S| s.theme),
+        );
         ui.layout(400.0, 200.0, &mut FixedWidthText(7.0));
         assert_eq!(ui.theme(), Theme::System, "System by default");
         // Choosing Dark: a click on its segment.
-        let dark = ui.accessibility_tree().into_iter().find(|a| a.name == "Dark").expect("a Dark choice");
+        let dark = ui
+            .accessibility_tree()
+            .into_iter()
+            .find(|a| a.name == "Dark")
+            .expect("a Dark choice");
         let r = dark.bounds;
         let (x, y) = (r.x + r.width / 2.0, r.y + r.height / 2.0);
         let b = crate::input::PointerButton::Primary;
-        input.dispatch(&mut ui, &mut s, crate::input::Event::PointerDown { x, y, button: b });
-        input.dispatch(&mut ui, &mut s, crate::input::Event::PointerUp { x, y, button: b });
+        input.dispatch(
+            &mut ui,
+            &mut s,
+            crate::input::Event::PointerDown { x, y, button: b },
+        );
+        input.dispatch(
+            &mut ui,
+            &mut s,
+            crate::input::Event::PointerUp { x, y, button: b },
+        );
         assert_eq!(s.theme, Theme::Dark);
         assert_eq!(ui.theme(), Theme::Dark);
         assert!(ui.contains(picker));

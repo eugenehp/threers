@@ -51,10 +51,14 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCommandBuffer, MTLCommandQueue, MTLPixelFormat, MTLTexture};
 
-use super::{Handedness, InputSlots, TargetRayMode, XrEvent, XrEventKind, XrEye, XrInput, XrSource};
+use super::{
+    Handedness, InputSlots, TargetRayMode, XrEvent, XrEventKind, XrEye, XrInput, XrSource,
+};
 use crate::math::{Matrix4, Vector3};
 use crate::metal::visionos::frame_loop::*;
-use crate::metal::visionos::{AxisConvention, CpDrawable, CpFrame, CpLayerRenderer, LayerRendererState, SimdFloat2};
+use crate::metal::visionos::{
+    AxisConvention, CpDrawable, CpFrame, CpLayerRenderer, LayerRendererState, SimdFloat2,
+};
 
 /// A look-and-pinch from the app (`SpatialEventCollection.Event`): which
 /// one, its phase (0 began, 1 active — a start the first time an id is
@@ -105,7 +109,10 @@ unsafe extern "C" {
 
 #[link(name = "CompositorServices", kind = "framework")]
 unsafe extern "C" {
-    fn cp_layer_renderer_set_minimum_frame_repeat_count(layer_renderer: CpLayerRenderer, count: i32);
+    fn cp_layer_renderer_set_minimum_frame_repeat_count(
+        layer_renderer: CpLayerRenderer,
+        count: i32,
+    );
 }
 
 impl Newer {
@@ -113,7 +120,8 @@ impl Newer {
         static NEWER: std::sync::OnceLock<Newer> = std::sync::OnceLock::new();
         NEWER.get_or_init(|| {
             // RTLD_DEFAULT: every image loaded.
-            let find = |name: &std::ffi::CStr| unsafe { dlsym(-2isize as *mut c_void, name.as_ptr()) };
+            let find =
+                |name: &std::ffi::CStr| unsafe { dlsym(-2isize as *mut c_void, name.as_ptr()) };
             macro_rules! f {
                 ($name:literal) => {{
                     let p = find($name);
@@ -155,7 +163,15 @@ pub struct SystemAccessibility {
 
 impl Default for SystemAccessibility {
     fn default() -> Self {
-        SystemAccessibility { reduce_motion: false, bold_text: false, increase_contrast: false, reduce_transparency: false, voice_over: false, dark: false, text_scale: 1.0 }
+        SystemAccessibility {
+            reduce_motion: false,
+            bold_text: false,
+            increase_contrast: false,
+            reduce_transparency: false,
+            voice_over: false,
+            dark: false,
+            text_scale: 1.0,
+        }
     }
 }
 
@@ -175,7 +191,11 @@ pub extern "C" fn threers_xr_set_accessibility(flags: u32, text_scale: f32) {
         reduce_transparency: flags & 8 != 0,
         voice_over: flags & 16 != 0,
         dark: flags & 32 != 0,
-        text_scale: if text_scale.is_finite() && text_scale > 0.0 { text_scale.clamp(0.5, 4.0) } else { 1.0 },
+        text_scale: if text_scale.is_finite() && text_scale > 0.0 {
+            text_scale.clamp(0.5, 4.0)
+        } else {
+            1.0
+        },
     };
     if let Ok(mut s) = ACCESSIBILITY.lock() {
         *s = Some(a);
@@ -206,8 +226,12 @@ pub extern "C" fn threers_xr_set_announcer(announcer: Option<Announcer>) {
 /// Has VoiceOver read `message` out (`assertive`: at once), through the
 /// shell's announcer; nothing if there is none. Returns whether there was.
 pub fn announce(message: &str, assertive: bool) -> bool {
-    let Some(f) = ANNOUNCER.lock().ok().and_then(|a| *a) else { return false };
-    let Ok(text) = std::ffi::CString::new(message.replace('\0', " ")) else { return false };
+    let Some(f) = ANNOUNCER.lock().ok().and_then(|a| *a) else {
+        return false;
+    };
+    let Ok(text) = std::ffi::CString::new(message.replace('\0', " ")) else {
+        return false;
+    };
     f(text.as_ptr(), assertive);
     true
 }
@@ -216,9 +240,23 @@ pub fn announce(message: &str, assertive: bool) -> bool {
 /// (1), ended (2) or was cancelled (3), with its selection ray (`origin`,
 /// `direction`) in the immersive space. Any thread.
 #[unsafe(no_mangle)]
-pub extern "C" fn threers_xr_spatial_event(id: u64, phase: u32, ox: f32, oy: f32, oz: f32, dx: f32, dy: f32, dz: f32) {
+pub extern "C" fn threers_xr_spatial_event(
+    id: u64,
+    phase: u32,
+    ox: f32,
+    oy: f32,
+    oz: f32,
+    dx: f32,
+    dy: f32,
+    dz: f32,
+) {
     if let Ok(mut q) = SPATIAL.lock() {
-        q.push(Spatial { id, phase, origin: [ox, oy, oz], direction: [dx, dy, dz] });
+        q.push(Spatial {
+            id,
+            phase,
+            origin: [ox, oy, oz],
+            direction: [dx, dy, dz],
+        });
     }
 }
 
@@ -228,7 +266,11 @@ unsafe extern "C" {
     fn ar_hand_tracking_configuration_create() -> *mut c_void;
     fn ar_hand_tracking_provider_create(configuration: *mut c_void) -> *mut c_void;
     fn ar_hand_anchor_create() -> *mut c_void;
-    fn ar_hand_tracking_provider_get_latest_anchors(provider: *mut c_void, left: *mut c_void, right: *mut c_void) -> bool;
+    fn ar_hand_tracking_provider_get_latest_anchors(
+        provider: *mut c_void,
+        left: *mut c_void,
+        right: *mut c_void,
+    ) -> bool;
     fn ar_hand_anchor_is_tracked(anchor: *mut c_void) -> bool;
     fn ar_hand_anchor_get_hand_skeleton(anchor: *mut c_void) -> *mut c_void;
     fn ar_hand_skeleton_get_joint_named(skeleton: *mut c_void, name: u64) -> *mut c_void;
@@ -248,8 +290,8 @@ const HAND_RIGHT: u64 = (1 << 40) + 1;
 /// About how thick each joint is (ARKit gives no radii): fingertips and
 /// knuckles a little under a centimetre, the wrist more.
 const HAND_RADII: [f32; 25] = [
-    0.02, 0.012, 0.01, 0.009, 0.008, 0.011, 0.01, 0.009, 0.008, 0.007, 0.011, 0.01, 0.009, 0.008, 0.007, 0.011, 0.01, 0.009, 0.008, 0.007, 0.011, 0.009,
-    0.008, 0.007, 0.006,
+    0.02, 0.012, 0.01, 0.009, 0.008, 0.011, 0.01, 0.009, 0.008, 0.007, 0.011, 0.01, 0.009, 0.008,
+    0.007, 0.011, 0.01, 0.009, 0.008, 0.007, 0.011, 0.009, 0.008, 0.007, 0.006,
 ];
 
 /// ARKit's hand tracking: a provider run with world tracking, and the two
@@ -270,7 +312,11 @@ impl HandTracking {
             let configuration = ar_hand_tracking_configuration_create();
             let provider = ar_hand_tracking_provider_create(configuration);
             ar_release_hand(configuration);
-            (!provider.is_null()).then(|| HandTracking { provider, left: ar_hand_anchor_create(), right: ar_hand_anchor_create() })
+            (!provider.is_null()).then(|| HandTracking {
+                provider,
+                left: ar_hand_anchor_create(),
+                right: ar_hand_anchor_create(),
+            })
         }
     }
 
@@ -279,10 +325,15 @@ impl HandTracking {
     /// space's coordinates.
     unsafe fn latest(&self) -> Vec<(u64, Handedness, Vec<f32>)> {
         let mut out = vec![];
-        if !unsafe { ar_hand_tracking_provider_get_latest_anchors(self.provider, self.left, self.right) } {
+        if !unsafe {
+            ar_hand_tracking_provider_get_latest_anchors(self.provider, self.left, self.right)
+        } {
             return out;
         }
-        for (anchor, id, handed) in [(self.left, HAND_LEFT, Handedness::Left), (self.right, HAND_RIGHT, Handedness::Right)] {
+        for (anchor, id, handed) in [
+            (self.left, HAND_LEFT, Handedness::Left),
+            (self.right, HAND_RIGHT, Handedness::Right),
+        ] {
             unsafe {
                 if !ar_hand_anchor_is_tracked(anchor) {
                     continue;
@@ -291,11 +342,23 @@ impl HandTracking {
                 if skeleton.is_null() {
                     continue;
                 }
-                let origin: Matrix4 = call_returning_float4x4(ar_hand_anchor_get_origin_from_anchor_transform_sym, anchor as usize, 0, 0).into();
+                let origin: Matrix4 = call_returning_float4x4(
+                    ar_hand_anchor_get_origin_from_anchor_transform_sym,
+                    anchor as usize,
+                    0,
+                    0,
+                )
+                .into();
                 let mut joints = Vec::with_capacity(25 * 16);
                 for k in 0..25u64 {
                     let joint = ar_hand_skeleton_get_joint_named(skeleton, k);
-                    let local: Matrix4 = call_returning_float4x4(ar_skeleton_joint_get_anchor_from_joint_transform_sym, joint as usize, 0, 0).into();
+                    let local: Matrix4 = call_returning_float4x4(
+                        ar_skeleton_joint_get_anchor_from_joint_transform_sym,
+                        joint as usize,
+                        0,
+                        0,
+                    )
+                    .into();
                     joints.extend_from_slice(&origin.multiply(&local).elements);
                 }
                 out.push((id, handed, joints));
@@ -413,7 +476,10 @@ impl ImmersiveSession {
         let hands = HandTracking::new();
         Ok(ImmersiveSession {
             layer: layer_renderer,
-            tracking: WorldTracking::with_providers(&hands.as_ref().map(|h| vec![h.provider]).unwrap_or_default()).ok(),
+            tracking: WorldTracking::with_providers(
+                &hands.as_ref().map(|h| vec![h.provider]).unwrap_or_default(),
+            )
+            .ok(),
             hands,
             hands_now: vec![],
             device: Arc::new(device),
@@ -468,7 +534,9 @@ impl ImmersiveSession {
     /// Shows each frame `count + 1` times: 0 draws at the display's rate
     /// (90 Hz), 1 at half. For a still scene, it halves the power used.
     pub fn set_frame_repeat(&self, count: u32) {
-        unsafe { cp_layer_renderer_set_minimum_frame_repeat_count(self.layer, count.min(8) as i32) };
+        unsafe {
+            cp_layer_renderer_set_minimum_frame_repeat_count(self.layer, count.min(8) as i32)
+        };
     }
 
     /// Waits for the next frame and readies it: the head, the eyes and the
@@ -502,7 +570,13 @@ impl ImmersiveSession {
                 return Frame::Skip;
             }
             // Reverse-Z: x is far, y near (see `drawable.h`).
-            cp_drawable_set_depth_range(drawable, SimdFloat2 { x: self.far, y: self.near });
+            cp_drawable_set_depth_range(
+                drawable,
+                SimdFloat2 {
+                    x: self.far,
+                    y: self.near,
+                },
+            );
             let origin_from_device = self.device_anchor(drawable);
             self.head = Some(origin_from_device.elements);
             let color_raw = cp_drawable_get_color_texture(drawable, 0) as *mut c_void;
@@ -519,7 +593,9 @@ impl ImmersiveSession {
             self.hover_areas.borrow_mut().clear();
             let newer = Newer::get();
             let hover = match (newer.tracking_texture_count, newer.tracking_texture) {
-                (Some(count), Some(get)) if count(drawable) > 0 => self.wrap(get(drawable, 0), wgpu::TextureUsages::RENDER_ATTACHMENT),
+                (Some(count), Some(get)) if count(drawable) > 0 => {
+                    self.wrap(get(drawable, 0), wgpu::TextureUsages::RENDER_ATTACHMENT)
+                }
                 _ => None,
             };
             self.eyes.clear();
@@ -530,7 +606,9 @@ impl ImmersiveSession {
                     continue;
                 }
                 let device_from_eye: Matrix4 = cp_view_get_transform(view).into();
-                let reversed: Matrix4 = cp_drawable_compute_projection(drawable, AxisConvention::RightUpBack as u8, i).into();
+                let reversed: Matrix4 =
+                    cp_drawable_compute_projection(drawable, AxisConvention::RightUpBack as u8, i)
+                        .into();
                 // Near at 1 to near at 0: z' = w - z.
                 let mut projection = reversed.elements;
                 for c in 0..4 {
@@ -542,16 +620,34 @@ impl ImmersiveSession {
                 } else {
                     // Metal's rectangle is from the top; the eyes' from the bottom.
                     let v = cp_view_texture_map_get_viewport(map);
-                    let (x, y, w, h) = (v.origin_x as i32, v.origin_y as i32, v.width as i32, v.height as i32);
+                    let (x, y, w, h) = (
+                        v.origin_x as i32,
+                        v.origin_y as i32,
+                        v.width as i32,
+                        v.height as i32,
+                    );
                     [x, self.size.1 as i32 - y - h, w, h]
                 };
-                self.eyes.push(Eye { pose: origin_from_device.multiply(&device_from_eye), projection, viewport });
+                self.eyes.push(Eye {
+                    pose: origin_from_device.multiply(&device_from_eye),
+                    projection,
+                    viewport,
+                });
             }
             if std::env::var_os("THREERS_XR_DEBUG").is_some() {
-                eprintln!("threers xr: {:?} {:?} head {:?} eyes {:?}", self.size, self.format, self.head, self.eyes);
+                eprintln!(
+                    "threers xr: {:?} {:?} head {:?} eyes {:?}",
+                    self.size, self.format, self.head, self.eyes
+                );
             }
             let target = color.create_view(&Default::default());
-            self.current = Some(Current { frame, drawable, color, depth, hover });
+            self.current = Some(Current {
+                frame,
+                drawable,
+                color,
+                depth,
+                hover,
+            });
             Frame::Draw(target)
         }
     }
@@ -559,7 +655,9 @@ impl ImmersiveSession {
     /// Presents what was drawn (behind it, on the same queue) and closes the
     /// frame.
     pub fn end_frame(&mut self) {
-        let Some(cur) = self.current.take() else { return };
+        let Some(cur) = self.current.take() else {
+            return;
+        };
         // The compositor's depth, cleared to far: nothing claims to be near.
         if let Some(depth) = &cur.depth {
             let view = depth.create_view(&Default::default());
@@ -569,7 +667,10 @@ impl ImmersiveSession {
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &view,
-                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0.0), store: wgpu::StoreOp::Store }),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
                     stencil_ops: None,
                 }),
                 timestamp_writes: None,
@@ -582,7 +683,10 @@ impl ImmersiveSession {
             if let Some(hal) = self.queue.as_hal::<wgpu::hal::api::Metal>()
                 && let Some(buffer) = hal.as_raw().commandBuffer()
             {
-                cp_drawable_encode_present(cur.drawable, Retained::as_ptr(&buffer) as *mut c_void as _);
+                cp_drawable_encode_present(
+                    cur.drawable,
+                    Retained::as_ptr(&buffer) as *mut c_void as _,
+                );
                 buffer.commit();
             }
             cp_frame_end_submission(cur.frame);
@@ -596,7 +700,12 @@ impl ImmersiveSession {
     /// gets nothing drawn.
     unsafe fn query_drawable(frame: CpFrame) -> CpDrawable {
         let newer = Newer::get();
-        let (Some(all), Some(count), Some(get), Some(target)) = (newer.query_drawables, newer.drawable_count, newer.drawable_at, newer.drawable_target) else {
+        let (Some(all), Some(count), Some(get), Some(target)) = (
+            newer.query_drawables,
+            newer.drawable_count,
+            newer.drawable_at,
+            newer.drawable_target,
+        ) else {
             return unsafe { cp_frame_query_drawable(frame) };
         };
         let array = unsafe { all(frame) };
@@ -604,21 +713,32 @@ impl ImmersiveSession {
             return std::ptr::null_mut();
         }
         let n = unsafe { count(array) };
-        let drawables: Vec<CpDrawable> = (0..n).map(|i| unsafe { get(array, i) }).filter(|d| !d.is_null()).collect();
+        let drawables: Vec<CpDrawable> = (0..n)
+            .map(|i| unsafe { get(array, i) })
+            .filter(|d| !d.is_null())
+            .collect();
         // 0: the built-in display.
-        drawables.iter().copied().find(|&d| unsafe { target(d) } == 0).or(drawables.first().copied()).unwrap_or(std::ptr::null_mut())
+        drawables
+            .iter()
+            .copied()
+            .find(|&d| unsafe { target(d) } == 0)
+            .or(drawables.first().copied())
+            .unwrap_or(std::ptr::null_mut())
     }
 
     /// The head's pose at this frame's presentation, handed to the
     /// compositor too (it reprojects with it). Identity until tracking runs.
     unsafe fn device_anchor(&mut self, drawable: CpDrawable) -> Matrix4 {
         let fallback = self.tracked.unwrap_or(self.untracked_head);
-        let Some(tracking) = &self.tracking else { return fallback };
+        let Some(tracking) = &self.tracking else {
+            return fallback;
+        };
         let timing = unsafe { cp_drawable_get_frame_timing(drawable) };
         if timing.is_null() {
             return fallback;
         }
-        let at = unsafe { cp_time_to_cf_time_interval(cp_frame_timing_get_presentation_time(timing)) };
+        let at =
+            unsafe { cp_time_to_cf_time_interval(cp_frame_timing_get_presentation_time(timing)) };
         match tracking.device_pose(at) {
             // The simulator's tracking "succeeds" with the space's origin
             // exactly — the head on the floor. A real pose is never exactly
@@ -648,7 +768,8 @@ impl ImmersiveSession {
 
     /// A compositor texture as a wgpu one (it stays the compositor's).
     unsafe fn wrap(&self, raw: *mut c_void, usage: wgpu::TextureUsages) -> Option<wgpu::Texture> {
-        let texture: Retained<ProtocolObject<dyn MTLTexture>> = unsafe { Retained::retain(raw.cast()) }?;
+        let texture: Retained<ProtocolObject<dyn MTLTexture>> =
+            unsafe { Retained::retain(raw.cast()) }?;
         let format = match texture.pixelFormat() {
             MTLPixelFormat::BGRA8Unorm_sRGB => wgpu::TextureFormat::Bgra8UnormSrgb,
             MTLPixelFormat::BGRA8Unorm => wgpu::TextureFormat::Bgra8Unorm,
@@ -660,14 +781,34 @@ impl ImmersiveSession {
             MTLPixelFormat::R16Uint => wgpu::TextureFormat::R16Uint,
             _ => return None,
         };
-        let (w, h, layers) = (texture.width() as u32, texture.height() as u32, (texture.arrayLength() as u32).max(1));
+        let (w, h, layers) = (
+            texture.width() as u32,
+            texture.height() as u32,
+            (texture.arrayLength() as u32).max(1),
+        );
         let kind = texture.textureType();
         let hal = unsafe {
-            wgpu::hal::metal::Device::texture_from_raw(texture, format, kind, layers, 1, wgpu::hal::CopyExtent { width: w, height: h, depth: 1 }, None)
+            wgpu::hal::metal::Device::texture_from_raw(
+                texture,
+                format,
+                kind,
+                layers,
+                1,
+                wgpu::hal::CopyExtent {
+                    width: w,
+                    height: h,
+                    depth: 1,
+                },
+                None,
+            )
         };
         let desc = wgpu::TextureDescriptor {
             label: Some("threers visionOS drawable"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: layers },
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: layers,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -675,7 +816,14 @@ impl ImmersiveSession {
             usage,
             view_formats: &[],
         };
-        Some(unsafe { self.device.create_texture_from_hal::<wgpu::hal::api::Metal>(hal, &desc, wgpu::TextureUses::UNINITIALIZED) })
+        Some(unsafe {
+            self.device
+                .create_texture_from_hal::<wgpu::hal::api::Metal>(
+                    hal,
+                    &desc,
+                    wgpu::TextureUses::UNINITIALIZED,
+                )
+        })
     }
 
     /// The hands ARKit has now: each tracked one connected as an input
@@ -688,7 +836,9 @@ impl ImmersiveSession {
         // A harness's right hand, its index fingertip where it was put.
         if let Some([x, y, z]) = SCRIPTED_TIP.lock().ok().and_then(|t| *t) {
             now.retain(|h| h.0 != HAND_RIGHT);
-            let joints = Matrix4::translation(Vector3::new(x, y, z)).elements.repeat(25);
+            let joints = Matrix4::translation(Vector3::new(x, y, z))
+                .elements
+                .repeat(25);
             now.push((HAND_RIGHT, Handedness::Right, joints));
         }
         for (id, _) in [(HAND_LEFT, ()), (HAND_RIGHT, ())] {
@@ -696,11 +846,17 @@ impl ImmersiveSession {
             match (tracked, self.slots.slot_of(&id)) {
                 (true, None) => {
                     let slot = self.slots.connect(id);
-                    self.events.push(XrEvent { kind: XrEventKind::Connected, slot });
+                    self.events.push(XrEvent {
+                        kind: XrEventKind::Connected,
+                        slot,
+                    });
                 }
                 (false, Some(slot)) => {
                     self.slots.disconnect(&id);
-                    self.events.push(XrEvent { kind: XrEventKind::Disconnected, slot });
+                    self.events.push(XrEvent {
+                        kind: XrEventKind::Disconnected,
+                        slot,
+                    });
                 }
                 _ => {}
             }
@@ -713,27 +869,51 @@ impl ImmersiveSession {
     fn take_spatial(&mut self) {
         for id in std::mem::take(&mut self.leaving) {
             if let Some(slot) = self.slots.disconnect(&id) {
-                self.events.push(XrEvent { kind: XrEventKind::Disconnected, slot });
+                self.events.push(XrEvent {
+                    kind: XrEventKind::Disconnected,
+                    slot,
+                });
             }
             self.rays.remove(&id);
         }
-        let events = SPATIAL.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+        let events = SPATIAL
+            .lock()
+            .map(|mut q| std::mem::take(&mut *q))
+            .unwrap_or_default();
         for e in events {
-            self.rays.insert(e.id, super::ray_pose(Vector3::new(e.origin[0], e.origin[1], e.origin[2]), Vector3::new(e.direction[0], e.direction[1], e.direction[2])));
+            self.rays.insert(
+                e.id,
+                super::ray_pose(
+                    Vector3::new(e.origin[0], e.origin[1], e.origin[2]),
+                    Vector3::new(e.direction[0], e.direction[1], e.direction[2]),
+                ),
+            );
             // SwiftUI says only active, ended or cancelled: an id's first
             // active is its start.
             let starts = e.phase == 0 || (e.phase == 1 && self.slots.slot_of(&e.id).is_none());
             match e.phase {
                 _ if starts => {
                     let slot = self.slots.connect(e.id);
-                    self.events.push(XrEvent { kind: XrEventKind::Connected, slot });
-                    self.events.push(XrEvent { kind: XrEventKind::SelectStart, slot });
+                    self.events.push(XrEvent {
+                        kind: XrEventKind::Connected,
+                        slot,
+                    });
+                    self.events.push(XrEvent {
+                        kind: XrEventKind::SelectStart,
+                        slot,
+                    });
                 }
                 2 | 3 => {
                     if let Some(slot) = self.slots.slot_of(&e.id) {
-                        self.events.push(XrEvent { kind: XrEventKind::SelectEnd, slot });
+                        self.events.push(XrEvent {
+                            kind: XrEventKind::SelectEnd,
+                            slot,
+                        });
                         if e.phase == 2 {
-                            self.events.push(XrEvent { kind: XrEventKind::Select, slot });
+                            self.events.push(XrEvent {
+                                kind: XrEventKind::Select,
+                                slot,
+                            });
                         }
                     }
                     self.leaving.push(e.id);
@@ -749,7 +929,14 @@ impl XrSource for ImmersiveSession {
         self.head
     }
     fn eyes(&self, origin: &Matrix4) -> Vec<XrEye> {
-        self.eyes.iter().map(|e| XrEye { projection: e.projection, world: origin.multiply(&e.pose), viewport: e.viewport }).collect()
+        self.eyes
+            .iter()
+            .map(|e| XrEye {
+                projection: e.projection,
+                world: origin.multiply(&e.pose),
+                viewport: e.viewport,
+            })
+            .collect()
     }
     fn framebuffer_size(&self) -> (u32, u32) {
         self.size
@@ -757,16 +944,23 @@ impl XrSource for ImmersiveSession {
     fn inputs(&self) -> Vec<XrInput> {
         self.slots
             .iter()
-            .map(|(slot, id)| match self.hands_now.iter().find(|h| h.0 == *id) {
-                // A hand: its joints, no ray (its pinches come as spatial events).
-                Some((_, handedness, joints)) => XrInput {
-                    slot,
-                    handedness: *handedness,
-                    joints: Some((joints.clone(), HAND_RADII.to_vec())),
-                    ..Default::default()
+            .map(
+                |(slot, id)| match self.hands_now.iter().find(|h| h.0 == *id) {
+                    // A hand: its joints, no ray (its pinches come as spatial events).
+                    Some((_, handedness, joints)) => XrInput {
+                        slot,
+                        handedness: *handedness,
+                        joints: Some((joints.clone(), HAND_RADII.to_vec())),
+                        ..Default::default()
+                    },
+                    None => XrInput {
+                        slot,
+                        target_ray_mode: TargetRayMode::TransientPointer,
+                        ray: self.rays.get(id).copied(),
+                        ..Default::default()
+                    },
                 },
-                None => XrInput { slot, target_ray_mode: TargetRayMode::TransientPointer, ray: self.rays.get(id).copied(), ..Default::default() },
-            })
+            )
             .collect()
     }
     fn take_events(&mut self) -> Vec<XrEvent> {
@@ -777,7 +971,11 @@ impl XrSource for ImmersiveSession {
     }
     fn hover_target(&self) -> Option<super::HoverTarget> {
         let t = self.current.as_ref()?.hover.as_ref()?;
-        Some(super::HoverTarget { view: t.create_view(&Default::default()), format: t.format(), size: (t.width(), t.height()) })
+        Some(super::HoverTarget {
+            view: t.create_view(&Default::default()),
+            format: t.format(),
+            size: (t.width(), t.height()),
+        })
     }
     fn declare_hover(&self, id: u64) -> Option<u32> {
         let cur = self.current.as_ref()?;
@@ -847,8 +1045,17 @@ pub unsafe fn run<A: super::App>(layer_renderer: *mut c_void) {
         }
         let (w, h) = session.framebuffer_size();
         let format = session.format();
-        let renderer = renderer.get_or_insert_with(|| crate::renderer::Renderer::new_lazy(device.clone(), queue.clone(), format, w, h));
-        let mut gpu = super::Gpu { device: &device, queue: &queue, format, target: &target, renderer, source: &session };
+        let renderer = renderer.get_or_insert_with(|| {
+            crate::renderer::Renderer::new_lazy(device.clone(), queue.clone(), format, w, h)
+        });
+        let mut gpu = super::Gpu {
+            device: &device,
+            queue: &queue,
+            format,
+            target: &target,
+            renderer,
+            source: &session,
+        };
         app.draw(&mut scene, &frame, &mut gpu);
         session.end_frame();
     }

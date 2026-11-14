@@ -32,18 +32,23 @@
 //! path/to/threers-ios/app/build.sh path/to/my-app vision     # Vision Pro simulator
 //! ```
 
-#![cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+#![cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "visionos"
+))]
 
 use std::ffi::c_void;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Mutex;
 
 pub use threers;
 
 pub mod app;
-pub mod bake;
 #[cfg(all(target_os = "ios", target_arch = "aarch64"))]
 pub mod ar;
+pub mod bake;
 #[cfg(target_os = "visionos")]
 pub mod immersive;
 mod surface_ui;
@@ -65,6 +70,12 @@ pub enum Request {
     EnterImmersive = 3,
     /// Out of it.
     ExitImmersive = 4,
+    /// A backdrop round you (visionOS): a dark sky in place of the room you
+    /// are in, the app's windows in front of it — what is small and bright
+    /// (a neuron's branches) reads against it. The room closes for it.
+    EnterBackdrop = 5,
+    /// Back to your surroundings.
+    ExitBackdrop = 6,
 }
 
 /// What an app can ask of the window's camera ([`camera`]).
@@ -83,6 +94,7 @@ static VIEW_REQUEST: AtomicU32 = AtomicU32::new(0);
 /// For the shell: the immersive space.
 static SHELL_REQUEST: AtomicU32 = AtomicU32::new(0);
 static IMMERSIVE: AtomicBool = AtomicBool::new(false);
+static BACKDROP: AtomicBool = AtomicBool::new(false);
 static MODE: AtomicU32 = AtomicU32::new(Mode::Window as u32);
 static SPINNING: AtomicBool = AtomicBool::new(false);
 static CAMERA: Mutex<Vec<CameraRequest>> = Mutex::new(Vec::new());
@@ -97,7 +109,10 @@ static TEXTS: Mutex<Vec<(u64, String)>> = Mutex::new(Vec::new());
 pub fn request(r: Request) {
     match r {
         Request::Window | Request::Ar => VIEW_REQUEST.store(r as u32, Ordering::Relaxed),
-        Request::EnterImmersive | Request::ExitImmersive => SHELL_REQUEST.store(r as u32, Ordering::Relaxed),
+        Request::EnterImmersive
+        | Request::ExitImmersive
+        | Request::EnterBackdrop
+        | Request::ExitBackdrop => SHELL_REQUEST.store(r as u32, Ordering::Relaxed),
     }
 }
 
@@ -121,7 +136,10 @@ pub fn camera(c: CameraRequest) {
 }
 
 pub(crate) fn take_camera_requests() -> Vec<CameraRequest> {
-    CAMERA.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default()
+    CAMERA
+        .lock()
+        .map(|mut q| std::mem::take(&mut *q))
+        .unwrap_or_default()
 }
 
 /// Whether the window's camera is turning on its own ([`CameraRequest::Spin`]).
@@ -147,9 +165,18 @@ pub fn immersive_open() -> bool {
     IMMERSIVE.load(Ordering::Relaxed)
 }
 
+/// Whether the backdrop is round you now (the shell says so).
+pub fn backdrop_open() -> bool {
+    BACKDROP.load(Ordering::Relaxed)
+}
+
 /// The view's mode now.
 pub fn current_mode() -> Mode {
-    if MODE.load(Ordering::Relaxed) == Mode::Ar as u32 { Mode::Ar } else { Mode::Window }
+    if MODE.load(Ordering::Relaxed) == Mode::Ar as u32 {
+        Mode::Ar
+    } else {
+        Mode::Window
+    }
 }
 
 pub(crate) fn set_current_mode(mode: Mode) {
@@ -175,7 +202,9 @@ pub extern "C" fn threers_ios_tap(x: f32, y: f32) {
 }
 
 pub(crate) fn take_taps() -> Vec<(f32, f32)> {
-    TAPS.lock().map(|mut t| std::mem::take(&mut *t)).unwrap_or_default()
+    TAPS.lock()
+        .map(|mut t| std::mem::take(&mut *t))
+        .unwrap_or_default()
 }
 
 /// The system's appearance as the shell last reported it: 0 not yet, 1
@@ -187,7 +216,10 @@ static APPEARANCE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::ne
 /// it while its theme is `Theme::System` (the default).
 #[unsafe(no_mangle)]
 pub extern "C" fn threers_ios_set_dark(dark: bool) {
-    APPEARANCE.store(if dark { 2 } else { 1 }, std::sync::atomic::Ordering::Relaxed);
+    APPEARANCE.store(
+        if dark { 2 } else { 1 },
+        std::sync::atomic::Ordering::Relaxed,
+    );
 }
 
 /// The system's appearance, if the shell has said.
@@ -222,15 +254,21 @@ pub extern "C" fn threers_ios_touch(which: u32, phase: u32, x: f32, y: f32) {
 }
 
 pub(crate) fn take_touches(which: u32) -> Vec<(u32, f32, f32, std::time::Instant)> {
-    let Ok(mut t) = TOUCHES.lock() else { return vec![] };
+    let Ok(mut t) = TOUCHES.lock() else {
+        return vec![];
+    };
     let (mine, rest): (Vec<_>, Vec<_>) = t.drain(..).partition(|e| e.0 == which);
     *t = rest;
-    mine.into_iter().map(|(_, p, x, y, at)| (p, x, y, at)).collect()
+    mine.into_iter()
+        .map(|(_, p, x, y, at)| (p, x, y, at))
+        .collect()
 }
 
 /// The presses on controls `mine` says are its; the rest stay queued.
 pub(crate) fn take_presses_for(mine: impl Fn(u64) -> bool) -> Vec<u64> {
-    let Ok(mut p) = PRESSES.lock() else { return vec![] };
+    let Ok(mut p) = PRESSES.lock() else {
+        return vec![];
+    };
     let (taken, rest): (Vec<_>, Vec<_>) = p.drain(..).partition(|&k| mine(k));
     *p = rest;
     taken
@@ -244,7 +282,11 @@ pub(crate) fn take_presses_for(mine: impl Fn(u64) -> bool) -> Vec<u64> {
 /// `text` must point to `len` readable bytes (or be null with `len` 0).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn threers_ios_text(key: u64, text: *const u8, len: usize) {
-    let bytes = if text.is_null() || len == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(text, len) } };
+    let bytes = if text.is_null() || len == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(text, len) }
+    };
     if let Ok(mut t) = TEXTS.lock() {
         t.push((key, String::from_utf8_lossy(bytes).into_owned()));
     }
@@ -252,7 +294,9 @@ pub unsafe extern "C" fn threers_ios_text(key: u64, text: *const u8, len: usize)
 
 /// The texts for controls `mine` says are its; the rest stay queued.
 pub(crate) fn take_texts_for(mine: impl Fn(u64) -> bool) -> Vec<(u64, String)> {
-    let Ok(mut t) = TEXTS.lock() else { return vec![] };
+    let Ok(mut t) = TEXTS.lock() else {
+        return vec![];
+    };
     let (taken, rest): (Vec<_>, Vec<_>) = t.drain(..).partition(|(k, _)| mine(*k));
     *t = rest;
     taken
@@ -270,6 +314,25 @@ pub extern "C" fn threers_ios_volume_shown(shown: bool) {
 /// one set of controls, the system's look highlight on them.
 pub fn volume_shown() -> bool {
     VOLUME_SHOWN.load(Ordering::Relaxed)
+}
+
+thread_local! {
+    static REALITYKIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the scene the app is updating now is drawn by RealityKit (the
+/// volume), not threers' Metal renderer (a window, AR, the room): no
+/// shader of the app's runs there — a flat
+/// [`ShaderMaterial`](threers::materials::ShaderMaterial) mesh is baked
+/// into a texture ([`bake`]), anything else of one is left out — so an
+/// app can build what RealityKit can draw instead. Asked inside
+/// [`App::update`](app::App::update).
+pub fn drawn_by_realitykit() -> bool {
+    REALITYKIT.with(|f| f.get())
+}
+
+pub(crate) fn set_drawn_by_realitykit(on: bool) {
+    REALITYKIT.with(|f| f.set(on));
 }
 
 /// The shell's poll: what the app asked of it since the last call — 0
@@ -310,10 +373,86 @@ pub unsafe extern "C" fn threers_ios_take_url(out: *mut u8, cap: usize) -> usize
     url.len()
 }
 
+/// What the app asked the shell's player to do since it last looked:
+/// `play\t<at>\t<url>` (from `at` seconds, or where it is when negative)
+/// or `pause`; taken by [`threers_ios_take_audio`].
+static AUDIO: Mutex<Option<String>> = Mutex::new(None);
+/// Where the shell's player is (seconds, its bits; NaN: none), and whether
+/// it is playing.
+static AUDIO_TIME: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0x7ff8_0000_0000_0000);
+static AUDIO_PLAYING: AtomicBool = AtomicBool::new(false);
+
+/// What the app asks of its sound (a story an fMRI run heard, its view's
+/// clock).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Audio<'a> {
+    /// Play `url` from `at` seconds (from where it is: `None`); another URL
+    /// replaces the one loaded.
+    Play { url: &'a str, at: Option<f64> },
+    /// Pause, keeping the place.
+    Pause,
+}
+
+/// Ask the shell's player: [`audio_state`] says what it is doing.
+pub fn audio(cmd: Audio) {
+    let s = match cmd {
+        Audio::Play { url, at } => format!("play\t{}\t{url}", at.unwrap_or(-1.0)),
+        Audio::Pause => "pause".into(),
+    };
+    if let Ok(mut a) = AUDIO.lock() {
+        *a = Some(s);
+    }
+}
+
+/// Where the sound is (seconds) and whether it is playing, once one is
+/// loaded.
+pub fn audio_state() -> Option<(f64, bool)> {
+    Some(f64::from_bits(AUDIO_TIME.load(Ordering::Relaxed)))
+        .filter(|t| t.is_finite())
+        .map(|t| (t, AUDIO_PLAYING.load(Ordering::Relaxed)))
+}
+
+/// The shell's poll for [`audio`]: −1 nothing asked; else the request's
+/// length, written to `out` (up to `cap` bytes, UTF-8).
+///
+/// # Safety
+/// `out` must be writable for `cap` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn threers_ios_take_audio(out: *mut u8, cap: usize) -> isize {
+    let Ok(mut a) = AUDIO.lock() else { return -1 };
+    let Some(cmd) = a.take() else { return -1 };
+    if cmd.len() > cap || out.is_null() {
+        return -1;
+    }
+    unsafe { std::ptr::copy_nonoverlapping(cmd.as_ptr(), out, cmd.len()) };
+    cmd.len() as isize
+}
+
+/// The shell telling the app where its player is (seconds) and whether it
+/// is playing.
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_audio_time(t: f64, playing: bool) {
+    AUDIO_TIME.store(t.to_bits(), Ordering::Relaxed);
+    AUDIO_PLAYING.store(playing, Ordering::Relaxed);
+}
+
 /// The shell telling the app the immersive space opened or closed.
 #[unsafe(no_mangle)]
 pub extern "C" fn threers_ios_immersive(open: bool) {
     IMMERSIVE.store(open, Ordering::Relaxed);
+}
+
+/// The shell telling the app the backdrop opened or closed.
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_backdrop(open: bool) {
+    BACKDROP.store(open, Ordering::Relaxed);
+}
+
+/// Whether the backdrop is open.
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_backdrop_open() -> bool {
+    BACKDROP.load(Ordering::Relaxed)
 }
 
 /// Whether the immersive space is open: the volume hides its model while
@@ -343,6 +482,8 @@ pub extern "C" fn threers_ios_immersive_open() -> bool {
 /// const uint8_t *threers_vol_texture(void *vol, uint32_t i, uint32_t *w, uint32_t *h, size_t *len); // a sprite's RGBA8, rows from the top
 /// void  threers_vol_root(void *vol, float out[17]);
 /// void  threers_vol_turn(void *vol, float radians);
+/// void  threers_vol_tap(void *vol, float u, float v);                                // a tap on the quad (0..1, from its foot up)
+/// bool  threers_vol_draw(void *vol, float qx, float qy, float qz, float qw, uint32_t size, void *mtl_texture, void *mtl_command_buffer); // the whole scene, drawn by threers, into a quad's texture
 /// const uint8_t *threers_vol_ui(void *vol, uint32_t which, uint32_t w, uint32_t h, float scale, size_t *len); // 0 card, 1 toolbar; NULL: unchanged, len 0: hidden
 /// const uint8_t *threers_vol_controls(void *vol, uint32_t which, size_t *len); // its controls, JSON; NULL: unchanged
 /// void  threers_vol_destroy(void *vol);
@@ -357,14 +498,25 @@ macro_rules! app {
         /// # Safety
         /// `layer` must be a live `CAMetalLayer` that outlives the view.
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn threers_view_create(layer: *mut ::core::ffi::c_void, width: u32, height: u32, mode: u32) -> *mut ::core::ffi::c_void {
+        pub unsafe extern "C" fn threers_view_create(
+            layer: *mut ::core::ffi::c_void,
+            width: u32,
+            height: u32,
+            mode: u32,
+        ) -> *mut ::core::ffi::c_void {
             unsafe { $crate::view::create::<$app>(layer, width, height, mode) }
         }
 
         /// # Safety
         /// `view` null or from `threers_view_create`, not destroyed.
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn threers_view_set(view: *mut ::core::ffi::c_void, key: u32, a: f32, b: f32, c: f32) {
+        pub unsafe extern "C" fn threers_view_set(
+            view: *mut ::core::ffi::c_void,
+            key: u32,
+            a: f32,
+            b: f32,
+            c: f32,
+        ) {
             if let Some(v) = unsafe { $crate::view::view::<$app>(view) } {
                 v.set(key, a, b, c);
             }
@@ -373,8 +525,16 @@ macro_rules! app {
         /// # Safety
         /// As `threers_view_set`; each matrix null or sixteen floats.
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn threers_view_ar_camera(view: *mut ::core::ffi::c_void, world: *const f32, projection: *const f32) {
-            let (Some(v), Some(w), Some(p)) = (unsafe { $crate::view::view::<$app>(view) }, unsafe { $crate::view::matrix(world) }, unsafe { $crate::view::matrix(projection) }) else {
+        pub unsafe extern "C" fn threers_view_ar_camera(
+            view: *mut ::core::ffi::c_void,
+            world: *const f32,
+            projection: *const f32,
+        ) {
+            let (Some(v), Some(w), Some(p)) = (
+                unsafe { $crate::view::view::<$app>(view) },
+                unsafe { $crate::view::matrix(world) },
+                unsafe { $crate::view::matrix(projection) },
+            ) else {
                 return;
             };
             v.set_ar_camera(w, p);
@@ -397,7 +557,10 @@ macro_rules! app {
         /// # Safety
         /// `view` null or from `threers_view_create`; `len` null or writable.
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn threers_view_controls(view: *mut ::core::ffi::c_void, len: *mut usize) -> *const u8 {
+        pub unsafe extern "C" fn threers_view_controls(
+            view: *mut ::core::ffi::c_void,
+            len: *mut usize,
+        ) -> *const u8 {
             unsafe { $crate::view::controls::<$app>(view, len) }
         }
 
@@ -420,26 +583,71 @@ macro_rules! app {
         /// # Safety
         /// As `threers_vol_frame`; 3 keys, 32 floats writable.
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn threers_vol_object(vol: *mut ::core::ffi::c_void, i: u32, keys: *mut u64, floats: *mut f32) -> bool {
+        pub unsafe extern "C" fn threers_vol_object(
+            vol: *mut ::core::ffi::c_void,
+            i: u32,
+            keys: *mut u64,
+            floats: *mut f32,
+        ) -> bool {
             unsafe { $crate::volume::object::<$app>(vol, i, keys, floats) }
         }
         /// # Safety
         /// As `threers_vol_frame`; 4 pointers, 3 counts writable.
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn threers_vol_geometry(vol: *mut ::core::ffi::c_void, i: u32, ptrs: *mut *const ::core::ffi::c_void, counts: *mut u32) -> bool {
+        pub unsafe extern "C" fn threers_vol_geometry(
+            vol: *mut ::core::ffi::c_void,
+            i: u32,
+            ptrs: *mut *const ::core::ffi::c_void,
+            counts: *mut u32,
+        ) -> bool {
             unsafe { $crate::volume::geometry::<$app>(vol, i, ptrs, counts) }
         }
         /// # Safety
         /// As `threers_vol_frame`; `len` writable.
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn threers_vol_uvs(vol: *mut ::core::ffi::c_void, i: u32, len: *mut usize) -> *const f32 {
+        pub unsafe extern "C" fn threers_vol_uvs(
+            vol: *mut ::core::ffi::c_void,
+            i: u32,
+            len: *mut usize,
+        ) -> *const f32 {
             unsafe { $crate::volume::uvs::<$app>(vol, i, len) }
         }
         /// # Safety
         /// As `threers_vol_frame`; `w`, `h`, `len` writable.
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn threers_vol_texture(vol: *mut ::core::ffi::c_void, i: u32, w: *mut u32, h: *mut u32, len: *mut usize) -> *const u8 {
+        pub unsafe extern "C" fn threers_vol_texture(
+            vol: *mut ::core::ffi::c_void,
+            i: u32,
+            w: *mut u32,
+            h: *mut u32,
+            len: *mut usize,
+        ) -> *const u8 {
             unsafe { $crate::volume::texture::<$app>(vol, i, w, h, len) }
+        }
+        /// # Safety
+        /// As `threers_vol_frame`.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn threers_vol_tap(vol: *mut ::core::ffi::c_void, u: f32, v: f32) {
+            unsafe { $crate::volume::tap::<$app>(vol, u, v) }
+        }
+        /// # Safety
+        /// As `threers_vol_frame`; `texture` a live `MTLTexture` (`size`
+        /// square, RGBA8 sRGB) and `command_buffer` a live, uncommitted
+        /// `MTLCommandBuffer`, on the system's default device.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn threers_vol_draw(
+            vol: *mut ::core::ffi::c_void,
+            qx: f32,
+            qy: f32,
+            qz: f32,
+            qw: f32,
+            size: u32,
+            texture: *mut ::core::ffi::c_void,
+            command_buffer: *mut ::core::ffi::c_void,
+        ) -> bool {
+            unsafe {
+                $crate::volume::draw::<$app>(vol, [qx, qy, qz, qw], size, texture, command_buffer)
+            }
         }
         /// # Safety
         /// As `threers_vol_frame`; 17 floats writable.
@@ -456,13 +664,24 @@ macro_rules! app {
         /// # Safety
         /// As `threers_vol_frame`; `len` writable.
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn threers_vol_ui(vol: *mut ::core::ffi::c_void, which: u32, width: u32, height: u32, scale: f32, len: *mut usize) -> *const u8 {
+        pub unsafe extern "C" fn threers_vol_ui(
+            vol: *mut ::core::ffi::c_void,
+            which: u32,
+            width: u32,
+            height: u32,
+            scale: f32,
+            len: *mut usize,
+        ) -> *const u8 {
             unsafe { $crate::volume::ui::<$app>(vol, which, width, height, scale, len) }
         }
         /// # Safety
         /// As `threers_vol_frame`; `len` writable.
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn threers_vol_controls(vol: *mut ::core::ffi::c_void, which: u32, len: *mut usize) -> *const u8 {
+        pub unsafe extern "C" fn threers_vol_controls(
+            vol: *mut ::core::ffi::c_void,
+            which: u32,
+            len: *mut usize,
+        ) -> *const u8 {
             unsafe { $crate::volume::controls::<$app>(vol, which, len) }
         }
 

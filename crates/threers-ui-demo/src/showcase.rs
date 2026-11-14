@@ -36,18 +36,42 @@ pub struct Showcase {
 }
 
 const PEOPLE: [&str; 14] = [
-    "Ada Lovelace", "Alan Turing", "Grace Hopper", "Edsger Dijkstra", "Barbara Liskov", "Donald Knuth", "Frances Allen",
-    "Ken Thompson", "Margaret Hamilton", "John McCarthy", "Radia Perlman", "Niklaus Wirth", "Shafi Goldwasser", "Leslie Lamport",
+    "Ada Lovelace",
+    "Alan Turing",
+    "Grace Hopper",
+    "Edsger Dijkstra",
+    "Barbara Liskov",
+    "Donald Knuth",
+    "Frances Allen",
+    "Ken Thompson",
+    "Margaret Hamilton",
+    "John McCarthy",
+    "Radia Perlman",
+    "Niklaus Wirth",
+    "Shafi Goldwasser",
+    "Leslie Lamport",
 ];
 
-fn small_button(ui: &mut Ui, input: &mut Input<State>, parent: NodeId, label: &str, command: &'static str) -> NodeId {
+fn small_button(
+    ui: &mut Ui,
+    input: &mut Input<State>,
+    parent: NodeId,
+    label: &str,
+    command: &'static str,
+) -> NodeId {
     let b = ui.add_box(parent, style! { padding: 4px 10px; border-radius: 6px; border: 1px solid #3a4150; font-size: 12px; cursor: pointer; });
-    ui.appearance_style(b, threers_ui::states::Appearance::Light, "border: 1px solid #d0d4da");
+    ui.appearance_style(
+        b,
+        threers_ui::states::Appearance::Light,
+        "border: 1px solid #d0d4da",
+    );
     ui.hover_style(b, "background: rgba(128,138,160,0.28)");
     ui.focus_visible_style(b, "border: 1px solid #93c5fd");
     ui.add_text(b, label);
     ui.set_semantics(b, Semantics::new(Role::Button).label(label));
-    input.on_click(b, move |s: &mut State, _, _| s.command = Some(command.into()));
+    input.on_click(b, move |s: &mut State, _, _| {
+        s.command = Some(command.into())
+    });
     b
 }
 
@@ -63,7 +87,13 @@ pub struct Pages {
 pub fn group(ui: &mut Ui, page: NodeId, title: &str, about: &str) -> NodeId {
     use threers_ui::environment::Token;
     let g = ui.add_box(page, style! { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 10px; flex-shrink: 0; });
-    ui.token_style(g, &[("background", Token::Surface), ("border-color", Token::Separator)]);
+    ui.token_style(
+        g,
+        &[
+            ("background", Token::Surface),
+            ("border-color", Token::Separator),
+        ],
+    );
     let h = ui.add_box(g, style! { font-size: 14px; font-weight: bold; });
     ui.add_text(h, title);
     ui.set_semantics(h, Semantics::new(Role::Heading(3)));
@@ -76,18 +106,53 @@ pub fn group(ui: &mut Ui, page: NodeId, title: &str, about: &str) -> NodeId {
 }
 
 pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, pages: &Pages) -> Showcase {
-    let people_g = group(ui, pages.components, "People", "Avatars and badges, and a strip that scrolls sideways and settles on a person.");
-    let split_g = group(ui, pages.components, "Split pane", "Drag the handle, or focus it and use the arrow keys; a double-click resets it.");
-    let tasks_g = group(ui, pages.components, "Tasks", "Described from the state each frame: the view changes only what differs.");
+    let people_g = group(
+        ui,
+        pages.components,
+        "People",
+        "Avatars and badges, and a strip that scrolls sideways and settles on a person.",
+    );
+    let split_g = group(
+        ui,
+        pages.components,
+        "Split pane",
+        "Drag the handle, or focus it and use the arrow keys; a double-click resets it.",
+    );
+    let tasks_g = group(
+        ui,
+        pages.components,
+        "Tasks",
+        "Described from the state each frame: the view changes only what differs.",
+    );
     let controls_g = group(ui, pages.components, "Controls", "Each bound to the state: a picker whose highlight slides, a stepper, a slider, progress, a search.");
-    let actions_g = group(ui, pages.basics, "Actions", "Notifications, a prompt with roles, a popover, and switches bound to the state.");
-    let screens_g = group(ui, pages.screens, "A navigation stack", "Screens pushed and popped by a path in the state; pick how they turn.");
+    let actions_g = group(
+        ui,
+        pages.basics,
+        "Actions",
+        "Notifications, a prompt with roles, a popover, and switches bound to the state.",
+    );
+    let screens_g = group(
+        ui,
+        pages.screens,
+        "A navigation stack",
+        "Screens pushed and popped by a path in the state; pick how they turn.",
+    );
     let d = pages.depth;
     // People: a few with badges, then a strip of everyone that scrolls
     // sideways (a wheel's dx, a trackpad, or a finger).
-    let row = ui.add_box(people_g, style! { display: flex; align-items: center; gap: 8px; });
-    for (name, count) in [("Ada Lovelace", "3"), ("Alan Turing", "12"), ("Grace Hopper", "")] {
-        let who = ui.add_box(row, style! { display: flex; align-items: center; gap: 4px; });
+    let row = ui.add_box(
+        people_g,
+        style! { display: flex; align-items: center; gap: 8px; },
+    );
+    for (name, count) in [
+        ("Ada Lovelace", "3"),
+        ("Alan Turing", "12"),
+        ("Grace Hopper", ""),
+    ] {
+        let who = ui.add_box(
+            row,
+            style! { display: flex; align-items: center; gap: 4px; },
+        );
         avatar(ui, who, name, 28.0);
         if !count.is_empty() {
             badge(ui, who, count, [0.86, 0.15, 0.15, 1.0]);
@@ -112,7 +177,13 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, pages: &Pages
     // arrows; a double-click puts it back.
     let host = ui.add_box(split_g, style! { display: flex; height: 120px; border-radius: 6px; border: 1px solid #2a303c; overflow: hidden; });
     let sp = split(ui, input, host, Axis::Horizontal, 110.0, 60.0);
-    for (pane, text) in [(sp.first, "Drag the handle"), (sp.second, "Or focus it and use the arrow keys; a double-click resets it.")] {
+    for (pane, text) in [
+        (sp.first, "Drag the handle"),
+        (
+            sp.second,
+            "Or focus it and use the arrow keys; a double-click resets it.",
+        ),
+    ] {
         ui.update_style(pane, |s| {
             threers_ui::css::apply(s, "padding", "8px");
             threers_ui::css::apply(s, "font-size", "12px");
@@ -125,9 +196,26 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, pages: &Pages
     let actions = actions_g;
     // Bound to the state: the Settings dialog's switch is bound to the
     // same shadows, and the two never disagree.
-    switch(ui, input, state, actions, "Notifications", Binding::new(|s: &State| !s.quiet, |s: &mut State, on| s.quiet = !on));
-    switch(ui, input, state, actions, "Card shadows", threers_ui::binding!(|s: State| s.shadows));
-    let buttons = ui.add_box(actions, style! { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; });
+    switch(
+        ui,
+        input,
+        state,
+        actions,
+        "Notifications",
+        Binding::new(|s: &State| !s.quiet, |s: &mut State, on| s.quiet = !on),
+    );
+    switch(
+        ui,
+        input,
+        state,
+        actions,
+        "Card shadows",
+        threers_ui::binding!(|s: State| s.shadows),
+    );
+    let buttons = ui.add_box(
+        actions,
+        style! { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; },
+    );
     small_button(ui, input, buttons, "Notify", "notify");
     small_button(ui, input, buttons, "Error", "error");
     small_button(ui, input, buttons, "Clear name…", "clear");
@@ -135,18 +223,64 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, pages: &Pages
     // Controls, each bound to the state.
     use threers_ui::pickers::{empty_state, progress, search_field, segmented, slider, stepper};
     let c = controls_g;
-    segmented(ui, input, state, c, "Size", &["Small", "Medium", "Large"], threers_ui::binding!(|s: State| s.size));
-    stepper(ui, input, state, c, "Guests", threers_ui::binding!(|s: State| s.guests), 1..=12, 1);
-    slider(ui, input, state, c, "Volume", threers_ui::binding!(|s: State| s.volume), 0.0..=1.0, 0.05);
+    segmented(
+        ui,
+        input,
+        state,
+        c,
+        "Size",
+        &["Small", "Medium", "Large"],
+        threers_ui::binding!(|s: State| s.size),
+    );
+    stepper(
+        ui,
+        input,
+        state,
+        c,
+        "Guests",
+        threers_ui::binding!(|s: State| s.guests),
+        1..=12,
+        1,
+    );
+    slider(
+        ui,
+        input,
+        state,
+        c,
+        "Volume",
+        threers_ui::binding!(|s: State| s.volume),
+        0.0..=1.0,
+        0.05,
+    );
     let bar = progress(ui, c, "Upload", Some(state.volume));
-    switch(ui, input, state, c, "Loading (placeholders)", threers_ui::binding!(|s: State| s.loading));
+    switch(
+        ui,
+        input,
+        state,
+        c,
+        "Loading (placeholders)",
+        threers_ui::binding!(|s: State| s.loading),
+    );
     small_button(ui, input, c, "Open sheet…", "sheet");
-    search_field(ui, input, state, c, "Search people", threers_ui::binding!(|s: State| s.query));
-    let results = ui.add_box(c, style! { display: flex; flex-direction: column; gap: 2px; });
+    search_field(
+        ui,
+        input,
+        state,
+        c,
+        "Search people",
+        threers_ui::binding!(|s: State| s.query),
+    );
+    let results = ui.add_box(
+        c,
+        style! { display: flex; flex-direction: column; gap: 2px; },
+    );
     let found: Vec<(String, NodeId)> = PEOPLE
         .iter()
         .map(|&name| {
-            let row = ui.add_box(results, style! { display: flex; align-items: center; gap: 6px; });
+            let row = ui.add_box(
+                results,
+                style! { display: flex; align-items: center; gap: 6px; },
+            );
             avatar(ui, row, name, 20.0);
             ui.add_text(row, name);
             ui.set_semantics(row, Semantics::new(Role::ListItem));
@@ -158,7 +292,15 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, pages: &Pages
 
     // Screens: a stack whose path is in the state.
     let host = ui.add_box(screens_g, style! { display: flex; flex-direction: column; height: 220px; border-radius: 6px; border: 1px solid #2a303c; overflow: hidden; });
-    segmented(ui, input, state, screens_g, "Transition", &["Slide", "Cube", "Page"], threers_ui::binding!(|s: State| s.nav_transition));
+    segmented(
+        ui,
+        input,
+        state,
+        screens_g,
+        "Transition",
+        &["Slide", "Cube", "Page"],
+        threers_ui::binding!(|s: State| s.nav_transition),
+    );
     let stack = threers_ui::nav_stack::nav_stack(
         ui,
         input,
@@ -171,14 +313,25 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, pages: &Pages
             let more = ui.add_box(screen, style! { padding: 6px 0; cursor: pointer; });
             ui.token_style(more, &[("color", threers_ui::environment::Token::Accent)]);
             ui.add_text(more, "Open the first one ›");
-            ui.set_semantics(more, Semantics::new(Role::Button).label("Open the first one"));
+            ui.set_semantics(
+                more,
+                Semantics::new(Role::Button).label("Open the first one"),
+            );
             let page = page.to_owned();
-            input.on_click(more, move |s: &mut State, _, _| s.path.push(format!("{page} · 1")));
+            input.on_click(more, move |s: &mut State, _, _| {
+                s.path.push(format!("{page} · 1"))
+            });
         },
         |ui, input, _, screen| {
             for name in ["Inbox", "Archive", "Sent"] {
-                let row = ui.add_box(screen, style! { padding: 8px 4px; cursor: pointer; border-bottom: 1px solid #2a303c; });
-                ui.token_style(row, &[("border-color", threers_ui::environment::Token::Separator)]);
+                let row = ui.add_box(
+                    screen,
+                    style! { padding: 8px 4px; cursor: pointer; border-bottom: 1px solid #2a303c; },
+                );
+                ui.token_style(
+                    row,
+                    &[("border-color", threers_ui::environment::Token::Separator)],
+                );
                 ui.add_text(row, format!("{name} ›"));
                 ui.set_semantics(row, Semantics::new(Role::Button).label(name));
                 input.on_click(row, move |s: &mut State, _, _| s.path.push(name.to_owned()));
@@ -212,13 +365,26 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, pages: &Pages
         "Word card",
         threers_ui::binding!(|s: State| s.flipped),
         |ui, f| {
-            ui.update_style(f, |s| (s.align_items, s.justify_content) = (threers_ui::AlignItems::Center, threers_ui::JustifyContent::Center));
+            ui.update_style(f, |s| {
+                (s.align_items, s.justify_content) = (
+                    threers_ui::AlignItems::Center,
+                    threers_ui::JustifyContent::Center,
+                )
+            });
             let w = ui.add_box(f, style! { font-size: 22px; font-weight: bold; });
             ui.add_text(w, "der Hund");
         },
         |ui, b| {
-            ui.update_style(b, |s| (s.align_items, s.justify_content) = (threers_ui::AlignItems::Center, threers_ui::JustifyContent::Center));
-            let w = ui.add_box(b, style! { font-size: 22px; font-weight: bold; color: rgb(37, 99, 235); });
+            ui.update_style(b, |s| {
+                (s.align_items, s.justify_content) = (
+                    threers_ui::AlignItems::Center,
+                    threers_ui::JustifyContent::Center,
+                )
+            });
+            let w = ui.add_box(
+                b,
+                style! { font-size: 22px; font-weight: bold; color: rgb(37, 99, 235); },
+            );
             ui.add_text(w, "the dog");
         },
     );
@@ -261,20 +427,42 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, pages: &Pages
     ui.add_text(head, "Depth of field");
     // Cards of one size at three depths, with room between them for the
     // near one to come forward into.
-    let layers = ui.add_box(d, style! { display: flex; justify-content: center; gap: 36px; padding: 14px 0 18px; });
+    let layers = ui.add_box(
+        d,
+        style! { display: flex; justify-content: center; gap: 36px; padding: 14px 0 18px; },
+    );
     for (label, depth) in [("Far", -140.0), ("Middle", 0.0), ("Near", 70.0)] {
         let l = ui.add_box(layers, style! { width: 132px; padding: 14px 6px; border-radius: 10px; display: flex; justify-content: center; font-weight: bold; });
         ui.token_style(l, &[("background", Token::Raised)]);
         ui.add_text(l, label);
-        ui.set_transform3d(l, threers_ui::depth::Transform3d { depth, shadow: true, ..Default::default() });
+        ui.set_transform3d(
+            l,
+            threers_ui::depth::Transform3d {
+                depth,
+                shadow: true,
+                ..Default::default()
+            },
+        );
     }
-    slider(ui, input, state, d, "Focus", threers_ui::binding!(|s: State| s.focus), 0.0..=1.0, 0.05);
+    slider(
+        ui,
+        input,
+        state,
+        d,
+        "Focus",
+        threers_ui::binding!(|s: State| s.focus),
+        0.0..=1.0,
+        0.05,
+    );
 
     // A card that leans as the phone is tilted.
     let phone = ui.add_box(d, style! { padding: 14px; border-radius: 12px; display: flex; justify-content: center; font-size: 12px; });
     ui.token_style(phone, &[("background", Token::Raised)]);
     ui.add_text(phone, "Tilt your phone: this card leans with it");
-    ui.set_semantics(phone, Semantics::new(Role::Group).label("Leans with the phone"));
+    ui.set_semantics(
+        phone,
+        Semantics::new(Role::Group).label("Leans with the phone"),
+    );
     input.tilt_with_device(ui, phone, 15.0);
 
     // A deck to swipe through.
@@ -299,7 +487,14 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, pages: &Pages
             ui.add_text(n, name);
         },
         |s: &mut State, name, dir| {
-            s.toast = Some(format!("{} {name}", if dir == threers_ui::depth::SwipeDirection::Right { "Liked" } else { "Passed on" }));
+            s.toast = Some(format!(
+                "{} {name}",
+                if dir == threers_ui::depth::SwipeDirection::Right {
+                    "Liked"
+                } else {
+                    "Passed on"
+                }
+            ));
         },
     );
     ui.update_style(deck.deck, |s| {
@@ -309,29 +504,60 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, pages: &Pages
 
     // Its spacing grows with the text, as its text does.
     // Basics: a disclosure that folds open and shut.
-    let (_, more) = disclosure(ui, input, state, actions_g, "How this works", Binding::local(false));
+    let (_, more) = disclosure(
+        ui,
+        input,
+        state,
+        actions_g,
+        "How this works",
+        Binding::local(false),
+    );
     let m = ui.add_box(more, style! { font-size: 12px; white-space: normal; });
     ui.add_text(m, "Every control here keeps no state of its own: it reads and writes the app's state through a binding, so two controls bound to one value always agree.");
 
     // 3D: a cube of seasons, a drum of numbers, and reflections.
     let head = ui.add_box(d, style! { font-size: 12px; font-weight: bold; });
     ui.add_text(head, "A cube (arrow keys, or pick a face)");
-    segmented(ui, input, state, d, "Face", &["Spring", "Summer", "Autumn", "Winter"], threers_ui::binding!(|s: State| s.cube_face));
-    let c = threers_ui::depth::cube(ui, input, state, d, "Seasons", 4, threers_ui::binding!(|s: State| s.cube_face), |ui, f, k| {
-        let (name, colour) = [("Spring", [0.18, 0.49, 0.2]), ("Summer", [0.71, 0.33, 0.04]), ("Autumn", [0.71, 0.14, 0.09]), ("Winter", [0.11, 0.31, 0.85])][k];
-        ui.update_style(f, |s| {
-            s.display = threers_ui::Display::Flex;
-            s.align_items = threers_ui::AlignItems::Center;
-            s.justify_content = threers_ui::JustifyContent::Center;
-            s.font_size = 22.0;
-            s.font_weight = threers_ui::FontWeight::Bold;
-        });
-        ui.token_style(f, &[("color", Token::OnAccent)]);
-        // Its own colour, not the theme's.
-        ui.clear_token_style(f, "background");
-        ui.update_style(f, |s| s.background = Some([colour[0], colour[1], colour[2], 1.0]));
-        ui.add_text(f, name);
-    });
+    segmented(
+        ui,
+        input,
+        state,
+        d,
+        "Face",
+        &["Spring", "Summer", "Autumn", "Winter"],
+        threers_ui::binding!(|s: State| s.cube_face),
+    );
+    let c = threers_ui::depth::cube(
+        ui,
+        input,
+        state,
+        d,
+        "Seasons",
+        4,
+        threers_ui::binding!(|s: State| s.cube_face),
+        |ui, f, k| {
+            let (name, colour) = [
+                ("Spring", [0.18, 0.49, 0.2]),
+                ("Summer", [0.71, 0.33, 0.04]),
+                ("Autumn", [0.71, 0.14, 0.09]),
+                ("Winter", [0.11, 0.31, 0.85]),
+            ][k];
+            ui.update_style(f, |s| {
+                s.display = threers_ui::Display::Flex;
+                s.align_items = threers_ui::AlignItems::Center;
+                s.justify_content = threers_ui::JustifyContent::Center;
+                s.font_size = 22.0;
+                s.font_weight = threers_ui::FontWeight::Bold;
+            });
+            ui.token_style(f, &[("color", Token::OnAccent)]);
+            // Its own colour, not the theme's.
+            ui.clear_token_style(f, "background");
+            ui.update_style(f, |s| {
+                s.background = Some([colour[0], colour[1], colour[2], 1.0])
+            });
+            ui.add_text(f, name);
+        },
+    );
     ui.update_style(c.cube, |s| {
         s.height = threers_ui::Length::Px(110.0);
         s.margin.top = 4.0;
@@ -352,18 +578,28 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, pages: &Pages
     ui.set_scroll_snap(drum, None);
     let head = ui.add_box(d, style! { font-size: 12px; font-weight: bold; });
     ui.add_text(head, "Reflections");
-    let shelf = ui.add_box(d, style! { display: flex; gap: 14px; justify-content: center; padding: 8px 0 56px 0; });
+    let shelf = ui.add_box(
+        d,
+        style! { display: flex; gap: 14px; justify-content: center; padding: 8px 0 56px 0; },
+    );
     for name in ["Ada Lovelace", "Grace Hopper", "Alan Turing"] {
         let a = avatar(ui, shelf, name, 64.0);
         ui.set_reflection(a, Some((0.35, 0.6)));
     }
     let head = ui.add_box(d, style! { font-size: 12px; font-weight: bold; });
     ui.add_text(head, "A split-flap board: click it, or the button");
-    let row = ui.add_box(d, style! { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; });
-    let mut board = threers_ui::depth::split_flap(ui, row, "Next departure", DEPARTURE_CELLS, 30.0, 46.0);
+    let row = ui.add_box(
+        d,
+        style! { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; },
+    );
+    let mut board =
+        threers_ui::depth::split_flap(ui, row, "Next departure", DEPARTURE_CELLS, 30.0, 46.0);
     board.set(ui, DEPARTURES[state.departure % DEPARTURES.len()]);
     input.on_click(board.node, |s: &mut State, _, _| s.departure += 1);
-    let next = ui.add_box(row, style! { padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; });
+    let next = ui.add_box(
+        row,
+        style! { padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; },
+    );
     ui.token_style(next, &[("background", Token::Raised)]);
     ui.hover_style(next, "background: rgba(128,138,160,0.28)");
     ui.focus_visible_style(next, "box-shadow: 0 0 0 2px #93c5fd");
@@ -377,10 +613,13 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, pages: &Pages
     ui.add_text(head, "Candles: a simple flame, and a realistic one");
     let stage = ui.add_box(d, style! { display: flex; gap: 36px; justify-content: center; align-items: flex-end; padding: 18px 24px 0 24px; border-radius: 12px; background: linear-gradient(180deg, #0b0a0d, #17130f 70%, #2a1e14); });
     ui.set_semantics(stage, Semantics::new(Role::Group).label("Candles"));
-    let candles = [(threers_ui::candle::FlameStyle::Simple, 1.0), (threers_ui::candle::FlameStyle::Realistic, 2.0)]
-        .into_iter()
-        .map(|(style, seed)| threers_ui::candle::candle(ui, stage, style, 120.0, seed))
-        .collect::<Vec<_>>();
+    let candles = [
+        (threers_ui::candle::FlameStyle::Simple, 1.0),
+        (threers_ui::candle::FlameStyle::Realistic, 2.0),
+    ]
+    .into_iter()
+    .map(|(style, seed)| threers_ui::candle::candle(ui, stage, style, 120.0, seed))
+    .collect::<Vec<_>>();
     for c in &candles {
         c.update(ui, 0.0);
     }
@@ -388,11 +627,24 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, pages: &Pages
     for g in [people_g, split_g, tasks_g, controls_g, actions_g, screens_g] {
         ui.scale_tree_with_text(g);
     }
-    Showcase { details, tasks: tasks_g, people: people_g, progress: bar, nobody, found, stack: stack.container, layers, board, candles }
+    Showcase {
+        details,
+        tasks: tasks_g,
+        people: people_g,
+        progress: bar,
+        nobody,
+        found,
+        stack: stack.container,
+        layers,
+        board,
+        candles,
+    }
 }
 
 /// What the departures board cycles through.
-pub const DEPARTURES: [&str; 6] = ["LISBON  ", "OSLO    ", "NAIROBI ", "KYOTO   ", "SANTIAGO", "REYKJAVK"];
+pub const DEPARTURES: [&str; 6] = [
+    "LISBON  ", "OSLO    ", "NAIROBI ", "KYOTO   ", "SANTIAGO", "REYKJAVK",
+];
 pub const DEPARTURE_CELLS: usize = 8;
 
 /// A task in the Tasks tab.
@@ -437,7 +689,11 @@ pub fn tasks(s: &State) -> Vec<threers_ui::view::El<State>> {
         })
         .collect();
     let left = s.tasks.iter().filter(|t| !t.done).count();
-    out.push(El::div("font-size: 11px; padding: 2px 6px").token("color", Token::SecondaryText).text(format!("{left} of {} to do", s.tasks.len())));
+    out.push(
+        El::div("font-size: 11px; padding: 2px 6px")
+            .token("color", Token::SecondaryText)
+            .text(format!("{left} of {} to do", s.tasks.len())),
+    );
     out.push(
         El::div("align-self: flex-start; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer")
             .token("background", Token::Accent)

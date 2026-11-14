@@ -41,7 +41,9 @@ impl Ui {
         match self.global::<T>() {
             Some(m) => m.set(value),
             None => {
-                self.globals.0.insert(TypeId::of::<T>(), Rc::new(Model::new(value)));
+                self.globals
+                    .0
+                    .insert(TypeId::of::<T>(), Rc::new(Model::new(value)));
             }
         }
     }
@@ -49,7 +51,11 @@ impl Ui {
     /// The app-wide value of type `T`, as a model to read, update and
     /// observe.
     pub fn global<T: 'static>(&self) -> Option<Model<T>> {
-        self.globals.0.get(&TypeId::of::<T>())?.downcast_ref::<Model<T>>().cloned()
+        self.globals
+            .0
+            .get(&TypeId::of::<T>())?
+            .downcast_ref::<Model<T>>()
+            .cloned()
     }
 
     /// Changes the app-wide `T` with `f`, telling its observers. `None`
@@ -77,7 +83,10 @@ mod tests {
         ui.set_global("name");
         let seen = Rc::new(Cell::new(0));
         let s = seen.clone();
-        ui.global::<u32>().unwrap().observe(move |n| s.set(*n)).detach();
+        ui.global::<u32>()
+            .unwrap()
+            .observe(move |n| s.set(*n))
+            .detach();
         ui.update_global(|n: &mut u32| *n += 1);
         ui.set_global(10u32);
         assert_eq!(seen.get(), 10, "setting it again tells its observers");

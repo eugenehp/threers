@@ -68,7 +68,8 @@ pub trait App: Sized + 'static {
     /// UI flat over it there).
     fn draw(&mut self, scene: &mut Scene, _frame: &Frame, gpu: &mut Gpu<'_>) {
         let (lens, origin) = (self.lens(), self.origin());
-        gpu.renderer.render_xr(scene, &lens, gpu.source, &origin, gpu.target);
+        gpu.renderer
+            .render_xr(scene, &lens, gpu.source, &origin, gpu.target);
     }
 
     /// Where a flat screen's camera looks, with nobody's head to go by (an
@@ -115,7 +116,14 @@ impl Frame {
     /// last (taken: call it once a frame) — at `time`, `dt` seconds after the
     /// last. What a runner hands [`App::update`].
     pub fn take(source: &mut (impl XrSource + ?Sized), time: f64, dt: f64) -> Frame {
-        Frame { time, dt, head: source.head(), inputs: source.inputs(), events: source.take_events(), see_through: source.see_through() }
+        Frame {
+            time,
+            dt,
+            head: source.head(),
+            inputs: source.inputs(),
+            events: source.take_events(),
+            see_through: source.see_through(),
+        }
     }
 
     /// The rays (start, direction, in the viewer's space) of the inputs
@@ -144,13 +152,30 @@ mod tests {
     fn a_select_gives_its_ray() {
         let ray = Matrix4::translation(Vector3::new(0.0, 1.5, 0.0)).elements;
         let frame = Frame {
-            inputs: vec![XrInput { slot: 3, target_ray_mode: TargetRayMode::TransientPointer, ray: Some(ray), ..Default::default() }],
-            events: vec![XrEvent { kind: XrEventKind::SelectStart, slot: 3 }, XrEvent { kind: XrEventKind::Select, slot: 3 }],
+            inputs: vec![XrInput {
+                slot: 3,
+                target_ray_mode: TargetRayMode::TransientPointer,
+                ray: Some(ray),
+                ..Default::default()
+            }],
+            events: vec![
+                XrEvent {
+                    kind: XrEventKind::SelectStart,
+                    slot: 3,
+                },
+                XrEvent {
+                    kind: XrEventKind::Select,
+                    slot: 3,
+                },
+            ],
             ..Default::default()
         };
         let s = frame.selects();
         assert_eq!(s.len(), 1, "one select, not the start");
         assert!((s[0].0 - Vector3::new(0.0, 1.5, 0.0)).length() < 1e-6);
-        assert!((s[0].1 - Vector3::new(0.0, 0.0, -1.0)).length() < 1e-6, "looking down -Z");
+        assert!(
+            (s[0].1 - Vector3::new(0.0, 0.0, -1.0)).length() < 1e-6,
+            "looking down -Z"
+        );
     }
 }

@@ -271,7 +271,10 @@ impl<K: Eq + Hash + Clone> Animator<K> {
     /// speed it already has.
     pub fn set_spring(&mut self, key: K, target: f32, spring: Spring) {
         let (rest, easing) = (self.rest, self.easing);
-        let track = self.tracks.entry(key).or_insert(Track::at_rest(rest, easing));
+        let track = self
+            .tracks
+            .entry(key)
+            .or_insert(Track::at_rest(rest, easing));
         if track.to == target && matches!(track.motion, Motion::Spring { .. }) {
             return;
         }
@@ -289,7 +292,10 @@ impl<K: Eq + Hash + Clone> Animator<K> {
     /// Like [`set`](Self::set), with its own duration and easing.
     pub fn set_over(&mut self, key: K, target: f32, duration: f32, easing: Easing) {
         let rest = self.rest;
-        let track = self.tracks.entry(key).or_insert(Track::at_rest(rest, easing));
+        let track = self
+            .tracks
+            .entry(key)
+            .or_insert(Track::at_rest(rest, easing));
         if track.to == target && matches!(track.motion, Motion::Tween { .. }) {
             return;
         }
@@ -442,7 +448,10 @@ mod tests {
         for _ in 0..300 {
             (x, v) = s.step(x, v, 0.001);
         }
-        assert!((x - x1).abs() < 1e-4 && (v - v1).abs() < 1e-3, "{x} {x1} {v} {v1}");
+        assert!(
+            (x - x1).abs() < 1e-4 && (v - v1).abs() < 1e-3,
+            "{x} {x1} {v} {v1}"
+        );
         // An underdamped spring overshoots; an overdamped one does not.
         let (under, _) = Spring::new(400.0, 5.0, 1.0).step(1.0, 0.0, 0.15);
         assert!(under < 0.0);

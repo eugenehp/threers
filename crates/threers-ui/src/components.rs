@@ -15,21 +15,36 @@ use crate::states::Appearance;
 use crate::tree::{NodeId, Ui};
 use crate::{style, Display, Length, Role, Semantics};
 
-
 /// An on/off switch with `label`, showing `value`: a track and a knob that
 /// slides, toggled by a click, a tap, Space or Enter (role `switch`, its
 /// state `checked`). It keeps no state of its own: it writes the binding,
 /// and shows the bound value however it changes.
-pub fn switch<S: 'static>(ui: &mut Ui, input: &mut Input<S>, state: &S, parent: NodeId, label: &str, value: Binding<S, bool>) -> NodeId {
+pub fn switch<S: 'static>(
+    ui: &mut Ui,
+    input: &mut Input<S>,
+    state: &S,
+    parent: NodeId,
+    label: &str,
+    value: Binding<S, bool>,
+) -> NodeId {
     // At least 24 px tall: a target a finger can hit (WCAG 2.2).
-    let row = ui.add_box(parent, style! { display: flex; align-items: center; gap: 8px; cursor: pointer; min-height: 24px; });
+    let row = ui.add_box(
+        parent,
+        style! { display: flex; align-items: center; gap: 8px; cursor: pointer; min-height: 24px; },
+    );
     let track = ui.add_box(row, style! { position: relative; width: 34px; height: 20px; border-radius: 10px; flex-shrink: 0; });
     let knob = ui.add_box(track, style! { position: absolute; top: 2px; width: 16px; height: 16px; border-radius: 8px; background: #ffffff; });
     ui.add_text(row, label);
-    ui.set_semantics(row, Semantics::new(Role::Switch).label(label).checked(false));
+    ui.set_semantics(
+        row,
+        Semantics::new(Role::Switch).label(label).checked(false),
+    );
     ui.focus_visible_style(row, "box-shadow: 0 0 0 2px #93c5fd");
     let show = move |ui: &mut Ui, on: bool| {
-        ui.token_style(track, &[("background", if on { Token::Accent } else { Token::Border })]);
+        ui.token_style(
+            track,
+            &[("background", if on { Token::Accent } else { Token::Border })],
+        );
         ui.style_mut(knob).left = Length::Px(if on { 16.0 } else { 2.0 });
         ui.semantics_mut(row).checked = Some(on);
     };
@@ -66,12 +81,18 @@ pub fn disclosure<S: 'static>(
     label: &str,
     open: Binding<S, bool>,
 ) -> (NodeId, NodeId) {
-    let head = ui.add_box(parent, style! { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 4px 0; });
+    let head = ui.add_box(
+        parent,
+        style! { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 4px 0; },
+    );
     let arrow = ui.add_box(head, style! { width: 12px; });
     let arrow_text = ui.add_text(arrow, "▸");
     ui.add_text(head, label);
     ui.set_semantics(head, Semantics::new(Role::Button).label(label));
-    let body = ui.add_box(parent, style! { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 4px 18px; });
+    let body = ui.add_box(
+        parent,
+        style! { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 4px 18px; },
+    );
     // Opening unfolds the body from its top edge, as paper does; closing
     // folds it up, then hides it.
     let show = move |ui: &mut Ui, open: bool, animate: bool| {
@@ -81,18 +102,35 @@ pub fn disclosure<S: 'static>(
         ui.semantics_mut(head).expanded = Some(open);
         let folded = -std::f32::consts::FRAC_PI_2;
         if !animate || ui.reduce_motion() {
-            ui.update_style(body, |s| s.display = if open { Display::Flex } else { Display::None });
+            ui.update_style(body, |s| {
+                s.display = if open { Display::Flex } else { Display::None }
+            });
             ui.clear_transform3d(body);
             return;
         }
         let spring = crate::anim::Spring::new(220.0, 26.0, 1.0);
         if open {
             ui.update_style(body, |s| s.display = Display::Flex);
-            ui.set_transform3d(body, Transform3d { rotate_x: folded, origin: (0.5, 0.0), shade: true, ..Transform3d::default() });
+            ui.set_transform3d(
+                body,
+                Transform3d {
+                    rotate_x: folded,
+                    origin: (0.5, 0.0),
+                    shade: true,
+                    ..Transform3d::default()
+                },
+            );
             ui.spring_to(body, Property::RotateX, 0.0, spring);
         } else {
             if ui.transform3d(body).is_none() {
-                ui.set_transform3d(body, Transform3d { origin: (0.5, 0.0), shade: true, ..Transform3d::default() });
+                ui.set_transform3d(
+                    body,
+                    Transform3d {
+                        origin: (0.5, 0.0),
+                        shade: true,
+                        ..Transform3d::default()
+                    },
+                );
             }
             ui.spring_to(body, Property::RotateX, folded, spring);
         }
@@ -164,7 +202,10 @@ pub fn tabs<S: 'static>(
     let panels: Vec<NodeId> = labels
         .iter()
         .map(|l| {
-            let p = ui.add_box(parent, style! { display: flex; flex-direction: column; gap: 8px; padding: 8px 0; });
+            let p = ui.add_box(
+                parent,
+                style! { display: flex; flex-direction: column; gap: 8px; padding: 8px 0; },
+            );
             ui.set_semantics(p, Semantics::new(Role::TabPanel).label(*l));
             p
         })
@@ -172,19 +213,38 @@ pub fn tabs<S: 'static>(
     // The selected tab's underline, sliding to the tab picked.
     let line = ui.add_box(list, style! { position: absolute; border-radius: 1px; });
     ui.token_style(line, &[("background", Token::Accent)]);
-    ui.match_geometry(line, tab_nodes[0], crate::matched::MatchShape::Underline(2.0), 0.22);
+    ui.match_geometry(
+        line,
+        tab_nodes[0],
+        crate::matched::MatchShape::Underline(2.0),
+        0.22,
+    );
     let (tabs_, panels_) = (tab_nodes.clone(), panels.clone());
     let labels: Vec<String> = labels.iter().map(|l| l.to_string()).collect();
     let select = move |ui: &mut Ui, k: usize| {
         for (i, (&t, &p)) in tabs_.iter().zip(&panels_).enumerate() {
             let on = i == k;
-            ui.set_semantics(t, Semantics::new(Role::Tab).label(labels[i].clone()).selected(on).tab_index(if on { 0 } else { -1 }));
-            ui.update_style(t, |s| s.font_weight = if on { crate::FontWeight::Bold } else { crate::FontWeight::Normal });
+            ui.set_semantics(
+                t,
+                Semantics::new(Role::Tab)
+                    .label(labels[i].clone())
+                    .selected(on)
+                    .tab_index(if on { 0 } else { -1 }),
+            );
+            ui.update_style(t, |s| {
+                s.font_weight = if on {
+                    crate::FontWeight::Bold
+                } else {
+                    crate::FontWeight::Normal
+                }
+            });
             if on {
                 ui.set_match_target(line, t);
                 ui.scroll_into_view(t);
             }
-            ui.update_style(p, |s| s.display = if on { Display::Flex } else { Display::None });
+            ui.update_style(p, |s| {
+                s.display = if on { Display::Flex } else { Display::None }
+            });
         }
     };
     let n = tab_nodes.len();
@@ -222,15 +282,28 @@ pub fn tabs<S: 'static>(
         }
         true
     });
-    Tabs { list, tabs: tab_nodes, panels }
+    Tabs {
+        list,
+        tabs: tab_nodes,
+        panels,
+    }
 }
 
 /// A round picture of `name`'s initials, its colour from the name, `size`
 /// pixels across (role `img`, named `name`).
 pub fn avatar(ui: &mut Ui, parent: NodeId, name: &str, size: f32) -> NodeId {
     // Each at least 4.5:1 against the white initials (WCAG AA for text).
-    let hues = [[0.706, 0.137, 0.094], [0.180, 0.490, 0.196], [0.114, 0.306, 0.847], [0.706, 0.325, 0.035], [0.427, 0.157, 0.851], [0.059, 0.463, 0.431]];
-    let h = name.bytes().fold(5381u32, |h, b| h.wrapping_mul(33) ^ b as u32);
+    let hues = [
+        [0.706, 0.137, 0.094],
+        [0.180, 0.490, 0.196],
+        [0.114, 0.306, 0.847],
+        [0.706, 0.325, 0.035],
+        [0.427, 0.157, 0.851],
+        [0.059, 0.463, 0.431],
+    ];
+    let h = name
+        .bytes()
+        .fold(5381u32, |h, b| h.wrapping_mul(33) ^ b as u32);
     let c = hues[h as usize % hues.len()];
     let a = ui.add_box(parent, style! { display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-weight: bold; });
     let s = ui.style_mut(a);
@@ -240,7 +313,12 @@ pub fn avatar(ui: &mut Ui, parent: NodeId, name: &str, size: f32) -> NodeId {
     s.background = Some([c[0], c[1], c[2], 1.0]);
     s.font_size = (size * 0.4).round();
     s.color = [0.99, 0.99, 0.99, 1.0];
-    let initials: String = name.split_whitespace().filter_map(|w| w.chars().next()).take(2).collect::<String>().to_uppercase();
+    let initials: String = name
+        .split_whitespace()
+        .filter_map(|w| w.chars().next())
+        .take(2)
+        .collect::<String>()
+        .to_uppercase();
     ui.add_text(a, initials);
     ui.set_semantics(a, Semantics::new(Role::Image).label(name));
     a
@@ -248,7 +326,10 @@ pub fn avatar(ui: &mut Ui, parent: NodeId, name: &str, size: f32) -> NodeId {
 
 /// A small pill of `text` in `color` (a count, a status).
 pub fn badge(ui: &mut Ui, parent: NodeId, text: &str, color: [f32; 4]) -> NodeId {
-    let b = ui.add_box(parent, style! { padding: 1px 7px; border-radius: 9px; font-size: 11px; font-weight: bold; });
+    let b = ui.add_box(
+        parent,
+        style! { padding: 1px 7px; border-radius: 9px; font-size: 11px; font-weight: bold; },
+    );
     ui.style_mut(b).background = Some(color);
     ui.style_mut(b).color = [0.99, 0.99, 0.99, 1.0];
     ui.add_text(b, text);
@@ -294,11 +375,30 @@ pub fn popover<S: 'static>(
             box-shadow: 0 10px 28px rgba(0,0,0,0.5);
         },
     );
-    ui.token_style(panel, &[("background", Token::Raised), ("border-color", Token::Border), ("color", Token::Text)]);
-    ui.appearance_style(panel, Appearance::Light, "box-shadow: 0 10px 28px rgba(0,0,0,0.18)");
-    ui.set_semantics(panel, Semantics::new(Role::Dialog).label(label).tab_index(-1));
+    ui.token_style(
+        panel,
+        &[
+            ("background", Token::Raised),
+            ("border-color", Token::Border),
+            ("color", Token::Text),
+        ],
+    );
+    ui.appearance_style(
+        panel,
+        Appearance::Light,
+        "box-shadow: 0 10px 28px rgba(0,0,0,0.18)",
+    );
+    ui.set_semantics(
+        panel,
+        Semantics::new(Role::Dialog).label(label).tab_index(-1),
+    );
     ui.defer(panel, 900);
-    ui.anchor(panel, Anchor::new(AnchorTo::Node(anchor, Corner::BottomLeft), Corner::TopLeft).offset(0.0, 6.0).fit(Fit::Flip));
+    ui.anchor(
+        panel,
+        Anchor::new(AnchorTo::Node(anchor, Corner::BottomLeft), Corner::TopLeft)
+            .offset(0.0, 6.0)
+            .fit(Fit::Flip),
+    );
     fill(ui, panel);
     ui.appear(panel, crate::transitions::Transition::Fade, 0.12);
     let closing = Rc::new(Cell::new(false));
@@ -314,7 +414,9 @@ pub fn popover<S: 'static>(
     input.on_click_outside(panel, move |_, ui, e, _| {
         // Not the press on the anchor that opened it: that one toggles.
         let on_anchor = match *e {
-            Event::PointerDown { x, y, .. } => ui.hit_test(x, y).is_some_and(|h| ui.ancestors(h).any(|a| a == anchor)),
+            Event::PointerDown { x, y, .. } => ui
+                .hit_test(x, y)
+                .is_some_and(|h| ui.ancestors(h).any(|a| a == anchor)),
             _ => false,
         };
         if !on_anchor {
@@ -331,9 +433,16 @@ pub fn popover<S: 'static>(
         if !gone && !c.get() {
             return true;
         }
-        let had = gone || input.focused().is_some_and(|f| ui.contains(f) && ui.ancestors(f).any(|a| a == panel));
+        let had = gone
+            || input
+                .focused()
+                .is_some_and(|f| ui.contains(f) && ui.ancestors(f).any(|a| a == panel));
         ui.remove(panel);
-        if had && input.focused().is_none_or(|f| !ui.contains(f) || ui.ancestors(f).any(|a| a == panel)) {
+        if had
+            && input
+                .focused()
+                .is_none_or(|f| !ui.contains(f) || ui.ancestors(f).any(|a| a == panel))
+        {
             input.set_focus(ui, state, before.filter(|&b| ui.contains(b)));
         }
         false

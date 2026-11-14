@@ -399,13 +399,21 @@ mod tests {
         // Format 1 from glyph 5: classes 1, 0, 3; format 2: 10..=12 class 2,
         // 20..=29 class 1, 40..=40 class 3.
         let one = [0, 1, 0, 5, 0, 3, 0, 1, 0, 0, 0, 3];
-        let two = [0, 2, 0, 3, 0, 10, 0, 12, 0, 2, 0, 20, 0, 29, 0, 1, 0, 40, 0, 40, 0, 3];
+        let two = [
+            0, 2, 0, 3, 0, 10, 0, 12, 0, 2, 0, 20, 0, 29, 0, 1, 0, 40, 0, 40, 0, 3,
+        ];
         let mut defs: Vec<(Vec<u8>, usize)> = vec![(one.to_vec(), 0), (two.to_vec(), 0)];
         // And real ones: each font's GDEF glyph classes.
-        for path in ["src/openscad/DejaVuSans.ttf", "/System/Library/Fonts/Supplemental/Arial.ttf", "/System/Library/Fonts/SFNS.ttf"] {
+        for path in [
+            "src/openscad/DejaVuSans.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/System/Library/Fonts/SFNS.ttf",
+        ] {
             let Ok(b) = std::fs::read(path) else { continue };
             let n = u16_at(&b, 4).unwrap() as usize;
-            let gdef = (0..n).map(|i| 12 + 16 * i).find(|&r| &b[r..r + 4] == b"GDEF");
+            let gdef = (0..n)
+                .map(|i| 12 + 16 * i)
+                .find(|&r| &b[r..r + 4] == b"GDEF");
             if let Some(r) = gdef {
                 let at = u32_at(&b, r + 8).unwrap() as usize;
                 let classes = u16_at(&b, at + 4).unwrap() as usize;
@@ -414,11 +422,18 @@ mod tests {
                 }
             }
         }
-        assert!(defs.len() >= 3, "no font with glyph classes to check against");
+        assert!(
+            defs.len() >= 3,
+            "no font with glyph classes to check against"
+        );
         for (b, off) in &defs {
             let all = parse_class_def(b, *off).unwrap();
             for g in 0..=u16::MAX {
-                assert_eq!(class_of(b, *off, g), all.get(&g).copied().unwrap_or(0), "glyph {g}");
+                assert_eq!(
+                    class_of(b, *off, g),
+                    all.get(&g).copied().unwrap_or(0),
+                    "glyph {g}"
+                );
             }
         }
     }

@@ -31,7 +31,10 @@ use crate::{style, FontWeight, Role, Semantics};
 /// in the query are skipped.
 pub fn fuzzy_match(query: &str, text: &str) -> Option<(i32, Vec<usize>)> {
     let label: Vec<char> = text.chars().collect();
-    let lower: Vec<char> = label.iter().map(|c| c.to_lowercase().next().unwrap_or(*c)).collect();
+    let lower: Vec<char> = label
+        .iter()
+        .map(|c| c.to_lowercase().next().unwrap_or(*c))
+        .collect();
     let mut score = 0;
     let mut at = 0;
     let mut found_at = vec![];
@@ -39,10 +42,15 @@ pub fn fuzzy_match(query: &str, text: &str) -> Option<(i32, Vec<usize>)> {
     for q in query.chars().filter(|c| !c.is_whitespace()) {
         let q = q.to_lowercase().next().unwrap_or(q);
         // A letter at a word's start, if there is one ahead, before any.
-        let starts = (at..label.len()).find(|&i| lower[i] == q && (i == 0 || !label[i - 1].is_alphanumeric()));
+        let starts = (at..label.len())
+            .find(|&i| lower[i] == q && (i == 0 || !label[i - 1].is_alphanumeric()));
         let next = (at..label.len()).find(|&i| lower[i] == q)?;
         // In a run with the last one, that; else a word's start; else the next.
-        let found = if last.is_some_and(|l| l + 1 == next) { next } else { starts.unwrap_or(next) };
+        let found = if last.is_some_and(|l| l + 1 == next) {
+            next
+        } else {
+            starts.unwrap_or(next)
+        };
         score += 1;
         if found == 0 || !label[found - 1].is_alphanumeric() {
             score += 8;
@@ -61,7 +69,11 @@ pub fn fuzzy_match(query: &str, text: &str) -> Option<(i32, Vec<usize>)> {
 /// `items` that match `query` (all of them for an empty one), best first
 /// (ties in their order), each with where it matched.
 pub fn filter<T>(query: &str, items: &[T], label: impl Fn(&T) -> &str) -> Vec<(usize, Vec<usize>)> {
-    let mut found: Vec<(i32, usize, Vec<usize>)> = items.iter().enumerate().filter_map(|(i, t)| fuzzy_match(query, label(t)).map(|(s, at)| (s, i, at))).collect();
+    let mut found: Vec<(i32, usize, Vec<usize>)> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| fuzzy_match(query, label(t)).map(|(s, at)| (s, i, at)))
+        .collect();
     found.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     found.into_iter().map(|(_, i, at)| (i, at)).collect()
 }
@@ -75,7 +87,11 @@ pub fn highlight(len: usize, matched: &[usize]) -> Vec<TextRun> {
         let on = matched.contains(&i);
         let n = (i..len).take_while(|j| matched.contains(j) == on).count();
         let run = TextRun::new(n);
-        runs.push(if on { run.weight(FontWeight::Bold) } else { run });
+        runs.push(if on {
+            run.weight(FontWeight::Bold)
+        } else {
+            run
+        });
         i += n;
     }
     runs
@@ -112,13 +128,26 @@ pub fn searchable<S: 'static>(
     limit: usize,
     pick: impl Fn(&mut S, usize) + 'static,
 ) -> Searchable {
-    let node = ui.add_box(parent, style! { display: flex; flex-direction: column; gap: 6px; });
+    let node = ui.add_box(
+        parent,
+        style! { display: flex; flex-direction: column; gap: 6px; },
+    );
     let field = crate::pickers::search_field(ui, input, state, node, placeholder, query.clone());
-    let results = ui.add_box(node, style! { display: flex; flex-direction: column; gap: 2px; });
-    ui.set_semantics(results, Semantics::new(Role::List).label(format!("Results for {placeholder}")));
+    let results = ui.add_box(
+        node,
+        style! { display: flex; flex-direction: column; gap: 2px; },
+    );
+    ui.set_semantics(
+        results,
+        Semantics::new(Role::List).label(format!("Results for {placeholder}")),
+    );
     let items = Rc::new(items);
     let pick = Rc::new(pick);
-    let shown = Rc::new(RefCell::new(Shown { query: "\u{0}".into(), rows: vec![], marked: 0 }));
+    let shown = Rc::new(RefCell::new(Shown {
+        query: "\u{0}".into(),
+        rows: vec![],
+        marked: 0,
+    }));
     // The rows for the query now, and the mark on one.
     let build = {
         let (items, shown, pick) = (items.clone(), shown.clone(), pick.clone());
@@ -129,12 +158,18 @@ pub fn searchable<S: 'static>(
             }
             let found = filter(q, &items, |s| s.as_str());
             for (i, at) in found.iter().take(limit) {
-                let row = ui.add_box(results, style! { padding: 5px 8px; border-radius: 6px; cursor: pointer; });
+                let row = ui.add_box(
+                    results,
+                    style! { padding: 5px 8px; border-radius: 6px; cursor: pointer; },
+                );
                 let t = ui.add_text(row, items[*i].as_str());
                 if !q.trim().is_empty() {
                     ui.set_text_runs(t, highlight(items[*i].chars().count(), at));
                 }
-                ui.set_semantics(row, Semantics::new(Role::ListItem).label(items[*i].as_str()));
+                ui.set_semantics(
+                    row,
+                    Semantics::new(Role::ListItem).label(items[*i].as_str()),
+                );
                 ui.hover_style(row, "background: rgba(128,138,160,0.2)");
                 let (i, pick) = (*i, pick.clone());
                 input.on_click(row, move |s, _, _| pick(s, i));
@@ -161,7 +196,9 @@ pub fn searchable<S: 'static>(
                     continue;
                 }
                 let on = k == sh.marked;
-                ui.update_style(row, |s| s.background = on.then_some([0.145, 0.388, 0.922, 0.16]));
+                ui.update_style(row, |s| {
+                    s.background = on.then_some([0.145, 0.388, 0.922, 0.16])
+                });
                 ui.semantics_mut(row).selected = Some(on);
             }
         }
@@ -185,12 +222,21 @@ pub fn searchable<S: 'static>(
     // Up and down move the mark; Enter picks it.
     let (sh, m) = (shown.clone(), mark.clone());
     input.on_key(field, move |s, ui, key, _, _| {
-        let n = sh.borrow().rows.iter().filter(|r| r.1 != usize::MAX).count();
+        let n = sh
+            .borrow()
+            .rows
+            .iter()
+            .filter(|r| r.1 != usize::MAX)
+            .count();
         match key {
             "ArrowDown" | "ArrowUp" if n > 0 => {
                 {
                     let mut st = sh.borrow_mut();
-                    st.marked = if key == "ArrowDown" { (st.marked + 1) % n } else { (st.marked + n - 1) % n };
+                    st.marked = if key == "ArrowDown" {
+                        (st.marked + 1) % n
+                    } else {
+                        (st.marked + n - 1) % n
+                    };
                 }
                 m(ui);
                 true
@@ -206,7 +252,11 @@ pub fn searchable<S: 'static>(
             _ => false,
         }
     });
-    Searchable { node, field, results }
+    Searchable {
+        node,
+        field,
+        results,
+    }
 }
 
 #[cfg(test)]
@@ -221,7 +271,10 @@ mod tests {
     }
 
     fn rows(ui: &Ui, s: &Searchable) -> Vec<String> {
-        ui.children(s.results).iter().map(|&r| ui.text_lines_of(ui.children(r)[0]).join("")).collect()
+        ui.children(s.results)
+            .iter()
+            .map(|&r| ui.text_lines_of(ui.children(r)[0]).join(""))
+            .collect()
     }
 
     #[test]
@@ -230,8 +283,26 @@ mod tests {
         let mut input: Input<S> = Input::new();
         let mut s = S::default();
         let root = ui.root();
-        let names = ["Toggle Sidebar", "Open File", "Save File", "Toggle Terminal", "Settings"].map(String::from).to_vec();
-        let found = searchable(&mut ui, &mut input, &s, root, "Commands", binding!(|s: S| s.query), names, 10, |s, i| s.picked = Some(i));
+        let names = [
+            "Toggle Sidebar",
+            "Open File",
+            "Save File",
+            "Toggle Terminal",
+            "Settings",
+        ]
+        .map(String::from)
+        .to_vec();
+        let found = searchable(
+            &mut ui,
+            &mut input,
+            &s,
+            root,
+            "Commands",
+            binding!(|s: S| s.query),
+            names,
+            10,
+            |s, i| s.picked = Some(i),
+        );
         ui.layout(400.0, 400.0, &mut FixedWidthText(7.0));
         assert_eq!(rows(&ui, &found).len(), 5, "all while empty");
         input.set_focus(&mut ui, &mut s, Some(found.field));
@@ -241,7 +312,9 @@ mod tests {
         // ("Toggle Sidebar" has one t.)
         assert_eq!(rows(&ui, &found), ["Toggle Terminal", "Settings"]);
         // Down to the second; Enter picks it.
-        input.simulate_keystrokes(&mut ui, &mut s, "down enter").unwrap();
+        input
+            .simulate_keystrokes(&mut ui, &mut s, "down enter")
+            .unwrap();
         assert_eq!(s.picked, Some(4), "Settings is item 4");
         input.simulate_keystrokes(&mut ui, &mut s, "z z z").unwrap();
         ui.layout(400.0, 400.0, &mut FixedWidthText(7.0));
@@ -251,6 +324,11 @@ mod tests {
     #[test]
     fn matched_letters_are_bold() {
         let runs = highlight(5, &[0, 1, 4]);
-        assert_eq!(runs.iter().map(|r| (r.len, r.weight.is_some())).collect::<Vec<_>>(), [(2, true), (2, false), (1, true)]);
+        assert_eq!(
+            runs.iter()
+                .map(|r| (r.len, r.weight.is_some()))
+                .collect::<Vec<_>>(),
+            [(2, true), (2, false), (1, true)]
+        );
     }
 }

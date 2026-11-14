@@ -48,11 +48,16 @@ impl Ui {
     pub fn spring_to(&mut self, node: NodeId, property: Property, target: f32, spring: Spring) {
         self.stop_animations(node, Some(property));
         if self.motion_skipped(property) {
-            self.springs.retain(|s| !(s.node == node && s.property == property));
+            self.springs
+                .retain(|s| !(s.node == node && s.property == property));
             self.write(node, property, Value::Number(target));
             return;
         }
-        if let Some(s) = self.springs.iter_mut().find(|s| s.node == node && s.property == property) {
+        if let Some(s) = self
+            .springs
+            .iter_mut()
+            .find(|s| s.node == node && s.property == property)
+        {
             s.target = target;
             s.spring = spring;
             return;
@@ -61,12 +66,22 @@ impl Ui {
             Value::Number(v) => v,
             Value::Color(_) => return,
         };
-        self.springs.push(Sprung { node, property, target, value, velocity: 0.0, spring });
+        self.springs.push(Sprung {
+            node,
+            property,
+            target,
+            value,
+            velocity: 0.0,
+            spring,
+        });
     }
 
     /// How fast `property` of `node` is moving under a spring (0 at rest).
     pub fn spring_velocity(&self, node: NodeId, property: Property) -> f32 {
-        self.springs.iter().find(|s| s.node == node && s.property == property).map_or(0.0, |s| s.velocity)
+        self.springs
+            .iter()
+            .find(|s| s.node == node && s.property == property)
+            .map_or(0.0, |s| s.velocity)
     }
 
     /// The springs moved on by `dt` (from [`step`](Self::step)); whether

@@ -9,7 +9,8 @@ use threers_ui::scene::Item;
 use threers_ui::text_cache::TextCache;
 use threers_ui::virtual_list::{RowHeight, VirtualList};
 use threers_ui::{
-    style, Cursor, Display, FixedWidthText, Length, NodeId, ObjectFit, Position, Role, Semantics, Style, Ui,
+    style, Cursor, Display, FixedWidthText, Length, NodeId, ObjectFit, Position, Role, Semantics,
+    Style, Ui,
 };
 
 fn layout(ui: &mut Ui) {
@@ -46,7 +47,11 @@ fn cursors_inherit_and_follow_a_captured_pointer() {
     let inner = ui.add_box(link, style! { width: 10px; height: 10px; });
     let field = ui.add_box(root, style! { height: 20px; cursor: text; });
     layout(&mut ui);
-    assert_eq!(ui.cursor_at(5.0, 5.0), Cursor::Pointer, "inherited by {inner:?}");
+    assert_eq!(
+        ui.cursor_at(5.0, 5.0),
+        Cursor::Pointer,
+        "inherited by {inner:?}"
+    );
     assert_eq!(ui.cursor_at(5.0, 25.0), Cursor::Text);
     assert_eq!(ui.cursor_at(5.0, 200.0), Cursor::Default);
     assert_eq!(Cursor::parse("col-resize"), Some(Cursor::ResizeHorizontal));
@@ -58,9 +63,21 @@ fn cursors_inherit_and_follow_a_captured_pointer() {
             cx.capture_pointer();
         }
     });
-    input.dispatch(&mut ui, &mut (), Event::PointerDown { x: 5.0, y: 25.0, button: Default::default() });
+    input.dispatch(
+        &mut ui,
+        &mut (),
+        Event::PointerDown {
+            x: 5.0,
+            y: 25.0,
+            button: Default::default(),
+        },
+    );
     input.dispatch(&mut ui, &mut (), Event::PointerMove { x: 5.0, y: 5.0 });
-    assert_eq!(input.cursor(&ui), Cursor::Text, "held by the field while dragging");
+    assert_eq!(
+        input.cursor(&ui),
+        Cursor::Text,
+        "held by the field while dragging"
+    );
 }
 
 #[test]
@@ -88,7 +105,13 @@ fn the_text_cache_measures_each_string_once_while_it_shows() {
 fn a_uniform_list_builds_only_what_shows() {
     let mut ui = Ui::new();
     let root = ui.root();
-    let mut list = VirtualList::new(&mut ui, root, style! { height: 200px; }, 100_000, RowHeight::Uniform(20.0));
+    let mut list = VirtualList::new(
+        &mut ui,
+        root,
+        style! { height: 200px; },
+        100_000,
+        RowHeight::Uniform(20.0),
+    );
     let sync = |ui: &mut Ui, list: &mut VirtualList| {
         layout(ui);
         let mut rounds = 0;
@@ -110,8 +133,13 @@ fn a_uniform_list_builds_only_what_shows() {
     let row = list.row(54_321).unwrap();
     let view = ui.rect(list.container());
     let r = ui.rect(row);
-    assert!(r.y >= view.y && r.y + r.height <= view.y + view.height + 0.01, "{r:?} in {view:?}");
-    let threers_ui::NodeKind::Text(t) = ui.kind(ui.children(row)[0]) else { panic!() };
+    assert!(
+        r.y >= view.y && r.y + r.height <= view.y + view.height + 0.01,
+        "{r:?} in {view:?}"
+    );
+    let threers_ui::NodeKind::Text(t) = ui.kind(ui.children(row)[0]) else {
+        panic!()
+    };
     assert_eq!(t, "row 54321");
     assert_eq!(ui.hit_test(10.0, r.y + 5.0), Some(ui.children(row)[0]));
     assert!(ui.live_nodes() < 50);
@@ -122,12 +150,24 @@ fn a_measured_list_keeps_the_row_in_view_still_as_heights_arrive() {
     let mut ui = Ui::new();
     let root = ui.root();
     let height = |i: usize| 10.0 + (i % 5) as f32 * 10.0;
-    let mut list = VirtualList::new(&mut ui, root, style! { height: 120px; }, 2_000, RowHeight::Measured { estimate: 20.0 });
+    let mut list = VirtualList::new(
+        &mut ui,
+        root,
+        style! { height: 120px; },
+        2_000,
+        RowHeight::Measured { estimate: 20.0 },
+    );
     let sync = |ui: &mut Ui, list: &mut VirtualList| {
         layout(ui);
         let mut rounds = 0;
         while list.sync(ui, |ui, row, i| {
-            ui.add_box(row, Style { height: Length::Px(height(i)), ..Style::default() });
+            ui.add_box(
+                row,
+                Style {
+                    height: Length::Px(height(i)),
+                    ..Style::default()
+                },
+            );
         }) {
             layout(ui);
             rounds += 1;
@@ -140,7 +180,10 @@ fn a_measured_list_keeps_the_row_in_view_still_as_heights_arrive() {
     let view = ui.rect(list.container());
     let row = list.row(1_000).expect("built");
     let top = ui.rect(row).y;
-    assert!(top >= view.y - 0.01 && top < view.y + view.height, "row 1000 at {top}, view {view:?}");
+    assert!(
+        top >= view.y - 0.01 && top < view.y + view.height,
+        "row 1000 at {top}, view {view:?}"
+    );
     assert_eq!(ui.rect(row).height, height(1_000));
 
     // Scrolling up a little measures rows above: the row stays where it is
@@ -150,7 +193,10 @@ fn a_measured_list_keeps_the_row_in_view_still_as_heights_arrive() {
     ui.style_mut(list.container()).scroll_top = up;
     sync(&mut ui, &mut list);
     let after = ui.rect(list.row(1_000).unwrap()).y;
-    assert!((after - (before + 5.0)).abs() < 0.01, "moved from {before} to {after}");
+    assert!(
+        (after - (before + 5.0)).abs() < 0.01,
+        "moved from {before} to {after}"
+    );
     // Offsets are the measured heights where measured.
     let (start, end) = (list.offset_of(1_000), list.offset_of(1_001));
     assert_eq!(end - start, height(1_000));
@@ -211,7 +257,11 @@ fn the_hit_index_agrees_with_walking_the_tree() {
         }
         for _ in 0..800 {
             let (x, y) = (rng.f(460.0) - 30.0, rng.f(360.0) - 30.0);
-            assert_eq!(ui.hit_test(x, y), ui.hit_test_walk(x, y), "seed {seed} at ({x}, {y})");
+            assert_eq!(
+                ui.hit_test(x, y),
+                ui.hit_test_walk(x, y),
+                "seed {seed} at ({x}, {y})"
+            );
         }
     }
 }
@@ -220,16 +270,33 @@ fn the_hit_index_agrees_with_walking_the_tree() {
 fn deferred_nodes_paint_last_and_escape_their_clip() {
     let mut ui = Ui::new();
     let root = ui.root();
-    let clip = ui.add_box(root, style! { width: 50px; height: 20px; overflow: hidden; });
-    let popup = ui.add_box(clip, style! { position: absolute; top: 15px; width: 100px; height: 40px; background: #f00; });
+    let clip = ui.add_box(
+        root,
+        style! { width: 50px; height: 20px; overflow: hidden; },
+    );
+    let popup = ui.add_box(
+        clip,
+        style! { position: absolute; top: 15px; width: 100px; height: 40px; background: #f00; },
+    );
     let after = ui.add_box(root, style! { height: 30px; background: #00f; });
     ui.defer(popup, 0);
     layout(&mut ui);
     let scene = ui.scene();
-    let last = scene.items.iter().rposition(|i| matches!(i, Item::Rect { color, .. } if color[0] == 1.0)).unwrap();
-    let blue = scene.items.iter().position(|i| matches!(i, Item::Rect { color, .. } if color[2] == 1.0)).unwrap();
+    let last = scene
+        .items
+        .iter()
+        .rposition(|i| matches!(i, Item::Rect { color, .. } if color[0] == 1.0))
+        .unwrap();
+    let blue = scene
+        .items
+        .iter()
+        .position(|i| matches!(i, Item::Rect { color, .. } if color[2] == 1.0))
+        .unwrap();
     assert!(last > blue, "the popup is painted after what follows it");
-    assert!(!matches!(scene.items[last - 1], Item::PushClip { .. }), "and not inside its parent's clip");
+    assert!(
+        !matches!(scene.items[last - 1], Item::PushClip { .. }),
+        "and not inside its parent's clip"
+    );
     // Over the blue box, outside the parent's clip: the popup is hit.
     assert_eq!(ui.hit_test(80.0, 40.0), Some(popup));
     ui.undefer(popup);
@@ -240,15 +307,27 @@ fn deferred_nodes_paint_last_and_escape_their_clip() {
 fn anchored_nodes_flip_then_snap_into_the_window() {
     let mut ui = Ui::new();
     let root = ui.root();
-    let at = ui.add_box(root, style! { position: absolute; left: 350px; top: 270px; width: 40px; height: 20px; });
-    let menu = ui.add_box(root, style! { position: absolute; width: 120px; height: 80px; });
-    ui.anchor(menu, Anchor::new(AnchorTo::Node(at, Corner::BottomLeft), Corner::TopLeft).offset(0.0, 4.0));
+    let at = ui.add_box(
+        root,
+        style! { position: absolute; left: 350px; top: 270px; width: 40px; height: 20px; },
+    );
+    let menu = ui.add_box(
+        root,
+        style! { position: absolute; width: 120px; height: 80px; },
+    );
+    ui.anchor(
+        menu,
+        Anchor::new(AnchorTo::Node(at, Corner::BottomLeft), Corner::TopLeft).offset(0.0, 4.0),
+    );
     layout(&mut ui);
     // No room right or below: it hangs up and to the left of the button.
     let r = ui.rect(menu);
     assert_eq!((r.x, r.y), (390.0 - 120.0, 270.0 - 4.0 - 80.0));
     // Snap only: pushed inside, on its own side.
-    ui.anchor(menu, Anchor::new(AnchorTo::Point(380.0, 290.0), Corner::TopLeft).fit(Fit::Snap));
+    ui.anchor(
+        menu,
+        Anchor::new(AnchorTo::Point(380.0, 290.0), Corner::TopLeft).fit(Fit::Snap),
+    );
     layout(&mut ui);
     let r = ui.rect(menu);
     assert_eq!((r.x, r.y), (280.0, 220.0));
@@ -259,7 +338,10 @@ fn the_inspector_names_the_line_that_made_a_node() {
     let mut ui = Ui::new();
     let root = ui.root();
     let line = line!() + 1;
-    let node = ui.add_box(root, style! { width: 30px; height: 30px; padding: 2px; cursor: grab; });
+    let node = ui.add_box(
+        root,
+        style! { width: 30px; height: 30px; padding: 2px; cursor: grab; },
+    );
     layout(&mut ui);
     let found = ui.inspect(10.0, 10.0).unwrap();
     assert_eq!(found.node, node);
@@ -267,7 +349,10 @@ fn the_inspector_names_the_line_that_made_a_node() {
     assert!(found.origin.unwrap().file().ends_with("features.rs"));
     assert_eq!(found.cursor, Cursor::Grab);
     let text = found.to_string();
-    assert!(text.contains("padding: Edges { top: 2.0, right: 2.0, bottom: 2.0, left: 2.0 }"), "{text}");
+    assert!(
+        text.contains("padding: Edges { top: 2.0, right: 2.0, bottom: 2.0, left: 2.0 }"),
+        "{text}"
+    );
     assert!(!text.contains("font_size"), "defaults are left out: {text}");
     let mut scene = ui.scene();
     let before = scene.items.len();
@@ -296,13 +381,36 @@ fn the_debug_overlay_paints_its_numbers() {
         .collect();
     assert!(texts[0].starts_with("frame"), "{texts:?}");
     assert!(texts[2].contains("of 1 nodes"));
-    let bars = scene.items.iter().filter(|i| matches!(i, Item::Rect { .. })).count();
+    let bars = scene
+        .items
+        .iter()
+        .filter(|i| matches!(i, Item::Rect { .. }))
+        .count();
     assert!(bars > FrameStats::CAPACITY);
 }
 
 #[allow(clippy::too_many_arguments)]
-fn touch(input: &mut Input<Vec<String>>, ui: &mut Ui, log: &mut Vec<String>, id: u64, phase: TouchPhase, x: f32, y: f32, time: f64) {
-    input.dispatch(ui, log, Event::Touch { id, phase, x, y, time });
+fn touch(
+    input: &mut Input<Vec<String>>,
+    ui: &mut Ui,
+    log: &mut Vec<String>,
+    id: u64,
+    phase: TouchPhase,
+    x: f32,
+    y: f32,
+    time: f64,
+) {
+    input.dispatch(
+        ui,
+        log,
+        Event::Touch {
+            id,
+            phase,
+            x,
+            y,
+            time,
+        },
+    );
 }
 
 #[test]
@@ -328,36 +436,156 @@ fn fingers_tap_pan_press_and_pinch() {
     });
     let mut log = vec![];
     // A tap: a click and a tap.
-    touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Start, 10.0, 10.0, 0.0);
-    touch(&mut input, &mut ui, &mut log, 1, TouchPhase::End, 11.0, 11.0, 0.1);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        1,
+        TouchPhase::Start,
+        10.0,
+        10.0,
+        0.0,
+    );
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        1,
+        TouchPhase::End,
+        11.0,
+        11.0,
+        0.1,
+    );
     assert_eq!(log, ["click", "tap"]);
     log.clear();
 
     // A drag up: a pan that scrolls the list with the finger, and no click.
-    touch(&mut input, &mut ui, &mut log, 2, TouchPhase::Start, 10.0, 60.0, 1.0);
-    touch(&mut input, &mut ui, &mut log, 2, TouchPhase::Move, 10.0, 40.0, 1.05);
-    touch(&mut input, &mut ui, &mut log, 2, TouchPhase::Move, 10.0, 30.0, 1.1);
-    touch(&mut input, &mut ui, &mut log, 2, TouchPhase::End, 10.0, 30.0, 1.15);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        2,
+        TouchPhase::Start,
+        10.0,
+        60.0,
+        1.0,
+    );
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        2,
+        TouchPhase::Move,
+        10.0,
+        40.0,
+        1.05,
+    );
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        2,
+        TouchPhase::Move,
+        10.0,
+        30.0,
+        1.1,
+    );
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        2,
+        TouchPhase::End,
+        10.0,
+        30.0,
+        1.15,
+    );
     assert_eq!(log, ["pan Began", "pan Changed", "pan Ended"]);
     assert_eq!(ui.style(list).scroll_top, 30.0);
     log.clear();
 
     // Held still: a long press, then no click on lifting.
-    touch(&mut input, &mut ui, &mut log, 3, TouchPhase::Start, 10.0, 10.0, 2.0);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        3,
+        TouchPhase::Start,
+        10.0,
+        10.0,
+        2.0,
+    );
     input.tick(&mut ui, &mut log, 2.2);
     assert!(log.is_empty());
     input.tick(&mut ui, &mut log, 2.6);
-    touch(&mut input, &mut ui, &mut log, 3, TouchPhase::End, 10.0, 10.0, 2.7);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        3,
+        TouchPhase::End,
+        10.0,
+        10.0,
+        2.7,
+    );
     assert_eq!(log, ["long"]);
     log.clear();
 
     // Two fingers apart to twice the distance.
-    touch(&mut input, &mut ui, &mut log, 4, TouchPhase::Start, 100.0, 50.0, 3.0);
-    touch(&mut input, &mut ui, &mut log, 5, TouchPhase::Start, 140.0, 50.0, 3.0);
-    touch(&mut input, &mut ui, &mut log, 5, TouchPhase::Move, 180.0, 50.0, 3.1);
-    touch(&mut input, &mut ui, &mut log, 5, TouchPhase::End, 180.0, 50.0, 3.2);
-    touch(&mut input, &mut ui, &mut log, 4, TouchPhase::End, 100.0, 50.0, 3.2);
-    assert_eq!(log, ["pinch Began 1.00", "pinch Changed 2.00", "pinch Ended 2.00"]);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        4,
+        TouchPhase::Start,
+        100.0,
+        50.0,
+        3.0,
+    );
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        5,
+        TouchPhase::Start,
+        140.0,
+        50.0,
+        3.0,
+    );
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        5,
+        TouchPhase::Move,
+        180.0,
+        50.0,
+        3.1,
+    );
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        5,
+        TouchPhase::End,
+        180.0,
+        50.0,
+        3.2,
+    );
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        4,
+        TouchPhase::End,
+        100.0,
+        50.0,
+        3.2,
+    );
+    assert_eq!(
+        log,
+        ["pinch Began 1.00", "pinch Changed 2.00", "pinch Ended 2.00"]
+    );
     assert!(!input.touching());
     let _ = GesturePhase::Began;
 }
@@ -366,13 +594,28 @@ fn fingers_tap_pan_press_and_pinch() {
 fn images_size_by_aspect_fit_their_box_and_paint() {
     let mut ui = Ui::new();
     let root = ui.root();
-    let px: Vec<u8> = (0..40 * 20).flat_map(|i| if i % 40 < 20 { [255, 0, 0, 255] } else { [0, 0, 255, 255] }).collect();
+    let px: Vec<u8> = (0..40 * 20)
+        .flat_map(|i| {
+            if i % 40 < 20 {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            }
+        })
+        .collect();
     let img = Image::new(40, 20, px).unwrap();
     let natural = ui.add_image(root, Style::default(), img.clone());
     let tall = ui.add_image(root, style! { height: 10px; }, img.clone());
-    let cover = ui.add_image(root, style! { width: 20px; height: 20px; object-fit: cover; }, img.clone());
+    let cover = ui.add_image(
+        root,
+        style! { width: 20px; height: 20px; object-fit: cover; },
+        img.clone(),
+    );
     layout(&mut ui);
-    assert_eq!((ui.rect(natural).width, ui.rect(natural).height), (40.0, 20.0));
+    assert_eq!(
+        (ui.rect(natural).width, ui.rect(natural).height),
+        (40.0, 20.0)
+    );
     assert_eq!((ui.rect(tall).width, ui.rect(tall).height), (20.0, 10.0));
     assert_eq!(ui.style(cover).object_fit, ObjectFit::Cover);
     let scene = ui.scene();
@@ -388,7 +631,11 @@ fn images_size_by_aspect_fit_their_box_and_paint() {
     assert_eq!(images[0].1, img);
     // Cover: 40 wide in a 20 box, centred, so the box clips it.
     assert_eq!((images[2].0.x, images[2].0.width), (-10.0, 40.0));
-    let i = scene.items.iter().position(|i| matches!(i, Item::Image { rect, .. } if rect.width == 40.0 && rect.x < 0.0)).unwrap();
+    let i = scene
+        .items
+        .iter()
+        .position(|i| matches!(i, Item::Image { rect, .. } if rect.width == 40.0 && rect.x < 0.0))
+        .unwrap();
     assert!(matches!(scene.items[i - 1], Item::PushClip { .. }));
 
     // The cache: ready after polling.
@@ -444,14 +691,64 @@ fn a_touch_whose_end_was_lost_does_not_turn_the_next_into_a_pinch() {
     layout(&mut ui);
     let mut input: Input<Vec<String>> = Input::new();
     let mut log = vec![];
-    touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Start, 10.0, 80.0, 0.0);
-    touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Move, 10.0, 60.0, 0.05);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        1,
+        TouchPhase::Start,
+        10.0,
+        80.0,
+        0.0,
+    );
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        1,
+        TouchPhase::Move,
+        10.0,
+        60.0,
+        0.05,
+    );
     // No end arrives.
-    touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Start, 10.0, 80.0, 1.0);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        1,
+        TouchPhase::Start,
+        10.0,
+        80.0,
+        1.0,
+    );
     let before = ui.style(list).scroll_top;
-    touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Move, 10.0, 50.0, 1.05);
-    touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Move, 10.0, 40.0, 1.1);
-    assert!(ui.style(list).scroll_top > before + 20.0, "{} → {}", before, ui.style(list).scroll_top);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        1,
+        TouchPhase::Move,
+        10.0,
+        50.0,
+        1.05,
+    );
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        1,
+        TouchPhase::Move,
+        10.0,
+        40.0,
+        1.1,
+    );
+    assert!(
+        ui.style(list).scroll_top > before + 20.0,
+        "{} → {}",
+        before,
+        ui.style(list).scroll_top
+    );
 }
 
 /// Safari reports a lift some time after the finger's last move: the flick
@@ -466,11 +763,38 @@ fn a_flick_whose_lift_arrives_late_still_glides() {
         layout(&mut ui);
         let mut input: Input<Vec<String>> = Input::new();
         let mut log = vec![];
-        touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Start, 10.0, 90.0, 0.0);
+        touch(
+            &mut input,
+            &mut ui,
+            &mut log,
+            1,
+            TouchPhase::Start,
+            10.0,
+            90.0,
+            0.0,
+        );
         for i in 1..=6 {
-            touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Move, 10.0, 90.0 - 15.0 * i as f32, i as f64 * 0.016);
+            touch(
+                &mut input,
+                &mut ui,
+                &mut log,
+                1,
+                TouchPhase::Move,
+                10.0,
+                90.0 - 15.0 * i as f32,
+                i as f64 * 0.016,
+            );
         }
-        touch(&mut input, &mut ui, &mut log, 1, TouchPhase::End, 10.0, 0.0, 0.096 + lift);
+        touch(
+            &mut input,
+            &mut ui,
+            &mut log,
+            1,
+            TouchPhase::End,
+            10.0,
+            0.0,
+            0.096 + lift,
+        );
         let released = ui.style(list).scroll_top;
         for i in 1..=60 {
             input.tick(&mut ui, &mut log, 0.096 + lift + i as f64 / 60.0);
@@ -491,25 +815,75 @@ fn a_finger_drags_a_scrollbar_thumb() {
     for reach in [0.0, 12.0] {
         let mut ui = Ui::new();
         let root = ui.root();
-        let list = ui.add_box(root, style! { width: 200px; height: 100px; overflow: auto; scrollbar-width: auto; });
+        let list = ui.add_box(
+            root,
+            style! { width: 200px; height: 100px; overflow: auto; scrollbar-width: auto; },
+        );
         ui.add_box(list, style! { height: 1000px; });
         layout(&mut ui);
         let bar = ui.scrollbar(list).expect("a scrollbar");
         let thumb = bar.thumb;
         // The thumb's travel down the track is the whole 900 of scrolling.
         let want = 45.0 / (bar.track.height - thumb.height) * 900.0;
-        let (x, y) = (thumb.x + thumb.width / 2.0 - reach, thumb.y + thumb.height / 2.0);
+        let (x, y) = (
+            thumb.x + thumb.width / 2.0 - reach,
+            thumb.y + thumb.height / 2.0,
+        );
         let mut input: Input<Vec<String>> = Input::new();
         let mut log = vec![];
-        touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Start, x, y, 0.0);
-        touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Move, x, y + 20.0, 0.05);
-        touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Move, x, y + 45.0, 0.1);
-        touch(&mut input, &mut ui, &mut log, 1, TouchPhase::End, x, y + 45.0, 0.15);
-        assert!((ui.style(list).scroll_top - want).abs() < 1.0, "reach {reach}: {} not {want}", ui.style(list).scroll_top);
+        touch(
+            &mut input,
+            &mut ui,
+            &mut log,
+            1,
+            TouchPhase::Start,
+            x,
+            y,
+            0.0,
+        );
+        touch(
+            &mut input,
+            &mut ui,
+            &mut log,
+            1,
+            TouchPhase::Move,
+            x,
+            y + 20.0,
+            0.05,
+        );
+        touch(
+            &mut input,
+            &mut ui,
+            &mut log,
+            1,
+            TouchPhase::Move,
+            x,
+            y + 45.0,
+            0.1,
+        );
+        touch(
+            &mut input,
+            &mut ui,
+            &mut log,
+            1,
+            TouchPhase::End,
+            x,
+            y + 45.0,
+            0.15,
+        );
+        assert!(
+            (ui.style(list).scroll_top - want).abs() < 1.0,
+            "reach {reach}: {} not {want}",
+            ui.style(list).scroll_top
+        );
         for i in 1..=30 {
             input.tick(&mut ui, &mut log, 0.15 + i as f64 / 60.0);
         }
-        assert!((ui.style(list).scroll_top - want).abs() < 1.0, "no glide after: {}", ui.style(list).scroll_top);
+        assert!(
+            (ui.style(list).scroll_top - want).abs() < 1.0,
+            "no glide after: {}",
+            ui.style(list).scroll_top
+        );
         assert!(!input.touching());
     }
 }
@@ -527,17 +901,48 @@ fn a_fling_outlives_the_row_it_started_on() {
     layout(&mut ui);
     let mut input: Input<Vec<String>> = Input::new();
     let mut log = vec![];
-    touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Start, 10.0, 10.0, 0.0);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        1,
+        TouchPhase::Start,
+        10.0,
+        10.0,
+        0.0,
+    );
     for i in 1..=6 {
-        touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Move, 10.0, 10.0 - 15.0 * i as f32, i as f64 * 0.016);
+        touch(
+            &mut input,
+            &mut ui,
+            &mut log,
+            1,
+            TouchPhase::Move,
+            10.0,
+            10.0 - 15.0 * i as f32,
+            i as f64 * 0.016,
+        );
     }
     ui.remove(row);
-    touch(&mut input, &mut ui, &mut log, 1, TouchPhase::End, 10.0, -80.0, 0.105);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        1,
+        TouchPhase::End,
+        10.0,
+        -80.0,
+        0.105,
+    );
     let released = ui.style(list).scroll_top;
     for i in 1..=30 {
         input.tick(&mut ui, &mut log, 0.105 + i as f64 / 60.0);
     }
-    assert!(ui.style(list).scroll_top > released + 200.0, "{released} → {}", ui.style(list).scroll_top);
+    assert!(
+        ui.style(list).scroll_top > released + 200.0,
+        "{released} → {}",
+        ui.style(list).scroll_top
+    );
 }
 
 /// `scrollbar-visibility: auto`: the bar is hidden until the box scrolls,
@@ -547,17 +952,24 @@ fn a_fling_outlives_the_row_it_started_on() {
 fn auto_scrollbars_show_while_used_and_fade() {
     let mut ui = Ui::new();
     let root = ui.root();
-    let list = ui.add_box(root, style! {
-        height: 100px; overflow: auto; scrollbar-width: auto;
-        scrollbar-visibility: auto; scrollbar-fade: 500ms 0.2s;
-    });
+    let list = ui.add_box(
+        root,
+        style! {
+            height: 100px; overflow: auto; scrollbar-width: auto;
+            scrollbar-visibility: auto; scrollbar-fade: 500ms 0.2s;
+        },
+    );
     ui.add_box(list, style! { height: 1000px; });
     layout(&mut ui);
     assert_eq!(ui.style(list).scrollbar_fade, (0.5, 0.2));
     ui.step(0.0);
     assert_eq!(ui.scrollbar_opacity(list), 0.0, "hidden until used");
     let painted = |ui: &Ui| {
-        ui.scene().items.iter().filter(|i| matches!(i, threers_ui::scene::Item::Rect { .. })).count()
+        ui.scene()
+            .items
+            .iter()
+            .filter(|i| matches!(i, threers_ui::scene::Item::Rect { .. }))
+            .count()
     };
     let hidden = painted(&ui);
 
@@ -570,21 +982,38 @@ fn auto_scrollbars_show_while_used_and_fade() {
     }
     assert_eq!(ui.scrollbar_opacity(list), 1.0, "through the delay");
     ui.step(0.1 + 1.0 / 60.0);
-    assert!((ui.scrollbar_opacity(list) - 0.5).abs() < 0.1, "half faded: {}", ui.scrollbar_opacity(list));
+    assert!(
+        (ui.scrollbar_opacity(list) - 0.5).abs() < 0.1,
+        "half faded: {}",
+        ui.scrollbar_opacity(list)
+    );
     ui.step(0.2);
     assert_eq!(ui.scrollbar_opacity(list), 0.0);
     layout(&mut ui);
-    assert!(!ui.step(1.0 / 60.0) && !ui.needs_frame(), "no frames once faded");
+    assert!(
+        !ui.step(1.0 / 60.0) && !ui.needs_frame(),
+        "no frames once faded"
+    );
     assert_eq!(painted(&ui), hidden);
 
     // The pointer over where the bar is shows it.
     let bar = ui.scrollbar(list).expect("geometry, faded or not").thumb;
     let mut input: Input<Vec<String>> = Input::new();
-    input.dispatch(&mut ui, &mut vec![], Event::PointerMove { x: bar.x + 2.0, y: bar.y + 2.0 });
+    input.dispatch(
+        &mut ui,
+        &mut vec![],
+        Event::PointerMove {
+            x: bar.x + 2.0,
+            y: bar.y + 2.0,
+        },
+    );
     assert_eq!(ui.scrollbar_opacity(list), 1.0);
 
     // `always`, the default, is not affected.
-    let other = ui.add_box(root, style! { height: 100px; overflow: auto; scrollbar-width: auto; });
+    let other = ui.add_box(
+        root,
+        style! { height: 100px; overflow: auto; scrollbar-width: auto; },
+    );
     ui.add_box(other, style! { height: 1000px; });
     layout(&mut ui);
     assert_eq!(ui.scrollbar_opacity(other), 1.0);
@@ -609,10 +1038,28 @@ fn flicks_in_a_row_build_speed_to_cross_a_long_list() {
         let (y0, dy) = if up { (500.0, -48.0) } else { (50.0, 48.0) };
         touch(input, ui, &mut log, id, TouchPhase::Start, 10.0, y0, t);
         for i in 1..=6 {
-            touch(input, ui, &mut log, id, TouchPhase::Move, 10.0, y0 + dy * i as f32, t + i as f64 * 0.016);
+            touch(
+                input,
+                ui,
+                &mut log,
+                id,
+                TouchPhase::Move,
+                10.0,
+                y0 + dy * i as f32,
+                t + i as f64 * 0.016,
+            );
         }
         let end = t + 0.106;
-        touch(input, ui, &mut log, id, TouchPhase::End, 10.0, y0 + dy * 6.0, end);
+        touch(
+            input,
+            ui,
+            &mut log,
+            id,
+            TouchPhase::End,
+            10.0,
+            y0 + dy * 6.0,
+            end,
+        );
         end
     };
     let glide = |input: &mut Input<Vec<String>>, ui: &mut Ui, from: f64, seconds: f64| {
@@ -644,7 +1091,11 @@ fn flicks_in_a_row_build_speed_to_cross_a_long_list() {
     }
     t = glide(&mut input, &mut ui, t, 8.0);
     let _ = t;
-    assert!(ui.style(list).scroll_top >= 2600000.0 - 601.0, "reached {} after {flicks}", ui.style(list).scroll_top);
+    assert!(
+        ui.style(list).scroll_top >= 2600000.0 - 601.0,
+        "reached {} after {flicks}",
+        ui.style(list).scroll_top
+    );
     assert!(flicks <= 10, "{flicks} flicks");
 
     // Back the other way: no build-up carried over.
@@ -660,7 +1111,10 @@ fn flicks_in_a_row_build_speed_to_cross_a_long_list() {
     let end = flick(&mut input, &mut ui, 9, t, false);
     glide(&mut input, &mut ui, end, 6.0);
     let back = before - ui.style(list).scroll_top;
-    assert!(back > 0.0 && back < 4500.0, "one flick's worth back: {back}");
+    assert!(
+        back > 0.0 && back < 4500.0,
+        "one flick's worth back: {back}"
+    );
 }
 
 /// Pull to refresh: dragging down on a list at its top opens a pull instead
@@ -678,12 +1132,35 @@ fn pulling_a_list_down_from_its_top_refreshes_it() {
     let mut input: Input<Vec<String>> = Input::new();
     input.on_refresh(list, |log, _| log.push("refresh".into()));
     let mut log = vec![];
-    let drag = |input: &mut Input<Vec<String>>, ui: &mut Ui, log: &mut Vec<String>, id: u64, to: f32, t: f64| {
+    let drag = |input: &mut Input<Vec<String>>,
+                ui: &mut Ui,
+                log: &mut Vec<String>,
+                id: u64,
+                to: f32,
+                t: f64| {
         touch(input, ui, log, id, TouchPhase::Start, 10.0, 10.0, t);
         for i in 1..=10 {
-            touch(input, ui, log, id, TouchPhase::Move, 10.0, 10.0 + to * i as f32 / 10.0, t + i as f64 * 0.03);
+            touch(
+                input,
+                ui,
+                log,
+                id,
+                TouchPhase::Move,
+                10.0,
+                10.0 + to * i as f32 / 10.0,
+                t + i as f64 * 0.03,
+            );
         }
-        touch(input, ui, log, id, TouchPhase::End, 10.0, 10.0 + to, t + 0.5);
+        touch(
+            input,
+            ui,
+            log,
+            id,
+            TouchPhase::End,
+            10.0,
+            10.0 + to,
+            t + 0.5,
+        );
     };
     let settle = |input: &mut Input<Vec<String>>, ui: &mut Ui, log: &mut Vec<String>, from: f64| {
         for i in 1..=60 {
@@ -692,12 +1169,42 @@ fn pulling_a_list_down_from_its_top_refreshes_it() {
     };
 
     // A short pull: open while pulled, less than the finger moved, and back.
-    touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Start, 10.0, 10.0, 0.0);
-    touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Move, 10.0, 70.0, 0.1);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        1,
+        TouchPhase::Start,
+        10.0,
+        10.0,
+        0.0,
+    );
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        1,
+        TouchPhase::Move,
+        10.0,
+        70.0,
+        0.1,
+    );
     let p = input.pull(list).expect("pulled");
-    assert!(p.distance > 10.0 && p.distance < 60.0 && p.phase == PullPhase::Pulling, "{p:?}");
+    assert!(
+        p.distance > 10.0 && p.distance < 60.0 && p.phase == PullPhase::Pulling,
+        "{p:?}"
+    );
     assert_eq!(ui.style(list).scroll_top, 0.0);
-    touch(&mut input, &mut ui, &mut log, 1, TouchPhase::End, 10.0, 70.0, 0.4);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        1,
+        TouchPhase::End,
+        10.0,
+        70.0,
+        0.4,
+    );
     settle(&mut input, &mut ui, &mut log, 0.4);
     assert_eq!(input.pull(list), None, "sprung back");
     assert!(log.is_empty());
@@ -707,7 +1214,10 @@ fn pulling_a_list_down_from_its_top_refreshes_it() {
     assert_eq!(log, ["refresh"]);
     settle(&mut input, &mut ui, &mut log, 2.5);
     let p = input.pull(list).expect("held open");
-    assert_eq!((p.phase, p.distance), (PullPhase::Refreshing, PULL_THRESHOLD));
+    assert_eq!(
+        (p.phase, p.distance),
+        (PullPhase::Refreshing, PULL_THRESHOLD)
+    );
     assert!(!input.needs_frame(), "nothing moves while it waits");
     input.finish_refresh(list);
     assert!(input.needs_frame());
@@ -756,10 +1266,19 @@ fn scrolling_a_list_measures_only_the_rows_that_arrive() {
     }
     let mut ui = Ui::new();
     let root = ui.root();
-    let mut list = VirtualList::new(&mut ui, root, style! { height: 300px; width: 200px; }, 1000, RowHeight::Measured { estimate: 40.0 });
+    let mut list = VirtualList::new(
+        &mut ui,
+        root,
+        style! { height: 300px; width: 200px; },
+        1000,
+        RowHeight::Measured { estimate: 40.0 },
+    );
     let build = |ui: &mut Ui, row: NodeId, i: usize| {
         let b = ui.add_box(row, style! { white-space: normal; padding: 4px; });
-        ui.add_text(b, "words that wrap over a few lines in a narrow list ".repeat(1 + i % 3));
+        ui.add_text(
+            b,
+            "words that wrap over a few lines in a narrow list ".repeat(1 + i % 3),
+        );
     };
     let mut m = Counting(0);
     ui.layout(400.0, 400.0, &mut m);
@@ -795,8 +1314,13 @@ fn swiping_a_row_left_opens_its_action_or_deletes_it() {
     use threers_ui::input::{SwipePhase, SWIPE_ACTION_WIDTH};
     let mut ui = Ui::new();
     let root = ui.root();
-    let list = ui.add_box(root, style! { width: 300px; height: 200px; overflow: auto; });
-    let rows: Vec<NodeId> = (0..20).map(|_| ui.add_box(list, style! { height: 40px; })).collect();
+    let list = ui.add_box(
+        root,
+        style! { width: 300px; height: 200px; overflow: auto; },
+    );
+    let rows: Vec<NodeId> = (0..20)
+        .map(|_| ui.add_box(list, style! { height: 40px; }))
+        .collect();
     let button = ui.add_box(rows[3], style! { width: 10px; height: 10px; });
     layout(&mut ui);
     let mut input: Input<Vec<String>> = Input::new();
@@ -804,12 +1328,36 @@ fn swiping_a_row_left_opens_its_action_or_deletes_it() {
     input.on_click(button, |log, _, _| log.push("button".into()));
     input.on_click(rows[1], |log, _, _| log.push("row 1 clicked".into()));
     let mut log = vec![];
-    let slide = |input: &mut Input<Vec<String>>, ui: &mut Ui, log: &mut Vec<String>, id: u64, y: f32, by: f32, t: f64| {
+    let slide = |input: &mut Input<Vec<String>>,
+                 ui: &mut Ui,
+                 log: &mut Vec<String>,
+                 id: u64,
+                 y: f32,
+                 by: f32,
+                 t: f64| {
         touch(input, ui, log, id, TouchPhase::Start, 250.0, y, t);
         for i in 1..=10 {
-            touch(input, ui, log, id, TouchPhase::Move, 250.0 + by * i as f32 / 10.0, y + 1.0, t + i as f64 * 0.02);
+            touch(
+                input,
+                ui,
+                log,
+                id,
+                TouchPhase::Move,
+                250.0 + by * i as f32 / 10.0,
+                y + 1.0,
+                t + i as f64 * 0.02,
+            );
         }
-        touch(input, ui, log, id, TouchPhase::End, 250.0 + by, y + 1.0, t + 0.25);
+        touch(
+            input,
+            ui,
+            log,
+            id,
+            TouchPhase::End,
+            250.0 + by,
+            y + 1.0,
+            t + 0.25,
+        );
     };
     let settle = |input: &mut Input<Vec<String>>, ui: &mut Ui, log: &mut Vec<String>, from: f64| {
         for i in 1..=40 {
@@ -818,12 +1366,42 @@ fn swiping_a_row_left_opens_its_action_or_deletes_it() {
     };
 
     // Under the finger it follows: row 1 (y 40..80).
-    touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Start, 250.0, 60.0, 0.0);
-    touch(&mut input, &mut ui, &mut log, 1, TouchPhase::Move, 220.0, 61.0, 0.05);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        1,
+        TouchPhase::Start,
+        250.0,
+        60.0,
+        0.0,
+    );
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        1,
+        TouchPhase::Move,
+        220.0,
+        61.0,
+        0.05,
+    );
     let s = input.swipe(list).expect("sliding");
-    assert_eq!((s.row, s.offset, s.phase), (rows[1], -30.0, SwipePhase::Dragging));
+    assert_eq!(
+        (s.row, s.offset, s.phase),
+        (rows[1], -30.0, SwipePhase::Dragging)
+    );
     // Short: back to closed.
-    touch(&mut input, &mut ui, &mut log, 1, TouchPhase::End, 220.0, 61.0, 0.1);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        1,
+        TouchPhase::End,
+        220.0,
+        61.0,
+        0.1,
+    );
     settle(&mut input, &mut ui, &mut log, 0.1);
     assert_eq!(input.swipe(list), None);
 
@@ -833,8 +1411,26 @@ fn swiping_a_row_left_opens_its_action_or_deletes_it() {
     let s = input.swipe(list).unwrap();
     assert_eq!((s.phase, s.offset), (SwipePhase::Open, -SWIPE_ACTION_WIDTH));
     // A tap on another row closes it, and clicks nothing.
-    touch(&mut input, &mut ui, &mut log, 3, TouchPhase::Start, 100.0, 140.0, 2.0);
-    touch(&mut input, &mut ui, &mut log, 3, TouchPhase::End, 100.0, 140.0, 2.05);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        3,
+        TouchPhase::Start,
+        100.0,
+        140.0,
+        2.0,
+    );
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        3,
+        TouchPhase::End,
+        100.0,
+        140.0,
+        2.05,
+    );
     settle(&mut input, &mut ui, &mut log, 2.05);
     assert_eq!(input.swipe(list), None);
     assert!(log.is_empty(), "{log:?}");
@@ -842,8 +1438,26 @@ fn swiping_a_row_left_opens_its_action_or_deletes_it() {
     // Open again; a tap on the action goes through as a click.
     slide(&mut input, &mut ui, &mut log, 4, 60.0, -70.0, 3.0);
     settle(&mut input, &mut ui, &mut log, 3.3);
-    touch(&mut input, &mut ui, &mut log, 5, TouchPhase::Start, 280.0, 60.0, 4.0);
-    touch(&mut input, &mut ui, &mut log, 5, TouchPhase::End, 280.0, 60.0, 4.05);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        5,
+        TouchPhase::Start,
+        280.0,
+        60.0,
+        4.0,
+    );
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        5,
+        TouchPhase::End,
+        280.0,
+        60.0,
+        4.05,
+    );
     assert_eq!(log, ["row 1 clicked"]);
     log.clear();
     input.close_swipe();
@@ -856,11 +1470,38 @@ fn swiping_a_row_left_opens_its_action_or_deletes_it() {
 
     // Up and down still scrolls, and slides nothing.
     log.clear();
-    touch(&mut input, &mut ui, &mut log, 7, TouchPhase::Start, 250.0, 150.0, 6.0);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        7,
+        TouchPhase::Start,
+        250.0,
+        150.0,
+        6.0,
+    );
     for i in 1..=5 {
-        touch(&mut input, &mut ui, &mut log, 7, TouchPhase::Move, 248.0, 150.0 - 20.0 * i as f32, 6.0 + i as f64 * 0.02);
+        touch(
+            &mut input,
+            &mut ui,
+            &mut log,
+            7,
+            TouchPhase::Move,
+            248.0,
+            150.0 - 20.0 * i as f32,
+            6.0 + i as f64 * 0.02,
+        );
     }
-    touch(&mut input, &mut ui, &mut log, 7, TouchPhase::End, 248.0, 50.0, 6.5);
+    touch(
+        &mut input,
+        &mut ui,
+        &mut log,
+        7,
+        TouchPhase::End,
+        248.0,
+        50.0,
+        6.5,
+    );
     assert!(ui.style(list).scroll_top > 50.0);
     assert_eq!(input.swipe(list), None);
 }
@@ -872,7 +1513,13 @@ fn removing_a_list_row_keeps_the_rest() {
     use threers_ui::virtual_list::{RowHeight, VirtualList};
     let mut ui = Ui::new();
     let root = ui.root();
-    let mut list = VirtualList::new(&mut ui, root, style! { height: 200px; width: 200px; }, 100, RowHeight::Measured { estimate: 30.0 });
+    let mut list = VirtualList::new(
+        &mut ui,
+        root,
+        style! { height: 200px; width: 200px; },
+        100,
+        RowHeight::Measured { estimate: 30.0 },
+    );
     // Row i is 20 + i px tall.
     let build = |ui: &mut Ui, row: NodeId, i: usize| {
         let b = ui.add_box(row, Style::default());
@@ -886,11 +1533,23 @@ fn removing_a_list_row_keeps_the_rest() {
     let total = list.content_height();
     list.remove(&mut ui, 2);
     assert_eq!(list.len(), 99);
-    assert_eq!(list.row(2), Some(before[3].1), "row 3 is row 2 now, the same node");
+    assert_eq!(
+        list.row(2),
+        Some(before[3].1),
+        "row 3 is row 2 now, the same node"
+    );
     assert!(!ui.contains(before[2].1));
-    assert_eq!(list.content_height(), total - 22.0, "row 2 was 22 px; the rest keep theirs");
+    assert_eq!(
+        list.content_height(),
+        total - 22.0,
+        "row 2 was 22 px; the rest keep theirs"
+    );
     assert_eq!(list.offset_of(3), 20.0 + 21.0 + 23.0);
     layout(&mut ui);
     let y = |n: NodeId| ui.rect(n).y;
-    assert_eq!(y(before[3].1) - y(before[1].1), 21.0, "moved up into the gap");
+    assert_eq!(
+        y(before[3].1) - y(before[1].1),
+        21.0,
+        "moved up into the gap"
+    );
 }

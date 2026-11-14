@@ -140,7 +140,10 @@ impl Ui {
     /// moved to the character's end.
     #[track_caller]
     pub fn set_text_runs(&mut self, id: NodeId, runs: Vec<TextRun>) {
-        assert!(matches!(self.kind(id), NodeKind::Text(_)), "runs are for text nodes");
+        assert!(
+            matches!(self.kind(id), NodeKind::Text(_)),
+            "runs are for text nodes"
+        );
         if self.node(id).runs.as_deref() != Some(runs.as_slice()) {
             self.touch(id);
             self.nodes[id.0].runs = Some(runs);
@@ -161,7 +164,11 @@ impl Ui {
 
     /// The boxes of text node `id`'s links as laid out (a link wrapping
     /// over two lines has two), each with where it links to.
-    pub fn link_rects(&self, id: NodeId, measure: &mut dyn crate::TextMeasure) -> Vec<(crate::Rect, String)> {
+    pub fn link_rects(
+        &self,
+        id: NodeId,
+        measure: &mut dyn crate::TextMeasure,
+    ) -> Vec<(crate::Rect, String)> {
         let (Some(runs), NodeKind::Text(text)) = (self.text_runs(id), self.kind(id)) else {
             return vec![];
         };
@@ -182,7 +189,13 @@ impl Ui {
 
     /// The link under `(x, y)` in any of `nodes`' text, by
     /// [`link_rects`](Self::link_rects).
-    pub fn link_at(&self, nodes: &[NodeId], x: f32, y: f32, measure: &mut dyn crate::TextMeasure) -> Option<String> {
+    pub fn link_at(
+        &self,
+        nodes: &[NodeId],
+        x: f32,
+        y: f32,
+        measure: &mut dyn crate::TextMeasure,
+    ) -> Option<String> {
         nodes
             .iter()
             .flat_map(|&n| self.link_rects(n, measure))
@@ -193,7 +206,12 @@ impl Ui {
 
 /// `start..end` of `text` cut where `runs` change, each piece with its run
 /// (`u32::MAX` past the last).
-pub(crate) fn split(text: &str, runs: &[TextRun], start: usize, end: usize) -> Vec<(usize, usize, u32)> {
+pub(crate) fn split(
+    text: &str,
+    runs: &[TextRun],
+    start: usize,
+    end: usize,
+) -> Vec<(usize, usize, u32)> {
     let mut out = vec![];
     let mut at = 0usize;
     let fix = |i: usize| {

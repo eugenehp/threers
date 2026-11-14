@@ -44,7 +44,14 @@ impl Rng {
     }
 }
 
-const WORDS: [&str; 6] = ["mill", "wide words", "i", "lattice", "m w m", "a longer run of text"];
+const WORDS: [&str; 6] = [
+    "mill",
+    "wide words",
+    "i",
+    "lattice",
+    "m w m",
+    "a longer run of text",
+];
 
 fn random_style(rng: &mut Rng) -> Style {
     let mut s = Style::default();
@@ -69,7 +76,11 @@ fn random_style(rng: &mut Rng) -> Style {
     s.ellipsis = rng.below(6) == 0;
     s.clip = s.ellipsis || rng.below(5) == 0;
     s.font_size = [11.0, 13.0, 16.0][rng.below(3)];
-    s.align_items = [AlignItems::Stretch, AlignItems::Center, AlignItems::FlexStart][rng.below(3)];
+    s.align_items = [
+        AlignItems::Stretch,
+        AlignItems::Center,
+        AlignItems::FlexStart,
+    ][rng.below(3)];
     s.background = Some([rng.f(0.0, 1.0), 0.2, 0.3, 1.0]);
     if rng.below(8) == 0 {
         s.position = Position::Absolute;
@@ -117,7 +128,12 @@ impl Pair {
     }
 
     fn live(&self, rng: &mut Rng) -> Option<NodeId> {
-        let live: Vec<NodeId> = self.nodes.iter().copied().filter(|&n| self.plain.contains(n)).collect();
+        let live: Vec<NodeId> = self
+            .nodes
+            .iter()
+            .copied()
+            .filter(|&n| self.plain.contains(n))
+            .collect();
         (!live.is_empty()).then(|| live[rng.below(live.len())])
     }
 
@@ -193,7 +209,11 @@ impl Pair {
 }
 
 fn assert_same(pair: &Pair, frame: usize) {
-    assert_eq!(pair.plain.scene(), pair.cached.scene(), "frame {frame}: scenes differ");
+    assert_eq!(
+        pair.plain.scene(),
+        pair.cached.scene(),
+        "frame {frame}: scenes differ"
+    );
     for &n in &pair.nodes {
         if pair.plain.contains(n) {
             let (a, b) = (pair.plain.rect(n), pair.cached.rect(n));
@@ -287,7 +307,11 @@ fn an_unchanged_cached_panel_is_not_laid_out_again() {
     // Only the counter changes: the panel's 101 nodes come from the cache.
     ui.set_text(counter, "1");
     ui.layout(400.0, 300.0, &mut Proportional);
-    assert!(ui.laid_out_last() < 5, "{} of {first} laid out again", ui.laid_out_last());
+    assert!(
+        ui.laid_out_last() < 5,
+        "{} of {first} laid out again",
+        ui.laid_out_last()
+    );
     assert_ne!(ui.scene(), before);
 
     // Changing a row inside it invalidates the panel and nothing else.

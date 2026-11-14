@@ -44,15 +44,36 @@ fn an_overlay_can_let_the_wheel_scroll_what_is_under_it() {
     let root = ui.root();
     let list = ui.add_box(root, style! { height: 100px; overflow: auto; });
     ui.add_box(list, style! { height: 1000px; });
-    let overlay = ui.add_box(root, style! { position: absolute; left: 0px; top: 0px; width: 400px; height: 100px; });
+    let overlay = ui.add_box(
+        root,
+        style! { position: absolute; left: 0px; top: 0px; width: 400px; height: 100px; },
+    );
     layout(&mut ui);
     let mut input: Input<Log> = Input::new();
     input.smooth_wheel = false;
     let mut log = vec![];
-    input.dispatch(&mut ui, &mut log, Event::Wheel { x: 10.0, y: 50.0, dx: 0.0, dy: 30.0 });
+    input.dispatch(
+        &mut ui,
+        &mut log,
+        Event::Wheel {
+            x: 10.0,
+            y: 50.0,
+            dx: 0.0,
+            dy: 30.0,
+        },
+    );
     assert_eq!(ui.style(list).scroll_top, 0.0, "blocked by the overlay");
     input.set_hit_behavior(overlay, HitBehavior::BlockExceptScroll);
-    input.dispatch(&mut ui, &mut log, Event::Wheel { x: 10.0, y: 50.0, dx: 0.0, dy: 30.0 });
+    input.dispatch(
+        &mut ui,
+        &mut log,
+        Event::Wheel {
+            x: 10.0,
+            y: 50.0,
+            dx: 0.0,
+            dy: 30.0,
+        },
+    );
     assert_eq!(ui.style(list).scroll_top, 30.0, "through it");
 }
 
@@ -69,11 +90,27 @@ fn a_drag_tells_what_it_moves_over() {
     input.on_drag_move::<String>(target, |log, _, _, _, _| log.push("not a string".into()));
     let mut log = vec![];
     let b = PointerButton::Primary;
-    input.dispatch(&mut ui, &mut log, Event::PointerDown { x: 5.0, y: 5.0, button: b });
+    input.dispatch(
+        &mut ui,
+        &mut log,
+        Event::PointerDown {
+            x: 5.0,
+            y: 5.0,
+            button: b,
+        },
+    );
     input.dispatch(&mut ui, &mut log, Event::PointerMove { x: 5.0, y: 12.0 });
     input.dispatch(&mut ui, &mut log, Event::PointerMove { x: 5.0, y: 40.0 });
     input.dispatch(&mut ui, &mut log, Event::PointerMove { x: 5.0, y: 60.0 });
-    input.dispatch(&mut ui, &mut log, Event::PointerUp { x: 5.0, y: 60.0, button: b });
+    input.dispatch(
+        &mut ui,
+        &mut log,
+        Event::PointerUp {
+            x: 5.0,
+            y: 60.0,
+            button: b,
+        },
+    );
     assert_eq!(log, ["7 at 40", "7 at 60"]);
 }
 
@@ -87,12 +124,28 @@ fn files_dropped_from_outside_go_to_the_node_that_takes_them() {
     layout(&mut ui);
     let _ = (inner, elsewhere);
     let mut input: Input<Log> = Input::new();
-    input.on_drop_files(zone, |log, _, files, _, _| log.extend(files.iter().map(|f| format!("{} {}", f.name, f.size))));
-    let files = [DroppedFile { name: "a.png".into(), size: 12, kind: "image/png".into() }];
+    input.on_drop_files(zone, |log, _, files, _, _| {
+        log.extend(files.iter().map(|f| format!("{} {}", f.name, f.size)))
+    });
+    let files = [DroppedFile {
+        name: "a.png".into(),
+        size: 12,
+        kind: "image/png".into(),
+    }];
     let mut log = vec![];
-    assert_eq!(input.files_target(&ui, 5.0, 5.0), Some(zone), "from inside it too");
-    assert_eq!(input.drop_files(&mut ui, &mut log, 5.0, 5.0, &files), Some(zone));
-    assert_eq!(input.drop_files(&mut ui, &mut log, 5.0, 150.0, &files), None);
+    assert_eq!(
+        input.files_target(&ui, 5.0, 5.0),
+        Some(zone),
+        "from inside it too"
+    );
+    assert_eq!(
+        input.drop_files(&mut ui, &mut log, 5.0, 5.0, &files),
+        Some(zone)
+    );
+    assert_eq!(
+        input.drop_files(&mut ui, &mut log, 5.0, 150.0, &files),
+        None
+    );
     assert_eq!(log, ["a.png 12"]);
 }
 
@@ -105,22 +158,62 @@ fn a_secondary_click_or_a_held_finger_asks_for_a_context_menu() {
     layout(&mut ui);
     let mut input: Input<Log> = Input::new();
     input.on_context_menu(row, |log, _, x, y| log.push(format!("menu at {x},{y}")));
-    input.on(root, threers_ui::input::Phase::Bubble, |log: &mut Log, _, e, _| {
-        if let Event::Gesture(threers_ui::input::Gesture::LongPress { .. }) = e {
-            log.push("long press".into());
-        }
-    });
+    input.on(
+        root,
+        threers_ui::input::Phase::Bubble,
+        |log: &mut Log, _, e, _| {
+            if let Event::Gesture(threers_ui::input::Gesture::LongPress { .. }) = e {
+                log.push("long press".into());
+            }
+        },
+    );
     let mut log = vec![];
-    input.dispatch(&mut ui, &mut log, Event::PointerDown { x: 5.0, y: 10.0, button: PointerButton::Secondary });
-    input.dispatch(&mut ui, &mut log, Event::PointerUp { x: 5.0, y: 10.0, button: PointerButton::Secondary });
+    input.dispatch(
+        &mut ui,
+        &mut log,
+        Event::PointerDown {
+            x: 5.0,
+            y: 10.0,
+            button: PointerButton::Secondary,
+        },
+    );
+    input.dispatch(
+        &mut ui,
+        &mut log,
+        Event::PointerUp {
+            x: 5.0,
+            y: 10.0,
+            button: PointerButton::Secondary,
+        },
+    );
     assert_eq!(log, ["menu at 5,10"]);
     log.clear();
     // Held on the row: its menu, and no long press. On the plain box: a
     // long press.
     for (y, t) in [(10.0, 1.0), (60.0, 3.0)] {
-        input.dispatch(&mut ui, &mut log, Event::Touch { id: 1, phase: TouchPhase::Start, x: 5.0, y, time: t });
+        input.dispatch(
+            &mut ui,
+            &mut log,
+            Event::Touch {
+                id: 1,
+                phase: TouchPhase::Start,
+                x: 5.0,
+                y,
+                time: t,
+            },
+        );
         input.tick(&mut ui, &mut log, t + 0.7);
-        input.dispatch(&mut ui, &mut log, Event::Touch { id: 1, phase: TouchPhase::End, x: 5.0, y, time: t + 0.8 });
+        input.dispatch(
+            &mut ui,
+            &mut log,
+            Event::Touch {
+                id: 1,
+                phase: TouchPhase::End,
+                x: 5.0,
+                y,
+                time: t + 0.8,
+            },
+        );
     }
     assert_eq!(log, ["menu at 5,10", "long press"]);
     let _ = plain;
@@ -138,7 +231,11 @@ fn timers_run_from_ticks_once_or_every_interval_until_cancelled() {
     for k in 1..=7 {
         input.tick(&mut ui, &mut log, 10.0 + k as f64 * 0.1);
     }
-    assert_eq!(log, ["tick", "tick", "once", "tick"], "at 10.2, 10.4, 10.5, 10.6");
+    assert_eq!(
+        log,
+        ["tick", "tick", "once", "tick"],
+        "at 10.2, 10.4, 10.5, 10.6"
+    );
     assert!(input.cancel_timer(every));
     log.clear();
     input.tick(&mut ui, &mut log, 12.0);
@@ -156,12 +253,15 @@ fn keystrokes_type_as_a_keymap_spells_them() {
     let mut input: Input<Log> = Input::new();
     let t = typed.clone();
     input.on_key(field, move |_, _, key, m, _| {
-        t.borrow_mut().push(format!("{}{key}", if m.meta { "⌘" } else { "" }));
+        t.borrow_mut()
+            .push(format!("{}{key}", if m.meta { "⌘" } else { "" }));
         true
     });
     let mut log = vec![];
     input.set_focus(&mut ui, &mut log, Some(field));
-    input.simulate_keystrokes(&mut ui, &mut log, "cmd-a h shift-i enter left").unwrap();
+    input
+        .simulate_keystrokes(&mut ui, &mut log, "cmd-a h shift-i enter left")
+        .unwrap();
     assert_eq!(*typed.borrow(), ["⌘a", "h", "I", "Enter", "ArrowLeft"]);
 }
 
@@ -205,7 +305,13 @@ fn shortcuts_here_are_the_handled_ones_in_force() {
     input.set_key_context(list, "List");
     input.on_action(root, |_, _, _: &Save, _| {});
     input.on_action(list, |_, _, _: &Rename, _| {});
-    let names = |input: &Input<()>, ui: &Ui| input.shortcuts_here(ui, false).into_iter().map(|(k, a)| format!("{k}={a}")).collect::<Vec<_>>();
+    let names = |input: &Input<()>, ui: &Ui| {
+        input
+            .shortcuts_here(ui, false)
+            .into_iter()
+            .map(|(k, a)| format!("{k}={a}"))
+            .collect::<Vec<_>>()
+    };
     assert_eq!(names(&input, &ui), ["Ctrl+S=Save"]);
     input.set_focus(&mut ui, &mut (), Some(row));
     assert_eq!(names(&input, &ui), ["Ctrl+S=Save", "F2=Rename"]);

@@ -82,13 +82,23 @@ pub struct SolidStyle {
 
 impl Default for SolidStyle {
     fn default() -> Self {
-        Self { thickness: None, align: DepthAlign::Front, lift: 0.0, bevel: None, gloss: 1.0, shadow: 1.0 }
+        Self {
+            thickness: None,
+            align: DepthAlign::Front,
+            lift: 0.0,
+            bevel: None,
+            gloss: 1.0,
+            shadow: 1.0,
+        }
     }
 }
 
 impl SolidStyle {
     pub fn thickness(self, px: f32) -> Self {
-        Self { thickness: Some(px.max(0.5)), ..self }
+        Self {
+            thickness: Some(px.max(0.5)),
+            ..self
+        }
     }
     pub fn align(self, align: DepthAlign) -> Self {
         Self { align, ..self }
@@ -97,20 +107,31 @@ impl SolidStyle {
         Self { lift: px, ..self }
     }
     pub fn bevel(self, px: f32) -> Self {
-        Self { bevel: Some(px.max(0.0)), ..self }
+        Self {
+            bevel: Some(px.max(0.0)),
+            ..self
+        }
     }
     pub fn gloss(self, gloss: f32) -> Self {
-        Self { gloss: gloss.clamp(0.0, 1.0), ..self }
+        Self {
+            gloss: gloss.clamp(0.0, 1.0),
+            ..self
+        }
     }
     pub fn shadow(self, shadow: f32) -> Self {
-        Self { shadow: shadow.max(0.0), ..self }
+        Self {
+            shadow: shadow.max(0.0),
+            ..self
+        }
     }
 }
 
 /// How far a solid box's shadow reaches past it, in UI pixels.
 const SHADOW: f32 = 12.0;
 
-const SOURCE: &str = concat!(include_str!("studio.wgsl"), r#"
+const SOURCE: &str = concat!(
+    include_str!("studio.wgsl"),
+    r#"
 
 // What the box drew at `q` (the slab's own coordinates: x right, y up,
 // from its middle `c`), and how much of it.
@@ -297,7 +318,8 @@ fn solid_box(p: vec2<f32>, size: vec2<f32>, look: vec4<f32>, pose: vec4<f32>, ro
     let shadow = 0.3 * look.w * shade / 9.0 * keep;
     return body + vec4<f32>(0.0, 0.0, 0.0, shadow * (1.0 - body.a));
 }
-"#);
+"#
+);
 
 thread_local! {
     static SHADER: Shader = Shader::new(SOURCE);
@@ -340,11 +362,16 @@ impl Ui {
     fn solid_state(&self, node: NodeId, style: SolidStyle) -> SolidState {
         let r = self.rect(node);
         let t = self.transform3d(node).unwrap_or_default();
-        let th = style.thickness.unwrap_or((r.width.min(r.height) * 0.25).clamp(4.0, 18.0));
+        let th = style
+            .thickness
+            .unwrap_or((r.width.min(r.height) * 0.25).clamp(4.0, 18.0));
         // Turned, its near edge grows by its perspective: room for that,
         // its walls and its shadow.
         let turned = t.rotate_x.sin().abs().max(t.rotate_y.sin().abs());
-        let grow = r.width.max(r.height) * 0.5 * turned * (r.width.max(r.height) / t.perspective.max(1.0)).min(1.0);
+        let grow = r.width.max(r.height)
+            * 0.5
+            * turned
+            * (r.width.max(r.height) / t.perspective.max(1.0)).min(1.0);
         // Standing out of the page, it is nearer and so larger.
         let out = match style.align {
             DepthAlign::Front => 0.0,
@@ -352,7 +379,16 @@ impl Ui {
             DepthAlign::Back => th,
         } + style.lift.max(0.0);
         let near = r.width.max(r.height) * 0.5 * out / t.perspective.max(1.0);
-        SolidState { style, pose: [t.rotate_y, t.rotate_x, style.thickness.unwrap_or(0.0), t.perspective], overflow: (SHADOW + th + grow + near + style.lift.max(0.0) * 0.5).ceil() }
+        SolidState {
+            style,
+            pose: [
+                t.rotate_y,
+                t.rotate_x,
+                style.thickness.unwrap_or(0.0),
+                t.perspective,
+            ],
+            overflow: (SHADOW + th + grow + near + style.lift.max(0.0) * 0.5).ceil(),
+        }
     }
 
     /// Draws `node` flat or solid (see the [module docs](self)). Solid
@@ -366,7 +402,11 @@ impl Ui {
                 }
             }
             Depth::Solid => {
-                let style = self.env.solids.get(&node).map_or_else(SolidStyle::default, |s| s.style);
+                let style = self
+                    .env
+                    .solids
+                    .get(&node)
+                    .map_or_else(SolidStyle::default, |s| s.style);
                 self.set_solid(node, style);
             }
         }
@@ -391,7 +431,11 @@ impl Ui {
 
     /// How deep `node` is drawn.
     pub fn depth_of(&self, node: NodeId) -> Depth {
-        if self.env.solids.contains_key(&node) { Depth::Solid } else { Depth::Flat }
+        if self.env.solids.contains_key(&node) {
+            Depth::Solid
+        } else {
+            Depth::Flat
+        }
     }
 
     /// Draws every control under `root` (and `root`, if it is one) flat or
@@ -403,7 +447,8 @@ impl Ui {
         let mut found = vec![];
         while let Some(n) = stack.pop() {
             let role = self.semantics(n).map(|s| s.role);
-            if role.is_some_and(|r| crate::spatial::is_control(r) || r == crate::Role::ProgressBar) {
+            if role.is_some_and(|r| crate::spatial::is_control(r) || r == crate::Role::ProgressBar)
+            {
                 found.push(n);
             } else {
                 stack.extend(self.children(n).iter().copied());
@@ -422,7 +467,8 @@ impl Ui {
         if self.env.solids.is_empty() {
             return;
         }
-        let nodes: Vec<(NodeId, SolidState)> = self.env.solids.iter().map(|(&n, &s)| (n, s)).collect();
+        let nodes: Vec<(NodeId, SolidState)> =
+            self.env.solids.iter().map(|(&n, &s)| (n, s)).collect();
         for (n, was) in nodes {
             if !self.contains(n) {
                 self.env.solids.remove(&n);
@@ -470,12 +516,16 @@ mod tests {
     fn a_subtree_turns_solid_but_its_own_shaders_stay() {
         let mut ui = Ui::new();
         let root = ui.root();
-        let button = ui.add_box(root, style! { width: 80px; height: 30px; border-radius: 8px; });
+        let button = ui.add_box(
+            root,
+            style! { width: 80px; height: 30px; border-radius: 8px; },
+        );
         ui.set_semantics(button, Semantics::new(Role::Button).label("Go"));
         let label = ui.add_box(root, style! { width: 80px; height: 30px; });
         let fancy = ui.add_box(root, style! { width: 80px; height: 30px; });
         ui.set_semantics(fancy, Semantics::new(Role::Button).label("Fancy"));
-        let own = Shader::new("fn f(p: vec2<f32>, color: vec4<f32>) -> vec4<f32> { return color; }");
+        let own =
+            Shader::new("fn f(p: vec2<f32>, color: vec4<f32>) -> vec4<f32> { return color; }");
         ui.set_effect(fancy, Some(Effect::new(&own)));
         ui.set_subtree_depth(root, Depth::Solid);
         assert_eq!(ui.depth_of(button), Depth::Solid);

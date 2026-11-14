@@ -115,7 +115,11 @@ impl<S: 'static> TextEditing<S> {
             root,
             style! { display: none; position: absolute; flex-direction: row; border-radius: 8px; background: #2b303b; box-shadow: 0 6px 18px rgba(0,0,0,0.5); overflow: hidden; color: #fcfcfc; user-select: none; },
         );
-        ui.appearance_style(menu, crate::states::Appearance::Light, "background: #ffffff; color: #1f2329; border: 1px solid #d5d9e0");
+        ui.appearance_style(
+            menu,
+            crate::states::Appearance::Light,
+            "background: #ffffff; color: #1f2329; border: 1px solid #d5d9e0",
+        );
         ui.set_semantics(menu, Semantics::new(Role::Menu).label("Edit"));
         ui.defer(menu, 31);
         // A press on the menu keeps the field's focus (and the keyboard).
@@ -127,9 +131,16 @@ impl<S: 'static> TextEditing<S> {
         let picked: Rc<Cell<Option<usize>>> = Rc::default();
         let menu_items: Vec<(NodeId, NodeId)> = (0..MENU_PER_PAGE + 2)
             .map(|i| {
-                let b = ui.add_box(menu, style! { padding: 9px 12px; font-size: 13px; cursor: pointer; });
+                let b = ui.add_box(
+                    menu,
+                    style! { padding: 9px 12px; font-size: 13px; cursor: pointer; },
+                );
                 if i > 0 {
-                    crate::css::apply(ui.style_mut(b), "border-left", "1px solid rgba(128,128,128,0.35)");
+                    crate::css::apply(
+                        ui.style_mut(b),
+                        "border-left",
+                        "1px solid rgba(128,128,128,0.35)",
+                    );
                 }
                 let t = ui.add_text(b, "");
                 ui.set_semantics(b, Semantics::new(Role::MenuItem));
@@ -175,11 +186,23 @@ impl<S: 'static> TextEditing<S> {
     /// [`TextField`] `model` finds in the app's state: it gets a caret, its
     /// selection shows, it scrolls to its caret, and the pointer and a
     /// finger edit it. Give `boxed` `overflow: hidden` and a text-box role.
-    pub fn add_field(&mut self, ui: &mut Ui, boxed: NodeId, text: NodeId, model: fn(&mut S) -> &mut TextField) {
+    pub fn add_field(
+        &mut self,
+        ui: &mut Ui,
+        boxed: NodeId,
+        text: NodeId,
+        model: fn(&mut S) -> &mut TextField,
+    ) {
         let caret = ui.add_box(boxed, style! { position: absolute; width: 1px; height: 16px; display: none; pointer-events: none; });
         let c = ui.color_of(text);
         ui.style_mut(caret).background = Some(c);
-        self.fields.push(Field { boxed, text, caret, model, scroll: 0.0 });
+        self.fields.push(Field {
+            boxed,
+            text,
+            caret,
+            model,
+            scroll: 0.0,
+        });
     }
 
     /// The touch editing of fields: its config, and the app's own menu
@@ -213,11 +236,14 @@ impl<S: 'static> TextEditing<S> {
     /// Which field `node` is in.
     fn field_at(&self, ui: &Ui, node: Option<NodeId>) -> Option<usize> {
         let n = node.filter(|&n| ui.contains(n))?;
-        self.fields.iter().position(|f| ui.ancestors(n).any(|a| a == f.boxed))
+        self.fields
+            .iter()
+            .position(|f| ui.ancestors(n).any(|a| a == f.boxed))
     }
 
     fn on_menu(&self, ui: &Ui, x: f32, y: f32) -> bool {
-        ui.hit_test(x, y).is_some_and(|t| ui.ancestors(t).any(|a| a == self.menu))
+        ui.hit_test(x, y)
+            .is_some_and(|t| ui.ancestors(t).any(|a| a == self.menu))
     }
 
     /// Whether a finger has been used (the handles and menu show).
@@ -228,7 +254,10 @@ impl<S: 'static> TextEditing<S> {
     /// Whether the handles and the menu show now, for a host's debugging.
     pub fn showing(&self, ui: &Ui) -> ([bool; 2], bool) {
         let shown = |n: NodeId| ui.style(n).display != Display::None;
-        ([shown(self.handles[0]), shown(self.handles[1])], shown(self.menu))
+        (
+            [shown(self.handles[0]), shown(self.handles[1])],
+            shown(self.menu),
+        )
     }
 
     /// The finger a field took, if one did.
@@ -264,16 +293,24 @@ impl<S: 'static> TextEditing<S> {
     /// Starts a selection of the page's text at `(x, y)`, if there is
     /// selectable text there (not a field's: that is edited, not read).
     fn select_page_at(&mut self, ui: &Ui, x: f32, y: f32, measure: &mut dyn TextMeasure) -> bool {
-        let Some(node) = ui.selectable_text_at(x, y) else { return false };
+        let Some(node) = ui.selectable_text_at(x, y) else {
+            return false;
+        };
         if self.field_at(ui, Some(node)).is_some() {
             return false;
         }
-        let NodeKind::Text(text) = ui.kind(node) else { return false };
+        let NodeKind::Text(text) = ui.kind(node) else {
+            return false;
+        };
         let mut model = TextField::new(text.clone());
         let i = ui.text_index_at(node, x, y, measure);
         model.anchor = i;
         model.caret = i;
-        self.page = Some(PageSelection { node, model, touch: self.page_template.clone() });
+        self.page = Some(PageSelection {
+            node,
+            model,
+            touch: self.page_template.clone(),
+        });
         true
     }
 
@@ -307,7 +344,11 @@ impl<S: 'static> TextEditing<S> {
         }
         let out = input.dispatch(ui, state, Event::PointerDown { x, y, button });
         let field = self.field_at(ui, out.target);
-        if field.is_none() && !on_menu && button == PointerButton::Primary && self.select_page_at(ui, x, y, measure) {
+        if field.is_none()
+            && !on_menu
+            && button == PointerButton::Primary
+            && self.select_page_at(ui, x, y, measure)
+        {
             let clicks = input.click_count();
             if let Some(p) = &mut self.page {
                 let i = p.model.caret;
@@ -324,7 +365,15 @@ impl<S: 'static> TextEditing<S> {
     }
 
     /// The mouse moved: a selection being dragged out follows it.
-    pub fn pointer_move(&mut self, ui: &mut Ui, input: &mut Input<S>, state: &mut S, x: f32, y: f32, measure: &mut dyn TextMeasure) {
+    pub fn pointer_move(
+        &mut self,
+        ui: &mut Ui,
+        input: &mut Input<S>,
+        state: &mut S,
+        x: f32,
+        y: f32,
+        measure: &mut dyn TextMeasure,
+    ) {
         input.dispatch(ui, state, Event::PointerMove { x, y });
         if self.page_dragging
             && let Some(p) = &mut self.page
@@ -341,7 +390,15 @@ impl<S: 'static> TextEditing<S> {
     }
 
     /// The mouse let go. Passes it on, then carries out a menu choice.
-    pub fn pointer_up(&mut self, ui: &mut Ui, input: &mut Input<S>, state: &mut S, x: f32, y: f32, button: PointerButton) {
+    pub fn pointer_up(
+        &mut self,
+        ui: &mut Ui,
+        input: &mut Input<S>,
+        state: &mut S,
+        x: f32,
+        y: f32,
+        button: PointerButton,
+    ) {
         if std::mem::take(&mut self.selecting) {
             for f in &self.fields {
                 (f.model)(state).pointer_up();
@@ -433,7 +490,10 @@ impl<S: 'static> TextEditing<S> {
             let text = f.text;
             let m = RefCell::new(&mut *measure);
             let mut caret_at = |i: usize| ui.text_caret(text, i, *m.borrow_mut());
-            if self.field_touch.wants((f.model)(state), x, y, inside, &mut caret_at) {
+            if self
+                .field_touch
+                .wants((f.model)(state), x, y, inside, &mut caret_at)
+            {
                 self.field_finger = Some(id);
                 self.field_gesture(ui, state, k, phase, x, y, time, measure);
                 return;
@@ -442,8 +502,22 @@ impl<S: 'static> TextEditing<S> {
         // A field without focus: the tap that focuses it puts the caret
         // where it lands, and is the first of a double tap.
         let first = phase == TouchPhase::Start && !input.touching();
-        let pressed = if first && focused.is_none() { self.field_at(ui, ui.hit_test(x, y)) } else { None };
-        input.dispatch(ui, state, Event::Touch { id, phase, x, y, time });
+        let pressed = if first && focused.is_none() {
+            self.field_at(ui, ui.hit_test(x, y))
+        } else {
+            None
+        };
+        input.dispatch(
+            ui,
+            state,
+            Event::Touch {
+                id,
+                phase,
+                x,
+                y,
+                time,
+            },
+        );
         if let Some(k) = pressed {
             let f = &self.fields[k];
             let i = ui.text_index_at(f.text, x, y, measure);
@@ -471,29 +545,65 @@ impl<S: 'static> TextEditing<S> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn field_gesture(&mut self, ui: &Ui, state: &mut S, k: usize, phase: TouchPhase, x: f32, y: f32, time: f64, measure: &mut dyn TextMeasure) {
+    fn field_gesture(
+        &mut self,
+        ui: &Ui,
+        state: &mut S,
+        k: usize,
+        phase: TouchPhase,
+        x: f32,
+        y: f32,
+        time: f64,
+        measure: &mut dyn TextMeasure,
+    ) {
         let f = &self.fields[k];
         let text = f.text;
         let m = RefCell::new(measure);
         let mut index_at = |x: f32, y: f32| ui.text_index_at(text, x, y, *m.borrow_mut());
         let mut caret_at = |i: usize| ui.text_caret(text, i, *m.borrow_mut());
-        self.field_touch.touch((f.model)(state), phase, x, y, time, &mut index_at, &mut caret_at);
+        self.field_touch.touch(
+            (f.model)(state),
+            phase,
+            x,
+            y,
+            time,
+            &mut index_at,
+            &mut caret_at,
+        );
     }
 
-    fn page_gesture(&mut self, ui: &Ui, phase: TouchPhase, x: f32, y: f32, time: f64, measure: &mut dyn TextMeasure) {
+    fn page_gesture(
+        &mut self,
+        ui: &Ui,
+        phase: TouchPhase,
+        x: f32,
+        y: f32,
+        time: f64,
+        measure: &mut dyn TextMeasure,
+    ) {
         let Some(p) = &mut self.page else { return };
         let node = p.node;
         let m = RefCell::new(measure);
         let mut index_at = |x: f32, y: f32| ui.text_index_at(node, x, y, *m.borrow_mut());
         let mut caret_at = |i: usize| ui.text_caret(node, i, *m.borrow_mut());
-        p.touch.touch(&mut p.model, phase, x, y, time, &mut index_at, &mut caret_at);
+        p.touch.touch(
+            &mut p.model,
+            phase,
+            x,
+            y,
+            time,
+            &mut index_at,
+            &mut caret_at,
+        );
     }
 
     /// A tap on the edit menu: carried out now, while the host still
     /// handles the tap (a browser lets the clipboard be written only then).
     fn take_pick(&mut self, state: &mut S) {
         let Some(i) = self.picked.take() else { return };
-        let Some(&entry) = self.menu_entries.get(i) else { return };
+        let Some(&entry) = self.menu_entries.get(i) else {
+            return;
+        };
         let (touch, model): (&mut TouchSelection, &mut TextField) = match &mut self.page {
             Some(p) => (&mut p.touch, &mut p.model),
             None => {
@@ -517,7 +627,14 @@ impl<S: 'static> TextEditing<S> {
     /// Time passing (call each frame, before layout): a held finger in a
     /// field takes the caret, one held on page text selects its word, and
     /// a field that lost focus puts its menu away.
-    pub fn tick(&mut self, ui: &mut Ui, input: &Input<S>, state: &mut S, time: f64, measure: &mut dyn TextMeasure) {
+    pub fn tick(
+        &mut self,
+        ui: &mut Ui,
+        input: &Input<S>,
+        state: &mut S,
+        time: f64,
+        measure: &mut dyn TextMeasure,
+    ) {
         match self.focused(input) {
             Some(k) => {
                 self.field_touch.tick((self.fields[k].model)(state), time);
@@ -543,7 +660,13 @@ impl<S: 'static> TextEditing<S> {
     /// layout, then lay out again: the menu is centred by its own width):
     /// each field's selection, composition, caret and scroll; the page's
     /// selected text; the handles; the edit menu.
-    pub fn place(&mut self, ui: &mut Ui, input: &mut Input<S>, state: &mut S, measure: &mut dyn TextMeasure) {
+    pub fn place(
+        &mut self,
+        ui: &mut Ui,
+        input: &mut Input<S>,
+        state: &mut S,
+        measure: &mut dyn TextMeasure,
+    ) {
         let focused = self.focused(input);
         for k in 0..self.fields.len() {
             self.place_field(ui, input, state, k, focused == Some(k), measure);
@@ -557,7 +680,15 @@ impl<S: 'static> TextEditing<S> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn place_field(&mut self, ui: &mut Ui, input: &mut Input<S>, state: &mut S, k: usize, focused: bool, measure: &mut dyn TextMeasure) {
+    fn place_field(
+        &mut self,
+        ui: &mut Ui,
+        input: &mut Input<S>,
+        state: &mut S,
+        k: usize,
+        focused: bool,
+        measure: &mut dyn TextMeasure,
+    ) {
         let (boxed, text, caret_node, model, mut scrolled) = {
             let f = &self.fields[k];
             (f.boxed, f.text, f.caret, f.model, f.scroll)
@@ -567,17 +698,30 @@ impl<S: 'static> TextEditing<S> {
             ui.set_text(text, f.text.clone());
         }
         // The selection as a highlighted run, a composition underlined.
-        let byte = |i: usize| f.text.char_indices().nth(i).map_or(f.text.len(), |(b, _)| b);
+        let byte = |i: usize| {
+            f.text
+                .char_indices()
+                .nth(i)
+                .map_or(f.text.len(), |(b, _)| b)
+        };
         let (a, z) = f.selection();
         let (ba, bz) = (byte(a), byte(z));
         let mut runs = if focused {
-            vec![TextRun::new(ba), TextRun::new(bz - ba).background([0.145, 0.388, 0.922, 0.45]), TextRun::new(f.text.len() - bz)]
+            vec![
+                TextRun::new(ba),
+                TextRun::new(bz - ba).background([0.145, 0.388, 0.922, 0.45]),
+                TextRun::new(f.text.len() - bz),
+            ]
         } else {
             vec![TextRun::new(f.text.len())]
         };
         if let Some((m0, m1)) = f.marked {
             let (b0, b1) = (byte(m0), byte(m1));
-            runs = vec![TextRun::new(b0), TextRun::new(b1 - b0).underline(false), TextRun::new(f.text.len() - b1)];
+            runs = vec![
+                TextRun::new(b0),
+                TextRun::new(b1 - b0).underline(false),
+                TextRun::new(f.text.len() - b1),
+            ];
         }
         if self.native {
             // The page's own input draws the text over the field.
@@ -612,7 +756,11 @@ impl<S: 'static> TextEditing<S> {
         }
         self.fields[k].scroll = scrolled;
         let mut s = ui.style(caret_node).clone();
-        s.display = if shows_caret { Display::Block } else { Display::None };
+        s.display = if shows_caret {
+            Display::Block
+        } else {
+            Display::None
+        };
         s.left = Length::Px(caret.x - r.x - 1.0);
         s.top = Length::Px(caret.y - r.y - 1.0 + (caret.height - 16.0) / 2.0);
         s.background = Some(ui.color_of(text));
@@ -632,8 +780,16 @@ impl<S: 'static> TextEditing<S> {
             if ui.style(a).clip {
                 let c = ui.rect(a);
                 let (x0, y0) = (r.x.max(c.x), r.y.max(c.y));
-                let (x1, y1) = ((r.x + r.width).min(c.x + c.width), (r.y + r.height).min(c.y + c.height));
-                r = Rect { x: x0, y: y0, width: (x1 - x0).max(0.0), height: (y1 - y0).max(0.0) };
+                let (x1, y1) = (
+                    (r.x + r.width).min(c.x + c.width),
+                    (r.y + r.height).min(c.y + c.height),
+                );
+                r = Rect {
+                    x: x0,
+                    y: y0,
+                    width: (x1 - x0).max(0.0),
+                    height: (y1 - y0).max(0.0),
+                };
             }
         }
         r
@@ -650,8 +806,16 @@ impl<S: 'static> TextEditing<S> {
                     .into_iter()
                     .filter_map(|b| {
                         let (x0, y0) = (b.x.max(clip.x), b.y.max(clip.y));
-                        let (x1, y1) = ((b.x + b.width).min(clip.x + clip.width), (b.y + b.height).min(clip.y + clip.height));
-                        (x1 > x0 && y1 > y0).then_some(Rect { x: x0, y: y0, width: x1 - x0, height: y1 - y0 })
+                        let (x1, y1) = (
+                            (b.x + b.width).min(clip.x + clip.width),
+                            (b.y + b.height).min(clip.y + clip.height),
+                        );
+                        (x1 > x0 && y1 > y0).then_some(Rect {
+                            x: x0,
+                            y: y0,
+                            width: x1 - x0,
+                            height: y1 - y0,
+                        })
                     })
                     .collect()
             }
@@ -683,33 +847,62 @@ impl<S: 'static> TextEditing<S> {
 
     /// The selection's handles and the edit menu, for the page's selected
     /// text or the focused field, while a finger edits.
-    fn place_handles_and_menu(&mut self, ui: &mut Ui, state: &mut S, focused: Option<usize>, measure: &mut dyn TextMeasure) {
+    fn place_handles_and_menu(
+        &mut self,
+        ui: &mut Ui,
+        state: &mut S,
+        focused: Option<usize>,
+        measure: &mut dyn TextMeasure,
+    ) {
         let field_model;
-        let (text, model, sel, area, editing): (NodeId, &TextField, &TouchSelection, Rect, bool) = match &self.page {
-            Some(p) => (p.node, &p.model, &p.touch, Self::clip_of(ui, p.node), self.touch_mode),
-            None => match focused {
-                Some(k) if !self.native => {
-                    let f = &self.fields[k];
-                    field_model = (f.model)(state).clone();
-                    (f.text, &field_model, &self.field_touch, ui.rect(f.boxed), self.touch_mode)
-                }
-                _ => {
-                    self.hide(ui);
-                    return;
-                }
-            },
-        };
+        let (text, model, sel, area, editing): (NodeId, &TextField, &TouchSelection, Rect, bool) =
+            match &self.page {
+                Some(p) => (
+                    p.node,
+                    &p.model,
+                    &p.touch,
+                    Self::clip_of(ui, p.node),
+                    self.touch_mode,
+                ),
+                None => match focused {
+                    Some(k) if !self.native => {
+                        let f = &self.fields[k];
+                        field_model = (f.model)(state).clone();
+                        (
+                            f.text,
+                            &field_model,
+                            &self.field_touch,
+                            ui.rect(f.boxed),
+                            self.touch_mode,
+                        )
+                    }
+                    _ => {
+                        self.hide(ui);
+                        return;
+                    }
+                },
+            };
         let m = RefCell::new(&mut *measure);
         let mut caret_at = |i: usize| ui.text_caret(text, i, *m.borrow_mut());
         let handles = sel.handles(model, &mut caret_at).filter(|_| editing);
         let page = sel.menu_page(model, MENU_PER_PAGE).filter(|_| editing);
-        let labels: Vec<String> = page.iter().flat_map(|p| p.actions.iter().map(|&a| sel.label(a).to_owned())).collect();
+        let labels: Vec<String> = page
+            .iter()
+            .flat_map(|p| p.actions.iter().map(|&a| sel.label(a).to_owned()))
+            .collect();
         // Where the menu points: the selection's middle, or the caret.
         let (lo, hi) = model.selection();
         let (a, b) = (caret_at(lo), caret_at(hi));
         let clamp = |x: f32| x.clamp(area.x, area.x + area.width);
-        let handles_at = handles.map(|h| [(clamp(h.start.x), h.start.y, h.start.height), (clamp(h.end.x), h.end.y, h.end.height)]);
-        let menu_at = page.as_ref().map(|_| ((clamp(a.x) + clamp(b.x)) / 2.0, a.y, a.y + a.height));
+        let handles_at = handles.map(|h| {
+            [
+                (clamp(h.start.x), h.start.y, h.start.height),
+                (clamp(h.end.x), h.end.y, h.end.height),
+            ]
+        });
+        let menu_at = page
+            .as_ref()
+            .map(|_| ((clamp(a.x) + clamp(b.x)) / 2.0, a.y, a.y + a.height));
         self.menu_field = if self.page.is_some() { None } else { focused };
         for (k, &h) in self.handles.iter().enumerate() {
             let mut s = ui.style(h).clone();
@@ -739,7 +932,11 @@ impl<S: 'static> TextEditing<S> {
                     entries.push(MenuEntry::More);
                 }
                 for (i, &(b, t)) in self.menu_items.iter().enumerate() {
-                    let d = if i < entries.len() { Display::Block } else { Display::None };
+                    let d = if i < entries.len() {
+                        Display::Block
+                    } else {
+                        Display::None
+                    };
                     if ui.style(b).display != d {
                         // Through its base style: it has a hover style.
                         ui.update_style(b, |s| s.display = d);
@@ -748,7 +945,10 @@ impl<S: 'static> TextEditing<S> {
                         Some(MenuEntry::Back) => ("‹".to_owned(), "Back".to_owned()),
                         Some(MenuEntry::More) => ("›".to_owned(), "More".to_owned()),
                         Some(MenuEntry::Action(_)) => {
-                            let l = labels.get(i - usize::from(page.back)).cloned().unwrap_or_default();
+                            let l = labels
+                                .get(i - usize::from(page.back))
+                                .cloned()
+                                .unwrap_or_default();
                             (l.clone(), l)
                         }
                         None => (String::new(), String::new()),
@@ -764,7 +964,11 @@ impl<S: 'static> TextEditing<S> {
                 let size = ui.rect(self.menu);
                 let window = ui.rect(ui.root());
                 let (w, h) = (size.width.max(1.0), size.height.max(36.0));
-                let y = if top - h - 14.0 >= 4.0 { top - h - 14.0 } else { bottom + 18.0 };
+                let y = if top - h - 14.0 >= 4.0 {
+                    top - h - 14.0
+                } else {
+                    bottom + 18.0
+                };
                 let x = (x - w / 2.0).clamp(4.0, (window.width - w - 4.0).max(4.0));
                 place = Some((x.round(), y.round()));
             }
@@ -773,7 +977,11 @@ impl<S: 'static> TextEditing<S> {
         // Through its base style: it has a light appearance's.
         let (display, left, top) = match place {
             Some((x, y)) => (Display::Flex, Length::Px(x), Length::Px(y)),
-            None => (Display::None, ui.style(self.menu).left, ui.style(self.menu).top),
+            None => (
+                Display::None,
+                ui.style(self.menu).left,
+                ui.style(self.menu).top,
+            ),
         };
         let s = ui.style(self.menu);
         if s.display != display || s.left != left || s.top != top {

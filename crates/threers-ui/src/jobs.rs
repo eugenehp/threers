@@ -90,21 +90,38 @@ impl Ui {
 
     /// Runs `job` on `input` off this thread, then `then` with its output
     /// here. Without a runner both happen now.
-    pub fn spawn_job(&mut self, job: Job, input: Vec<u8>, then: impl FnOnce(&mut Ui, Vec<u8>) + 'static) -> JobId {
+    pub fn spawn_job(
+        &mut self,
+        job: Job,
+        input: Vec<u8>,
+        then: impl FnOnce(&mut Ui, Vec<u8>) + 'static,
+    ) -> JobId {
         self.start_job(job, input, Box::new(then), None)
     }
 
     /// [`spawn_job`](Self::spawn_job) for work that belongs to `owner`: if
     /// it has been removed by the time the job lands, `then` does not run
     /// (a view closed while its picture loaded).
-    pub fn spawn_job_for(&mut self, owner: crate::tree::NodeId, job: Job, input: Vec<u8>, then: impl FnOnce(&mut Ui, Vec<u8>) + 'static) -> JobId {
+    pub fn spawn_job_for(
+        &mut self,
+        owner: crate::tree::NodeId,
+        job: Job,
+        input: Vec<u8>,
+        then: impl FnOnce(&mut Ui, Vec<u8>) + 'static,
+    ) -> JobId {
         self.start_job(job, input, Box::new(then), Some(owner))
     }
 
     /// [`spawn_job`](Self::spawn_job), cancelling the job last started
     /// under `key` if it has not landed: only the newest answer is wanted
     /// (a search run as each letter is typed).
-    pub fn spawn_latest(&mut self, key: &str, job: Job, input: Vec<u8>, then: impl FnOnce(&mut Ui, Vec<u8>) + 'static) -> JobId {
+    pub fn spawn_latest(
+        &mut self,
+        key: &str,
+        job: Job,
+        input: Vec<u8>,
+        then: impl FnOnce(&mut Ui, Vec<u8>) + 'static,
+    ) -> JobId {
         let before = self.env.jobs.borrow_mut().latest.remove(key);
         if let Some(old) = before {
             self.cancel_job(JobId(old));
@@ -124,7 +141,13 @@ impl Ui {
         self.env.jobs.borrow_mut().waiting.remove(&id.0).is_some()
     }
 
-    fn start_job(&mut self, job: Job, input: Vec<u8>, then: Then, owner: Option<crate::tree::NodeId>) -> JobId {
+    fn start_job(
+        &mut self,
+        job: Job,
+        input: Vec<u8>,
+        then: Then,
+        owner: Option<crate::tree::NodeId>,
+    ) -> JobId {
         let mut jobs = self.env.jobs.borrow_mut();
         let id = jobs.next;
         jobs.next += 1;
@@ -137,7 +160,10 @@ impl Ui {
             return JobId(id);
         }
         jobs.waiting.insert(id, Waiting { then, owner });
-        jobs.runner.as_mut().expect("checked").submit(id, job, input);
+        jobs.runner
+            .as_mut()
+            .expect("checked")
+            .submit(id, job, input);
         JobId(id)
     }
 
@@ -146,10 +172,17 @@ impl Ui {
     pub fn poll_jobs(&mut self) -> bool {
         let done: Vec<(Waiting, Vec<u8>)> = {
             let mut jobs = self.env.jobs.borrow_mut();
-            let Some(runner) = jobs.runner.as_mut() else { return false };
+            let Some(runner) = jobs.runner.as_mut() else {
+                return false;
+            };
             let done = runner.take_done();
-            let landed: Vec<(Waiting, Vec<u8>)> = done.into_iter().filter_map(|(id, out)| jobs.waiting.remove(&id).map(|w| (w, out))).collect();
-            let Jobs { waiting, latest, .. } = &mut *jobs;
+            let landed: Vec<(Waiting, Vec<u8>)> = done
+                .into_iter()
+                .filter_map(|(id, out)| jobs.waiting.remove(&id).map(|w| (w, out)))
+                .collect();
+            let Jobs {
+                waiting, latest, ..
+            } = &mut *jobs;
             latest.retain(|_, id| waiting.contains_key(id));
             landed
         };
@@ -193,7 +226,9 @@ impl Threads {
                     .name(format!("threers-ui job {i}"))
                     .spawn(move || loop {
                         let next = queue.lock().map(|q| q.recv());
-                        let Ok(Ok((id, job, input))) = next else { return };
+                        let Ok(Ok((id, job, input))) = next else {
+                            return;
+                        };
                         if finished.send((id, job(&input))).is_err() {
                             return;
                         }
@@ -201,7 +236,11 @@ impl Threads {
                     .expect("a thread")
             })
             .collect();
-        Threads { work: Some(work), done, threads }
+        Threads {
+            work: Some(work),
+            done,
+            threads,
+        }
     }
 
     /// As many threads as the machine has cores, less the UI's own.
@@ -296,7 +335,8 @@ onmessage = async (e) => {
         /// wasm-bindgen JavaScript from `glue_url` (`--target web`; an
         /// absolute URL, e.g. `new URL("pkg/app.js", import.meta.url).href`).
         pub fn new(glue_url: &str, count: usize) -> Result<Workers, JsValue> {
-            let script = SCRIPT.replace("GLUE", &glue_url.replace('\\', "\\\\").replace('"', "\\\""));
+            let script =
+                SCRIPT.replace("GLUE", &glue_url.replace('\\', "\\\\").replace('"', "\\\""));
             let parts = js_sys::Array::of1(&JsValue::from_str(&script));
             let bag = BlobPropertyBag::new();
             bag.set_type("text/javascript");
@@ -308,8 +348,13 @@ onmessage = async (e) => {
             let d = done.clone();
             let listen = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
                 let data = e.data();
-                let get = |k: &str| js_sys::Reflect::get(&data, &JsValue::from_str(k)).unwrap_or(JsValue::UNDEFINED);
-                let (Some(id), Ok(out)) = (get("id").as_f64(), get("output").dyn_into::<js_sys::Uint8Array>()) else {
+                let get = |k: &str| {
+                    js_sys::Reflect::get(&data, &JsValue::from_str(k)).unwrap_or(JsValue::UNDEFINED)
+                };
+                let (Some(id), Ok(out)) = (
+                    get("id").as_f64(),
+                    get("output").dyn_into::<js_sys::Uint8Array>(),
+                ) else {
                     return;
                 };
                 d.borrow_mut().push((id as u64, out.to_vec()));
@@ -325,13 +370,19 @@ onmessage = async (e) => {
                 workers.push((w, 0));
             }
             Url::revoke_object_url(&url)?;
-            Ok(Workers { workers, done, _listen: listen, sent: Default::default() })
+            Ok(Workers {
+                workers,
+                done,
+                _listen: listen,
+                sent: Default::default(),
+            })
         }
 
         /// As many workers as the device has cores, less the page's own,
         /// up to four.
         pub fn for_this_device(glue_url: &str) -> Result<Workers, JsValue> {
-            let n = web_sys::window().map_or(2.0, |w| w.navigator().hardware_concurrency()) as usize;
+            let n =
+                web_sys::window().map_or(2.0, |w| w.navigator().hardware_concurrency()) as usize;
             Self::new(glue_url, n.saturating_sub(1).clamp(1, 4))
         }
 
@@ -346,7 +397,9 @@ onmessage = async (e) => {
 
     impl JobRunner for Workers {
         fn submit(&mut self, id: u64, job: Job, input: Vec<u8>) {
-            let Some(i) = (0..self.workers.len()).min_by_key(|&i| self.workers[i].1) else { return };
+            let Some(i) = (0..self.workers.len()).min_by_key(|&i| self.workers[i].1) else {
+                return;
+            };
             let msg = js_sys::Object::new();
             let bytes = js_sys::Uint8Array::from(&input[..]);
             let set = |k: &str, v: &JsValue| js_sys::Reflect::set(&msg, &JsValue::from_str(k), v);
@@ -354,7 +407,11 @@ onmessage = async (e) => {
             let _ = set("job", &JsValue::from_f64(job as usize as f64));
             let _ = set("input", &bytes);
             let transfer = js_sys::Array::of1(&bytes.buffer());
-            if self.workers[i].0.post_message_with_transfer(&msg, &transfer).is_ok() {
+            if self.workers[i]
+                .0
+                .post_message_with_transfer(&msg, &transfer)
+                .is_ok()
+            {
                 self.workers[i].1 += 1;
                 self.sent.insert(id, i);
             }
@@ -397,7 +454,9 @@ mod tests {
         let mut ui = Ui::new();
         let got = Rc::new(RefCell::new(None));
         let g = got.clone();
-        ui.spawn_job(doubled, vec![1, 2], move |_, out| *g.borrow_mut() = Some(out));
+        ui.spawn_job(doubled, vec![1, 2], move |_, out| {
+            *g.borrow_mut() = Some(out)
+        });
         assert_eq!(got.borrow().as_deref(), Some(&[2u8, 4][..]));
         assert!(!ui.jobs_pending());
     }
@@ -409,7 +468,9 @@ mod tests {
         let got = Rc::new(RefCell::new(Vec::new()));
         for i in 0..20u8 {
             let g = got.clone();
-            ui.spawn_job(doubled, vec![i], move |_, out| g.borrow_mut().push((i, out[0])));
+            ui.spawn_job(doubled, vec![i], move |_, out| {
+                g.borrow_mut().push((i, out[0]))
+            });
         }
         assert!(ui.jobs_pending());
         assert!(ui.needs_frame(), "frames go on while a job runs");
@@ -442,14 +503,20 @@ mod tests {
         let root = ui.root();
         let view = ui.add_box(root, crate::style! { width: 10px; });
         let g = got.clone();
-        ui.spawn_job_for(view, doubled, vec![1], move |_, out| g.borrow_mut().push(("owned", out[0])));
+        ui.spawn_job_for(view, doubled, vec![1], move |_, out| {
+            g.borrow_mut().push(("owned", out[0]))
+        });
         ui.remove(view);
         let g = got.clone();
-        let id = ui.spawn_job(doubled, vec![2], move |_, out| g.borrow_mut().push(("cancelled", out[0])));
+        let id = ui.spawn_job(doubled, vec![2], move |_, out| {
+            g.borrow_mut().push(("cancelled", out[0]))
+        });
         assert!(ui.cancel_job(id));
         for n in 1..=5u8 {
             let g = got.clone();
-            ui.spawn_latest("search", doubled, vec![n], move |_, out| g.borrow_mut().push(("search", out[0])));
+            ui.spawn_latest("search", doubled, vec![n], move |_, out| {
+                g.borrow_mut().push(("search", out[0]))
+            });
         }
         settle(&mut ui);
         assert_eq!(*got.borrow(), [("search", 10)]);
@@ -459,7 +526,9 @@ mod tests {
         let gone = here.add_box(root, crate::style! { width: 10px; });
         here.remove(gone);
         let g = got.clone();
-        here.spawn_job_for(gone, doubled, vec![3], move |_, out| g.borrow_mut().push(("gone", out[0])));
+        here.spawn_job_for(gone, doubled, vec![3], move |_, out| {
+            g.borrow_mut().push(("gone", out[0]))
+        });
         assert_eq!(got.borrow().len(), 1);
     }
 }

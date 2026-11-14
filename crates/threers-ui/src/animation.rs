@@ -65,6 +65,8 @@ pub enum Property {
     /// How far a box is drawn to the right of where it is laid out, in
     /// pixels.
     TranslateX,
+    /// How far below where it is laid out, in pixels.
+    TranslateY,
 }
 
 impl Property {
@@ -84,6 +86,7 @@ impl Property {
                 | Property::Scale
                 | Property::RotateZ
                 | Property::TranslateX
+                | Property::TranslateY
         )
     }
 }
@@ -99,7 +102,9 @@ impl Value {
     fn lerp(self, to: Value, t: f32) -> Value {
         match (self, to) {
             (Value::Number(a), Value::Number(b)) => Value::Number(a + (b - a) * t),
-            (Value::Color(a), Value::Color(b)) => Value::Color(std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t)),
+            (Value::Color(a), Value::Color(b)) => {
+                Value::Color(std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t))
+            }
             (_, b) => b,
         }
     }
@@ -175,7 +180,11 @@ impl Animation {
         if self.alternate && run % 2 == 1 {
             f = 1.0 - f;
         }
-        (self.from.lerp(self.to, self.easing.apply(f.clamp(0.0, 1.0))), done)
+        (
+            self.from
+                .lerp(self.to, self.easing.apply(f.clamp(0.0, 1.0))),
+            done,
+        )
     }
 }
 
@@ -193,9 +202,11 @@ impl Ui {
     pub fn animate(&mut self, id: NodeId, animation: Animation) {
         self.node(id);
         // A spring on the property gives way.
-        self.springs.retain(|s| !(s.node == id && s.property == animation.property));
+        self.springs
+            .retain(|s| !(s.node == id && s.property == animation.property));
         if self.motion_skipped(animation.property) {
-            self.animations.retain(|r| !(r.node == id && r.animation.property == animation.property));
+            self.animations
+                .retain(|r| !(r.node == id && r.animation.property == animation.property));
             self.write(id, animation.property, animation.to);
             return;
         }
@@ -254,7 +265,11 @@ impl Ui {
         self.step_motions();
         self.step_solids();
         self.plan_effects();
-        self.animations.iter().any(|r| !self.idles(r)) || bars || !self.leaving.is_empty() || sprung || !self.env.keyframes.is_empty()
+        self.animations.iter().any(|r| !self.idles(r))
+            || bars
+            || !self.leaving.is_empty()
+            || sprung
+            || !self.env.keyframes.is_empty()
     }
 
     /// Whether `r` runs for ever on a node that does not show, as last
@@ -289,7 +304,12 @@ impl Ui {
             Property::Depth => Value::Number(self.transform3d(id).map_or(0.0, |t| t.depth)),
             Property::Scale => Value::Number(self.transform3d(id).map_or(1.0, |t| t.scale)),
             Property::RotateZ => Value::Number(self.transform3d(id).map_or(0.0, |t| t.rotate_z)),
-            Property::TranslateX => Value::Number(self.transform3d(id).map_or(0.0, |t| t.translate_x)),
+            Property::TranslateX => {
+                Value::Number(self.transform3d(id).map_or(0.0, |t| t.translate_x))
+            }
+            Property::TranslateY => {
+                Value::Number(self.transform3d(id).map_or(0.0, |t| t.translate_y))
+            }
         }
     }
 
@@ -311,9 +331,21 @@ impl Ui {
         // their own styles: those stay out of it.
         if !matches!(
             property,
-            Property::Background | Property::Color | Property::BorderColor | Property::Rotate | Property::RotateX | Property::RotateY | Property::Depth | Property::Scale | Property::RotateZ | Property::TranslateX
-        )
-            && let Some(base) = self.nodes[id.0].states.as_mut().and_then(|s| s.base.as_mut())
+            Property::Background
+                | Property::Color
+                | Property::BorderColor
+                | Property::Rotate
+                | Property::RotateX
+                | Property::RotateY
+                | Property::Depth
+                | Property::Scale
+                | Property::RotateZ
+                | Property::TranslateX
+                | Property::TranslateY
+        ) && let Some(base) = self.nodes[id.0]
+            .states
+            .as_mut()
+            .and_then(|s| s.base.as_mut())
         {
             Self::write_style(base, property, value);
         }
@@ -332,10 +364,22 @@ impl Ui {
             (Property::ScrollTop, Value::Number(v)) => s.scroll_top = v,
             (Property::ScrollLeft, Value::Number(v)) => s.scroll_left = v,
             (Property::Rotate, Value::Number(v)) => {
-                let t = crate::transform::Transformation { rotate: v, ..self.path_transform(id) };
+                let t = crate::transform::Transformation {
+                    rotate: v,
+                    ..self.path_transform(id)
+                };
                 self.set_path_transform(id, t);
             }
-            (Property::RotateX | Property::RotateY | Property::Depth | Property::Scale | Property::RotateZ | Property::TranslateX, Value::Number(v)) => {
+            (
+                Property::RotateX
+                | Property::RotateY
+                | Property::Depth
+                | Property::Scale
+                | Property::RotateZ
+                | Property::TranslateX
+                | Property::TranslateY,
+                Value::Number(v),
+            ) => {
                 let t = self.env.transforms3d.entry(id).or_default();
                 match property {
                     Property::RotateX => t.rotate_x = v,
@@ -343,6 +387,7 @@ impl Ui {
                     Property::Scale => t.scale = v,
                     Property::RotateZ => t.rotate_z = v,
                     Property::TranslateX => t.translate_x = v,
+                    Property::TranslateY => t.translate_y = v,
                     _ => t.depth = v,
                 }
             }
@@ -385,10 +430,9 @@ impl Ui {
             || self.jobs_pending()
             || !self.env.keyframes.is_empty()
             || !self.env.glides.is_empty()
-            || self
-                .scrollbar_use
-                .keys()
-                .any(|&n| self.contains(n) && self.fades_scrollbar(n) && self.scrollbar_opacity(n) > 0.0)
+            || self.scrollbar_use.keys().any(|&n| {
+                self.contains(n) && self.fades_scrollbar(n) && self.scrollbar_opacity(n) > 0.0
+            })
     }
 
     /// Scrolls `container` to `to` over `duration` seconds, eased out.
@@ -398,8 +442,13 @@ impl Ui {
         let to = to.clamp(0.0, (content - view).max(0.0));
         self.animate(
             container,
-            Animation::new(Property::ScrollTop, Value::Number(from), Value::Number(to), duration)
-                .easing(Easing::CubicOut),
+            Animation::new(
+                Property::ScrollTop,
+                Value::Number(from),
+                Value::Number(to),
+                duration,
+            )
+            .easing(Easing::CubicOut),
         );
     }
 }
@@ -410,15 +459,25 @@ mod tests {
 
     #[test]
     fn repeats_alternate_and_delay() {
-        let a = Animation::new(Property::Opacity, Value::Number(0.0), Value::Number(1.0), 1.0)
-            .repeat(Repeat::Times(2))
-            .alternate()
-            .delay(0.5);
+        let a = Animation::new(
+            Property::Opacity,
+            Value::Number(0.0),
+            Value::Number(1.0),
+            1.0,
+        )
+        .repeat(Repeat::Times(2))
+        .alternate()
+        .delay(0.5);
         assert_eq!(a.at(0.25), (Value::Number(0.0), false));
         assert_eq!(a.at(1.0), (Value::Number(0.5), false));
         assert_eq!(a.at(1.75), (Value::Number(0.75), false), "back again");
-        assert_eq!(a.at(9.0), (Value::Number(0.0), true), "two runs, ending where the second does");
-        let f = Animation::new(Property::Top, Value::Number(0.0), Value::Number(10.0), 2.0).repeat(Repeat::Forever);
+        assert_eq!(
+            a.at(9.0),
+            (Value::Number(0.0), true),
+            "two runs, ending where the second does"
+        );
+        let f = Animation::new(Property::Top, Value::Number(0.0), Value::Number(10.0), 2.0)
+            .repeat(Repeat::Forever);
         assert_eq!(f.at(1001.0), (Value::Number(5.0), false));
     }
 }

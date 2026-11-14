@@ -1608,12 +1608,20 @@ mod tests {
     fn prepare_if_changed_keeps_the_film_when_nothing_changed() {
         let (mut scene, cam) = scene_and_camera();
         let mut r = RaytraceRenderer::new(8, 8);
-        r.set_settings(RaytraceSettings::default().with_samples(2).with_denoise(false));
+        r.set_settings(
+            RaytraceSettings::default()
+                .with_samples(2)
+                .with_denoise(false),
+        );
         assert!(r.prepare_if_changed(&mut scene, &cam));
         r.accumulate(2).unwrap();
         assert_eq!(r.samples(), 2);
         assert!(!r.prepare_if_changed(&mut scene, &cam));
-        assert_eq!(r.samples(), 2, "an unchanged scene and camera must not clear the film");
+        assert_eq!(
+            r.samples(),
+            2,
+            "an unchanged scene and camera must not clear the film"
+        );
         r.accumulate(1).unwrap();
         assert_eq!(r.samples(), 3);
         let mut cam2 = cam;

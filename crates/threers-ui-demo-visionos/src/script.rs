@@ -23,10 +23,19 @@ use threers::Vector3;
 /// A pinch in the script.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Gesture {
-    Tap { x: f32, y: f32 },
-    Drag { from: (f32, f32), to: (f32, f32) },
+    Tap {
+        x: f32,
+        y: f32,
+    },
+    Drag {
+        from: (f32, f32),
+        to: (f32, f32),
+    },
     /// A fingertip pressing the panel at a point (hand tracking's poke).
-    Poke { x: f32, y: f32 },
+    Poke {
+        x: f32,
+        y: f32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -43,11 +52,28 @@ pub fn parse(script: &str) -> Vec<Step> {
         .filter(|s| !s.trim().is_empty())
         .filter_map(|s| {
             let parts: Vec<&str> = s.trim().splitn(3, ':').collect();
-            let nums = |p: &str| p.split(',').map(|n| n.trim().parse::<f32>()).collect::<Result<Vec<_>, _>>().ok();
+            let nums = |p: &str| {
+                p.split(',')
+                    .map(|n| n.trim().parse::<f32>())
+                    .collect::<Result<Vec<_>, _>>()
+                    .ok()
+            };
             let step = match parts.as_slice() {
-                [at, "tap", p] => nums(p).filter(|n| n.len() == 2).map(|n| (at, Gesture::Tap { x: n[0], y: n[1] })),
-                [at, "drag", p] => nums(p).filter(|n| n.len() == 4).map(|n| (at, Gesture::Drag { from: (n[0], n[1]), to: (n[2], n[3]) })),
-                [at, "poke", p] => nums(p).filter(|n| n.len() == 2).map(|n| (at, Gesture::Poke { x: n[0], y: n[1] })),
+                [at, "tap", p] => nums(p)
+                    .filter(|n| n.len() == 2)
+                    .map(|n| (at, Gesture::Tap { x: n[0], y: n[1] })),
+                [at, "drag", p] => nums(p).filter(|n| n.len() == 4).map(|n| {
+                    (
+                        at,
+                        Gesture::Drag {
+                            from: (n[0], n[1]),
+                            to: (n[2], n[3]),
+                        },
+                    )
+                }),
+                [at, "poke", p] => nums(p)
+                    .filter(|n| n.len() == 2)
+                    .map(|n| (at, Gesture::Poke { x: n[0], y: n[1] })),
                 _ => None,
             }
             .and_then(|(at, gesture)| at.trim().parse::<f64>().ok().map(|at| Step { at, gesture }));
@@ -76,12 +102,18 @@ pub struct Player {
 
 impl Player {
     pub fn new(steps: Vec<Step>) -> Self {
-        Player { steps, next: 0, held: None }
+        Player {
+            steps,
+            next: 0,
+            held: None,
+        }
     }
 
     /// The script from `THREERS_XR_SCRIPT`, if set.
     pub fn from_env() -> Option<Self> {
-        std::env::var("THREERS_XR_SCRIPT").ok().map(|s| Player::new(parse(&s)))
+        std::env::var("THREERS_XR_SCRIPT")
+            .ok()
+            .map(|s| Player::new(parse(&s)))
     }
 
     pub fn done(&self) -> bool {
@@ -91,13 +123,26 @@ impl Player {
     /// The pinches due at `time`, sent as visionOS would from a head at
     /// `head` (a pose) towards the panel at `plane` showing a UI of `size`
     /// pixels. Returns the steps that finished, to report.
-    pub fn step(&mut self, time: f64, head: &[f32; 16], plane: &PanelPlane, size: (f32, f32), fingertip: &mut dyn FnMut(Option<[f32; 3]>)) -> Vec<Step> {
+    pub fn step(
+        &mut self,
+        time: f64,
+        head: &[f32; 16],
+        plane: &PanelPlane,
+        size: (f32, f32),
+        fingertip: &mut dyn FnMut(Option<[f32; 3]>),
+    ) -> Vec<Step> {
         let eye = Vector3::new(head[12], head[13], head[14]);
-        let on_panel = |(x, y): (f32, f32)| plane.center + plane.right * ((x / size.0 - 0.5) * 2.0 * plane.half.0) + plane.up * ((0.5 - y / size.1) * 2.0 * plane.half.1);
+        let on_panel = |(x, y): (f32, f32)| {
+            plane.center
+                + plane.right * ((x / size.0 - 0.5) * 2.0 * plane.half.0)
+                + plane.up * ((0.5 - y / size.1) * 2.0 * plane.half.1)
+        };
         let send = |id: u64, phase: u32, (x, y): (f32, f32)| {
             let p = on_panel((x, y));
             let d = (p - eye).normalize();
-            threers::xr::visionos::threers_xr_spatial_event(id, phase, eye.x, eye.y, eye.z, d.x, d.y, d.z);
+            threers::xr::visionos::threers_xr_spatial_event(
+                id, phase, eye.x, eye.y, eye.z, d.x, d.y, d.z,
+            );
         };
         let mut finished = vec![];
         if let Some((i, id)) = self.held {
@@ -161,8 +206,17 @@ mod tests {
         assert_eq!(
             s,
             [
-                Step { at: 2.0, gesture: Gesture::Tap { x: 97.0, y: 129.0 } },
-                Step { at: 4.0, gesture: Gesture::Drag { from: (640.0, 600.0), to: (640.0, 250.0) } },
+                Step {
+                    at: 2.0,
+                    gesture: Gesture::Tap { x: 97.0, y: 129.0 }
+                },
+                Step {
+                    at: 4.0,
+                    gesture: Gesture::Drag {
+                        from: (640.0, 600.0),
+                        to: (640.0, 250.0)
+                    }
+                },
             ]
         );
     }

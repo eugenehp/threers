@@ -37,7 +37,7 @@ use threers::metal::{MetalDevice, MetalRenderer, MetalSurface, RenderView};
 use threers::scene::Scene;
 use threers::ui::input::{Event, PointerButton, TouchPhase};
 use threers::ui::native::{self, Control};
-use threers::xr::{Frame, TargetRayMode, XrEvent, XrEventKind, XrInput, ray_pose};
+use threers::xr::{ray_pose, Frame, TargetRayMode, XrEvent, XrEventKind, XrInput};
 
 use crate::surface_ui::SurfaceUi;
 use crate::{App, CameraRequest, Place, Request, Surface};
@@ -161,15 +161,32 @@ impl<A: App> View<A> {
     ///
     /// # Safety
     /// `layer` must be a live `CAMetalLayer` that outlives the view.
-    pub unsafe fn new(layer: *mut c_void, width: u32, height: u32, mode: Mode) -> Result<Self, String> {
+    pub unsafe fn new(
+        layer: *mut c_void,
+        width: u32,
+        height: u32,
+        mode: Mode,
+    ) -> Result<Self, String> {
         let device = MetalDevice::new().map_err(|e| e.to_string())?;
-        let samples = if device.supports_sample_count(SAMPLES) { SAMPLES } else { 1 };
-        let surface = unsafe { MetalSurface::from_layer(&device, layer, width.max(1), height.max(1), samples) }.map_err(|e| e.to_string())?;
+        let samples = if device.supports_sample_count(SAMPLES) {
+            SAMPLES
+        } else {
+            1
+        };
+        let surface = unsafe {
+            MetalSurface::from_layer(&device, layer, width.max(1), height.max(1), samples)
+        }
+        .map_err(|e| e.to_string())?;
         let renderer = MetalRenderer::with_device(device).map_err(|e| e.to_string())?;
         let mut scene = Scene::new();
         let app = A::setup(&mut scene);
         let lens = app.lens();
-        let mut camera = PerspectiveCamera::new(lens.fov.to_degrees(), width.max(1) as f32 / height.max(1) as f32, lens.near, lens.far);
+        let mut camera = PerspectiveCamera::new(
+            lens.fov.to_degrees(),
+            width.max(1) as f32 / height.max(1) as f32,
+            lens.near,
+            lens.far,
+        );
         camera.position = Vector3::new(0.0, 0.0, 3.0);
         camera.target = Vector3::ZERO;
         let mut controls = OrbitControls::new(&camera);
@@ -260,13 +277,17 @@ impl<A: App> View<A> {
                 self.camera.aspect = w as f32 / h as f32;
             }
             k if k == Key::Touch as u32 => self.touch(a as u32, (b, c)),
-            k if k == Key::Pinch as u32 && a.is_finite() && a > 0.0 && !self.on_ui() => self.zoom *= a,
+            k if k == Key::Pinch as u32 && a.is_finite() && a > 0.0 && !self.on_ui() => {
+                self.zoom *= a
+            }
             k if k == Key::Pan as u32 && !self.on_ui() => {
                 self.pan.0 += a;
                 self.pan.1 += b;
             }
             k if k == Key::Scale as u32 && a.is_finite() && a > 0.0 => self.scale = a,
-            k if k == Key::Insets as u32 => self.insets = [a, c, b, c].map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 }),
+            k if k == Key::Insets as u32 => {
+                self.insets = [a, c, b, c].map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 })
+            }
             _ => {}
         }
     }
@@ -284,23 +305,49 @@ impl<A: App> View<A> {
     fn touch_ui(&mut self, phase: TouchPhase, at: (f32, f32)) -> bool {
         let (x, y) = (at.0 / self.scale, at.1 / self.scale);
         let time = self.time();
-        self.app.ui_event(Place::Screen, Event::Touch { id: 0, phase, x, y, time }, time)
+        self.app.ui_event(
+            Place::Screen,
+            Event::Touch {
+                id: 0,
+                phase,
+                x,
+                y,
+                time,
+            },
+            time,
+        )
     }
 
     fn touch(&mut self, phase: u32, at: (f32, f32)) {
         match (phase, self.touch.as_mut()) {
             (0, _) => {
                 if self.touch_ui(TouchPhase::Start, at) {
-                    self.touch = Some(Touch { down: at, at, dragged: false, ui: true });
+                    self.touch = Some(Touch {
+                        down: at,
+                        at,
+                        dragged: false,
+                        ui: true,
+                    });
                     return;
                 }
                 // not the UI's: it forgets the finger
                 self.touch_ui(TouchPhase::Cancel, at);
-                self.touch = Some(Touch { down: at, at, dragged: false, ui: false });
+                self.touch = Some(Touch {
+                    down: at,
+                    at,
+                    dragged: false,
+                    ui: false,
+                });
                 if self.mode == Mode::Ar {
                     self.pointer = self.ray_at(at);
-                    self.events.push(XrEvent { kind: XrEventKind::Connected, slot: 0 });
-                    self.events.push(XrEvent { kind: XrEventKind::SelectStart, slot: 0 });
+                    self.events.push(XrEvent {
+                        kind: XrEventKind::Connected,
+                        slot: 0,
+                    });
+                    self.events.push(XrEvent {
+                        kind: XrEventKind::SelectStart,
+                        slot: 0,
+                    });
                 }
             }
             (1, Some(t)) if t.ui => {
@@ -309,7 +356,14 @@ impl<A: App> View<A> {
             }
             (2 | 3, Some(t)) if t.ui => {
                 self.touch = None;
-                self.touch_ui(if phase == 2 { TouchPhase::End } else { TouchPhase::Cancel }, at);
+                self.touch_ui(
+                    if phase == 2 {
+                        TouchPhase::End
+                    } else {
+                        TouchPhase::Cancel
+                    },
+                    at,
+                );
             }
             (1, Some(t)) => {
                 if self.mode == Mode::Window {
@@ -328,14 +382,29 @@ impl<A: App> View<A> {
                     }
                     // A tap is a whole select, in one frame.
                     self.pointer = self.ray_at(at);
-                    self.events.push(XrEvent { kind: XrEventKind::Connected, slot: 0 });
-                    self.events.push(XrEvent { kind: XrEventKind::SelectStart, slot: 0 });
+                    self.events.push(XrEvent {
+                        kind: XrEventKind::Connected,
+                        slot: 0,
+                    });
+                    self.events.push(XrEvent {
+                        kind: XrEventKind::SelectStart,
+                        slot: 0,
+                    });
                 }
-                self.events.push(XrEvent { kind: XrEventKind::SelectEnd, slot: 0 });
+                self.events.push(XrEvent {
+                    kind: XrEventKind::SelectEnd,
+                    slot: 0,
+                });
                 if tap {
-                    self.events.push(XrEvent { kind: XrEventKind::Select, slot: 0 });
+                    self.events.push(XrEvent {
+                        kind: XrEventKind::Select,
+                        slot: 0,
+                    });
                 }
-                self.events.push(XrEvent { kind: XrEventKind::Disconnected, slot: 0 });
+                self.events.push(XrEvent {
+                    kind: XrEventKind::Disconnected,
+                    slot: 0,
+                });
                 self.release = true;
             }
             _ => {}
@@ -350,7 +419,10 @@ impl<A: App> View<A> {
     /// is the app's [`lens`](App::lens), in this renderer's convention.
     pub fn set_ar_camera(&mut self, world: [f32; 16], projection: [f32; 16]) {
         let lens = self.app.lens();
-        self.ar = Some(ArEye { world: Matrix4 { elements: world }, projection: with_depth(projection, lens.near, lens.far) });
+        self.ar = Some(ArEye {
+            world: Matrix4 { elements: world },
+            projection: with_depth(projection, lens.near, lens.far),
+        });
     }
 
     /// The ray from the camera through the pixel `at`, in the reference
@@ -361,12 +433,26 @@ impl<A: App> View<A> {
         // The AR camera is already in the reference space (ARKit's world);
         // the window's camera is in the scene's world.
         let (view, projection, to_reference) = match (self.mode, &self.ar) {
-            (Mode::Ar, Some(eye)) => (eye.world.invert(), Matrix4 { elements: eye.projection }, Matrix4::identity()),
+            (Mode::Ar, Some(eye)) => (
+                eye.world.invert(),
+                Matrix4 {
+                    elements: eye.projection,
+                },
+                Matrix4::identity(),
+            ),
             (Mode::Ar, None) => return None,
-            (Mode::Window, _) => (self.camera.view_matrix(), self.camera.projection_matrix(), self.app.origin().invert()),
+            (Mode::Window, _) => (
+                self.camera.view_matrix(),
+                self.camera.projection_matrix(),
+                self.app.origin().invert(),
+            ),
         };
-        let near = Vector3::new(ndc.0, ndc.1, 0.0).unproject(&view, &projection).apply_matrix4(&to_reference);
-        let far = Vector3::new(ndc.0, ndc.1, 1.0).unproject(&view, &projection).apply_matrix4(&to_reference);
+        let near = Vector3::new(ndc.0, ndc.1, 0.0)
+            .unproject(&view, &projection)
+            .apply_matrix4(&to_reference);
+        let far = Vector3::new(ndc.0, ndc.1, 1.0)
+            .unproject(&view, &projection)
+            .apply_matrix4(&to_reference);
         Some(ray_pose(near, far - near))
     }
 
@@ -381,7 +467,9 @@ impl<A: App> View<A> {
         #[cfg(all(target_os = "ios", target_arch = "aarch64"))]
         if let Some(session) = &self.session {
             let lens = self.app.lens();
-            if let Some((world, projection)) = session.camera(self.surface.size(), lens.near, lens.far) {
+            if let Some((world, projection)) =
+                session.camera(self.surface.size(), lens.near, lens.far)
+            {
                 self.set_ar_camera(world, projection);
             }
         }
@@ -395,7 +483,12 @@ impl<A: App> View<A> {
         }
         let inputs: Vec<XrInput> = self
             .pointer
-            .map(|ray| XrInput { slot: 0, target_ray_mode: TargetRayMode::TransientPointer, ray: Some(ray), ..Default::default() })
+            .map(|ray| XrInput {
+                slot: 0,
+                target_ray_mode: TargetRayMode::TransientPointer,
+                ray: Some(ray),
+                ..Default::default()
+            })
             .into_iter()
             .collect();
         let origin = self.app.origin();
@@ -424,8 +517,14 @@ impl<A: App> View<A> {
                 let Some(eye) = &self.ar else { return false };
                 self.scene.background_alpha = 0.0;
                 let world = origin.multiply(&eye.world);
-                let mut v = RenderView::from_matrices(world.invert(), Matrix4 { elements: eye.projection });
-                v.position = Vector3::new(world.elements[12], world.elements[13], world.elements[14]);
+                let mut v = RenderView::from_matrices(
+                    world.invert(),
+                    Matrix4 {
+                        elements: eye.projection,
+                    },
+                );
+                v.position =
+                    Vector3::new(world.elements[12], world.elements[13], world.elements[14]);
                 v
             }
         };
@@ -442,12 +541,19 @@ impl<A: App> View<A> {
         // A control activated by assistive technology (its element's
         // `accessibilityActivate`): a click at its middle, on what shows.
         let pressed: Vec<(f32, f32)> =
-            crate::take_presses_for(|k| native::find(&self.native, k).is_some()).into_iter().filter_map(|k| native::find(&self.native, k)).map(|c| c.centre()).collect();
+            crate::take_presses_for(|k| native::find(&self.native, k).is_some())
+                .into_iter()
+                .filter_map(|k| native::find(&self.native, k))
+                .map(|c| c.centre())
+                .collect();
         for (x, y) in pressed {
             let button = PointerButton::Primary;
-            self.app.ui_event(Place::Screen, Event::PointerMove { x, y }, time);
-            self.app.ui_event(Place::Screen, Event::PointerDown { x, y, button }, time);
-            self.app.ui_event(Place::Screen, Event::PointerUp { x, y, button }, time);
+            self.app
+                .ui_event(Place::Screen, Event::PointerMove { x, y }, time);
+            self.app
+                .ui_event(Place::Screen, Event::PointerDown { x, y, button }, time);
+            self.app
+                .ui_event(Place::Screen, Event::PointerUp { x, y, button }, time);
         }
         let (shown, _) = self.ui.update(&mut self.app, &surface);
         self.native = match (shown, self.app.ui(&surface)) {
@@ -456,14 +562,18 @@ impl<A: App> View<A> {
         };
         let (tone, exposure) = self.app.tone_mapping();
         self.renderer.set_tone_mapping(tone, exposure);
-        let Some(next) = self.surface.next_frame() else { return false };
+        let Some(next) = self.surface.next_frame() else {
+            return false;
+        };
         let pass = next.attachments();
         let drawn = if shown {
             self.renderer
                 .render_views(&mut self.scene, &[view], &pass.without_drawable())
                 .and_then(|_| self.ui.pixels.draw(&mut self.renderer, &pass))
         } else {
-            self.renderer.render_views(&mut self.scene, &[view], &pass).map(drop)
+            self.renderer
+                .render_views(&mut self.scene, &[view], &pass)
+                .map(drop)
         };
         if let Err(e) = drawn {
             eprintln!("threers: frame: {e}");
@@ -482,7 +592,11 @@ impl<A: App> View<A> {
                 CameraRequest::Zoom(k) if k.is_finite() && k > 0.0 => {
                     let t = self.camera.target;
                     let d = (self.camera.position - t) * k;
-                    let d = if d.length() < self.controls.min_distance { d.normalize() * self.controls.min_distance } else { d };
+                    let d = if d.length() < self.controls.min_distance {
+                        d.normalize() * self.controls.min_distance
+                    } else {
+                        d
+                    };
                     self.camera.position = t + d;
                     self.controls.reseed_from_camera(&self.camera);
                 }
@@ -507,24 +621,56 @@ impl<A: App> View<A> {
         }
         let (w, h) = self.surface.size();
         let size = (w as f32, h as f32);
-        let none = PointerEvent { dx: 0.0, dy: 0.0, wheel: 0.0, rotating: false, panning: false, cursor: (0.0, 0.0) };
+        let none = PointerEvent {
+            dx: 0.0,
+            dy: 0.0,
+            wheel: 0.0,
+            rotating: false,
+            panning: false,
+            cursor: (0.0, 0.0),
+        };
         let mut turn = std::mem::take(&mut self.turn);
         if self.spin && !self.on_ui() && self.touch.is_none() {
             turn.0 += SPIN * self.scale * dt;
         }
         if turn != (0.0, 0.0) {
-            self.controls.update_dt(PointerEvent { dx: turn.0, dy: turn.1, rotating: true, ..none }, &mut self.camera, size, dt);
+            self.controls.update_dt(
+                PointerEvent {
+                    dx: turn.0,
+                    dy: turn.1,
+                    rotating: true,
+                    ..none
+                },
+                &mut self.camera,
+                size,
+                dt,
+            );
         }
         let pan = std::mem::take(&mut self.pan);
         if pan != (0.0, 0.0) {
-            self.controls.update_dt(PointerEvent { dx: pan.0, dy: pan.1, panning: true, ..none }, &mut self.camera, size, dt);
+            self.controls.update_dt(
+                PointerEvent {
+                    dx: pan.0,
+                    dy: pan.1,
+                    panning: true,
+                    ..none
+                },
+                &mut self.camera,
+                size,
+                dt,
+            );
         }
         // The controls scale the distance by 1 − wheel·0.001·zoom_speed; a
         // pinch's scale s divides it by s.
         let zoom = std::mem::replace(&mut self.zoom, 1.0);
-        let wheel = if (zoom - 1.0).abs() > 1e-6 { (1.0 - 1.0 / zoom) / (0.001 * self.controls.zoom_speed.max(1e-6)) } else { 0.0 };
+        let wheel = if (zoom - 1.0).abs() > 1e-6 {
+            (1.0 - 1.0 / zoom) / (0.001 * self.controls.zoom_speed.max(1e-6))
+        } else {
+            0.0
+        };
         // Every frame, with or without input: damping eases on after a fling.
-        self.controls.update_dt(PointerEvent { wheel, ..none }, &mut self.camera, size, dt);
+        self.controls
+            .update_dt(PointerEvent { wheel, ..none }, &mut self.camera, size, dt);
         // The far plane follows a zoom out.
         let distance = (self.camera.position - self.camera.target).length();
         self.camera.far = self.camera.far.max(distance * 10.0);
@@ -565,8 +711,17 @@ fn with_depth(projection: [f32; 16], near: f32, far: f32) -> [f32; 16] {
 /// # Safety
 /// As [`View::new`].
 #[doc(hidden)]
-pub unsafe fn create<A: App>(layer: *mut c_void, width: u32, height: u32, mode: u32) -> *mut c_void {
-    let mode = if mode == Mode::Ar as u32 { Mode::Ar } else { Mode::Window };
+pub unsafe fn create<A: App>(
+    layer: *mut c_void,
+    width: u32,
+    height: u32,
+    mode: u32,
+) -> *mut c_void {
+    let mode = if mode == Mode::Ar as u32 {
+        Mode::Ar
+    } else {
+        Mode::Window
+    };
     match unsafe { View::<A>::new(layer, width, height, mode) } {
         Ok(v) => Box::into_raw(Box::new(v)).cast(),
         Err(e) => {
@@ -629,7 +784,9 @@ mod tests {
 /// # Safety
 /// `v` null or from `create`; `len` null or writable.
 pub unsafe fn controls<A: App>(v: *mut c_void, len: *mut usize) -> *const u8 {
-    let Some(json) = (unsafe { view::<A>(v) }).and_then(|v| v.controls()) else { return std::ptr::null() };
+    let Some(json) = (unsafe { view::<A>(v) }).and_then(|v| v.controls()) else {
+        return std::ptr::null();
+    };
     if !len.is_null() {
         unsafe { *len = json.len() };
     }

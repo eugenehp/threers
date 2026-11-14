@@ -981,7 +981,11 @@ impl Item {
                     .as_ref()
                     .map(|r| join(r, Lang::Msl))
                     .unwrap_or_else(|| "void".into());
-                let template = if slots.is_empty() { String::new() } else { format!("template <{}> ", slots.join(", ")) };
+                let template = if slots.is_empty() {
+                    String::new()
+                } else {
+                    format!("template <{}> ", slots.join(", "))
+                };
                 // Not `const`: a WGSL function may write module state
                 // (`var<private>`), which lives in the struct.
                 format!(

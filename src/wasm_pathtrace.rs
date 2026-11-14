@@ -479,7 +479,9 @@ pub struct WebHybridCompositor {
 impl WebHybridCompositor {
     #[wasm_bindgen(constructor)]
     pub fn new() -> WebHybridCompositor {
-        WebHybridCompositor { inner: crate::raytrace::HybridCompositor::default() }
+        WebHybridCompositor {
+            inner: crate::raytrace::HybridCompositor::default(),
+        }
     }
 
     /// mix, detail, edge sigma (see `HybridParams`)
@@ -501,13 +503,25 @@ impl WebHybridCompositor {
         p.bloom_levels = levels.clamp(1, 8);
     }
 
-    pub fn composite(&mut self, raster: &[u8], w: u32, h: u32, trace: &[u8], tw: u32, th: u32) -> Result<Vec<u8>, JsValue> {
-        self.inner.composite(raster, w, h, trace, tw, th).map_err(|e| JsValue::from_str(&e.to_string()))
+    pub fn composite(
+        &mut self,
+        raster: &[u8],
+        w: u32,
+        h: u32,
+        trace: &[u8],
+        tw: u32,
+        th: u32,
+    ) -> Result<Vec<u8>, JsValue> {
+        self.inner
+            .composite(raster, w, h, trace, tw, th)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     #[wasm_bindgen(js_name = bloom)]
     pub fn bloom(&mut self, rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, JsValue> {
-        self.inner.bloom_rgba(rgba, w, h).map_err(|e| JsValue::from_str(&e.to_string()))
+        self.inner
+            .bloom_rgba(rgba, w, h)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 }
 

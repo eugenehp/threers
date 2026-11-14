@@ -6,8 +6,14 @@ use threers_ui::{style, FixedWidthText, Ui};
 #[test]
 fn a_wrapping_row_narrower_than_its_column_is_as_tall_as_its_lines() {
     let mut ui = Ui::new();
-    let column = ui.add_box(ui.root(), style! { display: flex; flex-direction: column; align-items: center; width: 800px; });
-    let row = ui.add_box(column, style! { display: flex; flex-wrap: wrap; width: 300px; max-width: 100%; });
+    let column = ui.add_box(
+        ui.root(),
+        style! { display: flex; flex-direction: column; align-items: center; width: 800px; },
+    );
+    let row = ui.add_box(
+        column,
+        style! { display: flex; flex-wrap: wrap; width: 300px; max-width: 100%; },
+    );
     for _ in 0..4 {
         ui.add_box(row, style! { width: 100px; height: 20px; flex-shrink: 0; });
     }
@@ -23,7 +29,10 @@ fn a_wrapping_row_narrower_than_its_column_is_as_tall_as_its_lines() {
 #[test]
 fn a_row_of_word_boxes_that_wraps_is_as_tall_as_its_lines() {
     let mut ui = Ui::new();
-    let column = ui.add_box(ui.root(), style! { display: flex; flex-direction: column; align-items: center; width: 200px; });
+    let column = ui.add_box(
+        ui.root(),
+        style! { display: flex; flex-direction: column; align-items: center; width: 200px; },
+    );
     let row = ui.add_box(column, style! { display: flex; flex-wrap: wrap; justify-content: center; column-gap: 8px; max-width: 100%; });
     for word in ["Tu", "écoutes", "___", "la", "radio."] {
         let w = ui.add_box(row, style! { font-size: 20px; white-space: nowrap; });
@@ -33,7 +42,12 @@ fn a_row_of_word_boxes_that_wraps_is_as_tall_as_its_lines() {
     ui.layout(400.0, 600.0, &mut FixedWidthText(10.0));
     let r = ui.rect(row);
     let last = ui.children(row)[4];
-    assert!(ui.rect(last).y + ui.rect(last).height <= r.y + r.height + 0.01, "{:?} in {:?}", ui.rect(last), r);
+    assert!(
+        ui.rect(last).y + ui.rect(last).height <= r.y + r.height + 0.01,
+        "{:?} in {:?}",
+        ui.rect(last),
+        r
+    );
     assert!(ui.rect(after).y >= r.y + r.height - 0.01);
 }
 
@@ -42,8 +56,14 @@ fn a_row_of_word_boxes_that_wraps_is_as_tall_as_its_lines() {
 #[test]
 fn a_rows_own_width_counts_its_column_gap() {
     let mut ui = Ui::new();
-    let column = ui.add_box(ui.root(), style! { display: flex; flex-direction: column; align-items: center; width: 400px; });
-    let row = ui.add_box(column, style! { display: flex; flex-wrap: wrap; column-gap: 7px; });
+    let column = ui.add_box(
+        ui.root(),
+        style! { display: flex; flex-direction: column; align-items: center; width: 400px; },
+    );
+    let row = ui.add_box(
+        column,
+        style! { display: flex; flex-wrap: wrap; column-gap: 7px; },
+    );
     let mut words = vec![];
     for word in ["___", "coup"] {
         let w = ui.add_box(row, style! { white-space: nowrap; });
@@ -60,9 +80,15 @@ fn a_rows_own_width_counts_its_column_gap() {
 #[test]
 fn a_narrow_card_in_a_wide_column_holds_its_wrapped_content() {
     let mut ui = Ui::new();
-    let page = ui.add_box(ui.root(), style! { display: flex; flex-direction: column; align-items: center; width: 1000px; });
+    let page = ui.add_box(
+        ui.root(),
+        style! { display: flex; flex-direction: column; align-items: center; width: 1000px; },
+    );
     let card = ui.add_box(page, style! { display: flex; flex-direction: column; align-items: center; width: 300px; padding: 10px; box-sizing: border-box; });
-    let row = ui.add_box(card, style! { display: flex; flex-wrap: wrap; gap: 10px; max-width: 100%; });
+    let row = ui.add_box(
+        card,
+        style! { display: flex; flex-wrap: wrap; gap: 10px; max-width: 100%; },
+    );
     for _ in 0..2 {
         ui.add_box(row, style! { width: 200px; height: 50px; flex-shrink: 0; });
     }

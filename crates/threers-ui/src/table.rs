@@ -59,7 +59,12 @@ pub struct TableColumn {
 
 impl TableColumn {
     pub fn new(title: impl Into<String>, width: impl Into<String>) -> Self {
-        Self { title: title.into(), width: width.into(), numeric: false, sortable: true }
+        Self {
+            title: title.into(),
+            width: width.into(),
+            numeric: false,
+            sortable: true,
+        }
     }
 
     pub fn numeric(mut self) -> Self {
@@ -90,7 +95,13 @@ impl DataTable {
 
 /// `a` against `b`, as numbers when both are.
 fn compare(a: &str, b: &str, numeric: bool) -> std::cmp::Ordering {
-    let num = |s: &str| s.trim().trim_end_matches('%').replace([',', '_'], "").parse::<f64>().ok();
+    let num = |s: &str| {
+        s.trim()
+            .trim_end_matches('%')
+            .replace([',', '_'], "")
+            .parse::<f64>()
+            .ok()
+    };
     match (numeric, num(a), num(b)) {
         (true, Some(x), Some(y)) => x.total_cmp(&y),
         _ => a.to_lowercase().cmp(&b.to_lowercase()),
@@ -120,9 +131,19 @@ pub fn data_table<S: 'static>(
     selected: Binding<S, Option<usize>>,
     row_height: f32,
 ) -> DataTable {
-    let template: String = columns.iter().map(|c| c.width.as_str()).collect::<Vec<_>>().join(" ");
+    let template: String = columns
+        .iter()
+        .map(|c| c.width.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
     let table = ui.add_box(parent, style! { display: flex; flex-direction: column; border-radius: 8px; overflow: hidden; min-height: 0; });
-    ui.token_style(table, &[("background", Token::Surface), ("border-color", Token::Border)]);
+    ui.token_style(
+        table,
+        &[
+            ("background", Token::Surface),
+            ("border-color", Token::Border),
+        ],
+    );
     let mut sem = Semantics::new(Role::Table).label(label).tab_index(0);
     sem.row_index = Some((0, rows.get(state).len()));
     ui.set_semantics(table, sem);
@@ -147,7 +168,12 @@ pub fn data_table<S: 'static>(
         }
         ui.add_text(h, c.title.clone());
         let arrow = ui.add_text(h, "");
-        ui.set_semantics(h, Semantics::new(Role::ColumnHeader).label(c.title.clone()).tab_index(if c.sortable { -1 } else { 0 }));
+        ui.set_semantics(
+            h,
+            Semantics::new(Role::ColumnHeader)
+                .label(c.title.clone())
+                .tab_index(if c.sortable { -1 } else { 0 }),
+        );
         heads.push((h, arrow));
         if c.sortable {
             let sort = sort.clone();
@@ -159,21 +185,34 @@ pub fn data_table<S: 'static>(
     }
     let body_style = style! { flex-grow: 1; min-height: 0; height: 100px; scrollbar-width: thin; scrollbar-visibility: auto; };
     let count = rows.get(state).len();
-    let list = Rc::new(RefCell::new(VirtualList::new(ui, table, body_style, count, RowHeight::Uniform(row_height))));
+    let list = Rc::new(RefCell::new(VirtualList::new(
+        ui,
+        table,
+        body_style,
+        count,
+        RowHeight::Uniform(row_height),
+    )));
     // A click on a row selects it (the row from the node clicked: rows are
     // made and dropped as the body scrolls).
     let built_rows: Rc<RefCell<Vec<(NodeId, usize)>>> = Rc::default();
     let container = list.borrow().container();
     {
         let (sel, b) = (selected.clone(), built_rows.clone());
-        input.on(container, crate::input::Phase::Bubble, move |s, ui, e, _| {
-            if let crate::input::Event::PointerDown { x, y, .. } = *e
-                && let Some(hit) = ui.hit_test(x, y)
-                && let Some(&(_, i)) = b.borrow().iter().find(|(row, _)| ui.ancestors(hit).any(|a| a == *row))
-            {
-                sel.set(s, Some(i));
-            }
-        });
+        input.on(
+            container,
+            crate::input::Phase::Bubble,
+            move |s, ui, e, _| {
+                if let crate::input::Event::PointerDown { x, y, .. } = *e
+                    && let Some(hit) = ui.hit_test(x, y)
+                    && let Some(&(_, i)) = b
+                        .borrow()
+                        .iter()
+                        .find(|(row, _)| ui.ancestors(hit).any(|a| a == *row))
+                {
+                    sel.set(s, Some(i));
+                }
+            },
+        );
     }
     let order: Rc<RefCell<Vec<usize>>> = Rc::default();
     // The keys move the selection along the sorted order.
@@ -184,7 +223,9 @@ pub fn data_table<S: 'static>(
             if o.is_empty() {
                 return false;
             }
-            let page = (ui.scroll_extent(l.borrow().container()).1 / row_height).floor().max(1.0) as usize;
+            let page = (ui.scroll_extent(l.borrow().container()).1 / row_height)
+                .floor()
+                .max(1.0) as usize;
             let at = sel.get(s).and_then(|i| o.iter().position(|&r| r == i));
             let to = match (key, at) {
                 ("ArrowDown", None) | ("Home", _) => 0,
@@ -291,5 +332,9 @@ pub fn data_table<S: 'static>(
         }
         true
     });
-    DataTable { table, header, order }
+    DataTable {
+        table,
+        header,
+        order,
+    }
 }

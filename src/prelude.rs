@@ -261,10 +261,10 @@ cfg_metal! {
 /// ```
 #[cfg(feature = "ui")]
 pub mod ui {
-    pub use crate::ui::prelude::*;
-    pub use crate::ui::{paint_to_rgba, OverlayPainter};
     #[cfg(feature = "render")]
     pub use crate::renderer::UiPass;
+    pub use crate::ui::prelude::*;
+    pub use crate::ui::{paint_to_rgba, OverlayPainter};
 }
 
 /// Headsets (`xr`): an [`App`](crate::xr::App) and the [`Frame`](crate::xr::Frame)
@@ -274,7 +274,8 @@ pub mod ui {
 #[cfg(feature = "xr")]
 pub mod xr {
     pub use crate::xr::{
-        App, Frame, Gpu, Handedness, HoverArea, HoverTarget, Panel, PanelInput, PanelPass, PanelPlane, Pointer, TargetRayMode, XrEvent, XrEventKind, XrEye, XrInput, XrSource,
+        App, Frame, Gpu, Handedness, HoverArea, HoverTarget, Panel, PanelInput, PanelPass,
+        PanelPlane, Pointer, TargetRayMode, XrEvent, XrEventKind, XrEye, XrInput, XrSource,
     };
 }
 
@@ -389,7 +390,18 @@ mod tests {
         let root = ui.root();
         let card = ui.add_box(root, style! { padding: 8px; });
         ui.token_style(card, &[("background", Token::Surface)]);
-        let mut g = gauge_styled(&mut ui, card, "Load", 0.0..=1.0, GaugeKind::Circular, GaugeStyle { tint: GaugeTint::levels(), animate: false, ..Default::default() });
+        let mut g = gauge_styled(
+            &mut ui,
+            card,
+            "Load",
+            0.0..=1.0,
+            GaugeKind::Circular,
+            GaugeStyle {
+                tint: GaugeTint::levels(),
+                animate: false,
+                ..Default::default()
+            },
+        );
         g.set(&mut ui, 0.9);
         ui.layout(200.0, 200.0, &mut FixedWidthText(7.0));
         let rgba = paint_to_rgba(&ui, 1.0, 200, 200);
@@ -406,7 +418,15 @@ mod tests {
         panel.place_facing(&Matrix4::translation(Vector3::new(0.0, 1.6, 0.0)).elements);
         let plane: PanelPlane = panel.plane().unwrap();
         assert!(plane.half.0 > 0.0);
-        let _ = (HoverArea { id: 1, rect: [0.0; 4], radius: 0.0 }, TargetRayMode::Gaze, XrEventKind::Select);
+        let _ = (
+            HoverArea {
+                id: 1,
+                rect: [0.0; 4],
+                radius: 0.0,
+            },
+            TargetRayMode::Gaze,
+            XrEventKind::Select,
+        );
     }
 
     #[test]

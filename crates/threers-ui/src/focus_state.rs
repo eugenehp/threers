@@ -38,14 +38,23 @@ use crate::tree::NodeId;
 impl<S: 'static> Input<S> {
     /// Keeps `focus` (one of `fields`' keys, or `None`) and which of their
     /// nodes has focus the same, both ways.
-    pub fn bind_focus<K: Clone + PartialEq + 'static>(&mut self, focus: Binding<S, Option<K>>, fields: Vec<(K, NodeId)>) {
+    pub fn bind_focus<K: Clone + PartialEq + 'static>(
+        &mut self,
+        focus: Binding<S, Option<K>>,
+        fields: Vec<(K, NodeId)>,
+    ) {
         let mut agreed: Option<Option<K>> = None;
         self.on_after_dispatch(move |input, ui, s| {
-            let has = input.focused().and_then(|f| fields.iter().find(|(_, n)| *n == f).map(|(k, _)| k.clone()));
+            let has = input
+                .focused()
+                .and_then(|f| fields.iter().find(|(_, n)| *n == f).map(|(k, _)| k.clone()));
             let want = focus.get(s);
             if agreed.as_ref() != Some(&want) {
                 // The state moved it: focus follows.
-                let node = want.as_ref().and_then(|k| fields.iter().find(|(f, _)| f == k).map(|(_, n)| *n)).filter(|&n| ui.contains(n));
+                let node = want
+                    .as_ref()
+                    .and_then(|k| fields.iter().find(|(f, _)| f == k).map(|(_, n)| *n))
+                    .filter(|&n| ui.contains(n));
                 if node.is_some() || has.is_some() {
                     input.set_focus(ui, s, node);
                 }
@@ -63,7 +72,9 @@ impl<S: 'static> Input<S> {
     /// `node` unless it is already inside `scope`.
     pub fn default_focus(&mut self, scope: NodeId, node: NodeId) {
         self.on_appear(scope, move |input, ui, s| {
-            let inside = input.focused().is_some_and(|f| ui.contains(f) && ui.ancestors(f).any(|a| a == scope));
+            let inside = input
+                .focused()
+                .is_some_and(|f| ui.contains(f) && ui.ancestors(f).any(|a| a == scope));
             if !inside && ui.contains(node) {
                 input.set_focus(ui, s, Some(node));
             }

@@ -36,7 +36,12 @@ pub struct ElementState {
 
 impl std::fmt::Debug for ElementState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ElementState({} values, frame {})", self.values.len(), self.frame)
+        write!(
+            f,
+            "ElementState({} values, frame {})",
+            self.values.len(),
+            self.frame
+        )
     }
 }
 
@@ -51,7 +56,11 @@ impl ElementState {
 
     /// The `T` under `key`, made with `make` the first time (or the first
     /// time after it was let go). Marks it used this frame.
-    pub fn get_or_insert_with<T: 'static>(&mut self, key: impl Hash, make: impl FnOnce() -> T) -> &mut T {
+    pub fn get_or_insert_with<T: 'static>(
+        &mut self,
+        key: impl Hash,
+        make: impl FnOnce() -> T,
+    ) -> &mut T {
         let slot = self.slot::<T>(key);
         let frame = self.frame;
         let entry = self

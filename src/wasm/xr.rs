@@ -16,8 +16,8 @@ use web_sys::HtmlCanvasElement;
 
 use super::{CameraInner, WebCamera, WebRenderer, WebScene};
 use crate::math::Matrix4;
-use crate::xr::HAND_JOINTS;
 use crate::xr::web::XrSession;
+use crate::xr::HAND_JOINTS;
 
 fn set(o: &Object, key: &str, value: impl Into<JsValue>) {
     let _ = Reflect::set(o, &key.into(), &value.into());
@@ -52,7 +52,16 @@ impl WebXr {
         features: Option<Vec<String>>,
     ) -> Result<WebXr, JsValue> {
         let features = features.unwrap_or_default();
-        Ok(WebXr { session: XrSession::request(&mode, canvas, &reference_space, framebuffer_scale, &features).await? })
+        Ok(WebXr {
+            session: XrSession::request(
+                &mode,
+                canvas,
+                &reference_space,
+                framebuffer_scale,
+                &features,
+            )
+            .await?,
+        })
     }
 
     /// Takes over a session the page opened (three.js `xr.setSession`).
@@ -62,7 +71,10 @@ impl WebXr {
         reference_space: String,
         framebuffer_scale: f32,
     ) -> Result<WebXr, JsValue> {
-        Ok(WebXr { session: XrSession::attach(session, canvas, &reference_space, framebuffer_scale).await? })
+        Ok(WebXr {
+            session: XrSession::attach(session, canvas, &reference_space, framebuffer_scale)
+                .await?,
+        })
     }
 
     /// Calls `callback(time, frame)` once per device frame (`null` stops
@@ -151,7 +163,11 @@ impl WebXr {
     /// `squeeze(start|end)`. Slot `i` is three.js's `getController(i)`.
     #[wasm_bindgen(js_name = takeEvents)]
     pub fn take_events(&self) -> Array {
-        self.session.take_events_with_sources().into_iter().map(|(e, source)| Array::of3(&e.kind.name().into(), &(e.slot as u32).into(), &source)).collect()
+        self.session
+            .take_events_with_sources()
+            .into_iter()
+            .map(|(e, source)| Array::of3(&e.kind.name().into(), &(e.slot as u32).into(), &source))
+            .collect()
     }
 
     /// The connected inputs this frame, one object each: `slot`,
@@ -166,8 +182,16 @@ impl WebXr {
             .map(|i| {
                 let o = Object::new();
                 set(&o, "slot", i.slot as u32);
-                set(&o, "inputSource", self.session.source(i.slot).unwrap_or_default());
-                set(&o, "handedness", format!("{:?}", i.handedness).to_lowercase());
+                set(
+                    &o,
+                    "inputSource",
+                    self.session.source(i.slot).unwrap_or_default(),
+                );
+                set(
+                    &o,
+                    "handedness",
+                    format!("{:?}", i.handedness).to_lowercase(),
+                );
                 set(&o, "ray", matrix_or_null(i.ray));
                 set(&o, "grip", matrix_or_null(i.grip));
                 if let Some((joints, radii)) = i.joints {
@@ -196,8 +220,16 @@ impl WebRenderer {
     /// scissor and pixel ratio are put back after. False outside a frame
     /// or while tracking is lost (nothing drawn).
     #[wasm_bindgen(js_name = renderXr)]
-    pub fn render_xr(&mut self, scene: &mut WebScene, camera: &WebCamera, xr: &WebXr, origin: Vec<f32>) -> bool {
-        let CameraInner::Perspective(lens) = &camera.inner else { return false };
+    pub fn render_xr(
+        &mut self,
+        scene: &mut WebScene,
+        camera: &WebCamera,
+        xr: &WebXr,
+        origin: Vec<f32>,
+    ) -> bool {
+        let CameraInner::Perspective(lens) = &camera.inner else {
+            return false;
+        };
         let session = &xr.session;
         if !session.in_frame() {
             return false;
@@ -207,14 +239,24 @@ impl WebRenderer {
         session.mark_drawn();
         let (w, h) = session.fit_canvas();
         self.set_size(w, h);
-        let origin = <[f32; 16]>::try_from(&origin[..]).map(|elements| Matrix4 { elements }).unwrap_or_else(|_| Matrix4::identity());
+        let origin = <[f32; 16]>::try_from(&origin[..])
+            .map(|elements| Matrix4 { elements })
+            .unwrap_or_else(|_| Matrix4::identity());
         let r = &self.renderer;
-        let saved = (r.viewport(), r.scissor(), r.scissor_test(), r.auto_clear(), r.pixel_ratio());
+        let saved = (
+            r.viewport(),
+            r.scissor(),
+            r.scissor_test(),
+            r.auto_clear(),
+            r.pixel_ratio(),
+        );
         self.renderer.set_pixel_ratio(1.0);
         self.renderer.set_auto_clear(true);
         self.set_scissor_test(true);
         for eye in session.eyes(&origin) {
-            let eye_camera = WebCamera { inner: CameraInner::Perspective(eye.camera(lens)) };
+            let eye_camera = WebCamera {
+                inner: CameraInner::Perspective(eye.camera(lens)),
+            };
             let [x, y, vw, vh] = eye.viewport.map(|v| v as f32);
             self.set_viewport(x, y, vw, vh);
             self.renderer.set_scissor(x, y, vw, vh);

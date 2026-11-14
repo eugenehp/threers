@@ -43,17 +43,32 @@ use crate::{style, Role, Semantics};
 pub enum MenuItem {
     /// Something to do: `id` is handed to the menu's `on_pick`.
     /// `destructive`: it deletes or discards, and reads so (in red).
-    Action { id: String, label: String, shortcut: Option<String>, disabled: bool, destructive: bool },
+    Action {
+        id: String,
+        label: String,
+        shortcut: Option<String>,
+        disabled: bool,
+        destructive: bool,
+    },
     Separator,
     /// A title over the items after it.
     Header(String),
     /// A menu inside the menu.
-    Submenu { label: String, items: Vec<MenuItem> },
+    Submenu {
+        label: String,
+        items: Vec<MenuItem>,
+    },
 }
 
 impl MenuItem {
     pub fn action(id: impl Into<String>, label: impl Into<String>) -> Self {
-        MenuItem::Action { id: id.into(), label: label.into(), shortcut: None, disabled: false, destructive: false }
+        MenuItem::Action {
+            id: id.into(),
+            label: label.into(),
+            shortcut: None,
+            disabled: false,
+            destructive: false,
+        }
     }
 
     pub fn separator() -> Self {
@@ -65,7 +80,10 @@ impl MenuItem {
     }
 
     pub fn submenu(label: impl Into<String>, items: Vec<MenuItem>) -> Self {
-        MenuItem::Submenu { label: label.into(), items }
+        MenuItem::Submenu {
+            label: label.into(),
+            items,
+        }
     }
 
     /// Shows `label` (`⌘C`) at the item's end.
@@ -93,7 +111,13 @@ impl MenuItem {
 
     /// Whether the keyboard and the pointer can land on it.
     fn active(&self) -> bool {
-        matches!(self, MenuItem::Action { disabled: false, .. } | MenuItem::Submenu { .. })
+        matches!(
+            self,
+            MenuItem::Action {
+                disabled: false,
+                ..
+            } | MenuItem::Submenu { .. }
+        )
     }
 }
 
@@ -163,7 +187,9 @@ fn roots(open: &Rc<RefCell<Open>>) -> Vec<NodeId> {
 fn close<S: 'static>(open: &Rc<RefCell<Open>>, ui: &mut Ui, input: &mut Input<S>, state: &mut S) {
     // Focus in it or in a submenu of it goes back where it was before.
     let all = roots(open);
-    let had_focus = input.focused().is_some_and(|f| ui.contains(f) && ui.ancestors(f).any(|a| all.contains(&a)));
+    let had_focus = input
+        .focused()
+        .is_some_and(|f| ui.contains(f) && ui.ancestors(f).any(|a| all.contains(&a)));
     let (root, child, before) = {
         let mut o = open.borrow_mut();
         (o.root, o.child.take(), o.focus_before)
@@ -224,9 +250,19 @@ pub fn popover_menu<S: 'static>(
     });
     input.on_after_dispatch(move |input, ui, state| {
         // Kept for as long as the button is there.
-        let Some(items) = wanted.borrow_mut().take() else { return ui.contains(trigger) };
+        let Some(items) = wanted.borrow_mut().take() else {
+            return ui.contains(trigger);
+        };
         let p = pick.clone();
-        let open = build(ui, input, MenuAt::Below(trigger), items, p, input.focused(), Some(trigger));
+        let open = build(
+            ui,
+            input,
+            MenuAt::Below(trigger),
+            items,
+            p,
+            input.focused(),
+            Some(trigger),
+        );
         let root = open.borrow().root;
         input.set_focus(ui, state, Some(root));
         *shown.borrow_mut() = Some(MenuHandle { open });
@@ -254,19 +290,30 @@ fn build<S: 'static>(
     );
     ui.set_semantics(root, Semantics::new(Role::Menu).tab_index(-1));
     // In the light appearance, a light menu (see `Ui::appearance_style`).
-    ui.appearance_style(root, crate::states::Appearance::Light, "background: #ffffff; border: 1px solid #d5d9e0; color: #1f2329");
+    ui.appearance_style(
+        root,
+        crate::states::Appearance::Light,
+        "background: #ffffff; border: 1px solid #d5d9e0; color: #1f2329",
+    );
     ui.defer(root, 1000);
     let anchor = match at {
         MenuAt::Point(x, y) => Anchor::new(AnchorTo::Point(x, y), Corner::TopLeft),
-        MenuAt::Below(n) => Anchor::new(AnchorTo::Node(n, Corner::BottomLeft), Corner::TopLeft).offset(0.0, 4.0),
-        MenuAt::Beside(n) => Anchor::new(AnchorTo::Node(n, Corner::TopRight), Corner::TopLeft).offset(2.0, -5.0),
+        MenuAt::Below(n) => {
+            Anchor::new(AnchorTo::Node(n, Corner::BottomLeft), Corner::TopLeft).offset(0.0, 4.0)
+        }
+        MenuAt::Beside(n) => {
+            Anchor::new(AnchorTo::Node(n, Corner::TopRight), Corner::TopLeft).offset(2.0, -5.0)
+        }
     };
     ui.anchor(root, anchor.fit(Fit::Flip));
     let mut rows = vec![];
     for (i, item) in items.iter().enumerate() {
         let row = match item {
             MenuItem::Separator => {
-                let s = ui.add_box(root, style! { height: 1px; margin: 4px 6px; background: #3a4150; });
+                let s = ui.add_box(
+                    root,
+                    style! { height: 1px; margin: 4px 6px; background: #3a4150; },
+                );
                 ui.appearance_style(s, crate::states::Appearance::Light, "background: #e3e6eb");
                 s
             }
@@ -275,7 +322,13 @@ fn build<S: 'static>(
                 ui.add_text(h, label.clone());
                 h
             }
-            MenuItem::Action { label, shortcut, disabled, destructive, .. } => {
+            MenuItem::Action {
+                label,
+                shortcut,
+                disabled,
+                destructive,
+                ..
+            } => {
                 let r = ui.add_box(root, style! { display: flex; gap: 24px; justify-content: space-between; padding: 6px 10px; border-radius: 5px; });
                 let t = ui.add_text(r, label.clone());
                 if *destructive {
@@ -369,7 +422,9 @@ fn build<S: 'static>(
             "Enter" | " " | "ArrowRight" => {
                 let target = {
                     let b = o.borrow();
-                    b.highlighted.filter(|&i| key != "ArrowRight" || matches!(b.items[i], MenuItem::Submenu { .. }))
+                    b.highlighted.filter(|&i| {
+                        key != "ArrowRight" || matches!(b.items[i], MenuItem::Submenu { .. })
+                    })
                 };
                 if let Some(i) = target {
                     activate(state, ui, &o, &p, i);
@@ -390,11 +445,14 @@ fn build<S: 'static>(
     let o = open.clone();
     input.on_click_outside(root, move |_, ui, e, _| {
         let (x, y) = match *e {
-            Event::PointerDown { x, y, .. } | Event::PointerUp { x, y, .. } | Event::Click { x, y, .. } => (x, y),
+            Event::PointerDown { x, y, .. }
+            | Event::PointerUp { x, y, .. }
+            | Event::Click { x, y, .. } => (x, y),
             _ => return,
         };
         let hit = ui.hit_test(x, y);
-        let inside = |n: NodeId| hit.is_some_and(|h| ui.contains(n) && ui.ancestors(h).any(|a| a == n));
+        let inside =
+            |n: NodeId| hit.is_some_and(|h| ui.contains(n) && ui.ancestors(h).any(|a| a == n));
         let in_child = roots(&o).iter().skip(1).any(|&r| inside(r));
         if !in_child && !owner.is_some_and(inside) {
             o.borrow_mut().closing = true;
@@ -408,19 +466,38 @@ fn build<S: 'static>(
 
 /// Does what the menu's listeners asked for. Returns whether it is still
 /// open.
-fn service<S: 'static>(input: &mut Input<S>, ui: &mut Ui, state: &mut S, open: &Rc<RefCell<Open>>, pick: &Pick<S>) -> bool {
+fn service<S: 'static>(
+    input: &mut Input<S>,
+    ui: &mut Ui,
+    state: &mut S,
+    open: &Rc<RefCell<Open>>,
+    pick: &Pick<S>,
+) -> bool {
     if !ui.contains(open.borrow().root) {
         return false;
     }
     // A submenu that closed itself (Left, Escape) is gone.
-    let child_gone = open.borrow().child.as_ref().is_some_and(|(_, c)| !ui.contains(c.borrow().root));
+    let child_gone = open
+        .borrow()
+        .child
+        .as_ref()
+        .is_some_and(|(_, c)| !ui.contains(c.borrow().root));
     if child_gone {
         open.borrow_mut().child = None;
     }
-    let child_picked = open.borrow().child.as_ref().is_some_and(|(_, c)| c.borrow().picked);
+    let child_picked = open
+        .borrow()
+        .child
+        .as_ref()
+        .is_some_and(|(_, c)| c.borrow().picked);
     let (closing, picked, wanted, focus) = {
         let mut o = open.borrow_mut();
-        (std::mem::take(&mut o.closing), o.picked, o.submenu_wanted.take(), std::mem::take(&mut o.submenu_focus))
+        (
+            std::mem::take(&mut o.closing),
+            o.picked,
+            o.submenu_wanted.take(),
+            std::mem::take(&mut o.submenu_focus),
+        )
     };
     if picked || child_picked {
         open.borrow_mut().picked = true;
@@ -442,7 +519,15 @@ fn service<S: 'static>(input: &mut Input<S>, ui: &mut Ui, state: &mut S, open: &
                 (o.items[i].clone(), o.rows[i], o.root)
             };
             if let MenuItem::Submenu { items, .. } = item {
-                let child = build(ui, input, MenuAt::Beside(row), items, pick.clone(), Some(root), None);
+                let child = build(
+                    ui,
+                    input,
+                    MenuAt::Beside(row),
+                    items,
+                    pick.clone(),
+                    Some(root),
+                    None,
+                );
                 open.borrow_mut().child = Some((i, child));
             }
         }
@@ -468,13 +553,20 @@ fn highlight(ui: &mut Ui, open: &Rc<RefCell<Open>>, to: Option<usize>) {
     if o.highlighted == to {
         return;
     }
-    if let Some(r) = o.highlighted.and_then(|h| o.rows.get(h).copied()).filter(|&r| ui.contains(r)) {
+    if let Some(r) = o
+        .highlighted
+        .and_then(|h| o.rows.get(h).copied())
+        .filter(|&r| ui.contains(r))
+    {
         let st = ui.style_mut(r);
         st.background = None;
         // Back to the menu's colour (the default inherits it).
         st.color = [1.0; 4];
     }
-    if let Some(r) = to.and_then(|h| o.rows.get(h).copied()).filter(|&r| ui.contains(r)) {
+    if let Some(r) = to
+        .and_then(|h| o.rows.get(h).copied())
+        .filter(|&r| ui.contains(r))
+    {
         let st = ui.style_mut(r);
         st.background = Some([0.145, 0.388, 0.922, 1.0]);
         // White on the blue, in either appearance (not the default white,
@@ -484,10 +576,20 @@ fn highlight(ui: &mut Ui, open: &Rc<RefCell<Open>>, to: Option<usize>) {
     o.highlighted = to;
 }
 
-fn activate<S: 'static>(state: &mut S, ui: &mut Ui, open: &Rc<RefCell<Open>>, pick: &Pick<S>, i: usize) {
+fn activate<S: 'static>(
+    state: &mut S,
+    ui: &mut Ui,
+    open: &Rc<RefCell<Open>>,
+    pick: &Pick<S>,
+    i: usize,
+) {
     let item = open.borrow().items[i].clone();
     match item {
-        MenuItem::Action { id, disabled: false, .. } => {
+        MenuItem::Action {
+            id,
+            disabled: false,
+            ..
+        } => {
             (pick.borrow_mut())(state, ui, &id);
             // The whole menu closes, from the top.
             open.borrow_mut().picked = true;

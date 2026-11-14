@@ -46,14 +46,14 @@ mod shaders;
 mod tests;
 mod theme;
 
-pub use label::{Label, LabelAlign};
 use label::{place_label, Host, LabelNode};
-pub use palette::Palette;
+pub use label::{Label, LabelAlign};
 use palette::hex;
+pub use palette::Palette;
 pub use plain::{progress_view, PlainKind, PlainStyle, ProgressView, SPOKES};
 pub use presets::Preset;
-pub use shaders::{source, source_filled};
 use shaders::{linear, shader};
+pub use shaders::{source, source_filled};
 pub use theme::{indicator_themed, progress_view_themed, IndicatorTheme};
 
 /// What an indicator is drawn as.
@@ -152,7 +152,14 @@ impl CustomFill {
 
 impl Fill {
     /// Every fill, in order.
-    pub const ALL: [Fill; 6] = [Fill::Neon, Fill::Electric, Fill::Fire, Fill::Water, Fill::Plasma, Fill::Frost];
+    pub const ALL: [Fill; 6] = [
+        Fill::Neon,
+        Fill::Electric,
+        Fill::Fire,
+        Fill::Water,
+        Fill::Plasma,
+        Fill::Frost,
+    ];
 
     /// Its number in the effects' shader (`Electric` and `Neon` have their
     /// own).
@@ -220,7 +227,20 @@ impl IndicatorStyle {
             Shape::Ring => 96.0,
             Shape::Battery => 28.0,
         };
-        Self { shape, depth: Depth::Flat, palette: Palette::AURORA, glow: 0.7, shimmer: false, size, thickness: 0.22, motion: Motion::None, motion_speed: 1.0, motion_amount: 1.0, phases: None, fill: Fill::Neon }
+        Self {
+            shape,
+            depth: Depth::Flat,
+            palette: Palette::AURORA,
+            glow: 0.7,
+            shimmer: false,
+            size,
+            thickness: 0.22,
+            motion: Motion::None,
+            motion_speed: 1.0,
+            motion_amount: 1.0,
+            phases: None,
+            fill: Fill::Neon,
+        }
     }
 
     pub fn depth(self, depth: Depth) -> Self {
@@ -232,7 +252,10 @@ impl IndicatorStyle {
     }
 
     pub fn glow(self, glow: f32) -> Self {
-        Self { glow: glow.max(0.0), ..self }
+        Self {
+            glow: glow.max(0.0),
+            ..self
+        }
     }
 
     pub fn shimmer(self, shimmer: bool) -> Self {
@@ -240,11 +263,17 @@ impl IndicatorStyle {
     }
 
     pub fn size(self, size: f32) -> Self {
-        Self { size: size.max(2.0), ..self }
+        Self {
+            size: size.max(2.0),
+            ..self
+        }
     }
 
     pub fn thickness(self, thickness: f32) -> Self {
-        Self { thickness: thickness.clamp(0.05, 0.6), ..self }
+        Self {
+            thickness: thickness.clamp(0.05, 0.6),
+            ..self
+        }
     }
 
     /// Coloured by phase: the palette's first colour below `low`, its
@@ -265,7 +294,10 @@ impl IndicatorStyle {
     }
 
     pub fn phases(self, low: f32, mid: f32) -> Self {
-        Self { phases: Some([low.min(mid), mid.max(low)]), ..self }
+        Self {
+            phases: Some([low.min(mid), mid.max(low)]),
+            ..self
+        }
     }
 
     /// The colours to give the shader at `value`: the palette, or the one
@@ -273,7 +305,13 @@ impl IndicatorStyle {
     fn colours_at(&self, value: Option<f32>) -> [Rgba; 3] {
         match (self.phases, value) {
             (Some([low, mid]), Some(v)) => {
-                let c = if v < low { self.palette.0[0] } else if v < mid { self.palette.0[1] } else { self.palette.0[2] };
+                let c = if v < low {
+                    self.palette.0[0]
+                } else if v < mid {
+                    self.palette.0[1]
+                } else {
+                    self.palette.0[2]
+                };
                 [c, c, c]
             }
             _ => self.palette.0,
@@ -286,7 +324,11 @@ impl IndicatorStyle {
 
     /// How fast (1 as designed) and how far (1 as designed) it moves.
     pub fn motion_tuned(self, speed: f32, amount: f32) -> Self {
-        Self { motion_speed: speed.max(0.0), motion_amount: amount.max(0.0), ..self }
+        Self {
+            motion_speed: speed.max(0.0),
+            motion_amount: amount.max(0.0),
+            ..self
+        }
     }
 
     /// How far its glow reaches past its box, in UI pixels.
@@ -295,7 +337,11 @@ impl IndicatorStyle {
             Shape::Bar | Shape::Battery => self.size * 0.5,
             Shape::Ring => self.size * 0.25 * self.thickness,
         };
-        if self.glow <= 0.0 { 1.0 } else { (stroke * 4.0 + 6.0) * self.glow.min(1.5) }
+        if self.glow <= 0.0 {
+            1.0
+        } else {
+            (stroke * 4.0 + 6.0) * self.glow.min(1.5)
+        }
     }
 
     /// How far a hop goes, in UI pixels.
@@ -315,11 +361,22 @@ impl IndicatorStyle {
             Motion::Bounce => self.hop() * a + self.size * 0.1 * a,
             Motion::Buzz => self.hop() * 0.15 * a,
             // A bar grows along its length too: room for a long one.
-            Motion::Pulse => self.size * 0.1 * a + if self.shape == Shape::Bar { 16.0 * a } else { 0.0 },
+            Motion::Pulse => {
+                self.size * 0.1 * a
+                    + if self.shape == Shape::Bar {
+                        16.0 * a
+                    } else {
+                        0.0
+                    }
+            }
             Motion::Float => self.hop() * 0.3 * a + self.size * 0.04,
         };
         // Flames rise four times the stroke's half above it.
-        let flames = if self.fill == Fill::Fire { self.stroke() * 2.0 } else { 0.0 };
+        let flames = if self.fill == Fill::Fire {
+            self.stroke() * 2.0
+        } else {
+            0.0
+        };
         self.glow_reach().max(flames) + moves
     }
 
@@ -348,7 +405,13 @@ pub struct Indicator {
 /// An indicator in `parent` showing `value` (0 to 1), or busy with `None`.
 /// A bar is as wide as its parent lets it be; give it a width to change
 /// that. See the [module docs](self).
-pub fn indicator(ui: &mut Ui, parent: NodeId, label: &str, style: IndicatorStyle, value: Option<f32>) -> Indicator {
+pub fn indicator(
+    ui: &mut Ui,
+    parent: NodeId,
+    label: &str,
+    style: IndicatorStyle,
+    value: Option<f32>,
+) -> Indicator {
     let node = ui.add_box(parent, style! { position: relative; flex-shrink: 0; });
     ui.update_style(node, |s| match style.shape {
         Shape::Bar => {
@@ -365,7 +428,10 @@ pub fn indicator(ui: &mut Ui, parent: NodeId, label: &str, style: IndicatorStyle
         }
     });
     ui.set_semantics(node, Semantics::new(Role::ProgressBar).label(label));
-    let fx = ui.add_box(node, style! { position: absolute; left: 0px; top: 0px; width: 100%; height: 100%; });
+    let fx = ui.add_box(
+        node,
+        style! { position: absolute; left: 0px; top: 0px; width: 100%; height: 100%; },
+    );
     let [c0, c1, c2] = style.palette.0;
     let fill = match style.shape {
         Shape::Bar => {
@@ -381,7 +447,13 @@ pub fn indicator(ui: &mut Ui, parent: NodeId, label: &str, style: IndicatorStyle
                 s.background = Some(c1);
                 s.background_gradient = vec![(0.0, c0), (0.5, c1), (1.0, c2)];
                 if style.glow > 0.0 {
-                    s.box_shadow = vec![BoxShadow { x: 0.0, y: 0.0, blur: style.size * 1.5 * style.glow, spread: 0.0, color: [c1[0], c1[1], c1[2], 0.6] }];
+                    s.box_shadow = vec![BoxShadow {
+                        x: 0.0,
+                        y: 0.0,
+                        blur: style.size * 1.5 * style.glow,
+                        spread: 0.0,
+                        color: [c1[0], c1[1], c1[2], 0.6],
+                    }];
                 }
             });
             fill
@@ -393,10 +465,20 @@ pub fn indicator(ui: &mut Ui, parent: NodeId, label: &str, style: IndicatorStyle
             let nub = h * 0.14;
             ui.update_style(fx, |s| {
                 s.width = Length::Px(battery_width(h) - nub);
-                s.border = crate::Edges { top: t, right: t, bottom: t, left: t };
+                s.border = crate::Edges {
+                    top: t,
+                    right: t,
+                    bottom: t,
+                    left: t,
+                };
                 s.border_color = [0.82, 0.85, 0.9, 0.85];
                 s.border_radius = Length::Px(h * 0.24);
-                s.padding = crate::Edges { top: t, right: t, bottom: t, left: t };
+                s.padding = crate::Edges {
+                    top: t,
+                    right: t,
+                    bottom: t,
+                    left: t,
+                };
                 s.box_sizing = crate::BoxSizing::BorderBox;
                 s.display = crate::Display::Flex;
             });
@@ -421,13 +503,28 @@ pub fn indicator(ui: &mut Ui, parent: NodeId, label: &str, style: IndicatorStyle
             // Arcs on a 100-unit view box: the stroke is its share of that.
             let stroke = 100.0 * style.stroke() / style.size;
             let r = 50.0 - stroke * 0.5 - 100.0 / style.size;
-            let whole = || style! { position: absolute; left: 0px; top: 0px; width: 100%; height: 100%; };
-            let track = ui.add_path(fx, whole(), arc(r, 0.0, 1.0), [0.0, 0.0, 100.0, 100.0], Some(stroke), false);
+            let whole =
+                || style! { position: absolute; left: 0px; top: 0px; width: 100%; height: 100%; };
+            let track = ui.add_path(
+                fx,
+                whole(),
+                arc(r, 0.0, 1.0),
+                [0.0, 0.0, 100.0, 100.0],
+                Some(stroke),
+                false,
+            );
             ui.update_style(track, |s| {
                 s.color = [c0[0], c0[1], c0[2], 0.2];
                 s.color_set = true;
             });
-            let fill = ui.add_path(fx, whole(), vec![], [0.0, 0.0, 100.0, 100.0], Some(stroke), false);
+            let fill = ui.add_path(
+                fx,
+                whole(),
+                vec![],
+                [0.0, 0.0, 100.0, 100.0],
+                Some(stroke),
+                false,
+            );
             ui.update_style(fill, |s| {
                 s.color = c1;
                 s.color_set = true;
@@ -438,7 +535,13 @@ pub fn indicator(ui: &mut Ui, parent: NodeId, label: &str, style: IndicatorStyle
     for n in [fx, fill] {
         ui.semantics_mut(n).hidden = true;
     }
-    let ind = Indicator { node, fx, fill, style, label: None };
+    let ind = Indicator {
+        node,
+        fx,
+        fill,
+        style,
+        label: None,
+    };
     ind.set(ui, value);
     ind
 }
@@ -454,9 +557,14 @@ fn slide(ui: &mut Ui, bar: NodeId, fill: NodeId, share: f32, period: f32) {
         let w = ui.rect(bar).width.max(100.0);
         ui.animate(
             fill,
-            Animation::new(Property::TranslateX, Value::Number(-share * w), Value::Number(w), period)
-                .easing(threers_math::easing::Easing::SineInOut)
-                .repeat(Repeat::Forever),
+            Animation::new(
+                Property::TranslateX,
+                Value::Number(-share * w),
+                Value::Number(w),
+                period,
+            )
+            .easing(threers_math::easing::Easing::SineInOut)
+            .repeat(Repeat::Forever),
         );
     }
 }
@@ -485,11 +593,15 @@ fn arc(r: f32, start: f32, turns: f32) -> Vec<String> {
     let (x0, y0) = point(start);
     if turns >= 1.0 - 1e-4 {
         let (xm, ym) = point(start + 0.5);
-        return vec![format!("M{x0:.3} {y0:.3} A{r} {r} 0 0 1 {xm:.3} {ym:.3} A{r} {r} 0 0 1 {x0:.3} {y0:.3}")];
+        return vec![format!(
+            "M{x0:.3} {y0:.3} A{r} {r} 0 0 1 {xm:.3} {ym:.3} A{r} {r} 0 0 1 {x0:.3} {y0:.3}"
+        )];
     }
     let (x1, y1) = point(start + turns);
     let large = u8::from(turns > 0.5);
-    vec![format!("M{x0:.3} {y0:.3} A{r} {r} 0 {large} 1 {x1:.3} {y1:.3}")]
+    vec![format!(
+        "M{x0:.3} {y0:.3} A{r} {r} 0 {large} 1 {x1:.3} {y1:.3}"
+    )]
 }
 
 impl Indicator {
@@ -497,14 +609,22 @@ impl Indicator {
     pub fn set(&self, ui: &mut Ui, value: Option<f32>) {
         let v = value.map(|v| v.clamp(0.0, 1.0));
         let sem = ui.semantics_mut(self.node);
-        sem.range = v.map(|v| crate::a11y::RangeValue { min: 0.0, max: 100.0, now: v * 100.0 });
+        sem.range = v.map(|v| crate::a11y::RangeValue {
+            min: 0.0,
+            max: 100.0,
+            now: v * 100.0,
+        });
         sem.value = v.map(|v| format!("{}%", (v * 100.0).round()));
         if let Some(l) = &self.label {
             ui.set_text(l.text, l.label.render(v));
         }
         let st = self.style;
         let busy = v.is_none();
-        let motion = if ui.reduce_motion() { Motion::None } else { st.motion };
+        let motion = if ui.reduce_motion() {
+            Motion::None
+        } else {
+            st.motion
+        };
         let light = ui.appearance_of(self.node) == crate::states::Appearance::Light;
         let animated = busy || st.shimmer || motion != Motion::None || st.fill.moves();
         let sh = shader(st.shape, st.depth, st.fill, animated);
@@ -516,8 +636,23 @@ impl Indicator {
             .arg("c1", c1)
             .arg("c2", c2)
             .arg("look", [st.glow, flag(st.shimmer), flag(busy), st.stroke()])
-            .arg("reach", if light { -st.glow_reach() } else { st.glow_reach() })
-            .arg("motion", [motion_code(motion, st.shape), st.motion_speed, st.motion_amount, st.hop()])
+            .arg(
+                "reach",
+                if light {
+                    -st.glow_reach()
+                } else {
+                    st.glow_reach()
+                },
+            )
+            .arg(
+                "motion",
+                [
+                    motion_code(motion, st.shape),
+                    st.motion_speed,
+                    st.motion_amount,
+                    st.hop(),
+                ],
+            )
             .overflow(st.overflow());
         if ui.effect(self.fx) != Some(&effect) {
             ui.set_effect(self.fx, Some(effect));
@@ -533,7 +668,11 @@ impl Indicator {
             },
             Shape::Battery => {
                 let level = v.unwrap_or(0.35);
-                let c = if st.phases.is_some() { st.colours_at(Some(level))[0] } else { st.palette.at(level) };
+                let c = if st.phases.is_some() {
+                    st.colours_at(Some(level))[0]
+                } else {
+                    st.palette.at(level)
+                };
                 ui.update_style(self.fill, |s| {
                     s.width = Length::Percent(level * 100.0);
                     s.background = Some(c);
@@ -564,12 +703,25 @@ impl Indicator {
     /// Puts `label` on it, or takes its label off.
     pub fn set_label(&mut self, ui: &mut Ui, label: Option<Label>) {
         let host = match self.style.shape {
-            Shape::Bar | Shape::Battery => Host::Bar { height: self.style.size },
-            Shape::Ring => Host::Round { size: self.style.size },
+            Shape::Bar | Shape::Battery => Host::Bar {
+                height: self.style.size,
+            },
+            Shape::Ring => Host::Round {
+                size: self.style.size,
+            },
         };
         let value = self.current(ui);
         match label {
-            Some(l) => self.label = Some(place_label(ui, self.node, host, l, self.label.as_ref(), value)),
+            Some(l) => {
+                self.label = Some(place_label(
+                    ui,
+                    self.node,
+                    host,
+                    l,
+                    self.label.as_ref(),
+                    value,
+                ))
+            }
             None => {
                 if let Some(o) = self.label.take() {
                     ui.remove(o.node);
@@ -588,6 +740,7 @@ impl Indicator {
 
     /// Its value as last set (`None`: busy).
     pub fn current(&self, ui: &Ui) -> Option<f32> {
-        ui.semantics(self.node).and_then(|s| s.range.map(|r| r.now / 100.0))
+        ui.semantics(self.node)
+            .and_then(|s| s.range.map(|r| r.now / 100.0))
     }
 }

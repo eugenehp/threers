@@ -266,7 +266,10 @@ pub enum LayoutDirection {
 
 impl std::fmt::Debug for Env {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Env").field("text_scale", &self.text_scale).field("reduce_motion", &self.reduce_motion).finish()
+        f.debug_struct("Env")
+            .field("text_scale", &self.text_scale)
+            .field("reduce_motion", &self.reduce_motion)
+            .finish()
     }
 }
 
@@ -280,13 +283,25 @@ impl Ui {
     /// Sets `value` for `node` and everything inside it (until something
     /// inside sets its own).
     pub fn set_environment<T: 'static>(&mut self, node: NodeId, value: T) {
-        self.env.values.retain(|n, _| self.nodes.get(n.0).is_some_and(|x| !x.removed && x.generation == n.1));
-        self.env.values.entry(node).or_default().insert(TypeId::of::<T>(), Rc::new(value));
+        self.env.values.retain(|n, _| {
+            self.nodes
+                .get(n.0)
+                .is_some_and(|x| !x.removed && x.generation == n.1)
+        });
+        self.env
+            .values
+            .entry(node)
+            .or_default()
+            .insert(TypeId::of::<T>(), Rc::new(value));
     }
 
     /// The `T` set on `node` itself, if one is (not inherited).
     pub fn own_environment<T: Clone + 'static>(&self, node: NodeId) -> Option<T> {
-        self.env.values.get(&node).and_then(|m| m.get(&TypeId::of::<T>())).and_then(|v| v.downcast_ref::<T>().cloned())
+        self.env
+            .values
+            .get(&node)
+            .and_then(|m| m.get(&TypeId::of::<T>()))
+            .and_then(|v| v.downcast_ref::<T>().cloned())
     }
 
     /// The `T` in effect at `node`: set on it or its nearest ancestor that
@@ -294,7 +309,12 @@ impl Ui {
     pub fn environment<T: Clone + 'static>(&self, node: NodeId) -> Option<T> {
         let mut at = Some(node);
         while let Some(n) = at.filter(|&n| self.contains(n)) {
-            if let Some(v) = self.env.values.get(&n).and_then(|m| m.get(&TypeId::of::<T>())) {
+            if let Some(v) = self
+                .env
+                .values
+                .get(&n)
+                .and_then(|m| m.get(&TypeId::of::<T>()))
+            {
                 return v.downcast_ref::<T>().cloned();
             }
             at = self.parent(n);
@@ -360,7 +380,11 @@ impl Ui {
 
     /// The text size, as a multiple of each text node's own (1 by default).
     pub fn text_scale(&self) -> f32 {
-        if self.env.text_scale > 0.0 { self.env.text_scale } else { 1.0 }
+        if self.env.text_scale > 0.0 {
+            self.env.text_scale
+        } else {
+            1.0
+        }
     }
 
     /// Scales every text node's font size and line height by `scale`
@@ -368,13 +392,19 @@ impl Ui {
     /// a text node's own style given after should be given unscaled
     /// through [`set_style`](Self::set_style).
     pub fn set_text_scale(&mut self, scale: f32) {
-        let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
         if scale == self.text_scale() {
             return;
         }
         self.env.text_scale = scale;
-        let texts: Vec<NodeId> =
-            (0..self.nodes.len()).filter(|&i| !self.nodes[i].removed && matches!(self.nodes[i].kind, NodeKind::Text(_))).map(|i| self.id_at(i)).collect();
+        let texts: Vec<NodeId> = (0..self.nodes.len())
+            .filter(|&i| !self.nodes[i].removed && matches!(self.nodes[i].kind, NodeKind::Text(_)))
+            .map(|i| self.id_at(i))
+            .collect();
         for id in texts {
             self.scale_text(id);
         }
@@ -428,9 +458,20 @@ impl Ui {
     pub fn scale_with_text(&mut self, node: NodeId) {
         let s = self.style(node);
         let k = self.text_scale();
-        let own = |l: Length| if let Length::Px(v) = l { Length::Px(v / k) } else { l };
+        let own = |l: Length| {
+            if let Length::Px(v) = l {
+                Length::Px(v / k)
+            } else {
+                l
+            }
+        };
         let m = Metrics {
-            padding: Edges { top: s.padding.top / k, right: s.padding.right / k, bottom: s.padding.bottom / k, left: s.padding.left / k },
+            padding: Edges {
+                top: s.padding.top / k,
+                right: s.padding.right / k,
+                bottom: s.padding.bottom / k,
+                left: s.padding.left / k,
+            },
             gap: s.gap / k,
             row_gap: s.row_gap.map(|g| g / k),
             width: own(s.width),
@@ -462,9 +503,20 @@ impl Ui {
                 self.env.scaled.remove(&n);
                 continue;
             }
-            let px = |l: Length| if let Length::Px(v) = l { Length::Px(v * k) } else { l };
+            let px = |l: Length| {
+                if let Length::Px(v) = l {
+                    Length::Px(v * k)
+                } else {
+                    l
+                }
+            };
             self.update_style(n, |s| {
-                s.padding = Edges { top: m.padding.top * k, right: m.padding.right * k, bottom: m.padding.bottom * k, left: m.padding.left * k };
+                s.padding = Edges {
+                    top: m.padding.top * k,
+                    right: m.padding.right * k,
+                    bottom: m.padding.bottom * k,
+                    left: m.padding.left * k,
+                };
                 s.gap = m.gap * k;
                 s.row_gap = m.row_gap.map(|g| g * k);
                 s.width = px(m.width);
@@ -504,14 +556,21 @@ impl Ui {
     }
 
     fn apply_safe(&mut self, node: NodeId) {
-        let Some(&(own, [t, r, b, l])) = self.env.safe_nodes.get(&node) else { return };
+        let Some(&(own, [t, r, b, l])) = self.env.safe_nodes.get(&node) else {
+            return;
+        };
         if !self.contains(node) {
             self.env.safe_nodes.remove(&node);
             return;
         }
         let i = self.env.safe_area;
         let on = |yes: bool, v: f32| if yes { v } else { 0.0 };
-        let want = Edges { top: own.top + on(t, i.top), right: own.right + on(r, i.right), bottom: own.bottom + on(b, i.bottom), left: own.left + on(l, i.left) };
+        let want = Edges {
+            top: own.top + on(t, i.top),
+            right: own.right + on(r, i.right),
+            bottom: own.bottom + on(b, i.bottom),
+            left: own.left + on(l, i.left),
+        };
         if self.style(node).padding != want {
             self.update_style(node, |s| s.padding = want);
         }
@@ -520,7 +579,11 @@ impl Ui {
     /// Draws `node`'s text and images as plain bars (a placeholder while
     /// what it shows loads), or as themselves again.
     pub fn set_redacted(&mut self, node: NodeId, on: bool) {
-        let changed = if on { self.env.redacted.insert(node) } else { self.env.redacted.remove(&node) };
+        let changed = if on {
+            self.env.redacted.insert(node)
+        } else {
+            self.env.redacted.remove(&node)
+        };
         if changed {
             self.touch(node);
         }
@@ -528,7 +591,8 @@ impl Ui {
 
     /// Whether `node` or a box around it is drawn as a placeholder.
     pub fn is_redacted(&self, node: NodeId) -> bool {
-        !self.env.redacted.is_empty() && self.ancestors(node).any(|a| self.env.redacted.contains(&a))
+        !self.env.redacted.is_empty()
+            && self.ancestors(node).any(|a| self.env.redacted.contains(&a))
     }
 
     /// Lays rows out from the right, as Arabic and Hebrew read: everything
@@ -559,7 +623,25 @@ impl Ui {
     /// Whether reduced motion skips animating `property`.
     pub(crate) fn motion_skipped(&self, property: Property) -> bool {
         self.env.reduce_motion
-            && matches!(property, Property::Left | Property::Top | Property::Right | Property::Bottom | Property::Width | Property::Height | Property::ScrollTop | Property::ScrollLeft | Property::Rotate | Property::RotateX | Property::RotateY | Property::Depth | Property::Scale | Property::RotateZ | Property::TranslateX)
+            && matches!(
+                property,
+                Property::Left
+                    | Property::Top
+                    | Property::Right
+                    | Property::Bottom
+                    | Property::Width
+                    | Property::Height
+                    | Property::ScrollTop
+                    | Property::ScrollLeft
+                    | Property::Rotate
+                    | Property::RotateX
+                    | Property::RotateY
+                    | Property::Depth
+                    | Property::Scale
+                    | Property::RotateZ
+                    | Property::TranslateX
+                    | Property::TranslateY
+            )
     }
 }
 
@@ -600,8 +682,14 @@ mod tests {
         t.dark.surface = [0.0, 0.5, 0.0, 1.0];
         t.light.surface = [0.0, 0.5, 0.0, 1.0];
         ui.set_tokens(t);
-        assert_eq!(ui.style(b).background.map(|c| (c[1] * 255.0).round()), Some(128.0));
-        ui.set_interaction(crate::states::Interaction { hovered: vec![b], ..Default::default() });
+        assert_eq!(
+            ui.style(b).background.map(|c| (c[1] * 255.0).round()),
+            Some(128.0)
+        );
+        ui.set_interaction(crate::states::Interaction {
+            hovered: vec![b],
+            ..Default::default()
+        });
         assert_eq!(ui.style(b).background, Some([1.0, 0.0, 0.0, 1.0]));
     }
 
@@ -622,7 +710,15 @@ mod tests {
         ui.set_text_scale(1.0);
         assert_eq!(ui.style(t).font_size, 10.0);
         ui.set_reduce_motion(true);
-        ui.animate(b, crate::animation::Animation::new(Property::Left, crate::animation::Value::Number(0.0), crate::animation::Value::Number(50.0), 1.0));
+        ui.animate(
+            b,
+            crate::animation::Animation::new(
+                Property::Left,
+                crate::animation::Value::Number(0.0),
+                crate::animation::Value::Number(50.0),
+                1.0,
+            ),
+        );
         assert!(!ui.is_animating(b));
         assert_eq!(ui.style(b).left, crate::Length::Px(50.0));
     }
@@ -642,10 +738,21 @@ mod animated_state_tests {
         let b = ui.add_box(root, style! { position: absolute; left: 0px; });
         ui.token_style(b, &[("background", super::Token::Accent)]);
         ui.hover_style(b, "opacity: 0.5");
-        ui.animate(b, Animation::new(Property::Left, Value::Number(0.0), Value::Number(100.0), 0.2));
+        ui.animate(
+            b,
+            Animation::new(
+                Property::Left,
+                Value::Number(0.0),
+                Value::Number(100.0),
+                0.2,
+            ),
+        );
         ui.step(0.3);
         assert_eq!(ui.style(b).left, Length::Px(100.0));
-        ui.set_interaction(crate::states::Interaction { hovered: vec![b], ..Default::default() });
+        ui.set_interaction(crate::states::Interaction {
+            hovered: vec![b],
+            ..Default::default()
+        });
         assert_eq!(ui.style(b).left, Length::Px(100.0), "not back at 0");
         assert_eq!(ui.style(b).opacity, 0.5, "and its hover style on top");
     }

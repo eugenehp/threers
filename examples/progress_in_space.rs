@@ -25,23 +25,38 @@ fn space() -> (Scene, Vec<IndicatorHandle3d>) {
     f.quaternion = Euler::new(-std::f32::consts::FRAC_PI_2, 0.0, 0.0).to_quaternion();
     scene.add(f);
     let mut out = vec![];
-    let ring = Indicator3d::ring(0.32, 0.06).palette(Palette3d::EMBER).add_to(&mut scene, Vector3::new(-0.9, 0.75, 0.0));
+    let ring = Indicator3d::ring(0.32, 0.06)
+        .palette(Palette3d::EMBER)
+        .add_to(&mut scene, Vector3::new(-0.9, 0.75, 0.0));
     ring.set(Some(0.72));
     out.push(ring);
-    let spinning = Indicator3d::ring(0.32, 0.06).palette(Palette3d::AURORA).spin(0.12).add_to(&mut scene, Vector3::new(0.0, 0.8, -0.3));
+    let spinning = Indicator3d::ring(0.32, 0.06)
+        .palette(Palette3d::AURORA)
+        .spin(0.12)
+        .add_to(&mut scene, Vector3::new(0.0, 0.8, -0.3));
     spinning.set(Some(0.45));
     out.push(spinning);
-    let busy = Indicator3d::ring(0.26, 0.05).palette(Palette3d::NEON).bob(0.04).add_to(&mut scene, Vector3::new(0.9, 0.75, 0.0));
+    let busy = Indicator3d::ring(0.26, 0.05)
+        .palette(Palette3d::NEON)
+        .bob(0.04)
+        .add_to(&mut scene, Vector3::new(0.9, 0.75, 0.0));
     busy.set(None);
     out.push(busy);
-    let bar = Indicator3d::bar(1.6, 0.06).palette(Palette3d::OCEAN).shimmer(true).add_to(&mut scene, Vector3::new(0.0, 0.22, 0.35));
+    let bar = Indicator3d::bar(1.6, 0.06)
+        .palette(Palette3d::OCEAN)
+        .shimmer(true)
+        .add_to(&mut scene, Vector3::new(0.0, 0.22, 0.35));
     bar.set(Some(0.6));
     out.push(bar);
     (scene, out)
 }
 
 fn render(scene: &mut Scene, camera: &PerspectiveCamera, w: u32, h: u32) -> Vec<u8> {
-    let mut hr = HeadlessRenderer::builder().size(w, h).color_format(FORMAT).build().expect("a GPU adapter");
+    let mut hr = HeadlessRenderer::builder()
+        .size(w, h)
+        .color_format(FORMAT)
+        .build()
+        .expect("a GPU adapter");
     hr.set_msaa(4);
     hr.renderer().set_tone_mapping(ToneMapping::AcesFilmic, 1.0);
     let mut composer = EffectComposer::with_size(w, h);
@@ -62,9 +77,16 @@ fn main() {
     for i in &items {
         i.update(&mut scene, 1.4);
     }
-    std::fs::write("out/progress_in_space.png", encode_png(w, h, &render(&mut scene, &camera, w, h))).unwrap();
+    std::fs::write(
+        "out/progress_in_space.png",
+        encode_png(w, h, &render(&mut scene, &camera, w, h)),
+    )
+    .unwrap();
     println!("wrote out/progress_in_space.png");
-    let frames: usize = std::env::var("PROGRESS_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let frames: usize = std::env::var("PROGRESS_FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     if frames > 0 {
         std::fs::create_dir_all("out/progress_frames").unwrap();
         for f in 0..frames {
@@ -73,7 +95,11 @@ fn main() {
                 i.update(&mut scene, t);
             }
             let path = format!("out/progress_frames/{f:03}.png");
-            std::fs::write(&path, encode_png(640, 360, &render(&mut scene, &camera, 640, 360))).unwrap();
+            std::fs::write(
+                &path,
+                encode_png(640, 360, &render(&mut scene, &camera, 640, 360)),
+            )
+            .unwrap();
         }
         println!("wrote {frames} frames to out/progress_frames/");
     }

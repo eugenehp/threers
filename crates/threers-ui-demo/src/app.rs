@@ -8,11 +8,13 @@ use threers_ui::menu::{popover_menu, MenuItem};
 use threers_ui::navigation::{ListNavigation, Nav};
 use threers_ui::notifications::{Notice, Notifications, Tone};
 use threers_ui::palette::{open_palette, Command};
+use threers_ui::rich_text::TextRun;
 use threers_ui::states::Theme;
 use threers_ui::text_editing::TextEditing;
 use threers_ui::text_touch::Request;
-use threers_ui::rich_text::TextRun;
-use threers_ui::{style, FieldKey, KeyModifiers, NodeId, Painter, Role, Semantics, TextField, TextMeasure, Ui};
+use threers_ui::{
+    style, FieldKey, KeyModifiers, NodeId, Painter, Role, Semantics, TextField, TextMeasure, Ui,
+};
 
 /// What the UI's listeners change.
 #[derive(Debug, Default)]
@@ -68,6 +70,10 @@ pub struct State {
     pub progress: f32,
     /// Whether the Progress page's controls are drawn solid.
     pub progress_solid: bool,
+    /// The Tailwind page: its tab, and the buttons pressed there.
+    pub tw_tab: usize,
+    pub tw_presses: u32,
+    pub tw_pressed: &'static str,
     /// The 3D page's departures board: which one it shows.
     pub departure: usize,
     /// The Toolkit page: the rolling number, the fading word, the gauges'
@@ -227,6 +233,7 @@ pub struct App {
     progress: crate::progress::Progress,
     /// The Toolkit page, kept up from the state.
     toolkit: crate::toolkit::Toolkit,
+    tailwind: crate::tailwind::TailwindPage,
 }
 
 const ACCENT: &str = "#2563eb";
@@ -243,10 +250,28 @@ fn button(ui: &mut Ui, parent: NodeId, label: &str, primary: bool) -> NodeId {
     ui.add_text(b, label);
     ui.set_semantics(b, Semantics::new(Role::Button).label(label));
     if !primary {
-        light(ui, b, "background: #ffffff; border: 1px solid #d0d4da; color: #1f2329");
+        light(
+            ui,
+            b,
+            "background: #ffffff; border: 1px solid #d0d4da; color: #1f2329",
+        );
     }
-    ui.hover_style(b, if primary { "background: #1d4ed8" } else { "background: rgba(128,138,160,0.28)" });
-    ui.active_style(b, if primary { "background: #1e40af" } else { "background: rgba(128,138,160,0.4)" });
+    ui.hover_style(
+        b,
+        if primary {
+            "background: #1d4ed8"
+        } else {
+            "background: rgba(128,138,160,0.28)"
+        },
+    );
+    ui.active_style(
+        b,
+        if primary {
+            "background: #1e40af"
+        } else {
+            "background: rgba(128,138,160,0.4)"
+        },
+    );
     ui.focus_visible_style(b, "border: 2px solid #93c5fd");
     ui.transition(b, 0.12);
     b
@@ -263,8 +288,14 @@ fn panel(ui: &mut Ui, parent: NodeId, title: &str) -> NodeId {
         style! { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 10px; background: #1b1f27; border: 1px solid #2a303c; overflow: hidden; },
     );
     light(ui, p, "background: #ffffff; border: 1px solid #e2e5ea");
-    let h = ui.add_box(p, style! { font-size: 12px; color: #8b93a5; font-weight: bold; });
-    ui.token_style(h, &[("color", threers_ui::environment::Token::SecondaryText)]);
+    let h = ui.add_box(
+        p,
+        style! { font-size: 12px; color: #8b93a5; font-weight: bold; },
+    );
+    ui.token_style(
+        h,
+        &[("color", threers_ui::environment::Token::SecondaryText)],
+    );
     ui.add_text(h, title);
     ui.set_semantics(h, Semantics::new(Role::Heading(2)));
     p
@@ -278,7 +309,12 @@ fn picture() -> threers_ui::image::ImageRef {
         for x in 0..w {
             let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
             let ring = ((u - 0.5).hypot(v - 0.6) * 18.0).sin() * 0.5 + 0.5;
-            px.extend([(40.0 + 200.0 * u) as u8, (60.0 + 120.0 * ring) as u8, (180.0 + 60.0 * v) as u8, 255]);
+            px.extend([
+                (40.0 + 200.0 * u) as u8,
+                (60.0 + 120.0 * ring) as u8,
+                (180.0 + 60.0 * v) as u8,
+                255,
+            ]);
         }
     }
     Image::new(w, h, px).expect("sized")
@@ -298,7 +334,11 @@ impl App {
             tasks: ["Read the docs", "Try the palette", "Resize the split"]
                 .iter()
                 .enumerate()
-                .map(|(i, t)| crate::showcase::Task { id: i as u32 + 1, title: (*t).into(), done: i == 0 })
+                .map(|(i, t)| crate::showcase::Task {
+                    id: i as u32 + 1,
+                    title: (*t).into(),
+                    done: i == 0,
+                })
                 .collect(),
             guests: 2,
             volume: 0.4,
@@ -312,7 +352,16 @@ impl App {
             mac: cfg!(target_os = "macos"),
             toolkit_level: 64.0,
             table_rows: std::rc::Rc::new(crate::pages::table_rows()),
-            deck: ["Ada Lovelace", "Alan Turing", "Grace Hopper", "Edsger Dijkstra", "Barbara Liskov", "Donald Knuth"].map(String::from).to_vec(),
+            deck: [
+                "Ada Lovelace",
+                "Alan Turing",
+                "Grace Hopper",
+                "Edsger Dijkstra",
+                "Barbara Liskov",
+                "Donald Knuth",
+            ]
+            .map(String::from)
+            .to_vec(),
             ..Default::default()
         };
         let root = ui.root();
@@ -330,9 +379,16 @@ impl App {
             page,
             style! { min-height: 46px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-radius: 10px; background: #1b1f27; border: 1px solid #2a303c; },
         );
-        light(&mut ui, header, "background: #ffffff; border: 1px solid #e2e5ea");
+        light(
+            &mut ui,
+            header,
+            "background: #ffffff; border: 1px solid #e2e5ea",
+        );
         // The longest title that fits.
-        let title = ui.add_box(header, style! { font-size: 15px; font-weight: bold; flex-grow: 1; min-width: 0; });
+        let title = ui.add_box(
+            header,
+            style! { font-size: 15px; font-weight: bold; flex-grow: 1; min-width: 0; },
+        );
         for t in ["threers-ui — a retained UI in Rust", "threers-ui"] {
             let b = ui.add_box(title, style! {});
             ui.add_text(b, t);
@@ -340,13 +396,25 @@ impl App {
         ui.view_that_fits(title);
         // A menu of everything, opened from a button: its theme submenu
         // sets the app-wide setting.
-        input.keymap.bind("secondary-k secondary-s", Save, None).expect("binds");
-        input.keymap.bind("secondary-shift-p", OpenPalette, None).expect("binds");
+        input
+            .keymap
+            .bind("secondary-k secondary-s", Save, None)
+            .expect("binds");
+        input
+            .keymap
+            .bind("secondary-shift-p", OpenPalette, None)
+            .expect("binds");
         // In a browser `secondary` is Ctrl; on a Mac, ⌘ is expected too.
-        input.keymap.bind("cmd-shift-p", OpenPalette, None).expect("binds");
+        input
+            .keymap
+            .bind("cmd-shift-p", OpenPalette, None)
+            .expect("binds");
         let mac = cfg!(target_os = "macos");
         let save_keys = input.keymap.label_for("Save", mac).unwrap_or_default();
-        let palette_keys = input.keymap.label_for("OpenPalette", mac).unwrap_or_default();
+        let palette_keys = input
+            .keymap
+            .label_for("OpenPalette", mac)
+            .unwrap_or_default();
         let more = button(&mut ui, header, "⋯", false);
         ui.semantics_mut(more).label = Some("Menu".into());
         popover_menu(
@@ -361,7 +429,11 @@ impl App {
                     MenuItem::action("keyboard", "On-Screen Keyboard"),
                     MenuItem::submenu(
                         "Theme",
-                        vec![MenuItem::action("theme-system", "System"), MenuItem::action("theme-light", "Light"), MenuItem::action("theme-dark", "Dark")],
+                        vec![
+                            MenuItem::action("theme-system", "System"),
+                            MenuItem::action("theme-light", "Light"),
+                            MenuItem::action("theme-dark", "Dark"),
+                        ],
                     ),
                     MenuItem::separator(),
                     MenuItem::action("settings", "Settings…"),
@@ -373,7 +445,10 @@ impl App {
         );
         let settings = button(&mut ui, header, "Settings…", false);
         let save = button(&mut ui, header, "Save", true);
-        for (b, tip) in [(settings, "Open the settings dialog"), (save, "Save  (⌘/Ctrl-K ⌘/Ctrl-S)")] {
+        for (b, tip) in [
+            (settings, "Open the settings dialog"),
+            (save, "Save  (⌘/Ctrl-K ⌘/Ctrl-S)"),
+        ] {
             input.tooltip(b, move |_, ui, root| {
                 let t = ui.add_box(
                     root,
@@ -385,10 +460,19 @@ impl App {
         }
         input.on_click(save, |s: &mut State, _, _| s.toast = Some("Saved".into()));
         input.on_click(settings, |s: &mut State, _, _| s.dialog_open = true);
-        input.keymap.bind("escape", CloseDialog, Some("Dialog")).expect("binds");
-        input.on_action(root, |s: &mut State, _, _: &Save, _| s.toast = Some("Saved from the keyboard".into()));
-        input.on_action(root, |s: &mut State, _, _: &OpenPalette, _| s.command = Some("palette".into()));
-        ui.set_global(Settings { theme: Theme::System });
+        input
+            .keymap
+            .bind("escape", CloseDialog, Some("Dialog"))
+            .expect("binds");
+        input.on_action(root, |s: &mut State, _, _: &Save, _| {
+            s.toast = Some("Saved from the keyboard".into())
+        });
+        input.on_action(root, |s: &mut State, _, _: &OpenPalette, _| {
+            s.command = Some("palette".into())
+        });
+        ui.set_global(Settings {
+            theme: Theme::System,
+        });
 
         // The navigation and the pages.
         let mut shell = crate::pages::Shell::new(&mut ui, &mut input, &state, page);
@@ -401,16 +485,28 @@ impl App {
         });
         // Its cards are dragged, not their text selected.
         ui.update_style(board, |s| s.user_select = threers_ui::UserSelect::None);
-        let lanes = ui.add_box(board, style! { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; flex-grow: 1; });
+        let lanes = ui.add_box(
+            board,
+            style! { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; flex-grow: 1; },
+        );
         let mut cards = vec![];
         let mut lanes_list = vec![];
-        for (k, (name, items)) in [("To do", ["Grid layout", "Scrollbars", "IME"]), ("Done", ["Shadows", "Tooltips", "Springs"])]
-            .into_iter()
-            .enumerate()
+        for (k, (name, items)) in [
+            ("To do", ["Grid layout", "Scrollbars", "IME"]),
+            ("Done", ["Shadows", "Tooltips", "Springs"]),
+        ]
+        .into_iter()
+        .enumerate()
         {
             let lane = ui.add_box(lanes, style! { display: flex; flex-direction: column; gap: 6px; padding: 6px; border-radius: 8px; background: #161a21; min-height: 120px; });
-            let h = ui.add_box(lane, style! { font-size: 11px; color: #8b93a5; padding: 2px 4px; });
-            ui.token_style(h, &[("color", threers_ui::environment::Token::SecondaryText)]);
+            let h = ui.add_box(
+                lane,
+                style! { font-size: 11px; color: #8b93a5; padding: 2px 4px; },
+            );
+            ui.token_style(
+                h,
+                &[("color", threers_ui::environment::Token::SecondaryText)],
+            );
             ui.add_text(h, name);
             ui.set_semantics(lane, Semantics::new(Role::List).label(name));
             for item in items {
@@ -433,7 +529,11 @@ impl App {
                 ui.reparent(card.0, lane);
                 let at = at.unwrap_or(ui.children(lane).len() - 1);
                 ui.move_child(lane, card.0, at);
-                s.log.push(format!("moved a card to {} at {}", if k == 0 { "To do" } else { "Done" }, at));
+                s.log.push(format!(
+                    "moved a card to {} at {}",
+                    if k == 0 { "To do" } else { "Done" },
+                    at
+                ));
             });
         }
         // The slot a dragged card would drop into, moved from place to place
@@ -484,10 +584,20 @@ impl App {
             },
         );
         let shaders = crate::shaders::build(&mut ui, &mut input, &state, pg(crate::pages::SHADERS));
-        let progress = crate::progress::build(&mut ui, &mut input, &state, pg(crate::pages::PROGRESS));
+        let progress =
+            crate::progress::build(&mut ui, &mut input, &state, pg(crate::pages::PROGRESS));
         let toolkit = crate::toolkit::build(&mut ui, &mut input, &state, pg(crate::pages::TOOLKIT));
-        let tasks_view = threers_ui::view::View::new(&mut ui, showcase.tasks, "display: flex; flex-direction: column; gap: 2px");
-        let para = ui.add_box(right, style! { white-space: normal; line-height: 19px; color: #c3c8d2; });
+        let tailwind =
+            crate::tailwind::build(&mut ui, &mut input, &state, pg(crate::pages::TAILWIND));
+        let tasks_view = threers_ui::view::View::new(
+            &mut ui,
+            showcase.tasks,
+            "display: flex; flex-direction: column; gap: 2px",
+        );
+        let para = ui.add_box(
+            right,
+            style! { white-space: normal; line-height: 19px; color: #c3c8d2; },
+        );
         light(&mut ui, para, "color: #374151");
         let words = "Rich text has runs: a keyword, a mispelled word, and a link, each in its own style, wrapping as one.";
         let t = ui.add_text(para, words);
@@ -504,35 +614,68 @@ impl App {
             t,
             vec![
                 TextRun::new(kw),
-                TextRun::new("keyword".len()).color([0.78, 0.47, 0.87, 1.0]).weight(threers_ui::FontWeight::Bold),
+                TextRun::new("keyword".len())
+                    .color([0.78, 0.47, 0.87, 1.0])
+                    .weight(threers_ui::FontWeight::Bold),
                 TextRun::new(typo - kw - "keyword".len()),
-                TextRun::new("mispelled".len()).underline(true).decoration_color([0.94, 0.33, 0.31, 1.0]),
+                TextRun::new("mispelled".len())
+                    .underline(true)
+                    .decoration_color([0.94, 0.33, 0.31, 1.0]),
                 TextRun::new(link - typo - "mispelled".len()),
-                TextRun::new("link".len()).color([0.38, 0.65, 0.98, 1.0]).underline(false).link("https://example.com/"),
+                TextRun::new("link".len())
+                    .color([0.38, 0.65, 0.98, 1.0])
+                    .underline(false)
+                    .link("https://example.com/"),
                 TextRun::new(words.len() - link - "link".len()),
             ],
         );
-        let media = ui.add_box(right, style! { display: flex; gap: 10px; align-items: center; });
-        ui.add_image(media, style! { width: 96px; height: 64px; border-radius: 6px; object-fit: cover; }, picture());
+        let media = ui.add_box(
+            right,
+            style! { display: flex; gap: 10px; align-items: center; },
+        );
+        ui.add_image(
+            media,
+            style! { width: 96px; height: 64px; border-radius: 6px; object-fit: cover; },
+            picture(),
+        );
         let card = ui.add_box(media, style! { display: flex; flex-direction: column; gap: 4px; flex-grow: 1; padding: 8px; border-radius: 6px; background: #232833; });
         ui.container_query(card, media, vec![(520.0, style! { display: flex; flex-direction: row; gap: 8px; flex-grow: 1; padding: 8px; border-radius: 6px; background: #2a3448; })]);
         light(&mut ui, card, "background: #eef1f6");
-        for line in ["Container query:", "this card turns into a row", "when its panel is wide."] {
+        for line in [
+            "Container query:",
+            "this card turns into a row",
+            "when its panel is wide.",
+        ] {
             let l = ui.add_box(card, style! { font-size: 12px; });
             ui.add_text(l, line);
         }
-        let keys = ui.add_box(right, style! { white-space: normal; font-size: 12px; color: #8b93a5; });
-        ui.token_style(keys, &[("color", threers_ui::environment::Token::SecondaryText)]);
+        let keys = ui.add_box(
+            right,
+            style! { white-space: normal; font-size: 12px; color: #8b93a5; },
+        );
+        ui.token_style(
+            keys,
+            &[("color", threers_ui::environment::Token::SecondaryText)],
+        );
         ui.add_text(keys, "Keys: Tab moves focus, F shows frame stats, I inspects, ⌘/Ctrl-K ⌘/Ctrl-S saves, ⌘/Ctrl-⇧-P opens the command palette, arrows move through a focused list.");
         let field_box = ui.add_box(
             right,
             style! { position: relative; padding: 6px 8px; border-radius: 6px; border: 1px solid #3a4150; background: #0f1218; cursor: text; overflow: hidden; },
         );
         ui.set_semantics(field_box, Semantics::new(Role::TextBox).label("Name"));
-        light(&mut ui, field_box, "background: #ffffff; border: 1px solid #c9ced6; color: #1f2329");
+        light(
+            &mut ui,
+            field_box,
+            "background: #ffffff; border: 1px solid #c9ced6; color: #1f2329",
+        );
         ui.focus_style(field_box, "border: 1px solid #2563eb");
         let field_text = ui.add_text(field_box, "");
-        input.on_key(field_box, |s: &mut State, _, key, m, _| !matches!(s.field.key(key, m, |_| true), FieldKey::Ignored | FieldKey::Tab { .. }));
+        input.on_key(field_box, |s: &mut State, _, key, m, _| {
+            !matches!(
+                s.field.key(key, m, |_| true),
+                FieldKey::Ignored | FieldKey::Tab { .. }
+            )
+        });
         input.on(field_box, Phase::Bubble, |s: &mut State, _, e, _| {
             if let Event::Ime(ime) = e {
                 s.field.ime(ime);
@@ -543,7 +686,11 @@ impl App {
         for c in ui.children(right).to_vec() {
             ui.update_style(c, |s| s.flex_shrink = 0.0);
         }
-        let audit_view = threers_ui::view::View::new(&mut ui, shell.audit, "display: flex; flex-direction: column; gap: 2px");
+        let audit_view = threers_ui::view::View::new(
+            &mut ui,
+            shell.audit,
+            "display: flex; flex-direction: column; gap: 2px",
+        );
         shell.apply(&mut ui, &state);
 
         // The dialog: modal, over a backdrop, closed by a click outside.
@@ -560,19 +707,37 @@ impl App {
         let h = ui.add_box(dialog, style! { font-size: 15px; font-weight: bold; });
         ui.add_text(h, "Settings");
         // Bound to the same state as the components section's switch.
-        threers_ui::components::switch(&mut ui, &mut input, &state, dialog, "Card shadows", threers_ui::binding!(|s: State| s.shadows));
+        threers_ui::components::switch(
+            &mut ui,
+            &mut input,
+            &state,
+            dialog,
+            "Card shadows",
+            threers_ui::binding!(|s: State| s.shadows),
+        );
         // Selecting text, anywhere in the demo (`Ui::set_text_selection`).
-        let check = ui.add_box(dialog, style! { display: flex; gap: 8px; align-items: center; cursor: pointer; });
+        let check = ui.add_box(
+            dialog,
+            style! { display: flex; gap: 8px; align-items: center; cursor: pointer; },
+        );
         let tick = ui.add_box(check, style! { width: 16px; height: 16px; border-radius: 4px; border: 1px solid #5b6478; background: rgb(37, 99, 235); });
         ui.add_text(check, "Selectable text");
-        ui.set_semantics(check, Semantics::new(Role::Checkbox).label("Selectable text").checked(true));
+        ui.set_semantics(
+            check,
+            Semantics::new(Role::Checkbox)
+                .label("Selectable text")
+                .checked(true),
+        );
         input.on_click(check, move |_: &mut State, ui, _| {
             let on = !ui.text_selection();
             ui.set_text_selection(on);
             ui.semantics_mut(check).checked = Some(on);
             ui.style_mut(tick).background = on.then_some([0.145, 0.388, 0.922, 1.0]);
         });
-        let row = ui.add_box(dialog, style! { display: flex; gap: 8px; justify-content: flex-end; });
+        let row = ui.add_box(
+            dialog,
+            style! { display: flex; gap: 8px; justify-content: flex-end; },
+        );
         let cancel = button(&mut ui, row, "Cancel", false);
         let ok = button(&mut ui, row, "OK", true);
         input.on_click(cancel, |s: &mut State, _, _| s.dialog_open = false);
@@ -581,7 +746,9 @@ impl App {
             s.toast = Some("Settings saved".into());
         });
         input.on_click_outside(dialog, |s: &mut State, _, _, _| s.dialog_open = false);
-        input.on_action(dialog, |s: &mut State, _, _: &CloseDialog, _| s.dialog_open = false);
+        input.on_action(dialog, |s: &mut State, _, _: &CloseDialog, _| {
+            s.dialog_open = false
+        });
 
         // Asked while the state says so, and the state told when answered.
         input.present(
@@ -589,13 +756,24 @@ impl App {
             |s: &mut State| s.confirm_clear = false,
             |ui, input, s| {
                 use threers_ui::button::ButtonRole;
-                let buttons = [("Cancel", ButtonRole::Cancel), ("Clear", ButtonRole::Destructive)];
-                threers_ui::prompt::prompt_with(ui, input, s, "Clear the name?", "Its text will be lost.", &buttons, |s: &mut State, _, answer| {
-                    if answer == 1 {
-                        s.field = TextField::new("");
-                        s.toast = Some("Cleared".into());
-                    }
-                })
+                let buttons = [
+                    ("Cancel", ButtonRole::Cancel),
+                    ("Clear", ButtonRole::Destructive),
+                ];
+                threers_ui::prompt::prompt_with(
+                    ui,
+                    input,
+                    s,
+                    "Clear the name?",
+                    "Its text will be lost.",
+                    &buttons,
+                    |s: &mut State, _, answer| {
+                        if answer == 1 {
+                            s.field = TextField::new("");
+                            s.toast = Some("Cleared".into());
+                        }
+                    },
+                )
                 .dialog
             },
         );
@@ -603,21 +781,38 @@ impl App {
         threers_ui::sheet::sheet(
             &mut input,
             threers_ui::binding!(|s: State| s.sheet_open),
-            vec![threers_ui::sheet::Detent::Medium, threers_ui::sheet::Detent::Large],
+            vec![
+                threers_ui::sheet::Detent::Medium,
+                threers_ui::sheet::Detent::Large,
+            ],
             "Share",
             |ui, input, _, c| {
                 let h = ui.add_box(c, style! { font-size: 15px; font-weight: bold; });
                 ui.add_text(h, "Share");
-                for (i, name) in ["Ada Lovelace", "Alan Turing", "Grace Hopper"].into_iter().enumerate() {
-                    let row = ui.add_box(c, style! { display: flex; align-items: center; gap: 8px; });
+                for (i, name) in ["Ada Lovelace", "Alan Turing", "Grace Hopper"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let row =
+                        ui.add_box(c, style! { display: flex; align-items: center; gap: 8px; });
                     threers_ui::components::avatar(ui, row, name, 28.0);
                     ui.add_text(row, name);
                     let _ = i;
                 }
                 let hint = ui.add_box(c, style! { font-size: 12px; white-space: normal; });
-                ui.token_style(hint, &[("color", threers_ui::environment::Token::SecondaryText)]);
+                ui.token_style(
+                    hint,
+                    &[("color", threers_ui::environment::Token::SecondaryText)],
+                );
                 ui.add_text(hint, "Drag the grabber up for more room, or down to close.");
-                let done = threers_ui::button::button(ui, input, c, "Done", threers_ui::button::ButtonRole::Primary, |s: &mut State, _| s.sheet_open = false);
+                let done = threers_ui::button::button(
+                    ui,
+                    input,
+                    c,
+                    "Done",
+                    threers_ui::button::ButtonRole::Primary,
+                    |s: &mut State, _| s.sheet_open = false,
+                );
                 let _ = done;
             },
         );
@@ -691,6 +886,7 @@ impl App {
             shaders,
             progress,
             toolkit,
+            tailwind,
             storage: None,
             stored_theme: None,
             state_theme: Theme::System,
@@ -718,7 +914,9 @@ impl App {
             return false;
         }
         let (first, rest) = link.split_once('/').unwrap_or((link, ""));
-        let page = crate::pages::PAGES.iter().position(|(name, _)| slug(name) == first.to_lowercase());
+        let page = crate::pages::PAGES
+            .iter()
+            .position(|(name, _)| slug(name) == first.to_lowercase());
         let section = match page {
             Some(p) => {
                 self.state.page = p;
@@ -742,7 +940,11 @@ impl App {
         if let Some((section, _)) = &self.pending_link {
             return format!("{page}/{section}");
         }
-        let section = self.input.focused().filter(|&f| self.ui.contains(f)).and_then(|f| self.ui.ancestors(f).find_map(|n| self.ui.anchor_name(n)));
+        let section = self
+            .input
+            .focused()
+            .filter(|&f| self.ui.contains(f))
+            .and_then(|f| self.ui.ancestors(f).find_map(|n| self.ui.anchor_name(n)));
         match section {
             Some(s) => format!("{page}/{s}"),
             None => page,
@@ -756,18 +958,30 @@ impl App {
     }
 
     /// [`frame`](Self::frame), timing layout with `clock` (milliseconds).
-    pub fn frame_timed(&mut self, time: f64, width: f32, height: f32, measure: &mut dyn TextMeasure, clock: &dyn Fn() -> f64) {
+    pub fn frame_timed(
+        &mut self,
+        time: f64,
+        width: f32,
+        height: f32,
+        measure: &mut dyn TextMeasure,
+        clock: &dyn Fn() -> f64,
+    ) {
         let started = clock();
         self.layouts_last = 0;
         let dt = self.last.map_or(0.0, |l| (time - l).max(0.0));
         self.last = Some(time);
         self.input.tick(&mut self.ui, &mut self.state, time);
-        self.editing.tick(&mut self.ui, &self.input, &mut self.state, time, measure);
+        self.editing
+            .tick(&mut self.ui, &self.input, &mut self.state, time, measure);
         self.run_commands();
         // On a phone-sized window, a budget for the shader effects (the
         // Progress page's dozens of moving indicators): the largest few at
         // up to 30 frames a second, the rest slower.
-        let budget = if width < 700.0 { threers_ui::shader::AnimationBudget::PHONE } else { threers_ui::shader::AnimationBudget::UNLIMITED };
+        let budget = if width < 700.0 {
+            threers_ui::shader::AnimationBudget::PHONE
+        } else {
+            threers_ui::shader::AnimationBudget::UNLIMITED
+        };
         if self.ui.animation_budget() != budget {
             self.ui.set_animation_budget(budget);
         }
@@ -801,7 +1015,8 @@ impl App {
                 self.state.refreshes += 1;
                 self.state.refreshing = None;
                 self.refresh_until = None;
-                self.input.finish_refresh(self.lists.lists[tab].1.container());
+                self.input
+                    .finish_refresh(self.lists.lists[tab].1.container());
             }
         }
         self.ui.step(dt as f32);
@@ -811,6 +1026,7 @@ impl App {
         self.shaders.update(&mut self.ui, &self.state);
         self.progress.update(&mut self.ui, &self.state);
         self.toolkit.update(&mut self.ui, &self.input, &self.state);
+        self.tailwind.update(&mut self.ui, &self.state);
         self.shell.apply(&mut self.ui, &self.state);
         self.apply_access(time);
         let tasks = crate::showcase::tasks(&self.state);
@@ -829,12 +1045,15 @@ impl App {
                 break;
             }
             self.ui.layout(width, height, measure);
-        self.layouts_last += 1;
+            self.layouts_last += 1;
         }
         // A link's section, once its page is laid out (a few frames for
         // what builds as it shows, then given up).
         if let Some((section, waited)) = self.pending_link.take() {
-            match self.input.go_to_anchor(&mut self.ui, &mut self.state, &section) {
+            match self
+                .input
+                .go_to_anchor(&mut self.ui, &mut self.state, &section)
+            {
                 Some(n) => {
                     self.followed = Some(n);
                     self.ui.layout(width, height, measure);
@@ -854,11 +1073,17 @@ impl App {
             self.ui.layout(width, height, measure);
             self.layouts_last += 1;
         }
-        self.editing.place(&mut self.ui, &mut self.input, &mut self.state, measure);
+        self.editing
+            .place(&mut self.ui, &mut self.input, &mut self.state, measure);
         // The dialog in the middle of the window.
         let d = self.ui.rect(self.nodes.dialog);
-        let (left, top) = (((width - d.width) / 2.0).max(0.0), ((height - d.height) / 3.0).max(0.0));
-        if self.ui.style(self.nodes.dialog).left != threers_ui::Length::Px(left) || self.ui.style(self.nodes.dialog).top != threers_ui::Length::Px(top) {
+        let (left, top) = (
+            ((width - d.width) / 2.0).max(0.0),
+            ((height - d.height) / 3.0).max(0.0),
+        );
+        if self.ui.style(self.nodes.dialog).left != threers_ui::Length::Px(left)
+            || self.ui.style(self.nodes.dialog).top != threers_ui::Length::Px(top)
+        {
             self.ui.update_style(self.nodes.dialog, |s| {
                 s.left = threers_ui::Length::Px(left);
                 s.top = threers_ui::Length::Px(top);
@@ -870,11 +1095,17 @@ impl App {
         // is laid out: placed again now, in the same frame, it does not move
         // under the finger about to tap it. (A layout with nothing changed
         // does nothing.)
-        self.editing.place(&mut self.ui, &mut self.input, &mut self.state, measure);
+        self.editing
+            .place(&mut self.ui, &mut self.input, &mut self.state, measure);
         self.ui.layout(width, height, measure);
         self.mark_highlighted();
-        self.links = self.link_nodes.iter().flat_map(|&n| self.ui.link_rects(n, measure)).collect();
-        let mut sample = FrameSample::of(&self.ui, (dt * 1000.0) as f32, (clock() - started) as f32);
+        self.links = self
+            .link_nodes
+            .iter()
+            .flat_map(|&n| self.ui.link_rects(n, measure))
+            .collect();
+        let mut sample =
+            FrameSample::of(&self.ui, (dt * 1000.0) as f32, (clock() - started) as f32);
         if self.show_stats {
             sample.painted = self.ui.scene().items.len();
         }
@@ -888,23 +1119,36 @@ impl App {
         let open = self.state.dialog_open;
         let shown = |d| if open { d } else { threers_ui::Display::None };
         if self.ui.style(n.dialog).display != shown(threers_ui::Display::Flex) {
-            self.ui.update_style(n.dialog, |s| s.display = shown(threers_ui::Display::Flex));
-            self.ui.update_style(n.backdrop, |s| s.display = shown(threers_ui::Display::Block));
+            self.ui
+                .update_style(n.dialog, |s| s.display = shown(threers_ui::Display::Flex));
+            self.ui.update_style(n.backdrop, |s| {
+                s.display = shown(threers_ui::Display::Block)
+            });
             let modal = open.then_some(n.dialog);
             self.input.set_modal(&mut self.ui, &mut self.state, modal);
         }
         if let Some(msg) = self.state.toast.take()
             && !self.state.quiet
         {
-            self.notices.push(&mut self.ui, &mut self.input, Notice::new(msg, "").timeout(Some(3.0)), None);
+            self.notices.push(
+                &mut self.ui,
+                &mut self.input,
+                Notice::new(msg, "").timeout(Some(3.0)),
+                None,
+            );
         }
         // Through the cards' base styles (they have hover and light ones),
         // and only when the setting changes.
         if self.shadows_drawn != Some(self.state.shadows) {
             self.shadows_drawn = Some(self.state.shadows);
-            let shadow = if self.state.shadows { "0 1px 3px rgba(0,0,0,0.6)" } else { "none" };
+            let shadow = if self.state.shadows {
+                "0 1px 3px rgba(0,0,0,0.6)"
+            } else {
+                "none"
+            };
             for &c in &n.cards {
-                self.ui.update_style(c, |s| threers_ui::css::apply(s, "box-shadow", shadow));
+                self.ui
+                    .update_style(c, |s| threers_ui::css::apply(s, "box-shadow", shadow));
             }
         }
         // While a card is dragged it leaves its place, and a slot opens
@@ -912,7 +1156,11 @@ impl App {
         // first card whose middle is below it. Set only when they change.
         let (from, over) = (self.input.drag_source(), self.input.drag_over());
         for &c in &n.cards {
-            let d = if from == Some(c) { threers_ui::Display::None } else { threers_ui::Display::Block };
+            let d = if from == Some(c) {
+                threers_ui::Display::None
+            } else {
+                threers_ui::Display::Block
+            };
             if self.ui.style(c).display != d {
                 self.ui.update_style(c, |s| s.display = d);
             }
@@ -938,7 +1186,12 @@ impl App {
                 if self.ui.parent(n.slot) != Some(lane) {
                     self.ui.reparent(n.slot, lane);
                 }
-                let now = self.ui.children(lane).iter().position(|&c| c == n.slot).expect("in the lane");
+                let now = self
+                    .ui
+                    .children(lane)
+                    .iter()
+                    .position(|&c| c == n.slot)
+                    .expect("in the lane");
                 // Moving the slot out from before `at` shifts `at` down one.
                 let to = if now < at { at - 1 } else { at };
                 if now != to {
@@ -961,8 +1214,16 @@ impl App {
             }
         }
         for &l in &n.lanes {
-            let rest = if self.ui.appearance() == threers_ui::states::Appearance::Light { [0.925, 0.933, 0.949, 1.0] } else { [0.086, 0.102, 0.129, 1.0] };
-            let bg = Some(if over == Some(l) { [0.145, 0.388, 0.922, 0.16] } else { rest });
+            let rest = if self.ui.appearance() == threers_ui::states::Appearance::Light {
+                [0.925, 0.933, 0.949, 1.0]
+            } else {
+                [0.086, 0.102, 0.129, 1.0]
+            };
+            let bg = Some(if over == Some(l) {
+                [0.145, 0.388, 0.922, 0.16]
+            } else {
+                rest
+            });
             if self.ui.style(l).background != bg {
                 self.ui.style_mut(l).background = bg;
             }
@@ -987,28 +1248,53 @@ impl App {
     }
 
     pub fn pointer_move(&mut self, x: f32, y: f32, measure: &mut dyn TextMeasure) {
-        self.editing.pointer_move(&mut self.ui, &mut self.input, &mut self.state, x, y, measure);
+        self.editing.pointer_move(
+            &mut self.ui,
+            &mut self.input,
+            &mut self.state,
+            x,
+            y,
+            measure,
+        );
     }
 
-    pub fn pointer_down(&mut self, x: f32, y: f32, button: PointerButton, shift: bool, measure: &mut dyn TextMeasure) {
+    pub fn pointer_down(
+        &mut self,
+        x: f32,
+        y: f32,
+        button: PointerButton,
+        shift: bool,
+        measure: &mut dyn TextMeasure,
+    ) {
         if self.inspecting {
             if let Some(i) = self.ui.inspect(x, y) {
                 self.state.log.push(i.to_string());
             }
             return;
         }
-        self.editing.pointer_down(&mut self.ui, &mut self.input, &mut self.state, x, y, button, shift, measure);
+        self.editing.pointer_down(
+            &mut self.ui,
+            &mut self.input,
+            &mut self.state,
+            x,
+            y,
+            button,
+            shift,
+            measure,
+        );
     }
 
     pub fn pointer_up(&mut self, x: f32, y: f32, button: PointerButton) {
-        self.editing.pointer_up(&mut self.ui, &mut self.input, &mut self.state, x, y, button);
+        self.editing
+            .pointer_up(&mut self.ui, &mut self.input, &mut self.state, x, y, button);
         self.take_requests();
         self.take_link_click();
         self.run_commands();
     }
 
     pub fn wheel(&mut self, x: f32, y: f32, dx: f32, dy: f32) {
-        self.input.dispatch(&mut self.ui, &mut self.state, Event::Wheel { x, y, dx, dy });
+        self.input
+            .dispatch(&mut self.ui, &mut self.state, Event::Wheel { x, y, dx, dy });
     }
 
     /// A key; returns whether the app used it (and the page should not).
@@ -1035,7 +1321,14 @@ impl App {
                 _ => {}
             }
         }
-        let out = self.input.dispatch(&mut self.ui, &mut self.state, Event::Key { key: key.to_owned(), modifiers });
+        let out = self.input.dispatch(
+            &mut self.ui,
+            &mut self.state,
+            Event::Key {
+                key: key.to_owned(),
+                modifiers,
+            },
+        );
         self.run_commands();
         out.handled || out.action.is_some() || out.focus_changed || key == "Tab"
     }
@@ -1084,7 +1377,9 @@ impl App {
                     Command::new("sheet", "Open the Share Sheet"),
                     Command::new("keyboard", "Toggle On-Screen Keyboard"),
                 ];
-                open_palette(ui, input, state, commands, |s: &mut State, _, id| s.command = Some(id.to_owned()));
+                open_palette(ui, input, state, commands, |s: &mut State, _, id| {
+                    s.command = Some(id.to_owned())
+                });
             }
             "save" => state.toast = Some("Saved".into()),
             "settings" => state.dialog_open = true,
@@ -1094,11 +1389,24 @@ impl App {
             "theme-light" => theme(ui, Theme::Light),
             "theme-dark" => theme(ui, Theme::Dark),
             "notify" => {
-                let n = Notice::new("Build finished", "3 crates compiled in 4.2 s.").tone(Tone::Success).action("Show log");
-                self.notices.push(ui, input, n, Some(Box::new(|s: &mut State, _: &mut Ui| s.log.push("the build log".into()))));
+                let n = Notice::new("Build finished", "3 crates compiled in 4.2 s.")
+                    .tone(Tone::Success)
+                    .action("Show log");
+                self.notices.push(
+                    ui,
+                    input,
+                    n,
+                    Some(Box::new(|s: &mut State, _: &mut Ui| {
+                        s.log.push("the build log".into())
+                    })),
+                );
             }
             "error" => {
-                let n = Notice::new("Couldn't sync", "The server didn't answer. It stays until closed.").tone(Tone::Error);
+                let n = Notice::new(
+                    "Couldn't sync",
+                    "The server didn't answer. It stays until closed.",
+                )
+                .tone(Tone::Error);
                 self.notices.push(ui, input, n, None);
             }
             // Shown by the state (see `Input::present` in `new`).
@@ -1110,11 +1418,22 @@ impl App {
                 if let Some(store) = &self.storage {
                     store.set("keyboard", if on { "on" } else { "off" });
                 }
-                state.toast = Some(if on { "On-screen keyboard on" } else { "On-screen keyboard off" }.into());
+                state.toast = Some(
+                    if on {
+                        "On-screen keyboard on"
+                    } else {
+                        "On-screen keyboard off"
+                    }
+                    .into(),
+                );
             }
             "rtl" => {
                 use threers_ui::environment::LayoutDirection;
-                let d = if ui.layout_direction() == LayoutDirection::RightToLeft { LayoutDirection::LeftToRight } else { LayoutDirection::RightToLeft };
+                let d = if ui.layout_direction() == LayoutDirection::RightToLeft {
+                    LayoutDirection::LeftToRight
+                } else {
+                    LayoutDirection::RightToLeft
+                };
                 ui.set_layout_direction(d);
             }
             "text-larger" => ui.set_text_scale((ui.text_scale() + 0.25).min(2.0)),
@@ -1126,17 +1445,34 @@ impl App {
             }
             "details" => {
                 let anchor = self.showcase.details;
-                threers_ui::components::popover(ui, input, state, anchor, "Details", |ui, panel| {
-                    let row = ui.add_box(panel, style! { display: flex; align-items: center; gap: 8px; });
-                    threers_ui::components::avatar(ui, row, "Grace Hopper", 32.0);
-                    let who = ui.add_box(row, style! { display: flex; flex-direction: column; });
-                    let name = ui.add_box(who, style! { font-weight: bold; });
-                    ui.add_text(name, "Grace Hopper");
-                    ui.add_text(who, "Rear admiral, compiler pioneer");
-                    let note = ui.add_box(panel, style! { font-size: 12px; white-space: normal; color: #8b93a5; });
-                    ui.token_style(note, &[("color", threers_ui::environment::Token::SecondaryText)]);
-                    ui.add_text(note, "A popover: anchored under its button, it closes on Escape or a click outside, and gives focus back.");
-                });
+                threers_ui::components::popover(
+                    ui,
+                    input,
+                    state,
+                    anchor,
+                    "Details",
+                    |ui, panel| {
+                        let row = ui.add_box(
+                            panel,
+                            style! { display: flex; align-items: center; gap: 8px; },
+                        );
+                        threers_ui::components::avatar(ui, row, "Grace Hopper", 32.0);
+                        let who =
+                            ui.add_box(row, style! { display: flex; flex-direction: column; });
+                        let name = ui.add_box(who, style! { font-weight: bold; });
+                        ui.add_text(name, "Grace Hopper");
+                        ui.add_text(who, "Rear admiral, compiler pioneer");
+                        let note = ui.add_box(
+                            panel,
+                            style! { font-size: 12px; white-space: normal; color: #8b93a5; },
+                        );
+                        ui.token_style(
+                            note,
+                            &[("color", threers_ui::environment::Token::SecondaryText)],
+                        );
+                        ui.add_text(note, "A popover: anchored under its button, it closes on Escape or a click outside, and gives focus back.");
+                    },
+                );
             }
             other => state.log.push(format!("no command {other}")),
         }
@@ -1147,9 +1483,12 @@ impl App {
     fn apply_depth(&mut self) {
         // Focus from the far layer (−120) to the near one (+80).
         let focus = -120.0 + self.state.focus * 200.0;
-        self.ui.set_depth_of_field(self.showcase.layers, Some((focus, 3.0)));
+        self.ui
+            .set_depth_of_field(self.showcase.layers, Some((focus, 3.0)));
         let d = crate::showcase::DEPARTURES;
-        self.showcase.board.set(&mut self.ui, d[self.state.departure % d.len()]);
+        self.showcase
+            .board
+            .set(&mut self.ui, d[self.state.departure % d.len()]);
         // The candles flicker while their page shows (and motion is wanted).
         if self.candles_lit() {
             let t = self.last.unwrap_or(0.0) as f32;
@@ -1158,7 +1497,11 @@ impl App {
             }
         }
         use threers_ui::nav_stack::NavTransition;
-        let t = [NavTransition::Slide, NavTransition::Cube, NavTransition::PageTurn][self.state.nav_transition.min(2)];
+        let t = [
+            NavTransition::Slide,
+            NavTransition::Cube,
+            NavTransition::PageTurn,
+        ][self.state.nav_transition.min(2)];
         if self.ui.environment::<NavTransition>(self.showcase.stack) != Some(t) {
             self.ui.set_environment(self.showcase.stack, t);
         }
@@ -1167,7 +1510,11 @@ impl App {
     /// The Accessibility page's settings into the UI, and its audit (twice
     /// a second while it shows).
     fn apply_access(&mut self, time: f64) {
-        let system = if self.state.system_text_scale > 0.0 { self.state.system_text_scale } else { 1.0 };
+        let system = if self.state.system_text_scale > 0.0 {
+            self.state.system_text_scale
+        } else {
+            1.0
+        };
         let scale = (1.0 + 0.25 * self.state.text_scale as f32) * system;
         if self.ui.text_scale() != scale {
             self.ui.set_text_scale(scale);
@@ -1176,7 +1523,11 @@ impl App {
             self.ui.set_reduce_motion(self.state.reduce_motion);
         }
         use threers_ui::environment::LayoutDirection;
-        let dir = if self.state.right_to_left { LayoutDirection::RightToLeft } else { LayoutDirection::LeftToRight };
+        let dir = if self.state.right_to_left {
+            LayoutDirection::RightToLeft
+        } else {
+            LayoutDirection::LeftToRight
+        };
         if self.ui.layout_direction() != dir {
             self.ui.set_layout_direction(dir);
         }
@@ -1210,12 +1561,20 @@ impl App {
         for (name, row) in &sc.found {
             let hit = !q.is_empty() && name.to_lowercase().contains(&q);
             any |= hit;
-            let d = if hit { threers_ui::Display::Flex } else { threers_ui::Display::None };
+            let d = if hit {
+                threers_ui::Display::Flex
+            } else {
+                threers_ui::Display::None
+            };
             if self.ui.style(*row).display != d {
                 self.ui.update_style(*row, |s| s.display = d);
             }
         }
-        let d = if !q.is_empty() && !any { threers_ui::Display::Flex } else { threers_ui::Display::None };
+        let d = if !q.is_empty() && !any {
+            threers_ui::Display::Flex
+        } else {
+            threers_ui::Display::None
+        };
         if self.ui.style(sc.nobody).display != d {
             self.ui.update_style(sc.nobody, |s| s.display = d);
         }
@@ -1235,7 +1594,10 @@ impl App {
             self.nav = ListNavigation::default();
             self.nav_tab = tab;
         }
-        match self.nav.key_list(&mut self.ui, &mut self.lists.lists[tab].1, key) {
+        match self
+            .nav
+            .key_list(&mut self.ui, &mut self.lists.lists[tab].1, key)
+        {
             Some(Nav::Activated(i)) => {
                 self.state.log.push(format!("activated row {i}"));
                 true
@@ -1277,8 +1639,26 @@ impl App {
 
     /// A finger, as [`pointer_down`](Self::pointer_down) and the rest are
     /// the mouse (see `TextEditing::touch`).
-    pub fn touch(&mut self, id: u64, phase: TouchPhase, x: f32, y: f32, time: f64, measure: &mut dyn TextMeasure) {
-        self.editing.touch(&mut self.ui, &mut self.input, &mut self.state, id, phase, x, y, time, measure);
+    pub fn touch(
+        &mut self,
+        id: u64,
+        phase: TouchPhase,
+        x: f32,
+        y: f32,
+        time: f64,
+        measure: &mut dyn TextMeasure,
+    ) {
+        self.editing.touch(
+            &mut self.ui,
+            &mut self.input,
+            &mut self.state,
+            id,
+            phase,
+            x,
+            y,
+            time,
+            measure,
+        );
         self.take_requests();
         self.take_link_click();
     }
@@ -1286,7 +1666,8 @@ impl App {
     /// How firmly finger `id` presses (0 to 1, where the screen measures
     /// it): on the field's text, pressed firmly, it selects the word.
     pub fn touch_force(&mut self, id: u64, force: f32) {
-        self.editing.touch_force(&self.input, &mut self.state, id, force);
+        self.editing
+            .touch_force(&self.input, &mut self.state, id, force);
     }
 
     /// What the edit menu asked of the platform: the page, for the
@@ -1343,21 +1724,31 @@ impl App {
             self.ui.update_global(|g: &mut Settings| g.theme = t);
             self.stored_theme = Some(t);
         }
-        self.keyboard.set_enabled(storage.get("keyboard").as_deref() == Some("on"));
+        self.keyboard
+            .set_enabled(storage.get("keyboard").as_deref() == Some("on"));
         self.storage = Some(storage);
     }
 
     /// The edges of the window a phone draws over (the page's
     /// `env(safe-area-inset-*)`), which the page keeps clear of.
     pub fn set_safe_area(&mut self, top: f32, right: f32, bottom: f32, left: f32) {
-        self.ui.set_safe_area(threers_ui::Edges { top, right, bottom, left });
+        self.ui.set_safe_area(threers_ui::Edges {
+            top,
+            right,
+            bottom,
+            left,
+        });
     }
 
     /// The system's appearance, as the page's `prefers-color-scheme` says:
     /// the System theme (the default) follows it.
     pub fn set_system_dark(&mut self, dark: bool) {
         use threers_ui::states::Appearance;
-        self.ui.set_system_appearance(if dark { Appearance::Dark } else { Appearance::Light });
+        self.ui.set_system_appearance(if dark {
+            Appearance::Dark
+        } else {
+            Appearance::Light
+        });
     }
 
     /// Text from the clipboard, for a paste the menu asked for.
@@ -1372,8 +1763,13 @@ impl App {
     /// methods), and this keeps the field in step.
     pub fn set_field(&mut self, text: String, anchor: usize, caret: usize) {
         // Another text control has focus (the search box): it takes it.
-        if self.input.focused_text(&self.ui, &self.state).is_some_and(|(n, ..)| n != self.nodes.field_box) {
-            self.input.set_focused_text(&mut self.ui, &mut self.state, text, anchor, caret);
+        if self
+            .input
+            .focused_text(&self.ui, &self.state)
+            .is_some_and(|(n, ..)| n != self.nodes.field_box)
+        {
+            self.input
+                .set_focused_text(&mut self.ui, &mut self.state, text, anchor, caret);
             return;
         }
         let n = text.chars().count();
@@ -1392,9 +1788,15 @@ impl App {
     /// it (not scrolled out of sight, nor under the dialog). On a phone the
     /// page lays its text input over this, so the tap lands on the input and
     /// the browser opens the keyboard itself.
-    pub fn field_rect_and_text(&self) -> Option<(threers_ui::Rect, threers_ui::Rect, String, threers_ui::Rgba)> {
+    pub fn field_rect_and_text(
+        &self,
+    ) -> Option<(threers_ui::Rect, threers_ui::Rect, String, threers_ui::Rgba)> {
         // Another text control with focus: the page's input goes over it.
-        if let Some((n, ..)) = self.input.focused_text(&self.ui, &self.state).filter(|(n, ..)| *n != self.nodes.field_box) {
+        if let Some((n, ..)) = self
+            .input
+            .focused_text(&self.ui, &self.state)
+            .filter(|(n, ..)| *n != self.nodes.field_box)
+        {
             let mut stack = vec![n];
             let mut text = None;
             while let Some(c) = stack.pop() {
@@ -1406,12 +1808,22 @@ impl App {
             }
             let t = text?;
             let style = self.ui.style(t);
-            return Some((self.ui.rect(n), self.ui.rect(t), threers_ui::TextStyle::of(style).css_font(), style.color));
+            return Some((
+                self.ui.rect(n),
+                self.ui.rect(t),
+                threers_ui::TextStyle::of(style).css_font(),
+                style.color,
+            ));
         }
         let r = self.field_rect()?;
         let t = self.ui.rect(self.nodes.field_text);
         let style = self.ui.style(self.nodes.field_text);
-        Some((r, t, threers_ui::TextStyle::of(style).css_font(), style.color))
+        Some((
+            r,
+            t,
+            threers_ui::TextStyle::of(style).css_font(),
+            style.color,
+        ))
     }
 
     /// The text control with focus (the field when none has): its text,
@@ -1419,7 +1831,11 @@ impl App {
     pub fn text_now(&self) -> (String, usize, usize) {
         match self.input.focused_text(&self.ui, &self.state) {
             Some((_, t, a, c)) => (t, a, c),
-            None => (self.state.field.text.clone(), self.state.field.anchor, self.state.field.caret),
+            None => (
+                self.state.field.text.clone(),
+                self.state.field.anchor,
+                self.state.field.caret,
+            ),
         }
     }
 
@@ -1442,7 +1858,8 @@ impl App {
     pub fn focus_field(&mut self, focus: bool) {
         let field = self.nodes.field_box;
         if focus {
-            self.input.set_focus(&mut self.ui, &mut self.state, Some(field));
+            self.input
+                .set_focus(&mut self.ui, &mut self.state, Some(field));
         } else if self.input.focused() == Some(field) {
             self.input.set_focus(&mut self.ui, &mut self.state, None);
         }
@@ -1452,13 +1869,18 @@ impl App {
         let field = self.nodes.field_box;
         let r = self.ui.rect(field);
         let (x, y) = (r.x + r.width / 2.0, r.y + r.height / 2.0);
-        self.ui.hit_test(x, y).filter(|&t| self.ui.ancestors(t).any(|a| a == field)).map(|_| r)
+        self.ui
+            .hit_test(x, y)
+            .filter(|&t| self.ui.ancestors(t).any(|a| a == field))
+            .map(|_| r)
     }
 
     /// The caret's box, for the page to put its text input by (where the
     /// keyboard's suggestions and an input method's candidates appear).
     pub fn ime_area(&self) -> Option<threers_ui::Rect> {
-        self.input.ime_area().filter(|_| self.input.wants_ime(&self.ui))
+        self.input
+            .ime_area()
+            .filter(|_| self.input.wants_ime(&self.ui))
     }
 
     /// The pointer's CSS cursor now.
@@ -1473,7 +1895,9 @@ impl App {
         // Over text that can be selected, an I-beam, as text views
         // in browsers show (unless the box asks for a cursor of its own).
         let own = self.input.cursor(&self.ui);
-        if matches!(own, threers_ui::Cursor::Auto | threers_ui::Cursor::Default) && self.ui.selectable_text_at(x, y).is_some() {
+        if matches!(own, threers_ui::Cursor::Auto | threers_ui::Cursor::Default)
+            && self.ui.selectable_text_at(x, y).is_some()
+        {
             return "text";
         }
         self.input.cursor(&self.ui).css()
@@ -1484,7 +1908,13 @@ impl App {
     /// scrolled away) and motion is wanted. Otherwise they stay as they
     /// are, and the page draws no frames for them.
     fn candles_lit(&self) -> bool {
-        self.state.page == crate::pages::DEPTH && !self.ui.reduce_motion() && self.showcase.candles.iter().any(|c| self.ui.is_on_screen(c.root))
+        self.state.page == crate::pages::DEPTH
+            && !self.ui.reduce_motion()
+            && self
+                .showcase
+                .candles
+                .iter()
+                .any(|c| self.ui.is_on_screen(c.root))
     }
 
     pub fn needs_frame(&self) -> bool {

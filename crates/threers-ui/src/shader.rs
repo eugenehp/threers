@@ -63,28 +63,53 @@ pub struct AnimationBudget {
 
 impl AnimationBudget {
     /// Every animated effect, every frame.
-    pub const UNLIMITED: AnimationBudget = AnimationBudget { max_full_rate: None, overflow_fps: 0.0, small: 0.0, small_fps: 0.0, max_fps: 0.0 };
+    pub const UNLIMITED: AnimationBudget = AnimationBudget {
+        max_full_rate: None,
+        overflow_fps: 0.0,
+        small: 0.0,
+        small_fps: 0.0,
+        max_fps: 0.0,
+    };
 
     /// For a phone: four at up to 30 frames a second, the rest at 8, those
     /// under 48 pixels at 15.
-    pub const PHONE: AnimationBudget = AnimationBudget { max_full_rate: Some(4), overflow_fps: 8.0, small: 48.0, small_fps: 15.0, max_fps: 30.0 };
+    pub const PHONE: AnimationBudget = AnimationBudget {
+        max_full_rate: Some(4),
+        overflow_fps: 8.0,
+        small: 48.0,
+        small_fps: 15.0,
+        max_fps: 30.0,
+    };
 
     /// At most `n` at full rate, the rest held still.
     pub fn at_most(n: usize) -> Self {
-        Self { max_full_rate: Some(n), ..Self::UNLIMITED }
+        Self {
+            max_full_rate: Some(n),
+            ..Self::UNLIMITED
+        }
     }
 
     pub fn overflow_fps(self, fps: f32) -> Self {
-        Self { overflow_fps: fps.max(0.0), ..self }
+        Self {
+            overflow_fps: fps.max(0.0),
+            ..self
+        }
     }
 
     /// Effects smaller than `side` UI pixels go `fps` frames a second.
     pub fn small(self, side: f32, fps: f32) -> Self {
-        Self { small: side.max(0.0), small_fps: fps.max(0.0), ..self }
+        Self {
+            small: side.max(0.0),
+            small_fps: fps.max(0.0),
+            ..self
+        }
     }
 
     pub fn max_fps(self, fps: f32) -> Self {
-        Self { max_fps: fps.max(0.0), ..self }
+        Self {
+            max_fps: fps.max(0.0),
+            ..self
+        }
     }
 }
 
@@ -149,7 +174,13 @@ impl Shader {
             Ok((f, p)) => (f, p, None),
             Err(e) => (String::new(), vec![], Some(e)),
         };
-        Shader(Arc::new(Inner { id, source, function, params, error }))
+        Shader(Arc::new(Inner {
+            id,
+            source,
+            function,
+            params,
+            error,
+        }))
     }
 
     /// Identifies the source: equal sources, equal ids.
@@ -192,7 +223,10 @@ impl Shader {
 
 impl std::fmt::Debug for Shader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Shader").field("function", &self.0.function).field("id", &self.0.id).finish()
+        f.debug_struct("Shader")
+            .field("function", &self.0.function)
+            .field("id", &self.0.id)
+            .finish()
     }
 }
 
@@ -228,14 +262,24 @@ fn signature(source: &str) -> Result<(String, Vec<Param>), String> {
         }
     }
     let close = close.ok_or("unclosed parameter list")?;
-    let returns: String = rest[close + 1..].split('{').next().unwrap_or("").chars().filter(|c| !c.is_whitespace()).collect();
+    let returns: String = rest[close + 1..]
+        .split('{')
+        .next()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
     if returns != "->vec4<f32>" && returns != "->vec4f" {
-        return Err(format!("`{name}` must return vec4<f32>, the pixel's premultiplied colour"));
+        return Err(format!(
+            "`{name}` must return vec4<f32>, the pixel's premultiplied colour"
+        ));
     }
     let mut params = vec![];
     let mut slot = 0u8;
     for (i, part) in split_top(&rest[open + 1..close]).into_iter().enumerate() {
-        let (pname, ty) = part.split_once(':').ok_or_else(|| format!("parameter `{}` has no type", part.trim()))?;
+        let (pname, ty) = part
+            .split_once(':')
+            .ok_or_else(|| format!("parameter `{}` has no type", part.trim()))?;
         // Attributes, if any, come before the name.
         let pname = pname.split_whitespace().last().unwrap_or("").to_string();
         let ty: String = ty.chars().filter(|c| !c.is_whitespace()).collect();
@@ -244,11 +288,17 @@ fn signature(source: &str) -> Result<(String, Vec<Param>), String> {
             "vec2<f32>" | "vec2f" => 2,
             "vec3<f32>" | "vec3f" => 3,
             "vec4<f32>" | "vec4f" => 4,
-            _ => return Err(format!("`{pname}: {ty}`: parameters are f32 or vec2/vec3/vec4 of f32")),
+            _ => {
+                return Err(format!(
+                    "`{pname}: {ty}`: parameters are f32 or vec2/vec3/vec4 of f32"
+                ))
+            }
         };
         let kind = if i == 0 {
             if components != 2 {
-                return Err(format!("the first parameter, `{pname}`, is the position: a vec2<f32>"));
+                return Err(format!(
+                    "the first parameter, `{pname}`, is the position: a vec2<f32>"
+                ));
             }
             ParamKind::Position
         } else {
@@ -256,15 +306,18 @@ fn signature(source: &str) -> Result<(String, Vec<Param>), String> {
                 ("color", 4) => ParamKind::Color,
                 ("time", 1) => ParamKind::Time,
                 ("size", 2) => ParamKind::Size,
-                ("color" | "time" | "size", _) => {
-                    return Err(format!("`{pname}` is filled in: color is a vec4<f32>, time an f32, size a vec2<f32>"))
-                }
+                ("color" | "time" | "size", _) => return Err(format!(
+                    "`{pname}` is filled in: color is a vec4<f32>, time an f32, size a vec2<f32>"
+                )),
                 _ => {
                     if slot as usize == MAX_ARGS {
                         return Err(format!("more than {MAX_ARGS} arguments"));
                     }
                     slot += 1;
-                    ParamKind::Arg { components, slot: slot - 1 }
+                    ParamKind::Arg {
+                        components,
+                        slot: slot - 1,
+                    }
                 }
             }
         };
@@ -280,7 +333,13 @@ fn signature(source: &str) -> Result<(String, Vec<Param>), String> {
 fn last_fn(source: &str) -> Option<usize> {
     let b = source.as_bytes();
     let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-    source.match_indices("fn").map(|(i, _)| i).filter(|&i| (i == 0 || !ident(b[i - 1])) && b.get(i + 2).is_some_and(|c| c.is_ascii_whitespace())).last()
+    source
+        .match_indices("fn")
+        .map(|(i, _)| i)
+        .filter(|&i| {
+            (i == 0 || !ident(b[i - 1])) && b.get(i + 2).is_some_and(|c| c.is_ascii_whitespace())
+        })
+        .last()
 }
 
 /// `s` split at commas outside angle brackets and parentheses.
@@ -318,7 +377,12 @@ pub struct Effect {
 impl Effect {
     /// `shader` with its arguments at zero.
     pub fn new(shader: &Shader) -> Effect {
-        Effect { shader: shader.clone(), values: [[0.0; 4]; MAX_ARGS], overflow: 0.0, blend: crate::BlendMode::Normal }
+        Effect {
+            shader: shader.clone(),
+            values: [[0.0; 4]; MAX_ARGS],
+            overflow: 0.0,
+            blend: crate::BlendMode::Normal,
+        }
     }
 
     /// With the argument `name` at `value`.
@@ -415,7 +479,11 @@ impl Ui {
     /// Sets an argument of `node`'s effect (say, from a slider or a drag);
     /// `false` when it has no effect or the effect no such argument.
     pub fn set_effect_arg(&mut self, node: NodeId, name: &str, value: impl Into<ArgValue>) -> bool {
-        let set = self.env.effects.get_mut(&node).is_some_and(|e| e.set(name, value));
+        let set = self
+            .env
+            .effects
+            .get_mut(&node)
+            .is_some_and(|e| e.set(name, value));
         if set {
             self.repaint();
         }
@@ -431,7 +499,9 @@ impl Ui {
     /// coming.
     pub(crate) fn effects_animate(&self) -> bool {
         let drawn = self.env.effect_drawn.borrow();
-        self.env.effects.iter().any(|(&n, e)| e.shader.animated() && self.shows(n) && drawn.get(&n) != Some(&self.effect_time(n)))
+        self.env.effects.iter().any(|(&n, e)| {
+            e.shader.animated() && self.shows(n) && drawn.get(&n) != Some(&self.effect_time(n))
+        })
     }
 
     /// Sets how much the shader effects may animate (see
@@ -457,7 +527,12 @@ impl Ui {
             .iter()
             .filter(|(n, e)| e.shader.animated() && self.shows(**n))
             .filter_map(|(n, _)| {
-                let rate = self.env.effect_rates.get(n).copied().unwrap_or(f32::INFINITY) as f64;
+                let rate = self
+                    .env
+                    .effect_rates
+                    .get(n)
+                    .copied()
+                    .unwrap_or(f32::INFINITY) as f64;
                 if rate.is_infinite() {
                     Some(0.0)
                 } else if rate <= 0.0 {
@@ -472,12 +547,22 @@ impl Ui {
     /// The time `node`'s effect is drawn at now: the clock, stepped to its
     /// rate, or held where it stopped.
     fn effect_time(&self, node: NodeId) -> f32 {
-        let rate = self.env.effect_rates.get(&node).copied().unwrap_or(f32::INFINITY);
+        let rate = self
+            .env
+            .effect_rates
+            .get(&node)
+            .copied()
+            .unwrap_or(f32::INFINITY);
         let clock = self.clock as f32;
         if rate.is_infinite() {
             clock
         } else if rate <= 0.0 {
-            self.env.effect_drawn.borrow().get(&node).copied().unwrap_or(clock)
+            self.env
+                .effect_drawn
+                .borrow()
+                .get(&node)
+                .copied()
+                .unwrap_or(clock)
         } else {
             (self.clock * rate as f64).floor() as f32 / rate
         }
@@ -502,7 +587,11 @@ impl Ui {
         shown.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0 .0.cmp(&b.0 .0)));
         self.env.effect_rates.clear();
         for (i, (n, _, side)) in shown.into_iter().enumerate() {
-            let mut rate = if side < b.small { b.small_fps } else { f32::INFINITY };
+            let mut rate = if side < b.small {
+                b.small_fps
+            } else {
+                f32::INFINITY
+            };
             if b.max_full_rate.is_some_and(|max| i >= max) {
                 rate = rate.min(b.overflow_fps);
             }
@@ -536,16 +625,30 @@ impl Ui {
         if hidden(node) || self.ancestors(node).any(hidden) {
             return false;
         }
-        let overlap = |r: crate::Rect, w: crate::Rect| r.x < w.x + w.width && r.y < w.y + w.height && r.x + r.width > w.x && r.y + r.height > w.y;
+        let overlap = |r: crate::Rect, w: crate::Rect| {
+            r.x < w.x + w.width
+                && r.y < w.y + w.height
+                && r.x + r.width > w.x
+                && r.y + r.height > w.y
+        };
         let r = self.rect(node);
-        overlap(r, self.rect(self.root())) && self.ancestors(node).skip(1).filter(|&a| self.style(a).clip).all(|a| overlap(r, self.rect(a)))
+        overlap(r, self.rect(self.root()))
+            && self
+                .ancestors(node)
+                .skip(1)
+                .filter(|&a| self.style(a).clip)
+                .all(|a| overlap(r, self.rect(a)))
     }
 
     /// Opens `node`'s effect on `painter`, if it has one; whether it did.
     pub(crate) fn push_effect(&self, node: NodeId, painter: &mut dyn crate::Painter) -> bool {
         let s = &self.nodes[node.0].style;
         let rect = self.nodes[node.0].rect;
-        let custom = self.env.effects.get(&node).filter(|e| e.shader.error().is_none());
+        let custom = self
+            .env
+            .effects
+            .get(&node)
+            .filter(|e| e.shader.error().is_none());
         // Its own shader; else a mask's; else, to blend, one that changes
         // nothing.
         let mut effect = match (custom, &s.mask) {
@@ -600,7 +703,11 @@ fn mask(p: vec2<f32>, size: vec2<f32>, shape: vec4<f32>, a: vec4<f32>, b: vec4<f
 
 /// The built-in mask's effect for a box `rect` masked by a gradient of
 /// `shape` through `stops` (their alpha; the first four).
-fn mask_effect(rect: crate::Rect, shape: crate::GradientShape, stops: &[(f32, crate::Rgba)]) -> Effect {
+fn mask_effect(
+    rect: crate::Rect,
+    shape: crate::GradientShape,
+    stops: &[(f32, crate::Rgba)],
+) -> Effect {
     use crate::GradientShape;
     let (w, h) = (rect.width, rect.height);
     let shape = match shape {
@@ -611,7 +718,10 @@ fn mask_effect(rect: crate::Rect, shape: crate::GradientShape, stops: &[(f32, cr
         }
         GradientShape::Radial { cx, cy } => {
             let (px, py) = (w * cx, h * cy);
-            let far = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].iter().map(|&(x, y): &(f32, f32)| ((x - px).powi(2) + (y - py).powi(2)).sqrt()).fold(0.0f32, f32::max);
+            let far = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)]
+                .iter()
+                .map(|&(x, y): &(f32, f32)| ((x - px).powi(2) + (y - py).powi(2)).sqrt())
+                .fold(0.0f32, f32::max);
             [1.0, px, py, far]
         }
         GradientShape::Conic { cx, cy, from } => [2.0, w * cx, h * cy, from.to_radians()],
@@ -663,13 +773,21 @@ mod tests {
                 ParamKind::Position,
                 ParamKind::Color,
                 ParamKind::Time,
-                ParamKind::Arg { components: 1, slot: 0 },
-                ParamKind::Arg { components: 4, slot: 1 },
+                ParamKind::Arg {
+                    components: 1,
+                    slot: 0
+                },
+                ParamKind::Arg {
+                    components: 4,
+                    slot: 1
+                },
                 ParamKind::Size
             ]
         );
         assert!(s.animated());
-        let e = Effect::new(&s).arg("tint", [1.0, 0.5, 0.0, 1.0]).arg("strength", 0.25);
+        let e = Effect::new(&s)
+            .arg("tint", [1.0, 0.5, 0.0, 1.0])
+            .arg("strength", 0.25);
         assert_eq!(e.values()[0], [0.25, 0.0, 0.0, 0.0]);
         assert_eq!(e.values()[1], [1.0, 0.5, 0.0, 1.0]);
         assert!(!Effect::new(&s).set("nothing", 1.0));
@@ -677,11 +795,31 @@ mod tests {
 
     #[test]
     fn misshapen_sources_say_why() {
-        assert!(Shader::new("let x = 1;").error().unwrap().contains("no function"));
-        assert!(Shader::new("fn f(p: vec2<f32>) -> f32 { return 1.0; }").error().unwrap().contains("vec4"));
-        assert!(Shader::new("fn f(p: f32) -> vec4<f32> { return vec4<f32>(); }").error().unwrap().contains("position"));
-        assert!(Shader::new("fn f(p: vec2<f32>, m: mat2x2<f32>) -> vec4<f32> { return vec4<f32>(); }").error().is_some());
-        assert!(Shader::new("fn f(p: vec2<f32>, time: vec2<f32>) -> vec4<f32> { return vec4<f32>(); }").error().unwrap().contains("filled in"));
+        assert!(Shader::new("let x = 1;")
+            .error()
+            .unwrap()
+            .contains("no function"));
+        assert!(Shader::new("fn f(p: vec2<f32>) -> f32 { return 1.0; }")
+            .error()
+            .unwrap()
+            .contains("vec4"));
+        assert!(
+            Shader::new("fn f(p: f32) -> vec4<f32> { return vec4<f32>(); }")
+                .error()
+                .unwrap()
+                .contains("position")
+        );
+        assert!(Shader::new(
+            "fn f(p: vec2<f32>, m: mat2x2<f32>) -> vec4<f32> { return vec4<f32>(); }"
+        )
+        .error()
+        .is_some());
+        assert!(Shader::new(
+            "fn f(p: vec2<f32>, time: vec2<f32>) -> vec4<f32> { return vec4<f32>(); }"
+        )
+        .error()
+        .unwrap()
+        .contains("filled in"));
     }
 
     #[test]
@@ -691,9 +829,16 @@ mod tests {
         let mut ui = Ui::new();
         let root = ui.root();
         let page = ui.add_box(root, style! { width: 200px; height: 100px; });
-        let card = ui.add_box(page, style! { width: 100px; height: 50px; background: #f00; });
-        ui.add_box(card, style! { width: 10px; height: 10px; background: #0f0; });
-        let still = Shader::new("fn f(p: vec2<f32>, color: vec4<f32>) -> vec4<f32> { return color; }");
+        let card = ui.add_box(
+            page,
+            style! { width: 100px; height: 50px; background: #f00; },
+        );
+        ui.add_box(
+            card,
+            style! { width: 10px; height: 10px; background: #0f0; },
+        );
+        let still =
+            Shader::new("fn f(p: vec2<f32>, color: vec4<f32>) -> vec4<f32> { return color; }");
         ui.set_effect(card, Some(Effect::new(&still)));
         ui.layout(300.0, 200.0, &mut FixedWidthText(7.0));
         let mut scene = Scene::default();
@@ -707,10 +852,16 @@ mod tests {
                 _ => "draw",
             })
             .collect();
-        assert_eq!(kinds, ["push", "draw", "draw", "pop"], "the box and its child inside");
+        assert_eq!(
+            kinds,
+            ["push", "draw", "draw", "pop"],
+            "the box and its child inside"
+        );
         assert!(!ui.needs_frame(), "a still effect asks for nothing");
         // Its arguments: a frame to show them.
-        let tint = Shader::new("fn f(p: vec2<f32>, color: vec4<f32>, k: f32) -> vec4<f32> { return color * k; }");
+        let tint = Shader::new(
+            "fn f(p: vec2<f32>, color: vec4<f32>, k: f32) -> vec4<f32> { return color * k; }",
+        );
         ui.set_effect(card, Some(Effect::new(&tint)));
         ui.layout(300.0, 200.0, &mut FixedWidthText(7.0));
         assert!(ui.set_effect_arg(card, "k", 0.5));
@@ -764,14 +915,22 @@ mod tests {
         ui.set_animation_budget(AnimationBudget::UNLIMITED.small(48.0, 10.0));
         ui.step(0.37);
         assert_eq!(time_of(&ui, big), 0.37, "full rate");
-        assert_eq!(time_of(&ui, small), 0.3, "the small one: stepped at 10 a second");
+        assert_eq!(
+            time_of(&ui, small),
+            0.3,
+            "the small one: stepped at 10 a second"
+        );
         // At most one: the largest runs, the rest (the small one too) held.
         ui.set_animation_budget(AnimationBudget::at_most(1));
         let held = time_of(&ui, mid);
         ui.step(0.5);
         assert_eq!(time_of(&ui, big), 0.87);
         assert_eq!(time_of(&ui, mid), held, "past the limit: held");
-        assert_eq!(ui.next_effect_frame_in(), Some(0.0), "the big one runs every frame");
+        assert_eq!(
+            ui.next_effect_frame_in(),
+            Some(0.0),
+            "the big one runs every frame"
+        );
         // The big one gone, the next largest takes its place.
         ui.set_effect(big, None);
         ui.step(0.1);

@@ -38,7 +38,15 @@ fn fixture() -> Fixture {
     }
     ui.add_box(outer, style! { height: 200px; });
     ui.layout(400.0, 300.0, &mut FixedWidthText(7.0));
-    Fixture { ui, panel, ok, cancel, slider, list, outer }
+    Fixture {
+        ui,
+        panel,
+        ok,
+        cancel,
+        slider,
+        list,
+        outer,
+    }
 }
 
 fn logger(name: &'static str) -> impl FnMut(&mut Log, &mut Ui, &Event, &mut EventCx) {
@@ -73,8 +81,21 @@ fn capture_runs_inward_then_bubble_outward() {
         input.on(node, Phase::Bubble, logger(name));
     }
     let mut log = Log::default();
-    input.dispatch(&mut f.ui, &mut log, Event::PointerDown { x: 5.0, y: 5.0, button: PointerButton::Primary });
-    let downs: Vec<_> = log.0.iter().filter(|l| l.contains("down")).cloned().collect();
+    input.dispatch(
+        &mut f.ui,
+        &mut log,
+        Event::PointerDown {
+            x: 5.0,
+            y: 5.0,
+            button: PointerButton::Primary,
+        },
+    );
+    let downs: Vec<_> = log
+        .0
+        .iter()
+        .filter(|l| l.contains("down"))
+        .cloned()
+        .collect();
     assert_eq!(
         downs,
         [
@@ -92,7 +113,9 @@ fn capture_runs_inward_then_bubble_outward() {
 fn stopping_an_event_keeps_it_from_the_nodes_further_on() {
     let mut f = fixture();
     let mut input = Input::new();
-    input.on(f.panel, Phase::Capture, |_: &mut Log, _, _, cx| cx.stop_propagation());
+    input.on(f.panel, Phase::Capture, |_: &mut Log, _, _, cx| {
+        cx.stop_propagation()
+    });
     input.on(f.ok, Phase::Bubble, logger("ok"));
     let mut log = Log::default();
     let out = input.click(&mut f.ui, &mut log, 5.0, 5.0);
@@ -109,8 +132,24 @@ fn a_click_lands_on_what_holds_both_press_and_release() {
     let mut log = Log::default();
     let primary = PointerButton::Primary;
     // Pressed on OK, released on Cancel: the click is the panel's.
-    input.dispatch(&mut f.ui, &mut log, Event::PointerDown { x: 5.0, y: 5.0, button: primary });
-    let out = input.dispatch(&mut f.ui, &mut log, Event::PointerUp { x: 55.0, y: 5.0, button: primary });
+    input.dispatch(
+        &mut f.ui,
+        &mut log,
+        Event::PointerDown {
+            x: 5.0,
+            y: 5.0,
+            button: primary,
+        },
+    );
+    let out = input.dispatch(
+        &mut f.ui,
+        &mut log,
+        Event::PointerUp {
+            x: 55.0,
+            y: 5.0,
+            button: primary,
+        },
+    );
     assert_eq!(out.clicked, Some(f.panel));
     // Pressed and released on OK's label: the click is the label's, and
     // reaches OK as it bubbles.
@@ -118,11 +157,23 @@ fn a_click_lands_on_what_holds_both_press_and_release() {
     let clicked = out.clicked.unwrap();
     assert_eq!(f.ui.parent(clicked), Some(f.ok));
     // The other button released: no click.
-    input.dispatch(&mut f.ui, &mut log, Event::PointerDown { x: 5.0, y: 5.0, button: primary });
+    input.dispatch(
+        &mut f.ui,
+        &mut log,
+        Event::PointerDown {
+            x: 5.0,
+            y: 5.0,
+            button: primary,
+        },
+    );
     let out = input.dispatch(
         &mut f.ui,
         &mut log,
-        Event::PointerUp { x: 5.0, y: 5.0, button: PointerButton::Secondary },
+        Event::PointerUp {
+            x: 5.0,
+            y: 5.0,
+            button: PointerButton::Secondary,
+        },
     );
     assert_eq!(out.clicked, None);
 }
@@ -142,13 +193,41 @@ fn a_captured_pointer_keeps_reaching_the_slider_off_its_edge() {
     });
     let mut seen = vec![];
     let b = PointerButton::Primary;
-    input.dispatch(&mut f.ui, &mut seen, Event::PointerDown { x: 150.0, y: 10.0, button: b });
-    input.dispatch(&mut f.ui, &mut seen, Event::PointerMove { x: 175.0, y: 10.0 });
+    input.dispatch(
+        &mut f.ui,
+        &mut seen,
+        Event::PointerDown {
+            x: 150.0,
+            y: 10.0,
+            button: b,
+        },
+    );
+    input.dispatch(
+        &mut f.ui,
+        &mut seen,
+        Event::PointerMove { x: 175.0, y: 10.0 },
+    );
     // Far outside it, and over another node entirely.
-    input.dispatch(&mut f.ui, &mut seen, Event::PointerMove { x: 380.0, y: 200.0 });
-    input.dispatch(&mut f.ui, &mut seen, Event::PointerUp { x: 380.0, y: 200.0, button: b });
+    input.dispatch(
+        &mut f.ui,
+        &mut seen,
+        Event::PointerMove { x: 380.0, y: 200.0 },
+    );
+    input.dispatch(
+        &mut f.ui,
+        &mut seen,
+        Event::PointerUp {
+            x: 380.0,
+            y: 200.0,
+            button: b,
+        },
+    );
     // Released: moves go back to whatever is under the pointer.
-    input.dispatch(&mut f.ui, &mut seen, Event::PointerMove { x: 120.0, y: 10.0 });
+    input.dispatch(
+        &mut f.ui,
+        &mut seen,
+        Event::PointerMove { x: 120.0, y: 10.0 },
+    );
     assert_eq!(seen, [0.75, 1.0, 0.2]);
 }
 
@@ -232,11 +311,24 @@ fn the_pointer_entering_and_leaving_tells_only_those_nodes() {
     input.dispatch(&mut f.ui, &mut log, Event::PointerMove { x: 5.0, y: 5.0 });
     input.dispatch(&mut f.ui, &mut log, Event::PointerMove { x: 55.0, y: 5.0 });
     assert!(input.is_hovered(f.panel) && !input.is_hovered(f.ok));
-    input.dispatch(&mut f.ui, &mut log, Event::PointerMove { x: 300.0, y: 250.0 });
-    let hover: Vec<_> = log.0.iter().filter(|l| l.contains("enter") || l.contains("leave")).collect();
+    input.dispatch(
+        &mut f.ui,
+        &mut log,
+        Event::PointerMove { x: 300.0, y: 250.0 },
+    );
+    let hover: Vec<_> = log
+        .0
+        .iter()
+        .filter(|l| l.contains("enter") || l.contains("leave"))
+        .collect();
     assert_eq!(
         hover,
-        ["panel enter bubble", "ok enter bubble", "ok leave bubble", "panel leave bubble"]
+        [
+            "panel enter bubble",
+            "ok enter bubble",
+            "ok leave bubble",
+            "panel leave bubble"
+        ]
     );
 }
 
@@ -251,8 +343,14 @@ fn keys_become_actions_handled_nearest_the_focus() {
     let mut input: Input<Vec<String>> = Input::new();
     input.keymap.bind("ctrl-s", Save, None).unwrap();
     input.keymap.bind("enter", Confirm(1), None).unwrap();
-    input.keymap.bind("enter", Confirm(2), Some("Dialog")).unwrap();
-    input.keymap.bind("ctrl-k ctrl-s", Confirm(9), None).unwrap();
+    input
+        .keymap
+        .bind("enter", Confirm(2), Some("Dialog"))
+        .unwrap();
+    input
+        .keymap
+        .bind("ctrl-k ctrl-s", Confirm(9), None)
+        .unwrap();
     let root = f.ui.root();
     input.set_key_context(f.panel, "Dialog");
     input.on_action(root, |log, _, _: &Save, _| log.push("root saved".into()));
@@ -260,7 +358,9 @@ fn keys_become_actions_handled_nearest_the_focus() {
         log.push(format!("panel confirm {}", a.0));
         cx.propagate();
     });
-    input.on_action(root, |log, _, a: &Confirm, _| log.push(format!("root confirm {}", a.0)));
+    input.on_action(root, |log, _, a: &Confirm, _| {
+        log.push(format!("root confirm {}", a.0))
+    });
     input.on_key(root, |log, _, key, _, _| {
         log.push(format!("key {key}"));
         true
@@ -300,7 +400,10 @@ fn an_unhandled_action_falls_through_to_the_key() {
     input.press(&mut f.ui, &mut clicks, "tab");
     let out = input.press(&mut f.ui, &mut clicks, "enter");
     assert!(out.action.is_some());
-    assert_eq!(clicks, 1, "nobody handles Save, so Enter still activates the button");
+    assert_eq!(
+        clicks, 1,
+        "nobody handles Save, so Enter still activates the button"
+    );
 }
 
 #[test]
@@ -357,7 +460,16 @@ fn notches_animate_and_flings_glide() {
     let (mut t, dt) = (0.0, 1.0 / 60.0);
     input.tick(&mut ui, &mut (), t);
     let notch = |input: &mut Input<()>, ui: &mut Ui| {
-        input.dispatch(ui, &mut (), Event::Wheel { x: 10.0, y: 10.0, dx: 0.0, dy: 100.0 });
+        input.dispatch(
+            ui,
+            &mut (),
+            Event::Wheel {
+                x: 10.0,
+                y: 10.0,
+                dx: 0.0,
+                dy: 100.0,
+            },
+        );
     };
     notch(&mut input, &mut ui);
     notch(&mut input, &mut ui);
@@ -369,21 +481,52 @@ fn notches_animate_and_flings_glide() {
         ui.layout(400.0, 300.0, &mut FixedWidthText(7.0));
         seen.push(ui.style(list).scroll_top);
     }
-    assert!(seen[0] > 0.0 && seen[0] < 100.0, "a notch is not a jump: {seen:?}");
-    assert!(seen.windows(2).all(|w| w[1] >= w[0]), "it only goes forward");
+    assert!(
+        seen[0] > 0.0 && seen[0] < 100.0,
+        "a notch is not a jump: {seen:?}"
+    );
+    assert!(
+        seen.windows(2).all(|w| w[1] >= w[0]),
+        "it only goes forward"
+    );
     assert_eq!(*seen.last().unwrap(), 200.0, "two notches add up");
     // A trackpad's small step moves at once.
-    input.dispatch(&mut ui, &mut (), Event::Wheel { x: 10.0, y: 10.0, dx: 0.0, dy: 7.5 });
+    input.dispatch(
+        &mut ui,
+        &mut (),
+        Event::Wheel {
+            x: 10.0,
+            y: 10.0,
+            dx: 0.0,
+            dy: 7.5,
+        },
+    );
     assert_eq!(ui.style(list).scroll_top, 207.5);
 
     // A finger flicks up and lets go: the content keeps moving, slowing.
     use threers_ui::input::TouchPhase;
     let touch = |input: &mut Input<()>, ui: &mut Ui, phase, y: f32, t: f64| {
-        input.dispatch(ui, &mut (), Event::Touch { id: 1, phase, x: 10.0, y, time: t });
+        input.dispatch(
+            ui,
+            &mut (),
+            Event::Touch {
+                id: 1,
+                phase,
+                x: 10.0,
+                y,
+                time: t,
+            },
+        );
     };
     touch(&mut input, &mut ui, TouchPhase::Start, 90.0, t);
     for k in 1..=5 {
-        touch(&mut input, &mut ui, TouchPhase::Move, 90.0 - k as f32 * 15.0, t + k as f64 * dt);
+        touch(
+            &mut input,
+            &mut ui,
+            TouchPhase::Move,
+            90.0 - k as f32 * 15.0,
+            t + k as f64 * dt,
+        );
     }
     t += 5.0 * dt;
     touch(&mut input, &mut ui, TouchPhase::End, 15.0, t);
@@ -397,7 +540,10 @@ fn notches_animate_and_flings_glide() {
     }
     assert!(steps[0] > lifted, "it carries on");
     let gained: Vec<f32> = steps.windows(2).map(|w| w[1] - w[0]).collect();
-    assert!(gained[1] < gained[0] * 1.001 && gained[60] < gained[1], "and slows");
+    assert!(
+        gained[1] < gained[0] * 1.001 && gained[60] < gained[1],
+        "and slows"
+    );
     assert!(!input.needs_frame(), "until it stops");
 }
 
@@ -416,7 +562,17 @@ fn a_flick_glides_as_far_as_a_phone_would() {
     let mut t = 0.0;
     input.tick(&mut ui, &mut (), t);
     let touch = |input: &mut Input<()>, ui: &mut Ui, phase, y: f32, t: f64| {
-        input.dispatch(ui, &mut (), Event::Touch { id: 1, phase, x: 10.0, y, time: t });
+        input.dispatch(
+            ui,
+            &mut (),
+            Event::Touch {
+                id: 1,
+                phase,
+                x: 10.0,
+                y,
+                time: t,
+            },
+        );
     };
     // A slow start, then 10 px a frame (600 px/s) for the last 100 ms.
     let mut y = 290.0;
@@ -461,7 +617,10 @@ fn a_flick_glides_as_far_as_a_phone_would() {
         input.tick(&mut ui, &mut (), t);
     }
     let two = ui.style(list).scroll_top - b;
-    assert!(two > one * 1.4, "the second flick goes faster: {one} then {two}");
+    assert!(
+        two > one * 1.4,
+        "the second flick goes faster: {one} then {two}"
+    );
 }
 
 /// A finger hovers only while it is down: after a tap the hover style is
@@ -471,13 +630,36 @@ fn a_lifted_finger_hovers_nothing() {
     use threers_ui::input::TouchPhase;
     let mut ui = Ui::new();
     let root = ui.root();
-    let b = ui.add_box(root, style! { width: 50px; height: 50px; background: #000000; });
+    let b = ui.add_box(
+        root,
+        style! { width: 50px; height: 50px; background: #000000; },
+    );
     ui.hover_style(b, "background: #ff0000");
     ui.layout(200.0, 200.0, &mut FixedWidthText(7.0));
     let mut input: Input<()> = Input::new();
-    input.dispatch(&mut ui, &mut (), Event::Touch { id: 1, phase: TouchPhase::Start, x: 10.0, y: 10.0, time: 0.0 });
+    input.dispatch(
+        &mut ui,
+        &mut (),
+        Event::Touch {
+            id: 1,
+            phase: TouchPhase::Start,
+            x: 10.0,
+            y: 10.0,
+            time: 0.0,
+        },
+    );
     assert_eq!(input.hovered(), Some(b));
-    input.dispatch(&mut ui, &mut (), Event::Touch { id: 1, phase: TouchPhase::End, x: 10.0, y: 10.0, time: 0.05 });
+    input.dispatch(
+        &mut ui,
+        &mut (),
+        Event::Touch {
+            id: 1,
+            phase: TouchPhase::End,
+            x: 10.0,
+            y: 10.0,
+            time: 0.05,
+        },
+    );
     assert_eq!(input.hovered(), None);
     ui.layout(200.0, 200.0, &mut FixedWidthText(7.0));
     assert_eq!(ui.style(b).background, Some([0.0, 0.0, 0.0, 1.0]));
@@ -492,7 +674,10 @@ fn a_sideways_pan_keeps_to_its_strip_and_glides() {
     let mut ui = Ui::new();
     let root = ui.root();
     let page = ui.add_box(root, style! { height: 300px; overflow: auto; });
-    let strip = ui.add_box(page, style! { display: flex; overflow-x: auto; width: 300px; });
+    let strip = ui.add_box(
+        page,
+        style! { display: flex; overflow-x: auto; width: 300px; },
+    );
     for _ in 0..40 {
         ui.add_box(strip, style! { width: 60px; height: 40px; flex-shrink: 0; });
     }
@@ -502,16 +687,37 @@ fn a_sideways_pan_keeps_to_its_strip_and_glides() {
     let (mut t, dt) = (0.0, 1.0 / 60.0);
     input.tick(&mut ui, &mut (), t);
     let touch = |input: &mut Input<()>, ui: &mut Ui, phase, x: f32, y: f32, t: f64| {
-        input.dispatch(ui, &mut (), Event::Touch { id: 1, phase, x, y, time: t });
+        input.dispatch(
+            ui,
+            &mut (),
+            Event::Touch {
+                id: 1,
+                phase,
+                x,
+                y,
+                time: t,
+            },
+        );
     };
     touch(&mut input, &mut ui, TouchPhase::Start, 250.0, 20.0, t);
     // Mostly left, drifting down as a thumb does.
     for k in 1..=6 {
         t += dt;
-        touch(&mut input, &mut ui, TouchPhase::Move, 250.0 - k as f32 * 30.0, 20.0 + k as f32 * 8.0, t);
+        touch(
+            &mut input,
+            &mut ui,
+            TouchPhase::Move,
+            250.0 - k as f32 * 30.0,
+            20.0 + k as f32 * 8.0,
+            t,
+        );
         ui.layout(400.0, 300.0, &mut FixedWidthText(7.0));
     }
-    assert_eq!(ui.style(strip).scroll_left, 180.0, "every pixel of the finger");
+    assert_eq!(
+        ui.style(strip).scroll_left,
+        180.0,
+        "every pixel of the finger"
+    );
     assert_eq!(ui.style(page).scroll_top, 0.0, "the page stays put");
     touch(&mut input, &mut ui, TouchPhase::End, 70.0, 68.0, t);
     let lifted = ui.style(strip).scroll_left;
@@ -527,7 +733,14 @@ fn a_sideways_pan_keeps_to_its_strip_and_glides() {
     touch(&mut input, &mut ui, TouchPhase::Start, 200.0, 20.0, t);
     for k in 1..=4 {
         t += dt;
-        touch(&mut input, &mut ui, TouchPhase::Move, 200.0 - k as f32 * 4.0, 20.0 - k as f32 * 20.0, t);
+        touch(
+            &mut input,
+            &mut ui,
+            TouchPhase::Move,
+            200.0 - k as f32 * 4.0,
+            20.0 - k as f32 * 20.0,
+            t,
+        );
     }
     touch(&mut input, &mut ui, TouchPhase::End, 184.0, -60.0, t + 0.3);
     assert_eq!(ui.style(strip).scroll_left, before);

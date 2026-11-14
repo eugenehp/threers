@@ -158,7 +158,8 @@ impl VolumeMaps {
         if self.uploaded.contains_key(&k) {
             return false;
         }
-        self.uploaded.insert(k, (t.clone(), GpuVolume::from_texture_on(gpu, t)));
+        self.uploaded
+            .insert(k, (t.clone(), GpuVolume::from_texture_on(gpu, t)));
         true
     }
 
@@ -169,7 +170,8 @@ impl VolumeMaps {
 
     /// Let go of the volumes nothing but this holds any more.
     pub fn evict(&mut self) {
-        self.uploaded.retain(|_, (t, _)| std::sync::Arc::strong_count(t) > 1);
+        self.uploaded
+            .retain(|_, (t, _)| std::sync::Arc::strong_count(t) > 1);
     }
 }
 

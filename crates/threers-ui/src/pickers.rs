@@ -61,11 +61,25 @@ fn follow<S: 'static, T: Clone + PartialEq + 'static>(
 
 /// A row of choices, one picked, its highlight sliding to the one picked
 /// (a radio group to assistive technology; the arrows move the choice).
-pub fn segmented<S: 'static>(ui: &mut Ui, input: &mut Input<S>, state: &S, parent: NodeId, label: &str, choices: &[&str], selected: Binding<S, usize>) -> NodeId {
-    let row = ui.add_box(parent, style! { position: relative; display: flex; padding: 2px; border-radius: 8px; gap: 2px; });
+pub fn segmented<S: 'static>(
+    ui: &mut Ui,
+    input: &mut Input<S>,
+    state: &S,
+    parent: NodeId,
+    label: &str,
+    choices: &[&str],
+    selected: Binding<S, usize>,
+) -> NodeId {
+    let row = ui.add_box(
+        parent,
+        style! { position: relative; display: flex; padding: 2px; border-radius: 8px; gap: 2px; },
+    );
     ui.token_style(row, &[("background", Token::Separator)]);
     ui.set_semantics(row, Semantics::new(Role::RadioGroup).label(label));
-    let pill = ui.add_box(row, style! { position: absolute; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.25); });
+    let pill = ui.add_box(
+        row,
+        style! { position: absolute; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.25); },
+    );
     ui.token_style(pill, &[("background", Token::Raised)]);
     let n = choices.len();
     let items: Vec<NodeId> = choices
@@ -112,17 +126,39 @@ pub fn segmented<S: 'static>(ui: &mut Ui, input: &mut Input<S>, state: &S, paren
 /// A number with − and + buttons, kept in `range` by `step` (a spin
 /// button: up and down step it, Home and End go to the ends).
 #[allow(clippy::too_many_arguments)]
-pub fn stepper<S: 'static>(ui: &mut Ui, input: &mut Input<S>, state: &S, parent: NodeId, label: &str, value: Binding<S, i64>, range: RangeInclusive<i64>, step: i64) -> NodeId {
+pub fn stepper<S: 'static>(
+    ui: &mut Ui,
+    input: &mut Input<S>,
+    state: &S,
+    parent: NodeId,
+    label: &str,
+    value: Binding<S, i64>,
+    range: RangeInclusive<i64>,
+    step: i64,
+) -> NodeId {
     let (lo, hi) = (*range.start(), *range.end());
-    let row = ui.add_box(parent, style! { display: flex; align-items: center; gap: 8px; });
+    let row = ui.add_box(
+        parent,
+        style! { display: flex; align-items: center; gap: 8px; },
+    );
     let name = ui.add_box(row, style! { flex-grow: 1; });
     ui.add_text(name, label);
-    let shown = ui.add_box(row, style! { min-width: 28px; display: flex; justify-content: center; });
+    let shown = ui.add_box(
+        row,
+        style! { min-width: 28px; display: flex; justify-content: center; },
+    );
     let number = ui.add_text(shown, "");
-    let buttons = ui.add_box(row, style! { display: flex; border-radius: 6px; overflow: hidden; });
+    let buttons = ui.add_box(
+        row,
+        style! { display: flex; border-radius: 6px; overflow: hidden; },
+    );
     ui.token_style(buttons, &[("background", Token::Separator)]);
     let mut sem = Semantics::new(Role::SpinButton).label(label);
-    sem.range = Some(RangeValue { min: lo as f32, max: hi as f32, now: 0.0 });
+    sem.range = Some(RangeValue {
+        min: lo as f32,
+        max: hi as f32,
+        now: 0.0,
+    });
     ui.set_semantics(row, sem);
     ui.focus_visible_style(row, "box-shadow: 0 0 0 2px #93c5fd");
     let bump = move |v: &Binding<S, i64>, s: &mut S, by: i64| {
@@ -170,21 +206,44 @@ pub fn stepper<S: 'static>(ui: &mut Ui, input: &mut Input<S>, state: &S, parent:
 /// arrows step it by `step`, Page Up and Down by ten steps, Home and End to
 /// the ends).
 #[allow(clippy::too_many_arguments)]
-pub fn slider<S: 'static>(ui: &mut Ui, input: &mut Input<S>, state: &S, parent: NodeId, label: &str, value: Binding<S, f32>, range: RangeInclusive<f32>, step: f32) -> NodeId {
+pub fn slider<S: 'static>(
+    ui: &mut Ui,
+    input: &mut Input<S>,
+    state: &S,
+    parent: NodeId,
+    label: &str,
+    value: Binding<S, f32>,
+    range: RangeInclusive<f32>,
+    step: f32,
+) -> NodeId {
     let (lo, hi) = (*range.start(), *range.end());
     let span = (hi - lo).max(f32::EPSILON);
-    let track = ui.add_box(parent, style! { position: relative; height: 24px; cursor: pointer; });
+    let track = ui.add_box(
+        parent,
+        style! { position: relative; height: 24px; cursor: pointer; },
+    );
     let rail = ui.add_box(track, style! { position: absolute; left: 0px; top: 10px; width: 100%; height: 4px; border-radius: 2px; });
     ui.token_style(rail, &[("background", Token::Separator)]);
-    let fill = ui.add_box(track, style! { position: absolute; left: 0px; top: 10px; height: 4px; border-radius: 2px; });
+    let fill = ui.add_box(
+        track,
+        style! { position: absolute; left: 0px; top: 10px; height: 4px; border-radius: 2px; },
+    );
     ui.token_style(fill, &[("background", Token::Accent)]);
     let thumb = ui.add_box(track, style! { position: absolute; top: 2px; width: 20px; height: 20px; border-radius: 10px; background: #ffffff; box-shadow: 0 1px 4px rgba(0,0,0,0.4); });
     let mut sem = Semantics::new(Role::Slider).label(label);
-    sem.range = Some(RangeValue { min: lo, max: hi, now: lo });
+    sem.range = Some(RangeValue {
+        min: lo,
+        max: hi,
+        now: lo,
+    });
     ui.set_semantics(track, sem);
     ui.focus_visible_style(track, "box-shadow: 0 0 0 2px #93c5fd");
     let snap = move |v: f32| {
-        let v = if step > 0.0 { lo + ((v - lo) / step).round() * step } else { v };
+        let v = if step > 0.0 {
+            lo + ((v - lo) / step).round() * step
+        } else {
+            v
+        };
         v.clamp(lo, hi)
     };
     let at = move |ui: &Ui, x: f32| {
@@ -260,7 +319,11 @@ impl Progress {
     /// along the bar).
     pub fn set(&self, ui: &mut Ui, value: Option<f32>) {
         let sem = ui.semantics_mut(self.bar);
-        sem.range = value.map(|v| RangeValue { min: 0.0, max: 100.0, now: (v * 100.0).round() });
+        sem.range = value.map(|v| RangeValue {
+            min: 0.0,
+            max: 100.0,
+            now: (v * 100.0).round(),
+        });
         sem.value = value.map(|v| format!("{}%", (v * 100.0).round()));
         match value {
             Some(v) => {
@@ -276,7 +339,13 @@ impl Progress {
                 if !ui.is_animating(self.fill) {
                     ui.animate(
                         self.fill,
-                        Animation::new(Property::Left, Value::Number(-0.3 * w), Value::Number(w), 1.2).repeat(Repeat::Forever),
+                        Animation::new(
+                            Property::Left,
+                            Value::Number(-0.3 * w),
+                            Value::Number(w),
+                            1.2,
+                        )
+                        .repeat(Repeat::Forever),
                     );
                 }
             }
@@ -287,9 +356,15 @@ impl Progress {
 /// A bar showing how far along something is (`value` 0 to 1), or that it
 /// is under way when `None`.
 pub fn progress(ui: &mut Ui, parent: NodeId, label: &str, value: Option<f32>) -> Progress {
-    let bar = ui.add_box(parent, style! { position: relative; height: 6px; border-radius: 3px; overflow: hidden; });
+    let bar = ui.add_box(
+        parent,
+        style! { position: relative; height: 6px; border-radius: 3px; overflow: hidden; },
+    );
     ui.token_style(bar, &[("background", Token::Separator)]);
-    let fill = ui.add_box(bar, style! { position: absolute; top: 0px; height: 100%; border-radius: 3px; });
+    let fill = ui.add_box(
+        bar,
+        style! { position: absolute; top: 0px; height: 100%; border-radius: 3px; },
+    );
     ui.token_style(fill, &[("background", Token::Accent)]);
     ui.set_semantics(bar, Semantics::new(Role::ProgressBar).label(label));
     let p = Progress { bar, fill };
@@ -312,7 +387,10 @@ pub fn empty_state<S: 'static>(
     action: Option<(&str, EmptyAction<S>)>,
 ) -> NodeId {
     let b = ui.add_box(parent, style! { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 24px 12px; white-space: normal; });
-    ui.set_semantics(b, Semantics::new(Role::Status).label(format!("{title}. {message}")));
+    ui.set_semantics(
+        b,
+        Semantics::new(Role::Status).label(format!("{title}. {message}")),
+    );
     let sym = ui.add_box(b, style! { font-size: 32px; });
     ui.token_style(sym, &[("color", Token::SecondaryText)]);
     ui.add_text(sym, symbol);
@@ -322,8 +400,14 @@ pub fn empty_state<S: 'static>(
     ui.token_style(m, &[("color", Token::SecondaryText)]);
     ui.add_text(m, message);
     if let Some((label, mut f)) = action {
-        let a = ui.add_box(b, style! { margin-top: 4px; padding: 4px 12px; border-radius: 6px; cursor: pointer; });
-        ui.token_style(a, &[("background", Token::Accent), ("color", Token::OnAccent)]);
+        let a = ui.add_box(
+            b,
+            style! { margin-top: 4px; padding: 4px 12px; border-radius: 6px; cursor: pointer; },
+        );
+        ui.token_style(
+            a,
+            &[("background", Token::Accent), ("color", Token::OnAccent)],
+        );
         ui.add_text(a, label);
         ui.set_semantics(a, Semantics::new(Role::Button).label(label));
         input.on_click(a, move |s, ui, _| f(s, ui));
@@ -333,7 +417,14 @@ pub fn empty_state<S: 'static>(
 
 /// A search box bound to `query`: typed into with the keyboard, a ✕ to
 /// clear it while it has text, `placeholder` while it has none.
-pub fn search_field<S: 'static>(ui: &mut Ui, input: &mut Input<S>, state: &S, parent: NodeId, placeholder: &str, query: Binding<S, String>) -> NodeId {
+pub fn search_field<S: 'static>(
+    ui: &mut Ui,
+    input: &mut Input<S>,
+    state: &S,
+    parent: NodeId,
+    placeholder: &str,
+    query: Binding<S, String>,
+) -> NodeId {
     let b = ui.add_box(parent, style! { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 8px; cursor: text; });
     ui.token_style(b, &[("background", Token::Separator)]);
     ui.focus_style(b, "box-shadow: 0 0 0 2px #2563eb");
@@ -349,9 +440,15 @@ pub fn search_field<S: 'static>(ui: &mut Ui, input: &mut Input<S>, state: &S, pa
     );
     ui.token_style(icon, &[("color", Token::SecondaryText)]);
     ui.semantics_mut(icon).hidden = true;
-    let text_box = ui.add_box(b, style! { flex-grow: 1; min-width: 0; overflow: hidden; white-space: nowrap; });
+    let text_box = ui.add_box(
+        b,
+        style! { flex-grow: 1; min-width: 0; overflow: hidden; white-space: nowrap; },
+    );
     let text = ui.add_text(text_box, "");
-    let clear = ui.add_box(b, style! { padding: 0 2px; cursor: pointer; display: none; });
+    let clear = ui.add_box(
+        b,
+        style! { padding: 0 2px; cursor: pointer; display: none; },
+    );
     ui.token_style(clear, &[("color", Token::SecondaryText)]);
     ui.add_text(clear, "✕");
     ui.set_semantics(clear, Semantics::new(Role::Button).label("Clear"));
@@ -375,7 +472,10 @@ pub fn search_field<S: 'static>(ui: &mut Ui, input: &mut Input<S>, state: &S, pa
         if field.text != now {
             *field = TextField::new(&now);
         }
-        let used = !matches!(field.key(key, m, |_| true), FieldKey::Ignored | FieldKey::Tab { .. });
+        let used = !matches!(
+            field.key(key, m, |_| true),
+            FieldKey::Ignored | FieldKey::Tab { .. }
+        );
         if field.text != now {
             q.set(s, field.text.clone());
         }
@@ -413,7 +513,11 @@ pub fn search_field<S: 'static>(ui: &mut Ui, input: &mut Input<S>, state: &S, pa
             ui.set_text(text, q.clone());
             ui.token_style(text_box, &[("color", Token::Text)]);
         }
-        let d = if q.is_empty() { Display::None } else { Display::Flex };
+        let d = if q.is_empty() {
+            Display::None
+        } else {
+            Display::Flex
+        };
         ui.update_style(clear, |s| s.display = d);
         ui.semantics_mut(b).value = Some(q.clone());
     });
@@ -434,7 +538,16 @@ mod slider_touch {
         let page = ui.add_box(root, style! { width: 300px; height: 200px; overflow-y: auto; display: flex; flex-direction: column; });
         let v = Binding::new(|s: &(f32, f32)| s.0, |s: &mut (f32, f32), x| s.0 = x);
         let row = ui.add_box(page, style! { flex-shrink: 0; });
-        slider(&mut ui, &mut input, &(0.5, 0.0), row, "Opacity", v, 0.0..=1.0, 0.01);
+        slider(
+            &mut ui,
+            &mut input,
+            &(0.5, 0.0),
+            row,
+            "Opacity",
+            v,
+            0.0..=1.0,
+            0.01,
+        );
         ui.add_box(page, style! { height: 2000px; flex-shrink: 0; });
         ui.layout(300.0, 200.0, &mut FixedWidthText(7.0));
         (ui, input, page)
@@ -442,12 +555,42 @@ mod slider_touch {
 
     fn touch(ui: &mut Ui, input: &mut Input<(f32, f32)>, s: &mut (f32, f32), path: &[(f32, f32)]) {
         let (x, y) = path[0];
-        input.dispatch(ui, s, Event::Touch { id: 1, phase: TouchPhase::Start, x, y, time: 0.0 });
+        input.dispatch(
+            ui,
+            s,
+            Event::Touch {
+                id: 1,
+                phase: TouchPhase::Start,
+                x,
+                y,
+                time: 0.0,
+            },
+        );
         for (i, &(x, y)) in path.iter().enumerate().skip(1) {
-            input.dispatch(ui, s, Event::Touch { id: 1, phase: TouchPhase::Move, x, y, time: i as f64 * 0.016 });
+            input.dispatch(
+                ui,
+                s,
+                Event::Touch {
+                    id: 1,
+                    phase: TouchPhase::Move,
+                    x,
+                    y,
+                    time: i as f64 * 0.016,
+                },
+            );
         }
         let &(x, y) = path.last().unwrap();
-        input.dispatch(ui, s, Event::Touch { id: 1, phase: TouchPhase::End, x, y, time: path.len() as f64 * 0.016 });
+        input.dispatch(
+            ui,
+            s,
+            Event::Touch {
+                id: 1,
+                phase: TouchPhase::End,
+                x,
+                y,
+                time: path.len() as f64 * 0.016,
+            },
+        );
         ui.layout(300.0, 200.0, &mut FixedWidthText(7.0));
     }
 
@@ -455,20 +598,48 @@ mod slider_touch {
     fn a_finger_up_a_slider_scrolls_the_page_and_leaves_the_value() {
         let (mut ui, mut input, page) = page();
         let mut s = (0.5, 0.0);
-        let track = ui.accessibility_tree().into_iter().find(|a| a.role == Role::Slider).unwrap().bounds;
+        let track = ui
+            .accessibility_tree()
+            .into_iter()
+            .find(|a| a.role == Role::Slider)
+            .unwrap()
+            .bounds;
         let (x, y) = (track.x + track.width * 0.9, track.y + track.height / 2.0);
-        touch(&mut ui, &mut input, &mut s, &[(x, y), (x, y - 20.0), (x, y - 60.0), (x, y - 120.0)]);
+        touch(
+            &mut ui,
+            &mut input,
+            &mut s,
+            &[(x, y), (x, y - 20.0), (x, y - 60.0), (x, y - 120.0)],
+        );
         assert_eq!(s.0, 0.5, "the slider kept its value");
-        assert!(ui.scroll_extent(page).2 > 50.0, "the page scrolled: {}", ui.scroll_extent(page).2);
+        assert!(
+            ui.scroll_extent(page).2 > 50.0,
+            "the page scrolled: {}",
+            ui.scroll_extent(page).2
+        );
     }
 
     #[test]
     fn a_finger_along_a_slider_slides_it_and_a_tap_sets_it() {
         let (mut ui, mut input, page) = page();
         let mut s = (0.5, 0.0);
-        let track = ui.accessibility_tree().into_iter().find(|a| a.role == Role::Slider).unwrap().bounds;
+        let track = ui
+            .accessibility_tree()
+            .into_iter()
+            .find(|a| a.role == Role::Slider)
+            .unwrap()
+            .bounds;
         let (y, x0) = (track.y + track.height / 2.0, track.x + track.width / 2.0);
-        touch(&mut ui, &mut input, &mut s, &[(x0, y), (x0 + 20.0, y + 2.0), (track.x + track.width, y + 3.0)]);
+        touch(
+            &mut ui,
+            &mut input,
+            &mut s,
+            &[
+                (x0, y),
+                (x0 + 20.0, y + 2.0),
+                (track.x + track.width, y + 3.0),
+            ],
+        );
         assert!(s.0 > 0.95, "slid to the end: {}", s.0);
         assert_eq!(ui.scroll_extent(page).2, 0.0, "the page stayed");
         touch(&mut ui, &mut input, &mut s, &[(track.x + 10.0, y)]);
@@ -504,17 +675,29 @@ mod slider_touch {
 /// ui.layout(300.0, 200.0, &mut FixedWidthText(7.0));
 /// assert_eq!(ui.children(ui.children(b)[0]).len(), 2);
 /// ```
-pub fn text_area<S: 'static>(ui: &mut Ui, input: &mut Input<S>, state: &S, parent: NodeId, placeholder: &str, text: Binding<S, String>, rows: u32) -> NodeId {
+pub fn text_area<S: 'static>(
+    ui: &mut Ui,
+    input: &mut Input<S>,
+    state: &S,
+    parent: NodeId,
+    placeholder: &str,
+    text: Binding<S, String>,
+    rows: u32,
+) -> NodeId {
     let b = ui.add_box(parent, style! { display: flex; padding: 7px 8px; border-radius: 7px; cursor: text; overflow-y: auto; });
     let line = 12.0 * 1.4;
-    ui.update_style(b, |s| s.min_height = Length::Px(rows.max(1) as f32 * line + 14.0));
+    ui.update_style(b, |s| {
+        s.min_height = Length::Px(rows.max(1) as f32 * line + 14.0)
+    });
     ui.token_style(b, &[("background", Token::Separator)]);
     ui.focus_style(b, "box-shadow: 0 0 0 2px #2563eb");
     ui.set_semantics(b, Semantics::new(Role::TextArea).label(placeholder));
     // a box per line, each wrapping (the layout breaks lines at spaces, not
     // at the text's own line breaks)
     let shown = ui.add_box(b, style! { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; font-size: 12px; line-height: 1.4; });
-    let field = Rc::new(std::cell::RefCell::new(crate::text_area::TextArea::new(text.get(state))));
+    let field = Rc::new(std::cell::RefCell::new(crate::text_area::TextArea::new(
+        text.get(state),
+    )));
     let (f, t) = (field.clone(), text.clone());
     input.on_key(b, move |s, _, key, m, _| {
         // Tab moves on, as a form's would
@@ -558,14 +741,25 @@ pub fn text_area<S: 'static>(ui: &mut Ui, input: &mut Input<S>, state: &S, paren
     let placeholder = placeholder.to_owned();
     follow(ui, input, state, b, text, move |ui, now: &String| {
         ui.clear_children(shown);
-        let lines: Vec<&str> = if now.is_empty() { placeholder.split('\n').collect() } else { now.split('\n').collect() };
+        let lines: Vec<&str> = if now.is_empty() {
+            placeholder.split('\n').collect()
+        } else {
+            now.split('\n').collect()
+        };
         for l in lines {
             // (each its size: a box's font size does not reach the text of
             // a box inside it)
-            let row = ui.add_box(shown, style! { min-height: 16.8px; font-size: 12px; line-height: 1.4; });
+            let row = ui.add_box(
+                shown,
+                style! { min-height: 16.8px; font-size: 12px; line-height: 1.4; },
+            );
             ui.add_text(row, l);
         }
-        let color = if now.is_empty() { Token::SecondaryText } else { Token::Text };
+        let color = if now.is_empty() {
+            Token::SecondaryText
+        } else {
+            Token::Text
+        };
         ui.token_style(shown, &[("color", color)]);
         ui.semantics_mut(b).value = Some(now.clone());
     });

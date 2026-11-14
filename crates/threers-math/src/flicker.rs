@@ -15,7 +15,8 @@
 /// as it gutters to 1.2 as it flares.
 pub fn flame(time: f32, seed: f32) -> f32 {
     let t = time + seed * 17.3;
-    let fast = 0.035 * (t * 11.7).sin() + 0.025 * (t * 17.3 + 1.3).sin() + 0.02 * (t * 29.1 + 2.9).sin();
+    let fast =
+        0.035 * (t * 11.7).sin() + 0.025 * (t * 17.3 + 1.3).sin() + 0.02 * (t * 29.1 + 2.9).sin();
     let draught = 0.5 + 0.5 * (t * 0.37).sin() * (t * 0.61 + 0.7).sin();
     let gust = draught * draught * (0.06 * (t * 7.3).sin() + 0.04 * (t * 13.9 + 0.4).sin());
     (1.0 + fast + gust).clamp(0.8, 1.2)
@@ -26,7 +27,10 @@ pub fn flame(time: f32, seed: f32) -> f32 {
 pub fn sway(time: f32, seed: f32) -> (f32, f32) {
     let t = time + seed * 9.1;
     let draught = 0.5 + 0.5 * (t * 0.43).sin();
-    (draught * (0.6 * (t * 1.3).sin() + 0.4 * (t * 3.1).sin()), draught * (0.6 * (t * 1.1 + 1.0).cos() + 0.4 * (t * 2.7).sin()))
+    (
+        draught * (0.6 * (t * 1.3).sin() + 0.4 * (t * 3.1).sin()),
+        draught * (0.6 * (t * 1.1 + 1.0).cos() + 0.4 * (t * 2.7).sin()),
+    )
 }
 
 /// The volumetric flame's gas, in WGSL, shared by the 3D candle
@@ -130,7 +134,10 @@ mod tests {
             let (x, z) = sway(i as f32 * 0.01, 0.0);
             assert!(x.abs() <= 1.0 && z.abs() <= 1.0);
         }
-        assert!((0.8..0.95).contains(&lo) && (1.05..=1.2).contains(&hi), "{lo} {hi}");
+        assert!(
+            (0.8..0.95).contains(&lo) && (1.05..=1.2).contains(&hi),
+            "{lo} {hi}"
+        );
         assert_ne!(flame(3.0, 0.0), flame(3.0, 1.0));
     }
 }

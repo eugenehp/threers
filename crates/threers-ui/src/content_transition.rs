@@ -56,7 +56,11 @@ pub fn rolling_text(ui: &mut Ui, parent: NodeId, label: &str, text: &str) -> Rol
     sem.live = true;
     sem.value = Some(text.to_owned());
     ui.set_semantics(node, sem);
-    let mut r = RollingText { node, cells: vec![], shown: vec![] };
+    let mut r = RollingText {
+        node,
+        cells: vec![],
+        shown: vec![],
+    };
     r.place(ui, &text.chars().map(Some).collect::<Vec<_>>(), 0.0);
     r
 }
@@ -119,11 +123,19 @@ impl RollingText {
     }
 
     fn new_cell(&self, ui: &mut Ui) -> Cell {
-        let cell = ui.add_box(self.node, style! { position: relative; overflow: hidden; flex-shrink: 0; });
+        let cell = ui.add_box(
+            self.node,
+            style! { position: relative; overflow: hidden; flex-shrink: 0; },
+        );
         let sizer = layer_text(ui, cell, true);
         let leaving = layer_text(ui, cell, false);
         let arriving = layer_text(ui, cell, false);
-        Cell { cell, sizer, leaving, arriving }
+        Cell {
+            cell,
+            sizer,
+            leaving,
+            arriving,
+        }
     }
 
     /// Sets each cell to `want`, rolling those that change by `dir` (0: as
@@ -144,13 +156,19 @@ impl RollingText {
             }
             text_of(ui, c.leaving, old);
             text_of(ui, c.arriving, new);
-            let h = ui.rect(c.cell).height.max(ui.style(c.cell).font_size * 1.2).max(1.0);
+            let h = ui
+                .rect(c.cell)
+                .height
+                .max(ui.style(c.cell).font_size * 1.2)
+                .max(1.0);
             if dir == 0.0 {
                 ui.update_style(c.leaving, |s| s.opacity = 0.0);
                 continue;
             }
             let ease = Easing::CubicOut;
-            let run = |p: Property, a: f32, b: f32| Animation::new(p, Value::Number(a), Value::Number(b), DURATION).easing(ease);
+            let run = |p: Property, a: f32, b: f32| {
+                Animation::new(p, Value::Number(a), Value::Number(b), DURATION).easing(ease)
+            };
             ui.animate(c.leaving, run(Property::Opacity, 1.0, 0.0));
             ui.animate(c.arriving, run(Property::Opacity, 0.0, 1.0));
             if !reduce {
@@ -178,14 +196,26 @@ pub fn crossfade_text(ui: &mut Ui, parent: NodeId, text: &str) -> FadingText {
     let node = ui.add_box(parent, style! { position: relative; flex-shrink: 0; });
     let sizer = ui.add_box(node, style! { opacity: 0; });
     ui.add_text(sizer, text);
-    let leaving = ui.add_box(node, style! { position: absolute; left: 0px; top: 0px; opacity: 0; white-space: nowrap; });
+    let leaving = ui.add_box(
+        node,
+        style! { position: absolute; left: 0px; top: 0px; opacity: 0; white-space: nowrap; },
+    );
     ui.add_text(leaving, "");
-    let arriving = ui.add_box(node, style! { position: absolute; left: 0px; top: 0px; white-space: nowrap; });
+    let arriving = ui.add_box(
+        node,
+        style! { position: absolute; left: 0px; top: 0px; white-space: nowrap; },
+    );
     ui.add_text(arriving, text);
     for n in [sizer, leaving] {
         ui.semantics_mut(n).hidden = true;
     }
-    FadingText { node, sizer, leaving, arriving, shown: text.to_owned() }
+    FadingText {
+        node,
+        sizer,
+        leaving,
+        arriving,
+        shown: text.to_owned(),
+    }
 }
 
 impl FadingText {
@@ -195,11 +225,23 @@ impl FadingText {
             return;
         }
         let old = std::mem::replace(&mut self.shown, text.to_owned());
-        for (holder, s) in [(self.sizer, text), (self.leaving, old.as_str()), (self.arriving, text)] {
+        for (holder, s) in [
+            (self.sizer, text),
+            (self.leaving, old.as_str()),
+            (self.arriving, text),
+        ] {
             let t = ui.children(holder)[0];
             ui.set_text(t, s);
         }
-        let run = |a: f32, b: f32| Animation::new(Property::Opacity, Value::Number(a), Value::Number(b), DURATION).easing(Easing::SineInOut);
+        let run = |a: f32, b: f32| {
+            Animation::new(
+                Property::Opacity,
+                Value::Number(a),
+                Value::Number(b),
+                DURATION,
+            )
+            .easing(Easing::SineInOut)
+        };
         ui.animate(self.leaving, run(1.0, 0.0));
         ui.animate(self.arriving, run(0.0, 1.0));
     }
@@ -239,7 +281,10 @@ mod tests {
         ui.layout(400.0, 100.0, &mut FixedWidthText(7.0));
         let units = &r.cells[2];
         let (cell, arriving) = (ui.rect(units.cell), ui.rect(units.arriving));
-        assert!(arriving.y > cell.y, "coming up from below: {arriving:?} in {cell:?}");
+        assert!(
+            arriving.y > cell.y,
+            "coming up from below: {arriving:?} in {cell:?}"
+        );
         assert_eq!(shown_text(&ui, units.arriving), "0");
         settle(&mut ui);
         let units = &r.cells[2];
@@ -249,7 +294,10 @@ mod tests {
         ui.step(0.05);
         ui.layout(400.0, 100.0, &mut FixedWidthText(7.0));
         let units = &r.cells[2];
-        assert!(ui.rect(units.arriving).y < ui.rect(units.cell).y, "coming down from above");
+        assert!(
+            ui.rect(units.arriving).y < ui.rect(units.cell).y,
+            "coming down from above"
+        );
         settle(&mut ui);
         assert!(!ui.needs_frame());
         // The hundreds' cell empty, and as narrow as nothing.
@@ -274,7 +322,10 @@ mod tests {
         let (a, b) = (ui.style(f.leaving).opacity, ui.style(f.arriving).opacity);
         assert!(a > 0.0 && a < 1.0 && b > 0.0 && b < 1.0, "{a} {b}");
         settle(&mut ui);
-        assert_eq!((ui.style(f.leaving).opacity, ui.style(f.arriving).opacity), (0.0, 1.0));
+        assert_eq!(
+            (ui.style(f.leaving).opacity, ui.style(f.arriving).opacity),
+            (0.0, 1.0)
+        );
         assert_eq!(f.text(), "Goodbye");
     }
 }

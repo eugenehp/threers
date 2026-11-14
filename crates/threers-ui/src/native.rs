@@ -117,10 +117,18 @@ pub fn controls(ui: &Ui) -> Vec<Control> {
     let mut seen: HashMap<(Role, String), u32> = HashMap::new();
     let mut out = vec![];
     for a in ui.accessibility_tree() {
-        if !(pressable(a.role) || editable(a.role) || a.role == Role::Slider) || a.bounds.width <= 0.0 || a.bounds.height <= 0.0 {
+        if !(pressable(a.role) || editable(a.role) || a.role == Role::Slider)
+            || a.bounds.width <= 0.0
+            || a.bounds.height <= 0.0
+        {
             continue;
         }
-        let rect = a.bounds;
+        // what shows of it: inside every box that clips or scrolls it (a
+        // row scrolled half out of its list is half a control; one scrolled
+        // away, none)
+        let Some(rect) = visible(ui, a.id, a.bounds) else {
+            continue;
+        };
         let (cx, cy) = (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
         if !reaches(ui, cx, cy, a.id) {
             continue;
@@ -155,6 +163,34 @@ pub fn controls(ui: &Ui) -> Vec<Control> {
     out
 }
 
+/// `rect` (node `id`'s) cut to what its clipping and scrolling ancestors
+/// show; `None` when nothing of it does.
+fn visible(ui: &Ui, id: NodeId, mut rect: Rect) -> Option<Rect> {
+    let mut n = ui.parent(id);
+    while let Some(p) = n {
+        let s = ui.style(p);
+        if s.clip || s.scroll || s.scroll_x || ui.parent(p).is_none() {
+            let b = ui.rect(p);
+            let (x0, y0) = (rect.x.max(b.x), rect.y.max(b.y));
+            let (x1, y1) = (
+                (rect.x + rect.width).min(b.x + b.width),
+                (rect.y + rect.height).min(b.y + b.height),
+            );
+            if x1 <= x0 || y1 <= y0 {
+                return None;
+            }
+            rect = Rect {
+                x: x0,
+                y: y0,
+                width: x1 - x0,
+                height: y1 - y0,
+            };
+        }
+        n = ui.parent(p);
+    }
+    Some(rect)
+}
+
 /// Whether a press at `(x, y)` lands on `node` or inside it.
 fn reaches(ui: &Ui, x: f32, y: f32, node: NodeId) -> bool {
     let mut n = ui.hit_test(x, y);
@@ -177,7 +213,10 @@ pub fn version(controls: &[Control]) -> u64 {
         for v in [c.rect.x, c.rect.y, c.rect.width, c.rect.height, c.radius] {
             v.to_bits().hash(&mut h);
         }
-        (c.checked, c.selected, c.disabled, c.editable, &c.value, c.slider).hash(&mut h);
+        (
+            c.checked, c.selected, c.disabled, c.editable, &c.value, c.slider,
+        )
+            .hash(&mut h);
         c.tint.map(f32::to_bits).hash(&mut h);
     }
     h.finish()
@@ -303,6 +342,32 @@ mod tests {
     }
 
     #[test]
+    fn a_scrolled_list_gives_only_what_shows_of_its_rows() {
+        let mut ui = Ui::new();
+        let root = ui.root();
+        let list = ui.add_box(
+            root,
+            style! { display: flex; flex-direction: column; height: 100px; overflow-y: auto; },
+        );
+        let rows: Vec<NodeId> = (0..5)
+            .map(|i| {
+                let r = ui.add_box(list, style! { height: 40px; flex-shrink: 0; });
+                ui.set_semantics(r, Semantics::new(Role::Button).label(format!("Row {i}")));
+                r
+            })
+            .collect();
+        ui.layout(200.0, 300.0, &mut FixedWidthText(7.0));
+        ui.update_style(list, |s| s.scroll_top = 50.0);
+        ui.layout(200.0, 300.0, &mut FixedWidthText(7.0));
+        let c = controls(&ui);
+        // row 0 (−50..−10) scrolled away; row 1 (−10..30) cut at the top;
+        // row 3 (70..110) cut at the foot; row 4 (110..150) below
+        assert_eq!(c.iter().map(|c| c.node).collect::<Vec<_>>(), rows[1..4]);
+        assert_eq!((c[0].rect.y, c[0].rect.height), (0.0, 30.0));
+        assert_eq!((c[2].rect.y, c[2].rect.height), (70.0, 30.0));
+    }
+
+    #[test]
     fn keys_outlive_a_rebuild_and_the_version_follows_the_state() {
         let (ui, ..) = card();
         let before = controls(&ui);
@@ -328,10 +393,20 @@ mod tests {
         let mut input: Input<String> = Input::new();
         let root = ui.root();
         let q = Binding::new(|s: &String| s.clone(), |s: &mut String, v| *s = v);
-        crate::pickers::search_field(&mut ui, &mut input, &String::new(), root, "Search regions", q);
+        crate::pickers::search_field(
+            &mut ui,
+            &mut input,
+            &String::new(),
+            root,
+            "Search regions",
+            q,
+        );
         ui.layout(300.0, 200.0, &mut FixedWidthText(7.0));
         let c = controls(&ui);
-        let field = c.iter().find(|c| c.role == Role::SearchBox).expect("the search box");
+        let field = c
+            .iter()
+            .find(|c| c.role == Role::SearchBox)
+            .expect("the search box");
         assert!(field.editable && !pressable(field.role));
         assert_eq!(field.label, "Search regions");
         assert!(to_json(&c).contains("\"role\":\"searchbox\",\"label\":\"Search regions\""));
@@ -346,13 +421,28 @@ mod tests {
         let mut input: Input<f32> = Input::new();
         let root = ui.root();
         let v = Binding::new(|s: &f32| *s, |s: &mut f32, x| *s = x);
-        crate::pickers::slider(&mut ui, &mut input, &0.5, root, "Opacity", v, 0.0..=1.0, 0.1);
+        crate::pickers::slider(
+            &mut ui,
+            &mut input,
+            &0.5,
+            root,
+            "Opacity",
+            v,
+            0.0..=1.0,
+            0.1,
+        );
         ui.layout(300.0, 200.0, &mut FixedWidthText(7.0));
         let c = controls(&ui);
-        let s = c.iter().find(|c| c.role == Role::Slider).expect("the slider");
+        let s = c
+            .iter()
+            .find(|c| c.role == Role::Slider)
+            .expect("the slider");
         assert!(s.slider && !s.editable);
         let json = to_json(&c);
-        assert!(json.contains("\"slide\":true") && json.contains("\"tint\":["), "{json}");
+        assert!(
+            json.contains("\"slide\":true") && json.contains("\"tint\":["),
+            "{json}"
+        );
     }
 
     #[test]

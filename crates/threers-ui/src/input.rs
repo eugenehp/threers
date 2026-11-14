@@ -74,26 +74,52 @@ pub enum PointerButton {
 /// Something the user did, in UI pixels from the top-left.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
-    PointerMove { x: f32, y: f32 },
-    PointerDown { x: f32, y: f32, button: PointerButton },
-    PointerUp { x: f32, y: f32, button: PointerButton },
+    PointerMove {
+        x: f32,
+        y: f32,
+    },
+    PointerDown {
+        x: f32,
+        y: f32,
+        button: PointerButton,
+    },
+    PointerUp {
+        x: f32,
+        y: f32,
+        button: PointerButton,
+    },
     /// The press is not one after all (a finger on a slider that went on to
     /// scroll the page): whoever captured the pointer puts back what the
     /// press did. Sent only to the node that captured it.
     PointerCancel,
     /// A press and release on the same node, or a control activated from
     /// the keyboard. Made by dispatch; send the press and release instead.
-    Click { x: f32, y: f32, button: PointerButton },
+    Click {
+        x: f32,
+        y: f32,
+        button: PointerButton,
+    },
     /// Scroll amounts in pixels; positive `dy` scrolls content up (moves
     /// the view down), as a wheel turned towards you does.
-    Wheel { x: f32, y: f32, dx: f32, dy: f32 },
+    Wheel {
+        x: f32,
+        y: f32,
+        dx: f32,
+        dy: f32,
+    },
     /// A secondary click, or a finger held still: a context menu is wanted
     /// at `(x, y)`. Bubbles from the node under it; a listener that prevents
     /// its default stops a held finger being a long press too.
-    ContextMenu { x: f32, y: f32 },
+    ContextMenu {
+        x: f32,
+        y: f32,
+    },
     /// A key, as the DOM's `KeyboardEvent.key` names it (`"a"`, `"A"`,
     /// `"Enter"`, `"ArrowLeft"`), with the modifiers held.
-    Key { key: String, modifiers: KeyModifiers },
+    Key {
+        key: String,
+        modifiers: KeyModifiers,
+    },
     /// Text from an input method or a paste, to insert as it is.
     Text(String),
     /// Focus arrived at the target (it bubbles, as `focusin` does).
@@ -281,7 +307,9 @@ enum TouchMode {
     /// One finger down, not yet anything else.
     Pending,
     Pan,
-    Pinch { start: f32 },
+    Pinch {
+        start: f32,
+    },
     /// Recognised and finished (a long press, a pinch with one finger
     /// left): the rest of the touch is ignored.
     Done,
@@ -294,7 +322,9 @@ enum TouchMode {
     /// Sliding a row of a swipeable list sideways (see
     /// [`Input::on_swipe_delete`]); `base` is where the row was when the
     /// finger came down.
-    Swipe { base: f32 },
+    Swipe {
+        base: f32,
+    },
 }
 
 /// A finger: its id, where it started, where it is.
@@ -425,7 +455,8 @@ struct Tip {
     shown: Option<NodeId>,
 }
 
-type PreviewBuilder<S> = Box<dyn FnMut(&mut S, &mut Ui, &dyn std::any::Any, NodeId, NodeId) -> NodeId>;
+type PreviewBuilder<S> =
+    Box<dyn FnMut(&mut S, &mut Ui, &dyn std::any::Any, NodeId, NodeId) -> NodeId>;
 
 type DragSource<S> = Box<dyn FnMut(&mut S, &Ui) -> Option<Box<dyn std::any::Any>>>;
 type DropHandler<S> = Box<dyn FnMut(&mut S, &mut Ui, &dyn std::any::Any, &mut EventCx)>;
@@ -666,12 +697,19 @@ impl<S> Input<S> {
         phase: Phase,
         f: impl FnMut(&mut S, &mut Ui, &Event, &mut EventCx) + 'static,
     ) {
-        self.listeners.entry(node).or_default().push((phase, Box::new(f)));
+        self.listeners
+            .entry(node)
+            .or_default()
+            .push((phase, Box::new(f)));
     }
 
     /// Calls `f` when `node`, or something inside it, is clicked — by the
     /// pointer or from the keyboard. Stops the click there.
-    pub fn on_click(&mut self, node: NodeId, mut f: impl FnMut(&mut S, &mut Ui, &mut EventCx) + 'static) {
+    pub fn on_click(
+        &mut self,
+        node: NodeId,
+        mut f: impl FnMut(&mut S, &mut Ui, &mut EventCx) + 'static,
+    ) {
         self.on(node, Phase::Bubble, move |s, ui, e, cx| {
             if let Event::Click { .. } = e {
                 f(s, ui, cx);
@@ -711,7 +749,10 @@ impl<S> Input<S> {
                 f(s, ui, a, cx)
             }
         });
-        self.actions.entry(node).or_default().push((TypeId::of::<A>(), handler));
+        self.actions
+            .entry(node)
+            .or_default()
+            .push((TypeId::of::<A>(), handler));
     }
 
     /// Forgets `node`'s listeners, action handlers and key context.
@@ -741,20 +782,41 @@ impl<S> Input<S> {
         };
         let handled = |b: &super::keymap::Binding| {
             let id = b.action.as_any().type_id();
-            path.iter().chain(std::iter::once(&ui.root())).any(|n| self.actions.get(n).is_some_and(|hs| hs.iter().any(|(t, _)| *t == id)))
+            path.iter().chain(std::iter::once(&ui.root())).any(|n| {
+                self.actions
+                    .get(n)
+                    .is_some_and(|hs| hs.iter().any(|(t, _)| *t == id))
+            })
         };
-        let bindings = if self.keymap.is_pending() { self.keymap.continuations(&contexts) } else { self.keymap.available(&contexts) };
+        let bindings = if self.keymap.is_pending() {
+            self.keymap.continuations(&contexts)
+        } else {
+            self.keymap.available(&contexts)
+        };
         bindings
             .into_iter()
             .filter(|b| handled(b))
-            .map(|b| (b.keys.iter().map(|k| k.label(mac)).collect::<Vec<_>>().join(" "), b.action.name().rsplit("::").next().unwrap_or("")))
+            .map(|b| {
+                (
+                    b.keys
+                        .iter()
+                        .map(|k| k.label(mac))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    b.action.name().rsplit("::").next().unwrap_or(""),
+                )
+            })
             .collect()
     }
 
     /// The key contexts on the focus path, innermost first.
     pub fn key_contexts(&self, ui: &Ui) -> Vec<&str> {
         let Some(start) = self.focus.filter(|&f| ui.contains(f)) else {
-            return self.contexts.get(&ui.root()).map(|c| vec![c.as_str()]).unwrap_or_default();
+            return self
+                .contexts
+                .get(&ui.root())
+                .map(|c| vec![c.as_str()])
+                .unwrap_or_default();
         };
         ui.ancestors(start)
             .filter_map(|n| self.contexts.get(&n).map(String::as_str))
@@ -769,7 +831,10 @@ impl<S> Input<S> {
     /// should be on (winit's `set_ime_allowed`).
     pub fn wants_ime(&self, ui: &Ui) -> bool {
         self.focus.filter(|&f| ui.contains(f)).is_some_and(|f| {
-            matches!(ui.semantics(f).map(|s| s.role), Some(Role::TextBox | Role::TextArea | Role::SearchBox))
+            matches!(
+                ui.semantics(f).map(|s| s.role),
+                Some(Role::TextBox | Role::TextArea | Role::SearchBox)
+            )
         })
     }
 
@@ -784,14 +849,17 @@ impl<S> Input<S> {
         set: impl FnMut(&mut S, &mut Ui, String, usize, usize) + 'static,
     ) {
         self.text_targets.retain(|n, _| *n != node);
-        self.text_targets.insert(node, (Box::new(get), Box::new(set)));
+        self.text_targets
+            .insert(node, (Box::new(get), Box::new(set)));
     }
 
     /// The focused text control (see [`register_text`](Self::register_text)):
     /// its node, text, anchor and caret.
     pub fn focused_text(&self, ui: &Ui, state: &S) -> Option<(NodeId, String, usize, usize)> {
         let f = self.focus.filter(|&f| ui.contains(f))?;
-        let n = ui.ancestors(f).find(|n| self.text_targets.contains_key(n))?;
+        let n = ui
+            .ancestors(f)
+            .find(|n| self.text_targets.contains_key(n))?;
         let (text, a, c) = (self.text_targets[&n].0)(state);
         Some((n, text, a, c))
     }
@@ -799,9 +867,20 @@ impl<S> Input<S> {
     /// Gives the focused text control new text and selection (what the
     /// platform's input holds after the user typed). Returns whether one
     /// has focus.
-    pub fn set_focused_text(&mut self, ui: &mut Ui, state: &mut S, text: String, anchor: usize, caret: usize) -> bool {
-        let Some(f) = self.focus.filter(|&f| ui.contains(f)) else { return false };
-        let Some(n) = ui.ancestors(f).find(|n| self.text_targets.contains_key(n)) else { return false };
+    pub fn set_focused_text(
+        &mut self,
+        ui: &mut Ui,
+        state: &mut S,
+        text: String,
+        anchor: usize,
+        caret: usize,
+    ) -> bool {
+        let Some(f) = self.focus.filter(|&f| ui.contains(f)) else {
+            return false;
+        };
+        let Some(n) = ui.ancestors(f).find(|n| self.text_targets.contains_key(n)) else {
+            return false;
+        };
         if let Some((_, set)) = self.text_targets.get_mut(&n) {
             set(state, ui, text, anchor, caret);
         }
@@ -840,7 +919,11 @@ impl<S> Input<S> {
     /// is held by, or of the node under it. Set the window's (or canvas's)
     /// cursor from it after each pointer event.
     pub fn cursor(&self, ui: &Ui) -> super::Cursor {
-        match self.captured.filter(|&c| ui.contains(c)).or_else(|| self.hovered()) {
+        match self
+            .captured
+            .filter(|&c| ui.contains(c))
+            .or_else(|| self.hovered())
+        {
             Some(n) if ui.contains(n) => ui.cursor_of(n),
             _ => super::Cursor::Default,
         }
@@ -877,7 +960,9 @@ impl<S> Input<S> {
         // Into and out of whole subtrees, as the DOM's focusin and focusout:
         // a panel hears focus leave it, whichever of its fields had it.
         let path = |n: Option<NodeId>| -> Vec<NodeId> {
-            n.filter(|&n| ui.contains(n)).map(|n| ui.ancestors(n).collect()).unwrap_or_default()
+            n.filter(|&n| ui.contains(n))
+                .map(|n| ui.ancestors(n).collect())
+                .unwrap_or_default()
         };
         let (was, is) = (path(old), path(node));
         for n in was.iter().filter(|n| !is.contains(n)) {
@@ -890,12 +975,22 @@ impl<S> Input<S> {
     }
 
     fn run_focus(&mut self, ui: &mut Ui, state: &mut S, node: NodeId, into: bool) {
-        let map = if into { &mut self.focus_in } else { &mut self.focus_out };
-        let Some(mut hs) = map.remove(&node) else { return };
+        let map = if into {
+            &mut self.focus_in
+        } else {
+            &mut self.focus_out
+        };
+        let Some(mut hs) = map.remove(&node) else {
+            return;
+        };
         for h in &mut hs {
             h(state, ui);
         }
-        let map = if into { &mut self.focus_in } else { &mut self.focus_out };
+        let map = if into {
+            &mut self.focus_in
+        } else {
+            &mut self.focus_out
+        };
         map.entry(node).or_default().splice(0..0, hs);
     }
 
@@ -920,18 +1015,29 @@ impl<S> Input<S> {
     /// Calls `f` as a drag carrying a `T` moves over `node` (or what is
     /// inside it), with where the pointer is: for showing where it would
     /// land, or scrolling near an edge.
-    pub fn on_drag_move<T: std::any::Any>(&mut self, node: NodeId, mut f: impl FnMut(&mut S, &mut Ui, &T, f32, f32) + 'static) {
+    pub fn on_drag_move<T: std::any::Any>(
+        &mut self,
+        node: NodeId,
+        mut f: impl FnMut(&mut S, &mut Ui, &T, f32, f32) + 'static,
+    ) {
         let h: DragMoveHandler<S> = Box::new(move |s, ui, data, x, y| {
             if let Some(d) = data.downcast_ref::<T>() {
                 f(s, ui, d, x, y);
             }
         });
-        self.drag_move_handlers.entry(node).or_default().push((TypeId::of::<T>(), h));
+        self.drag_move_handlers
+            .entry(node)
+            .or_default()
+            .push((TypeId::of::<T>(), h));
     }
 
     /// Calls `f` with files dropped onto `node` (or what is inside it) from
     /// outside the UI, and where.
-    pub fn on_drop_files(&mut self, node: NodeId, f: impl FnMut(&mut S, &mut Ui, &[DroppedFile], f32, f32) + 'static) {
+    pub fn on_drop_files(
+        &mut self,
+        node: NodeId,
+        f: impl FnMut(&mut S, &mut Ui, &[DroppedFile], f32, f32) + 'static,
+    ) {
         self.files.insert(node, Box::new(f));
     }
 
@@ -944,7 +1050,14 @@ impl<S> Input<S> {
 
     /// Files dropped at `(x, y)` from outside (the host hears the drop):
     /// the node taking them is handed them. Returns it.
-    pub fn drop_files(&mut self, ui: &mut Ui, state: &mut S, x: f32, y: f32, files: &[DroppedFile]) -> Option<NodeId> {
+    pub fn drop_files(
+        &mut self,
+        ui: &mut Ui,
+        state: &mut S,
+        x: f32,
+        y: f32,
+        files: &[DroppedFile],
+    ) -> Option<NodeId> {
         let target = self.files_target(ui, x, y)?;
         let mut f = self.files.remove(&target)?;
         f(state, ui, files, x, y);
@@ -955,7 +1068,11 @@ impl<S> Input<S> {
     /// Calls `f` when a context menu is wanted on `node` (a secondary
     /// click, or a finger held still), with where; a held finger is then no
     /// long press.
-    pub fn on_context_menu(&mut self, node: NodeId, mut f: impl FnMut(&mut S, &mut Ui, f32, f32) + 'static) {
+    pub fn on_context_menu(
+        &mut self,
+        node: NodeId,
+        mut f: impl FnMut(&mut S, &mut Ui, f32, f32) + 'static,
+    ) {
         self.on(node, Phase::Bubble, move |s, ui, e, cx| {
             if let Event::ContextMenu { x, y } = *e {
                 f(s, ui, x, y);
@@ -980,20 +1097,36 @@ impl<S> Input<S> {
         self.next_timer += 1;
         let id = TimerId(self.next_timer);
         let due = self.now.unwrap_or(0.0) + seconds.max(0.0);
-        self.timers.push(Timer { id, due, every, f, owner: None });
+        self.timers.push(Timer {
+            id,
+            due,
+            every,
+            f,
+            owner: None,
+        });
         id
     }
 
     /// [`after`](Self::after), for as long as `node` is in the tree: the
     /// timer goes with it.
-    pub fn after_for(&mut self, node: NodeId, seconds: f64, f: impl FnMut(&mut S, &mut Ui) + 'static) -> TimerId {
+    pub fn after_for(
+        &mut self,
+        node: NodeId,
+        seconds: f64,
+        f: impl FnMut(&mut S, &mut Ui) + 'static,
+    ) -> TimerId {
         let id = self.after(seconds, f);
         self.own_timer(id, node);
         id
     }
 
     /// [`every`](Self::every), for as long as `node` is in the tree.
-    pub fn every_for(&mut self, node: NodeId, seconds: f64, f: impl FnMut(&mut S, &mut Ui) + 'static) -> TimerId {
+    pub fn every_for(
+        &mut self,
+        node: NodeId,
+        seconds: f64,
+        f: impl FnMut(&mut S, &mut Ui) + 'static,
+    ) -> TimerId {
         let id = self.every(seconds, f);
         self.own_timer(id, node);
         id
@@ -1007,7 +1140,11 @@ impl<S> Input<S> {
 
     /// Calls `f` once, on the next dispatch or tick: after `node` is
     /// built (a load to start, a field to focus).
-    pub fn on_appear(&mut self, node: NodeId, mut f: impl FnMut(&mut Input<S>, &mut Ui, &mut S) + 'static) {
+    pub fn on_appear(
+        &mut self,
+        node: NodeId,
+        mut f: impl FnMut(&mut Input<S>, &mut Ui, &mut S) + 'static,
+    ) {
         self.on_after_dispatch(move |input, ui, state| {
             if ui.contains(node) {
                 f(input, ui, state);
@@ -1072,11 +1209,15 @@ impl<S> Input<S> {
     /// sleeps between frames wakes then.
     pub fn next_timer(&self) -> Option<f64> {
         let now = self.now.unwrap_or(0.0);
-        self.timers.iter().map(|t| (t.due - now).max(0.0)).min_by(|a, b| a.total_cmp(b))
+        self.timers
+            .iter()
+            .map(|t| (t.due - now).max(0.0))
+            .min_by(|a, b| a.total_cmp(b))
     }
 
     fn run_timers(&mut self, ui: &mut Ui, state: &mut S, time: f64) {
-        self.timers.retain(|t| t.owner.is_none_or(|o| ui.contains(o)));
+        self.timers
+            .retain(|t| t.owner.is_none_or(|o| ui.contains(o)));
         let mut due: Vec<Timer<S>> = vec![];
         let mut i = 0;
         while i < self.timers.len() {
@@ -1099,7 +1240,12 @@ impl<S> Input<S> {
 
     /// Types `keys` (`"cmd-a backspace h i enter"`: keystrokes as keymaps
     /// spell them, by spaces), for tests.
-    pub fn simulate_keystrokes(&mut self, ui: &mut Ui, state: &mut S, keys: &str) -> Result<(), String> {
+    pub fn simulate_keystrokes(
+        &mut self,
+        ui: &mut Ui,
+        state: &mut S,
+        keys: &str,
+    ) -> Result<(), String> {
         for k in keys.split_whitespace() {
             let stroke = super::keymap::Keystroke::parse(k)?;
             let key = match stroke.key.as_str() {
@@ -1122,7 +1268,14 @@ impl<S> Input<S> {
                 k if stroke.modifiers.shift && k.chars().count() == 1 => k.to_uppercase(),
                 k => k.to_owned(),
             };
-            self.dispatch(ui, state, Event::Key { key, modifiers: stroke.modifiers });
+            self.dispatch(
+                ui,
+                state,
+                Event::Key {
+                    key,
+                    modifiers: stroke.modifiers,
+                },
+            );
         }
         Ok(())
     }
@@ -1131,7 +1284,11 @@ impl<S> Input<S> {
     /// [module docs](self).
     pub fn dispatch(&mut self, ui: &mut Ui, state: &mut S, event: Event) -> Dispatched {
         let secondary = match event {
-            Event::PointerDown { x, y, button: PointerButton::Secondary } => Some((x, y)),
+            Event::PointerDown {
+                x,
+                y,
+                button: PointerButton::Secondary,
+            } => Some((x, y)),
             _ => None,
         };
         let out = self.dispatch_inner(ui, state, event);
@@ -1150,7 +1307,10 @@ impl<S> Input<S> {
     /// as long as it returns `true`: for what listeners cannot do, since
     /// they are not given the input (a menu opening its submenu, closing
     /// itself and giving focus back).
-    pub fn on_after_dispatch(&mut self, f: impl FnMut(&mut Input<S>, &mut Ui, &mut S) -> bool + 'static) {
+    pub fn on_after_dispatch(
+        &mut self,
+        f: impl FnMut(&mut Input<S>, &mut Ui, &mut S) -> bool + 'static,
+    ) {
         self.after_hooks.push(Box::new(f));
     }
 
@@ -1173,7 +1333,9 @@ impl<S> Input<S> {
     /// styles.
     pub fn sync_states(&self, ui: &mut Ui) {
         let path = |n: Option<NodeId>| -> Vec<NodeId> {
-            n.filter(|&n| ui.contains(n)).map(|n| ui.ancestors(n).collect()).unwrap_or_default()
+            n.filter(|&n| ui.contains(n))
+                .map(|n| ui.ancestors(n).collect())
+                .unwrap_or_default()
         };
         let interaction = super::states::Interaction {
             hovered: self.hovered.clone(),
@@ -1235,7 +1397,10 @@ impl<S> Input<S> {
                     out.handled = true;
                     return out;
                 }
-                let hit = self.captured.filter(|&c| ui.contains(c)).or_else(|| ui.hit_test(*x, *y));
+                let hit = self
+                    .captured
+                    .filter(|&c| ui.contains(c))
+                    .or_else(|| ui.hit_test(*x, *y));
                 self.press_outside(ui, state, hit, &event);
                 self.hover(ui, state, *x, *y);
                 let Some(t) = self.pointer_target(ui, *x, *y) else {
@@ -1261,7 +1426,9 @@ impl<S> Input<S> {
             Event::PointerCancel => {
                 self.armed = None;
                 self.pressed = None;
-                let Some(t) = self.captured.take().filter(|&c| ui.contains(c)) else { return out };
+                let Some(t) = self.captured.take().filter(|&c| ui.contains(c)) else {
+                    return out;
+                };
                 out.target = Some(t);
                 let cx = self.deliver(ui, state, t, &event);
                 self.apply(ui, state, &cx, &mut out);
@@ -1293,7 +1460,11 @@ impl<S> Input<S> {
                     let on: Vec<NodeId> = ui.ancestors(p).collect();
                     let common = ui.ancestors(t).find(|n| on.contains(n));
                     if let Some(common) = common {
-                        let click = Event::Click { x: *x, y: *y, button: *button };
+                        let click = Event::Click {
+                            x: *x,
+                            y: *y,
+                            button: *button,
+                        };
                         let cx = self.deliver(ui, state, common, &click);
                         self.apply(ui, state, &cx, &mut out);
                         out.clicked = Some(common);
@@ -1331,7 +1502,9 @@ impl<S> Input<S> {
                         Self::scroll_chain(ui, t, *dx, *dy)
                     };
                     if *dx != 0.0
-                        && let Some(n) = ui.ancestors(t).find(|&n| ui.style(n).scroll_x && ui.scroll_snap(n).is_some())
+                        && let Some(n) = ui
+                            .ancestors(t)
+                            .find(|&n| ui.style(n).scroll_x && ui.scroll_snap(n).is_some())
                     {
                         self.wheel_x = Some((n, self.now.unwrap_or(0.0)));
                     }
@@ -1346,8 +1519,11 @@ impl<S> Input<S> {
                 let t = self.key_target(ui);
                 out.target = Some(t);
                 let stroke = Keystroke::from_event(key, *modifiers);
-                let contexts: Vec<String> =
-                    self.key_contexts(ui).into_iter().map(str::to_owned).collect();
+                let contexts: Vec<String> = self
+                    .key_contexts(ui)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect();
                 let contexts: Vec<&str> = contexts.iter().map(String::as_str).collect();
                 match self.keymap.match_stroke(&stroke, &contexts) {
                     Match::Pending => {
@@ -1455,7 +1631,10 @@ impl<S> Input<S> {
                 f(s, ui, t, cx)
             }
         });
-        self.drop_targets.entry(node).or_default().push((TypeId::of::<T>(), handler));
+        self.drop_targets
+            .entry(node)
+            .or_default()
+            .push((TypeId::of::<T>(), handler));
     }
 
     /// A node to show under the pointer while dragging: make it hidden
@@ -1485,7 +1664,9 @@ impl<S> Input<S> {
 
     /// The node showing the drag, if one does.
     pub fn drag_preview(&self) -> Option<NodeId> {
-        self.built_preview.map(|(n, _)| n).or(self.drag.as_ref().and(self.preview.map(|(n, _)| n)))
+        self.built_preview
+            .map(|(n, _)| n)
+            .or(self.drag.as_ref().and(self.preview.map(|(n, _)| n)))
     }
 
     /// What is being dragged, if anything.
@@ -1524,21 +1705,31 @@ impl<S> Input<S> {
 
     /// The nearest node under `(x, y)` taking drops of `ty`.
     fn drop_target(&self, ui: &Ui, x: f32, y: f32, ty: TypeId) -> Option<NodeId> {
-        let shown = self.built_preview.map(|(n, _)| n).or(self.preview.map(|(n, _)| n));
+        let shown = self
+            .built_preview
+            .map(|(n, _)| n)
+            .or(self.preview.map(|(n, _)| n));
         let hit = match shown {
             Some(p) if ui.contains(p) => ui.hit_test_except(x, y, p),
             _ => ui.hit_test(x, y),
         }?;
-        ui.ancestors(hit)
-            .find(|n| self.drop_targets.get(n).is_some_and(|hs| hs.iter().any(|(t, _)| *t == ty)))
+        ui.ancestors(hit).find(|n| {
+            self.drop_targets
+                .get(n)
+                .is_some_and(|hs| hs.iter().any(|(t, _)| *t == ty))
+        })
     }
 
     /// Starts or carries on a drag. Returns whether the move belonged to
     /// one (and so goes no further).
     fn drag_move(&mut self, ui: &mut Ui, state: &mut S, x: f32, y: f32) -> bool {
         if self.drag.is_none() {
-            let Some((source, (sx, sy))) = self.armed else { return false };
-            if ((x - sx).powi(2) + (y - sy).powi(2)).sqrt() < DRAG_THRESHOLD || self.captured.is_some() {
+            let Some((source, (sx, sy))) = self.armed else {
+                return false;
+            };
+            if ((x - sx).powi(2) + (y - sy).powi(2)).sqrt() < DRAG_THRESHOLD
+                || self.captured.is_some()
+            {
                 return false;
             }
             self.armed = None;
@@ -1558,21 +1749,39 @@ impl<S> Input<S> {
                 ui.style_mut(n).display = shown;
                 ui.defer(n, i32::MAX);
             }
-            self.drag = Some(Drag { source, data, over: None });
+            self.drag = Some(Drag {
+                source,
+                data,
+                over: None,
+            });
         }
-        let ty = self.drag.as_ref().expect("dragging").data.as_ref().type_id();
+        let ty = self
+            .drag
+            .as_ref()
+            .expect("dragging")
+            .data
+            .as_ref()
+            .type_id();
         let over = self.drop_target(ui, x, y, ty);
         self.drag.as_mut().expect("dragging").over = over;
         // Whatever is under it listening for the drag's moves hears them.
-        let shown = self.built_preview.map(|(n, _)| n).or(self.preview.map(|(n, _)| n));
+        let shown = self
+            .built_preview
+            .map(|(n, _)| n)
+            .or(self.preview.map(|(n, _)| n));
         let hit = match shown {
             Some(p) if ui.contains(p) => ui.hit_test_except(x, y, p),
             _ => ui.hit_test(x, y),
         };
         if let Some(hit) = hit {
-            let listening: Vec<NodeId> = ui.ancestors(hit).filter(|n| self.drag_move_handlers.contains_key(n)).collect();
+            let listening: Vec<NodeId> = ui
+                .ancestors(hit)
+                .filter(|n| self.drag_move_handlers.contains_key(n))
+                .collect();
             for n in listening {
-                let Some(mut hs) = self.drag_move_handlers.remove(&n) else { continue };
+                let Some(mut hs) = self.drag_move_handlers.remove(&n) else {
+                    continue;
+                };
                 let data = self.drag.as_ref().expect("dragging").data.as_ref();
                 for (t, h) in &mut hs {
                     if *t == ty {
@@ -1586,9 +1795,17 @@ impl<S> Input<S> {
         use super::layers::{Anchor, AnchorTo, Corner, Fit};
         if let Some((n, (gx, gy))) = self.built_preview.filter(|(n, _)| ui.contains(*n)) {
             // Held where it was grabbed.
-            ui.anchor(n, Anchor::new(AnchorTo::Point(x - gx, y - gy), Corner::TopLeft).fit(Fit::None));
+            ui.anchor(
+                n,
+                Anchor::new(AnchorTo::Point(x - gx, y - gy), Corner::TopLeft).fit(Fit::None),
+            );
         } else if let Some((n, _)) = self.preview.filter(|(n, _)| ui.contains(*n)) {
-            ui.anchor(n, Anchor::new(AnchorTo::Point(x, y), Corner::TopLeft).offset(10.0, 10.0).fit(Fit::Snap));
+            ui.anchor(
+                n,
+                Anchor::new(AnchorTo::Point(x, y), Corner::TopLeft)
+                    .offset(10.0, 10.0)
+                    .fit(Fit::Snap),
+            );
         }
         true
     }
@@ -1620,16 +1837,45 @@ impl<S> Input<S> {
 
     /// A press at `(x0, y0)`, a move to `(x1, y1)` in a few steps, and a
     /// release there: a drag, if it starts on a drag source.
-    pub fn drag(&mut self, ui: &mut Ui, state: &mut S, from: (f32, f32), to: (f32, f32)) -> Dispatched {
+    pub fn drag(
+        &mut self,
+        ui: &mut Ui,
+        state: &mut S,
+        from: (f32, f32),
+        to: (f32, f32),
+    ) -> Dispatched {
         let b = PointerButton::Primary;
-        self.dispatch(ui, state, Event::PointerMove { x: from.0, y: from.1 });
-        self.dispatch(ui, state, Event::PointerDown { x: from.0, y: from.1, button: b });
+        self.dispatch(
+            ui,
+            state,
+            Event::PointerMove {
+                x: from.0,
+                y: from.1,
+            },
+        );
+        self.dispatch(
+            ui,
+            state,
+            Event::PointerDown {
+                x: from.0,
+                y: from.1,
+                button: b,
+            },
+        );
         for k in 1..=4 {
             let t = k as f32 / 4.0;
             let (x, y) = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
             self.dispatch(ui, state, Event::PointerMove { x, y });
         }
-        self.dispatch(ui, state, Event::PointerUp { x: to.0, y: to.1, button: b })
+        self.dispatch(
+            ui,
+            state,
+            Event::PointerUp {
+                x: to.0,
+                y: to.1,
+                button: b,
+            },
+        )
     }
 
     // Simulated input: what a test (or an automation) does instead of a
@@ -1651,7 +1897,14 @@ impl<S> Input<S> {
         for k in keys.split_whitespace() {
             let stroke = Keystroke::parse(k).unwrap_or_else(|e| panic!("{e}"));
             let key = dom_key(&stroke);
-            last = self.dispatch(ui, state, Event::Key { key, modifiers: stroke.modifiers });
+            last = self.dispatch(
+                ui,
+                state,
+                Event::Key {
+                    key,
+                    modifiers: stroke.modifiers,
+                },
+            );
         }
         last
     }
@@ -1663,7 +1916,14 @@ impl<S> Input<S> {
                 shift: c.is_uppercase(),
                 ..Default::default()
             };
-            self.dispatch(ui, state, Event::Key { key: c.to_string(), modifiers });
+            self.dispatch(
+                ui,
+                state,
+                Event::Key {
+                    key: c.to_string(),
+                    modifiers,
+                },
+            );
         }
     }
 
@@ -1691,11 +1951,15 @@ impl<S> Input<S> {
                 ui.settle_x(n, aim);
             }
         }
-        self.wheel_targets.retain(|n, _| ui.contains(*n) && ui.is_animating(*n));
+        self.wheel_targets
+            .retain(|n, _| ui.contains(*n) && ui.is_animating(*n));
         self.tick_tooltip(ui, state, time);
         self.sync_states(ui);
         let t = &self.touches;
-        if t.mode == Some(TouchMode::Pending) && t.down.len() == 1 && time - t.start_time >= LONG_PRESS {
+        if t.mode == Some(TouchMode::Pending)
+            && t.down.len() == 1
+            && time - t.start_time >= LONG_PRESS
+        {
             let (x, y) = t.down[0].2;
             self.touches.mode = Some(TouchMode::Done);
             // A long press is not a click when the finger lifts.
@@ -1705,7 +1969,10 @@ impl<S> Input<S> {
             let menu = ui
                 .hit_test(x, y)
                 .filter(|&t| self.inside_modal(ui, t))
-                .is_some_and(|t| self.deliver(ui, state, t, &Event::ContextMenu { x, y }).prevented);
+                .is_some_and(|t| {
+                    self.deliver(ui, state, t, &Event::ContextMenu { x, y })
+                        .prevented
+                });
             if !menu {
                 self.gesture(ui, state, Gesture::LongPress { x, y }, &mut out);
             }
@@ -1719,7 +1986,11 @@ impl<S> Input<S> {
     /// returns it, and it is painted over everything, hung below `node`
     /// (above, if there is no room), and removed when the pointer leaves, or
     /// a press, key or wheel dismisses it.
-    pub fn tooltip(&mut self, node: NodeId, build: impl FnMut(&mut S, &mut Ui, NodeId) -> NodeId + 'static) {
+    pub fn tooltip(
+        &mut self,
+        node: NodeId,
+        build: impl FnMut(&mut S, &mut Ui, NodeId) -> NodeId + 'static,
+    ) {
         self.tooltips.insert(node, Box::new(build));
     }
 
@@ -1758,17 +2029,25 @@ impl<S> Input<S> {
         let idle = self.pressed.is_none() && self.drag.is_none();
         if tip.shown.is_none() && idle && time - tip.since >= self.tooltip_delay {
             let root = ui.root();
-            let Some(build) = self.tooltips.get_mut(&tip.owner) else { return };
+            let Some(build) = self.tooltips.get_mut(&tip.owner) else {
+                return;
+            };
             let n = build(state, ui, root);
             use super::layers::{Anchor, AnchorTo, Corner, Fit};
             ui.defer(n, i32::MAX - 1);
             ui.anchor(
                 n,
-                Anchor::new(AnchorTo::Node(tip.owner, Corner::BottomLeft), Corner::TopLeft)
-                    .offset(0.0, 6.0)
-                    .fit(Fit::Flip),
+                Anchor::new(
+                    AnchorTo::Node(tip.owner, Corner::BottomLeft),
+                    Corner::TopLeft,
+                )
+                .offset(0.0, 6.0)
+                .fit(Fit::Flip),
             );
-            self.tip = Some(Tip { shown: Some(n), ..tip });
+            self.tip = Some(Tip {
+                shown: Some(n),
+                ..tip
+            });
         }
     }
 
@@ -1783,7 +2062,14 @@ impl<S> Input<S> {
     fn count_click(&mut self, at: (f32, f32), button: PointerButton) {
         let now = self.now;
         let again = match (now, self.last_press) {
-            (Some(t), Some((t0, p0, b0, n))) if b0 == button && t - t0 <= 0.5 && (at.0 - p0.0).abs() <= 4.0 && (at.1 - p0.1).abs() <= 4.0 => n + 1,
+            (Some(t), Some((t0, p0, b0, n)))
+                if b0 == button
+                    && t - t0 <= 0.5
+                    && (at.0 - p0.0).abs() <= 4.0
+                    && (at.1 - p0.1).abs() <= 4.0 =>
+            {
+                n + 1
+            }
             _ => 1,
         };
         self.clicks = again;
@@ -1795,8 +2081,12 @@ impl<S> Input<S> {
     /// further out it is — so a drag can select past what shows.
     fn autoscroll(&mut self, ui: &mut Ui, dt: f32) {
         self.autoscrolling = false;
-        let Some(held) = self.captured.filter(|&c| ui.contains(c)) else { return };
-        let Some(scroller) = ui.scroll_container(held) else { return };
+        let Some(held) = self.captured.filter(|&c| ui.contains(c)) else {
+            return;
+        };
+        let Some(scroller) = ui.scroll_container(held) else {
+            return;
+        };
         let r = ui.rect(scroller);
         let y = self.pointer.1;
         let past = if y < r.y {
@@ -1821,7 +2111,9 @@ impl<S> Input<S> {
     /// near a scrolling box's edge (autoscroll). With
     /// [`Ui::needs_frame`](super::Ui::needs_frame), all an idle loop asks.
     pub fn needs_frame(&self) -> bool {
-        let tip_pending = self.tip.is_some_and(|t| t.shown.is_none() && t.since.is_finite());
+        let tip_pending = self
+            .tip
+            .is_some_and(|t| t.shown.is_none() && t.since.is_finite());
         let pull_moving = self.pull.is_some_and(|p| match p.phase {
             PullPhase::Settling => true,
             PullPhase::Refreshing => (p.distance - PULL_THRESHOLD).abs() > 0.5,
@@ -1862,7 +2154,11 @@ impl<S> Input<S> {
     /// like any click); short of that, it closes. A tap anywhere else closes an open row and does nothing
     /// else. [`swipe`](Self::swipe) says where the row is, for the app to
     /// draw it.
-    pub fn on_swipe_delete(&mut self, container: NodeId, f: impl FnMut(&mut S, &mut Ui, NodeId) + 'static) {
+    pub fn on_swipe_delete(
+        &mut self,
+        container: NodeId,
+        f: impl FnMut(&mut S, &mut Ui, NodeId) + 'static,
+    ) {
         self.swipe_delete.insert(container, Box::new(f));
     }
 
@@ -1894,10 +2190,15 @@ impl<S> Input<S> {
     /// A finger came down at `(x, y)` with a row open: closes it unless the
     /// finger is on its action. Returns whether it closed one.
     fn close_swipe_unless_on_action(&mut self, ui: &Ui, x: f32, y: f32) -> bool {
-        let Some(s) = self.swipe.filter(|s| s.phase == SwipePhase::Open) else { return false };
+        let Some(s) = self.swipe.filter(|s| s.phase == SwipePhase::Open) else {
+            return false;
+        };
         if ui.contains(s.row) {
             let r = ui.rect(s.row);
-            let on_action = y >= r.y && y < r.y + r.height && x >= r.x + r.width + s.offset && x < r.x + r.width;
+            let on_action = y >= r.y
+                && y < r.y + r.height
+                && x >= r.x + r.width + s.offset
+                && x < r.x + r.width;
             if on_action {
                 return false;
             }
@@ -1979,12 +2280,20 @@ impl<S> Input<S> {
                 p.distance -= back;
                 rest = -finger_dy - back;
             }
-            p.phase = if p.distance >= PULL_THRESHOLD { PullPhase::Armed } else { PullPhase::Pulling };
+            p.phase = if p.distance >= PULL_THRESHOLD {
+                PullPhase::Armed
+            } else {
+                PullPhase::Pulling
+            };
             if p.distance <= 0.0 {
                 self.pull = None;
             }
             // Pushed back past closed: the rest scrolls.
-            return if rest > 0.0 { Self::scroll_chain(ui, target, 0.0, rest) } else { Some(c) };
+            return if rest > 0.0 {
+                Self::scroll_chain(ui, target, 0.0, rest)
+            } else {
+                Some(c)
+            };
         }
         if finger_dy > 0.0 && self.pull.is_none() {
             // The nearest refreshing box, with it and every scrolling box
@@ -1997,8 +2306,16 @@ impl<S> Input<S> {
                 if self.refresh.contains_key(&n) {
                     if at_top {
                         let distance = pull_resisted(0.0, finger_dy);
-                        let phase = if distance >= PULL_THRESHOLD { PullPhase::Armed } else { PullPhase::Pulling };
-                        self.pull = Some(Pull { container: n, distance, phase });
+                        let phase = if distance >= PULL_THRESHOLD {
+                            PullPhase::Armed
+                        } else {
+                            PullPhase::Pulling
+                        };
+                        self.pull = Some(Pull {
+                            container: n,
+                            distance,
+                            phase,
+                        });
                         self.fling = None;
                         return Some(n);
                     }
@@ -2012,7 +2329,9 @@ impl<S> Input<S> {
     /// The finger let go: an armed pull refreshes, any other springs back.
     /// Returns whether a pull was open (so the release does not fling).
     fn release_pull(&mut self, ui: &mut Ui, state: &mut S, cancel: bool) -> bool {
-        let Some(p) = &mut self.pull else { return false };
+        let Some(p) = &mut self.pull else {
+            return false;
+        };
         match p.phase {
             PullPhase::Armed if !cancel => {
                 p.phase = PullPhase::Refreshing;
@@ -2090,7 +2409,13 @@ impl<S> Input<S> {
     /// Offers `actions` on `node` to assistive technology (a row's
     /// "Delete" for someone who cannot swipe it), and calls `f` with the
     /// one asked for.
-    pub fn on_accessibility_action(&mut self, ui: &mut Ui, node: NodeId, actions: &[&str], f: impl FnMut(&mut S, &mut Ui, &str) + 'static) {
+    pub fn on_accessibility_action(
+        &mut self,
+        ui: &mut Ui,
+        node: NodeId,
+        actions: &[&str],
+        f: impl FnMut(&mut S, &mut Ui, &str) + 'static,
+    ) {
         ui.semantics_mut(node).actions = actions.iter().map(|a| a.to_string()).collect();
         self.a11y_actions.retain(|n, _| ui.contains(*n));
         self.a11y_actions.insert(node, Box::new(f));
@@ -2099,9 +2424,19 @@ impl<S> Input<S> {
     /// Performs custom action `name` on `node`, as assistive technology
     /// asks (the DOM mirror's `A11yAction::Custom`).
     /// Returns whether `node` has it.
-    pub fn accessibility_action(&mut self, ui: &mut Ui, state: &mut S, node: NodeId, name: &str) -> bool {
-        let offered = ui.semantics(node).is_some_and(|s| s.actions.iter().any(|a| a == name));
-        let Some(f) = self.a11y_actions.get_mut(&node).filter(|_| offered) else { return false };
+    pub fn accessibility_action(
+        &mut self,
+        ui: &mut Ui,
+        state: &mut S,
+        node: NodeId,
+        name: &str,
+    ) -> bool {
+        let offered = ui
+            .semantics(node)
+            .is_some_and(|s| s.actions.iter().any(|a| a == name));
+        let Some(f) = self.a11y_actions.get_mut(&node).filter(|_| offered) else {
+            return false;
+        };
         f(state, ui, name);
         self.run_after_hooks(ui, state);
         true
@@ -2112,7 +2447,8 @@ impl<S> Input<S> {
         if self.gesture_priority.is_empty() {
             return None;
         }
-        ui.ancestors(node).find_map(|a| self.gesture_priority.get(&a).copied())
+        ui.ancestors(node)
+            .find_map(|a| self.gesture_priority.get(&a).copied())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2164,7 +2500,11 @@ impl<S> Input<S> {
                         if self.thumb_drag.is_some() {
                             self.touches.mode = Some(TouchMode::Drag);
                         } else if let Some(c) = self.captured {
-                            self.touches.mode = Some(if Self::sideways(ui, c) { TouchMode::Held } else { TouchMode::Drag });
+                            self.touches.mode = Some(if Self::sideways(ui, c) {
+                                TouchMode::Held
+                            } else {
+                                TouchMode::Drag
+                            });
                         }
                     }
                     2 if !matches!(self.touches.mode, Some(TouchMode::Drag | TouchMode::Held)) => {
@@ -2172,14 +2512,25 @@ impl<S> Input<S> {
                         self.pressed = None;
                         if self.touches.mode == Some(TouchMode::Pan) {
                             let (cx, cy) = self.touches.down[0].2;
-                            let end = Gesture::Pan { x: cx, y: cy, dx: 0.0, dy: 0.0, phase: GesturePhase::Ended };
+                            let end = Gesture::Pan {
+                                x: cx,
+                                y: cy,
+                                dx: 0.0,
+                                dy: 0.0,
+                                phase: GesturePhase::Ended,
+                            };
                             self.gesture(ui, state, end, &mut out);
                         }
                         let (a, c) = (self.touches.down[0].2, self.touches.down[1].2);
                         let start = ((a.0 - c.0).powi(2) + (a.1 - c.1).powi(2)).sqrt().max(1.0);
                         self.touches.mode = Some(TouchMode::Pinch { start });
                         let (mx, my) = ((a.0 + c.0) / 2.0, (a.1 + c.1) / 2.0);
-                        let g = Gesture::Pinch { x: mx, y: my, scale: 1.0, phase: GesturePhase::Began };
+                        let g = Gesture::Pinch {
+                            x: mx,
+                            y: my,
+                            scale: 1.0,
+                            phase: GesturePhase::Began,
+                        };
                         self.gesture(ui, state, g, &mut out);
                     }
                     _ => {}
@@ -2208,7 +2559,9 @@ impl<S> Input<S> {
                                 // does; the control's press is undone
                                 self.dispatch(ui, state, Event::PointerCancel);
                                 self.touches.mode = Some(TouchMode::Pending);
-                                self.touches.target = ui.hit_test(start.0, start.1).and_then(|t| ui.ancestors(t).find(|&n| ui.style(n).scroll));
+                                self.touches.target = ui
+                                    .hit_test(start.0, start.1)
+                                    .and_then(|t| ui.ancestors(t).find(|&n| ui.style(n).scroll));
                                 // as if it had moved here from where it began
                                 if let Some(f) = self.touches.down.iter_mut().find(|d| d.0 == id) {
                                     f.2 = last;
@@ -2219,7 +2572,9 @@ impl<S> Input<S> {
                     }
                     Some(TouchMode::Pending) => {
                         let moved = ((x - start.0).powi(2) + (y - start.1).powi(2)).sqrt();
-                        let high = self.touches.target.is_some_and(|t| self.priority_at(ui, t) == Some(GesturePriority::High));
+                        let high = self.touches.target.is_some_and(|t| {
+                            self.priority_at(ui, t) == Some(GesturePriority::High)
+                        });
                         if moved > TOUCH_SLOP && self.armed.is_some() && !high {
                             // Pressed on something draggable: the finger
                             // drags it, rather than scrolling what is under.
@@ -2232,18 +2587,34 @@ impl<S> Input<S> {
                         {
                             // Sideways on a row of a swipeable list: the row
                             // slides, from where it was if it was open.
-                            let base = self.swipe.filter(|s| s.row == row).map_or(0.0, |s| s.offset);
+                            let base = self
+                                .swipe
+                                .filter(|s| s.row == row)
+                                .map_or(0.0, |s| s.offset);
                             self.touches.mode = Some(TouchMode::Swipe { base });
                             self.pressed = None;
                             self.fling = None;
                             let offset = (base + x - start.0).min(0.0);
-                            self.swipe = Some(Swipe { container, row, offset, phase: SwipePhase::Dragging });
+                            self.swipe = Some(Swipe {
+                                container,
+                                row,
+                                offset,
+                                phase: SwipePhase::Dragging,
+                            });
                         } else if moved > TOUCH_SLOP {
                             self.touches.mode = Some(TouchMode::Pan);
                             self.pressed = None;
                             self.pan_target_x = self.touches.target;
-                            self.pan_axis = self.touches.target.map_or(PanAxis::Free, |t| pan_axis(ui, t, x - start.0, y - start.1));
-                            let began = Gesture::Pan { x, y, dx: x - start.0, dy: y - start.1, phase: GesturePhase::Began };
+                            self.pan_axis = self.touches.target.map_or(PanAxis::Free, |t| {
+                                pan_axis(ui, t, x - start.0, y - start.1)
+                            });
+                            let began = Gesture::Pan {
+                                x,
+                                y,
+                                dx: x - start.0,
+                                dy: y - start.1,
+                                phase: GesturePhase::Began,
+                            };
                             if !self.gesture(ui, state, began, &mut out)
                                 && let Some(t) = self.touches.target
                             {
@@ -2255,11 +2626,18 @@ impl<S> Input<S> {
                         let (dx, dy) = (x - last.0, y - last.1);
                         self.pan_samples.push((time, y));
                         self.pan_samples_x.push((time, x));
-                        self.pan_samples_x.retain(|&(t, _)| t >= time - 4.0 * FLING_WINDOW);
+                        self.pan_samples_x
+                            .retain(|&(t, _)| t >= time - 4.0 * FLING_WINDOW);
                         // Only the recent ones matter.
                         let keep = time - 4.0 * FLING_WINDOW;
                         self.pan_samples.retain(|&(t, _)| t >= keep);
-                        let g = Gesture::Pan { x, y, dx, dy, phase: GesturePhase::Changed };
+                        let g = Gesture::Pan {
+                            x,
+                            y,
+                            dx,
+                            dy,
+                            phase: GesturePhase::Changed,
+                        };
                         if !self.gesture(ui, state, g, &mut out)
                             && let Some(t) = self.touches.target
                         {
@@ -2276,7 +2654,12 @@ impl<S> Input<S> {
                         let (a, c) = (self.touches.down[0].2, self.touches.down[1].2);
                         let d = ((a.0 - c.0).powi(2) + (a.1 - c.1).powi(2)).sqrt();
                         let (mx, my) = ((a.0 + c.0) / 2.0, (a.1 + c.1) / 2.0);
-                        let g = Gesture::Pinch { x: mx, y: my, scale: d / start, phase: GesturePhase::Changed };
+                        let g = Gesture::Pinch {
+                            x: mx,
+                            y: my,
+                            scale: d / start,
+                            phase: GesturePhase::Changed,
+                        };
                         self.gesture(ui, state, g, &mut out);
                     }
                     _ => {}
@@ -2304,7 +2687,13 @@ impl<S> Input<S> {
                         }
                     }
                     Some(TouchMode::Pan) => {
-                        let g = Gesture::Pan { x: lx, y: ly, dx: 0.0, dy: 0.0, phase: GesturePhase::Ended };
+                        let g = Gesture::Pan {
+                            x: lx,
+                            y: ly,
+                            dx: 0.0,
+                            dy: 0.0,
+                            phase: GesturePhase::Ended,
+                        };
                         let prevented = self.gesture(ui, state, g, &mut out);
                         // Let go of a pull: it refreshes or springs back, and
                         // nothing glides.
@@ -2318,11 +2707,17 @@ impl<S> Input<S> {
                         // find too few moves and no speed.
                         let moved = self.pan_samples.last().map_or(time, |&(t, _)| t);
                         let rested = time - moved > FLING_REST;
-                        let recent: Vec<(f64, f32)> =
-                            self.pan_samples.iter().copied().filter(|&(t, _)| moved - t <= FLING_WINDOW).collect();
+                        let recent: Vec<(f64, f32)> = self
+                            .pan_samples
+                            .iter()
+                            .copied()
+                            .filter(|&(t, _)| moved - t <= FLING_WINDOW)
+                            .collect();
                         let v = match (recent.first(), recent.last()) {
                             _ if rested => 0.0,
-                            (Some(&(t0, y0)), Some(&(t1, y1))) if t1 - t0 > 0.005 => -(y1 - y0) / (t1 - t0) as f32,
+                            (Some(&(t0, y0)), Some(&(t1, y1))) if t1 - t0 > 0.005 => {
+                                -(y1 - y0) / (t1 - t0) as f32
+                            }
                             _ => 0.0,
                         };
                         // Flicking again the way it was already going
@@ -2346,12 +2741,16 @@ impl<S> Input<S> {
                                     let (content, view, _) = ui.scroll_extent(n);
                                     (content - view).max(0.0)
                                 });
-                            ((v + self.carry) * boost, FLING_MAX.max(travel * FLING_FRICTION))
+                            (
+                                (v + self.carry) * boost,
+                                FLING_MAX.max(travel * FLING_FRICTION),
+                            )
                         } else {
                             (v, FLING_MAX)
                         };
                         let v = v.clamp(-cap, cap);
-                        if !prevented && v.abs() > 100.0
+                        if !prevented
+                            && v.abs() > 100.0
                             && let Some(t) = self.touches.target
                         {
                             self.fling = Some((t, v));
@@ -2359,21 +2758,34 @@ impl<S> Input<S> {
                             self.now = Some(time);
                         }
                         // Sideways, likewise (without the streak).
-                        let recent: Vec<(f64, f32)> =
-                            self.pan_samples_x.iter().copied().filter(|&(t, _)| moved - t <= FLING_WINDOW).collect();
+                        let recent: Vec<(f64, f32)> = self
+                            .pan_samples_x
+                            .iter()
+                            .copied()
+                            .filter(|&(t, _)| moved - t <= FLING_WINDOW)
+                            .collect();
                         let vx = match (recent.first(), recent.last()) {
                             _ if rested || self.pan_axis == PanAxis::Y => 0.0,
-                            (Some(&(t0, x0)), Some(&(t1, x1))) if t1 - t0 > 0.005 => -(x1 - x0) / (t1 - t0) as f32,
+                            (Some(&(t0, x0)), Some(&(t1, x1))) if t1 - t0 > 0.005 => {
+                                -(x1 - x0) / (t1 - t0) as f32
+                            }
                             _ => 0.0,
                         };
                         // A box that snaps eases onto the point nearest where
                         // the glide would have stopped, instead of gliding.
-                        let snapping = self.pan_scrolled_x.filter(|&c| ui.contains(c) && ui.scroll_snap(c).is_some());
+                        let snapping = self
+                            .pan_scrolled_x
+                            .filter(|&c| ui.contains(c) && ui.scroll_snap(c).is_some());
                         if let Some(c) = snapping.filter(|_| !prevented) {
-                            let glide = if vx.abs() > 100.0 { vx.clamp(-FLING_MAX, FLING_MAX) / FLING_FRICTION } else { 0.0 };
+                            let glide = if vx.abs() > 100.0 {
+                                vx.clamp(-FLING_MAX, FLING_MAX) / FLING_FRICTION
+                            } else {
+                                0.0
+                            };
                             let aim = ui.style(c).scroll_left + glide;
                             ui.settle_x(c, aim);
-                        } else if !prevented && vx.abs() > 100.0
+                        } else if !prevented
+                            && vx.abs() > 100.0
                             && let Some(t) = self.pan_target_x
                         {
                             self.fling_x = Some((t, vx.clamp(-FLING_MAX, FLING_MAX)));
@@ -2385,7 +2797,13 @@ impl<S> Input<S> {
                         self.release_swipe(ui, state, cancel);
                     }
                     Some(TouchMode::Pinch { start }) => {
-                        let rest: Vec<(f32, f32)> = self.touches.down.iter().map(|d| d.2).chain([(lx, ly)]).collect();
+                        let rest: Vec<(f32, f32)> = self
+                            .touches
+                            .down
+                            .iter()
+                            .map(|d| d.2)
+                            .chain([(lx, ly)])
+                            .collect();
                         let (a, c) = (rest[0], rest[rest.len() - 1]);
                         let d = ((a.0 - c.0).powi(2) + (a.1 - c.1).powi(2)).sqrt();
                         let g = Gesture::Pinch {
@@ -2474,7 +2892,11 @@ impl<S> Input<S> {
     /// Calls `f` when the pointer is pressed anywhere outside `node` and
     /// everything inside it: a menu closing
     /// when the user clicks elsewhere.
-    pub fn on_click_outside(&mut self, node: NodeId, f: impl FnMut(&mut S, &mut Ui, &Event, &mut EventCx) + 'static) {
+    pub fn on_click_outside(
+        &mut self,
+        node: NodeId,
+        f: impl FnMut(&mut S, &mut Ui, &Event, &mut EventCx) + 'static,
+    ) {
         self.click_outside.insert(node, Box::new(f));
     }
 
@@ -2488,7 +2910,9 @@ impl<S> Input<S> {
         // Assistive technology is kept in it too.
         ui.set_accessibility_modal(self.modal);
         if let Some(m) = self.modal {
-            let inside = self.focus.is_some_and(|f| ui.contains(f) && ui.ancestors(f).any(|a| a == m));
+            let inside = self
+                .focus
+                .is_some_and(|f| ui.contains(f) && ui.ancestors(f).any(|a| a == m));
             if !inside {
                 let first = ui.next_focus_within(Some(m), None, false);
                 self.focus_visible = true;
@@ -2679,16 +3103,27 @@ impl<S> Input<S> {
             "tab" if plain => {
                 self.focus_visible = true;
                 let scope = self.modal.filter(|&m| ui.contains(m));
-                let next = ui.next_focus_within(scope, self.focus.filter(|&f| ui.contains(f)), m.shift);
+                let next =
+                    ui.next_focus_within(scope, self.focus.filter(|&f| ui.contains(f)), m.shift);
                 out.focus_changed |= self.set_focus(ui, state, next);
             }
             key @ ("enter" | "space") if plain && !m.shift && Some(target) == self.focus => {
                 let role = ui.semantics(target).map(|s| s.role);
                 let activates = match key {
-                    "enter" => matches!(role, Some(Role::Button | Role::Link | Role::MenuItem | Role::Tab | Role::Switch)),
+                    "enter" => matches!(
+                        role,
+                        Some(Role::Button | Role::Link | Role::MenuItem | Role::Tab | Role::Switch)
+                    ),
                     _ => matches!(
                         role,
-                        Some(Role::Button | Role::Checkbox | Role::Switch | Role::Radio | Role::MenuItem | Role::Tab)
+                        Some(
+                            Role::Button
+                                | Role::Checkbox
+                                | Role::Switch
+                                | Role::Radio
+                                | Role::MenuItem
+                                | Role::Tab
+                        )
                     ),
                 };
                 if activates {
@@ -2722,19 +3157,32 @@ impl<S> Input<S> {
     /// wherever it is, to where the notches so far are taking it.
     fn scroll_smoothly_by(&mut self, ui: &mut Ui, target: NodeId, dy: f32) -> Option<NodeId> {
         use super::animation::{Animation, Property, Value};
-        let chain: Vec<NodeId> = ui.ancestors(target).filter(|&n| ui.style(n).scroll).collect();
+        let chain: Vec<NodeId> = ui
+            .ancestors(target)
+            .filter(|&n| ui.style(n).scroll)
+            .collect();
         for n in chain {
             let (content, visible, _) = ui.scroll_extent(n);
             let max = (content - visible).max(0.0);
             let now = ui.style(n).scroll_top.clamp(0.0, max);
-            let from = self.wheel_targets.get(&n).copied().filter(|_| ui.is_animating(n)).unwrap_or(now);
+            let from = self
+                .wheel_targets
+                .get(&n)
+                .copied()
+                .filter(|_| ui.is_animating(n))
+                .unwrap_or(now);
             let to = (from + dy).clamp(0.0, max);
             if to != from {
                 self.wheel_targets.insert(n, to);
                 ui.animate(
                     n,
-                    Animation::new(Property::ScrollTop, Value::Number(now), Value::Number(to), NOTCH_SECONDS)
-                        .easing(threers_math::easing::Easing::QuadOut),
+                    Animation::new(
+                        Property::ScrollTop,
+                        Value::Number(now),
+                        Value::Number(to),
+                        NOTCH_SECONDS,
+                    )
+                    .easing(threers_math::easing::Easing::QuadOut),
                 );
                 return Some(n);
             }
@@ -2748,7 +3196,10 @@ impl<S> Input<S> {
         if dx == 0.0 {
             return None;
         }
-        let chain: Vec<NodeId> = ui.ancestors(target).filter(|&n| ui.style(n).scroll_x).collect();
+        let chain: Vec<NodeId> = ui
+            .ancestors(target)
+            .filter(|&n| ui.style(n).scroll_x)
+            .collect();
         for n in chain {
             let (content, visible, _) = ui.scroll_extent_x(n);
             let max = (content - visible).max(0.0);
@@ -2768,7 +3219,11 @@ impl<S> Input<S> {
     /// sideways from the node it started on (as the vertical target follows
     /// the box it scrolls, a sideways strip inside a page keeps moving).
     fn pan_both(&mut self, ui: &mut Ui, t: NodeId, dx: f32, dy: f32) -> Option<NodeId> {
-        let down = if self.pan_axis == PanAxis::X { None } else { self.pan_by(ui, t, dy) };
+        let down = if self.pan_axis == PanAxis::X {
+            None
+        } else {
+            self.pan_by(ui, t, dy)
+        };
         let side = match (self.pan_axis, self.pan_target_x.filter(|&s| ui.contains(s))) {
             (PanAxis::Y, _) | (_, None) => None,
             (_, Some(s)) => Self::scroll_chain_x(ui, s, -dx),
@@ -2803,7 +3258,9 @@ impl<S> Input<S> {
                 self.fling_x = (moved.is_some() && v.abs() > 20.0).then_some((target, v));
             }
         }
-        let Some((target, v)) = self.fling else { return };
+        let Some((target, v)) = self.fling else {
+            return;
+        };
         if !ui.contains(target) {
             // Gone: nothing to glide, and no more frames wanted for it.
             self.fling = None;
@@ -2826,7 +3283,10 @@ impl<S> Input<S> {
         if dy == 0.0 {
             return sideways;
         }
-        let chain: Vec<NodeId> = ui.ancestors(target).filter(|&n| ui.style(n).scroll).collect();
+        let chain: Vec<NodeId> = ui
+            .ancestors(target)
+            .filter(|&n| ui.style(n).scroll)
+            .collect();
         for n in chain {
             let (content, visible, _) = ui.scroll_extent(n);
             let max = (content - visible).max(0.0);
@@ -2866,7 +3326,11 @@ fn dom_key(stroke: &Keystroke) -> String {
         "pagedown" => "PageDown",
         _ => {
             if k.chars().count() == 1 {
-                return if stroke.modifiers.shift { k.to_uppercase() } else { k.to_owned() };
+                return if stroke.modifiers.shift {
+                    k.to_uppercase()
+                } else {
+                    k.to_owned()
+                };
             }
             // F-keys and the rest: capitalised, as the DOM writes them.
             let mut c = k.chars();

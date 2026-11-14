@@ -22,6 +22,9 @@ const OBU_FRAME: u8 = 6;
 /// An AV1 encoder for 8-bit 4:2:0 pictures whose sides are multiples of 8, so
 /// that every block lies inside the frame. Each picture becomes one temporal
 /// unit, independently decodable; see [the module docs](super).
+///
+/// At `qidx` 0 it is lossless: AV1's lossless mode, the 4×4 Walsh–Hadamard
+/// transform without quantisation, so a decoder returns the planes exactly.
 pub struct Av1Encoder {
     width: usize,
     height: usize,
@@ -36,6 +39,9 @@ pub struct Av1Encoder {
 /// earlier ones.
 struct Frame<'a> {
     src: [&'a [u8]; 3],
+    /// This frame's probabilities, adapting as symbols are coded (each frame
+    /// starts again from the defaults).
+    cdf: Box<CdfContext>,
     rec: [Vec<u16>; 3],
     strides: [usize; 3],
     enc: RangeEncoder,
@@ -53,7 +59,7 @@ struct Frame<'a> {
 }
 
 impl Av1Encoder {
-    /// An encoder at quantiser `qidx`, 1 (nearly lossless) to 255.
+    /// An encoder at quantiser `qidx`: 0 is lossless, 1 nearly so, up to 255.
     pub fn new(width: usize, height: usize, qidx: u8) -> Result<Self, String> {
         if width == 0 || height == 0 || !width.is_multiple_of(8) || !height.is_multiple_of(8) {
             return Err(format!(
@@ -62,9 +68,6 @@ impl Av1Encoder {
         }
         if width > 65536 || height > 65536 {
             return Err("AV1 frame is too large".into());
-        }
-        if qidx == 0 {
-            return Err("qidx 0 would be lossless, which this encoder does not do".into());
         }
         let bases = std::array::from_fn(|log2| {
             let n = 1usize << log2;
@@ -156,10 +159,11 @@ impl Av1Encoder {
         b.flag(false); // show_existing_frame
         b.put(0, 2); // frame_type: KEY_FRAME
         b.flag(true); // show_frame
-        b.flag(true); // disable_cdf_update
+        b.flag(false); // disable_cdf_update: probabilities adapt
         b.flag(false); // frame_size_override_flag
         b.flag(false); // render_and_frame_size_different
-                       // tile_info: one tile.
+        b.flag(true); // disable_frame_end_update_cdf: each frame stands alone
+                      // tile_info: one tile.
         b.flag(true); // uniform_tile_spacing_flag
         let tile_log2 = |n: usize| {
             let mut k = 0;
@@ -181,13 +185,18 @@ impl Av1Encoder {
         b.flag(false); // DeltaQUAc
         b.flag(false); // using_qmatrix
         b.flag(false); // segmentation_enabled
-        b.flag(false); // delta_q_present
-                       // loop_filter_params: off.
-        b.put(0, 6);
-        b.put(0, 6);
-        b.put(0, 3); // loop_filter_sharpness
-        b.flag(false); // loop_filter_delta_enabled
-        b.flag(false); // tx_mode_select: TX_MODE_LARGEST
+        if self.lossless() {
+            // CodedLossless: no delta_q_present (base_q_idx is 0), no loop
+            // filter parameters and no tx mode (4×4 only) are coded.
+        } else {
+            b.flag(false); // delta_q_present
+                           // loop_filter_params: off.
+            b.put(0, 6);
+            b.put(0, 6);
+            b.put(0, 3); // loop_filter_sharpness
+            b.flag(false); // loop_filter_delta_enabled
+            b.flag(false); // tx_mode_select: TX_MODE_LARGEST
+        }
         b.flag(true); // reduced_tx_set
         b.aligned()
     }
@@ -197,6 +206,7 @@ impl Av1Encoder {
         let (w4, h4) = (w / 4, h / 4);
         let mut f = Frame {
             src: [y, u, v],
+            cdf: Box::new(*self.cdf),
             rec: [vec![0; w * h], vec![0; w * h / 4], vec![0; w * h / 4]],
             strides: [w, w / 2, w / 2],
             enc: RangeEncoder::new(),
@@ -239,17 +249,23 @@ impl Av1Encoder {
         let shift = 4 - bl;
         let ctx = ((f.above_part[bx >> 1] >> shift) & 1) as usize
             + ((((f.left_part[by8] >> shift) & 1) as usize) << 1);
-        let cdf = &self.cdf.m.partition[bl][ctx];
         let bp;
         if have_h && have_v {
             let fits = bx + 2 * hsz <= f.w4 && by + 2 * hsz <= f.h4;
-            let split = bl < BL_8X8 && (bl < BL_32X32 || !fits || self.busy(f, bl, bx, by));
+            // Lossless transforms are 4×4 whatever the block, so large blocks
+            // only save mode symbols.
+            let split = bl < BL_8X8
+                && (bl < BL_32X32 || !fits || (!self.lossless() && self.busy(f, bl, bx, by)));
             bp = if split {
                 PARTITION_SPLIT
             } else {
                 PARTITION_NONE
             };
-            f.enc.symbol(cdf, PARTITION_TYPE_COUNT[bl] as usize, bp);
+            f.enc.symbol_adapt(
+                &mut f.cdf.m.partition[bl][ctx],
+                PARTITION_TYPE_COUNT[bl] as usize,
+                bp,
+            );
             if split {
                 self.partition(f, bl + 1, bx, by);
                 self.partition(f, bl + 1, bx + hsz, by);
@@ -259,12 +275,18 @@ impl Av1Encoder {
                 self.block(f, bl, bx, by);
             }
         } else if have_h {
-            f.enc.bool(gather_top_partition_prob(cdf, bl), true);
+            f.enc.bool(
+                gather_top_partition_prob(&f.cdf.m.partition[bl][ctx], bl),
+                true,
+            );
             bp = PARTITION_SPLIT;
             self.partition(f, bl + 1, bx, by);
             self.partition(f, bl + 1, bx + hsz, by);
         } else {
-            f.enc.bool(gather_left_partition_prob(cdf, bl), true);
+            f.enc.bool(
+                gather_left_partition_prob(&f.cdf.m.partition[bl][ctx], bl),
+                true,
+            );
             bp = PARTITION_SPLIT;
             self.partition(f, bl + 1, bx, by);
             self.partition(f, bl + 1, bx, by + hsz);
@@ -295,8 +317,16 @@ impl Av1Encoder {
         variance > (4 * q * q).max(16)
     }
 
+    /// Whether this encoder is lossless (`qidx` 0).
+    fn lossless(&self) -> bool {
+        self.qidx == 0
+    }
+
     /// One block: the mode syntax, then each plane's single transform.
     fn block(&self, f: &mut Frame, bl: usize, bx: usize, by: usize) {
+        if self.lossless() {
+            return self.lossless_block(f, bl, bx, by);
+        }
         let bs = BLOCK_SIZES[bl][PARTITION_NONE][0] as usize;
         let log2 = 3 + BL_8X8 - bl;
         let txs = [log2 - 2, log2 - 3, log2 - 3];
@@ -309,13 +339,13 @@ impl Av1Encoder {
         let n4 = 1usize << (log2 - 2);
         let ly = by & 31;
         let sctx = (f.above_skip[bx] + f.left_skip[ly]) as usize;
-        f.enc.bool(self.cdf.m.skip[sctx][0] as u32, skip);
+        f.enc.bool_adapt(&mut f.cdf.m.skip[sctx], skip);
         f.above_skip[bx..bx + n4].fill(skip as u8);
         f.left_skip[ly..ly + n4].fill(skip as u8);
         f.enc
-            .symbol(&self.cdf.kfym[0][0], N_INTRA_PRED_MODES - 1, DC_PRED);
-        f.enc.symbol(
-            &self.cdf.m.uv_mode[1][DC_PRED],
+            .symbol_adapt(&mut f.cdf.kfym[0][0], N_INTRA_PRED_MODES - 1, DC_PRED);
+        f.enc.symbol_adapt(
+            &mut f.cdf.m.uv_mode[1][DC_PRED],
             N_UV_INTRA_PRED_MODES - 1,
             DC_PRED,
         );
@@ -335,6 +365,171 @@ impl Av1Encoder {
         for (plane, levels) in coded.into_iter().enumerate() {
             self.coefficients(f, plane, txs[plane], bs, bx, by, levels.as_deref());
         }
+    }
+
+    /// A lossless block: 4×4 Walsh–Hadamard transforms in every plane, each
+    /// predicted from what the ones before reconstructed, in the order the
+    /// decoder reconstructs them: luma in raster order, then each chroma.
+    ///
+    /// The prediction is DC or Paeth, chosen for luma and for chroma by which
+    /// leaves the smaller residuals. A lossless reconstruction is the source, so
+    /// the choice can be measured on the source before anything is coded.
+    ///
+    /// The block is never coded as skipped: a skipped block predicts at the
+    /// block's own transform size, which need not reproduce the source.
+    fn lossless_block(&self, f: &mut Frame, bl: usize, bx: usize, by: usize) {
+        let bs = BLOCK_SIZES[bl][PARTITION_NONE][0] as usize;
+        let log2 = 3 + BL_8X8 - bl;
+        let n4 = 1usize << (log2 - 2);
+        let tiles = |plane: usize| if plane == 0 { n4 } else { (n4 / 2).max(1) };
+        let cost = |f: &Frame, planes: &[usize], mode: usize| -> u32 {
+            let mut sum = 0;
+            for &plane in planes {
+                let m = tiles(plane);
+                for ty in 0..m {
+                    for tx in 0..m {
+                        let (x0, y0) = tile_origin(plane, bx, by, tx, ty);
+                        let stride = f.strides[plane];
+                        let src = f.src[plane];
+                        let pred = predict4(|x, y| src[y * stride + x] as i32, x0, y0, mode);
+                        for (i, p) in pred.iter().enumerate() {
+                            sum +=
+                                (src[(y0 + i / 4) * stride + x0 + i % 4] as i32 - p).unsigned_abs();
+                        }
+                    }
+                }
+            }
+            sum
+        };
+        let pick = |f: &Frame, planes: &[usize]| {
+            if cost(f, planes, PAETH_PRED) < cost(f, planes, DC_PRED) {
+                PAETH_PRED
+            } else {
+                DC_PRED
+            }
+        };
+        let (y_mode, uv_mode) = (pick(f, &[0]), pick(f, &[1, 2]));
+        // (plane, block-relative position in that plane's 4×4 units, levels).
+        let mut coded: Vec<(usize, usize, usize, Option<Vec<i32>>)> = Vec::new();
+        for plane in 0..3 {
+            let mode = if plane == 0 { y_mode } else { uv_mode };
+            for ty in 0..tiles(plane) {
+                for tx in 0..tiles(plane) {
+                    coded.push((
+                        plane,
+                        tx,
+                        ty,
+                        self.lossless_transform(f, plane, bx, by, tx, ty, mode),
+                    ));
+                }
+            }
+        }
+
+        let ly = by & 31;
+        let sctx = (f.above_skip[bx] + f.left_skip[ly]) as usize;
+        f.enc.bool_adapt(&mut f.cdf.m.skip[sctx], false);
+        f.above_skip[bx..bx + n4].fill(0);
+        f.left_skip[ly..ly + n4].fill(0);
+        // DC and Paeth share mode context 0, so neighbours' modes need no tracking.
+        f.enc
+            .symbol_adapt(&mut f.cdf.kfym[0][0], N_INTRA_PRED_MODES - 1, y_mode);
+        // Lossless allows CfL only for a 4×4 chroma block.
+        let cfl_allowed = bl == BL_8X8;
+        f.enc.symbol_adapt(
+            &mut f.cdf.m.uv_mode[cfl_allowed as usize][y_mode],
+            N_UV_INTRA_PRED_MODES - 1 - !cfl_allowed as usize,
+            uv_mode,
+        );
+        for (plane, tx, ty, levels) in coded {
+            // `coefficients` takes positions in luma 4×4 units.
+            let k = if plane == 0 { 1 } else { 2 };
+            self.coefficients(
+                f,
+                plane,
+                TX_4X4,
+                bs,
+                bx + tx * k,
+                by + ty * k,
+                levels.as_deref(),
+            );
+        }
+    }
+
+    /// One lossless 4×4: DC or Paeth prediction from the reconstruction, the forward
+    /// Walsh–Hadamard transform of the residual (libaom's `av1_fwht4x4`, whose
+    /// outputs are the levels: the quantiser at `qidx` 0 is the transform's
+    /// own scale), and the decoder's inverse, which must give the source back.
+    fn lossless_transform(
+        &self,
+        f: &mut Frame,
+        plane: usize,
+        bx: usize,
+        by: usize,
+        tx: usize,
+        ty: usize,
+        mode: usize,
+    ) -> Option<Vec<i32>> {
+        let (x0, y0) = tile_origin(plane, bx, by, tx, ty);
+        let stride = f.strides[plane];
+        let rec = &mut f.rec[plane];
+        let pred = predict4(|x, y| rec[y * stride + x] as i32, x0, y0, mode);
+
+        let src = f.src[plane];
+        let mut residual = [0i32; 16];
+        for y in 0..4 {
+            for x in 0..4 {
+                residual[y * 4 + x] = src[(y0 + y) * stride + x0 + x] as i32 - pred[y * 4 + x];
+            }
+        }
+        let out = fwht4x4(&residual);
+        // The decoder's coefficients are column-major: `rc = x * 4 + y`, with
+        // x the horizontal frequency.
+        let mut levels = vec![0i32; 16];
+        let mut cf = vec![0i32; 16];
+        let mut any = false;
+        let mut last = 0;
+        for r in 0..4 {
+            for c in 0..4 {
+                let level = out[r * 4 + c];
+                let rc = c * 4 + r;
+                levels[rc] = level;
+                // Dequantised at `qidx` 0: × 4, which the inverse undoes.
+                cf[rc] = level * 4;
+                any |= level != 0;
+            }
+        }
+        for (i, &rc) in SCANS[TX_4X4].iter().enumerate() {
+            if levels[rc as usize] != 0 {
+                last = i as i32;
+            }
+        }
+        for y in 0..4 {
+            for x in 0..4 {
+                rec[(y0 + y) * stride + x0 + x] = pred[y * 4 + x] as u16;
+            }
+        }
+        if any {
+            itxfm_add(
+                rec,
+                y0 * stride + x0,
+                stride,
+                &mut cf,
+                last,
+                TX_4X4,
+                WHT_WHT,
+                255,
+            );
+        }
+        for y in 0..4 {
+            for x in 0..4 {
+                assert_eq!(
+                    rec[(y0 + y) * stride + x0 + x],
+                    src[(y0 + y) * stride + x0 + x] as u16,
+                    "AV1 lossless: reconstruction differs from the source"
+                );
+            }
+        }
+        any.then_some(levels)
     }
 
     /// Predict a plane of the block and reconstruct it: DC prediction, forward
@@ -460,9 +655,9 @@ impl Av1Encoder {
         ab[..w].copy_from_slice(&f.above_coef[plane][ax..ax + w]);
         lb[..h].copy_from_slice(&f.left_coef[plane][ly..ly + h]);
         let sctx = get_skip_ctx(&t_dim, bs, &ab, &lb, chroma, Layout::I420);
-        let coef = &self.cdf.coef;
+        let coef = &mut f.cdf.coef;
         let enc = &mut f.enc;
-        enc.bool(coef.skip[tctx][sctx][0] as u32, levels.is_none());
+        enc.bool_adapt(&mut coef.skip[tctx][sctx], levels.is_none());
         let Some(levels) = levels else {
             f.above_coef[plane][ax..ax + w].fill(0x40);
             f.left_coef[plane][ly..ly + h].fill(0x40);
@@ -470,9 +665,13 @@ impl Av1Encoder {
         };
 
         // Only luma below 32 pixels says which transform it used.
-        if !chroma && (t_dim.max as usize) + 1 < TX_64X64 {
+        if !self.lossless() && !chroma && (t_dim.max as usize) + 1 < TX_64X64 {
             let idx = TX_TYPES_PER_SET.iter().position(|&t| t == DCT_DCT).unwrap();
-            enc.symbol(&self.cdf.m.txtp_intra2[t_dim.min as usize][DC_PRED], 4, idx);
+            enc.symbol_adapt(
+                &mut f.cdf.m.txtp_intra2[t_dim.min as usize][DC_PRED],
+                4,
+                idx,
+            );
         }
 
         let slw = (t_dim.lw as usize).min(TX_32X32);
@@ -490,19 +689,19 @@ impl Av1Encoder {
             32 - eob.leading_zeros()
         };
         let ns = 4 + tx2dszctx;
-        let eob_cdf: &[u16] = match tx2dszctx {
-            0 => &coef.eob_bin_16[ci][0],
-            1 => &coef.eob_bin_32[ci][0],
-            2 => &coef.eob_bin_64[ci][0],
-            3 => &coef.eob_bin_128[ci][0],
-            4 => &coef.eob_bin_256[ci][0],
-            5 => &coef.eob_bin_512[ci],
-            _ => &coef.eob_bin_1024[ci],
+        let eob_cdf: &mut [u16] = match tx2dszctx {
+            0 => &mut coef.eob_bin_16[ci][0],
+            1 => &mut coef.eob_bin_32[ci][0],
+            2 => &mut coef.eob_bin_64[ci][0],
+            3 => &mut coef.eob_bin_128[ci][0],
+            4 => &mut coef.eob_bin_256[ci][0],
+            5 => &mut coef.eob_bin_512[ci],
+            _ => &mut coef.eob_bin_1024[ci],
         };
-        enc.symbol(eob_cdf, ns, bin as usize);
+        enc.symbol_adapt(eob_cdf, ns, bin as usize);
         if bin > 1 {
             let hi = (eob >> (bin - 2)) & 1;
-            enc.bool(coef.eob_hi_bit[tctx][ci][bin as usize][0] as u32, hi != 0);
+            enc.bool_adapt(&mut coef.eob_hi_bit[tctx][ci][bin as usize], hi != 0);
             enc.bools(eob & ((1 << (bin - 2)) - 1), bin - 2);
         }
 
@@ -522,15 +721,15 @@ impl Av1Encoder {
             let ctx0 = 1 + (eob > 2 << tx2dszctx) as usize + (eob > 4 << tx2dszctx) as usize;
             let (rc, x, y) = at(eob);
             let tok = token(levels[rc]);
-            enc.symbol(
-                &coef.eob_base_tok[tctx][ci][ctx0],
+            enc.symbol_adapt(
+                &mut coef.eob_base_tok[tctx][ci][ctx0],
                 2,
                 tok.min(3) as usize - 1,
             );
             let mut level_tok = tok * 0x41;
             if tok >= 3 {
                 let c = if (x | y) > 1 { 14 } else { 7 };
-                enc.hi_tok(&coef.br_tok[hi_ctx][ci][c], tok);
+                enc.hi_tok_adapt(&mut coef.br_tok[hi_ctx][ci][c], tok);
                 level_tok = tok + (3 << 6);
             }
             grid[x as usize * stride + y as usize] = level_tok as u8;
@@ -549,7 +748,7 @@ impl Av1Encoder {
                 ) as usize;
                 y |= x;
                 let tok = token(levels[rc]);
-                enc.symbol(&coef.base_tok[tctx][ci][ctx], 3, tok.min(3) as usize);
+                enc.symbol_adapt(&mut coef.base_tok[tctx][ci][ctx], 3, tok.min(3) as usize);
                 if tok >= 3 {
                     mag &= 63;
                     let c = (if y > 1 { 14 } else { 7 })
@@ -558,24 +757,28 @@ impl Av1Encoder {
                         } else {
                             ((mag + 1) >> 1) as usize
                         };
-                    enc.hi_tok(&coef.br_tok[hi_ctx][ci][c], tok);
+                    enc.hi_tok_adapt(&mut coef.br_tok[hi_ctx][ci][c], tok);
                     grid[lo] = (tok + (3 << 6)) as u8;
                 } else {
                     grid[lo] = (tok * 0x41) as u8;
                 }
             }
             let tok = token(levels[0]);
-            enc.symbol(&coef.base_tok[tctx][ci][0], 3, tok.min(3) as usize);
+            enc.symbol_adapt(&mut coef.base_tok[tctx][ci][0], 3, tok.min(3) as usize);
             if tok >= 3 {
                 let m = (grid[1] as u32 + grid[stride] as u32 + grid[stride + 1] as u32) & 63;
                 let c = if m > 12 { 6 } else { ((m + 1) >> 1) as usize };
-                enc.hi_tok(&coef.br_tok[hi_ctx][ci][c], tok);
+                enc.hi_tok_adapt(&mut coef.br_tok[hi_ctx][ci][c], tok);
             }
         } else {
             let tok = token(levels[0]);
-            enc.symbol(&coef.eob_base_tok[tctx][ci][0], 2, tok.min(3) as usize - 1);
+            enc.symbol_adapt(
+                &mut coef.eob_base_tok[tctx][ci][0],
+                2,
+                tok.min(3) as usize - 1,
+            );
             if tok >= 3 {
-                enc.hi_tok(&coef.br_tok[hi_ctx][ci][0], tok);
+                enc.hi_tok_adapt(&mut coef.br_tok[hi_ctx][ci][0], tok);
             }
         }
 
@@ -586,7 +789,7 @@ impl Av1Encoder {
         if dc != 0 {
             let dsc = get_dc_sign_ctx(&t_dim, &ab, &lb);
             let negative = dc < 0;
-            enc.bool(coef.dc_sign[ci][dsc][0] as u32, negative);
+            enc.bool_adapt(&mut coef.dc_sign[ci][dsc], negative);
             sign_level = if negative { 0 } else { 2 << 6 };
             let m = dc.unsigned_abs();
             if m >= 15 {
@@ -609,4 +812,109 @@ impl Av1Encoder {
         f.above_coef[plane][ax..ax + w].fill(ctx);
         f.left_coef[plane][ly..ly + h].fill(ctx);
     }
+}
+
+/// Where a block's 4×4 transform `(tx, ty)` starts in `plane`'s samples.
+fn tile_origin(plane: usize, bx: usize, by: usize, tx: usize, ty: usize) -> (usize, usize) {
+    let shift_c = (plane != 0) as usize;
+    (
+        ((bx * 4) >> shift_c) + tx * 4,
+        ((by * 4) >> shift_c) + ty * 4,
+    )
+}
+
+/// A 4×4 intra prediction at `(x0, y0)` from the samples `at(x, y)` above and
+/// to the left, as the decoder makes it (`decode::av1::ipred`): DC averages
+/// the edges there are (128 with none); Paeth picks, per sample, whichever of
+/// left, top and top-left is closest to `left + top - top_left`, becoming a
+/// vertical, horizontal or flat prediction where edges are missing.
+fn predict4(at: impl Fn(usize, usize) -> i32, x0: usize, y0: usize, mode: usize) -> [i32; 16] {
+    let (have_top, have_left) = (y0 > 0, x0 > 0);
+    let top = |x: usize| at(x0 + x, y0 - 1);
+    let left = |y: usize| at(x0 - 1, y0 + y);
+    let mut p = [0i32; 16];
+    match (mode, have_left, have_top) {
+        (PAETH_PRED, true, true) => {
+            let tl = at(x0 - 1, y0 - 1);
+            for y in 0..4 {
+                for x in 0..4 {
+                    let (l, t) = (left(y), top(x));
+                    let base = l + t - tl;
+                    let (ld, td, tld) = ((l - base).abs(), (t - base).abs(), (tl - base).abs());
+                    p[y * 4 + x] = if ld <= td && ld <= tld {
+                        l
+                    } else if td <= tld {
+                        t
+                    } else {
+                        tl
+                    };
+                }
+            }
+        }
+        (PAETH_PRED, false, true) => {
+            for (i, v) in p.iter_mut().enumerate() {
+                *v = top(i % 4);
+            }
+        }
+        (PAETH_PRED, true, false) => {
+            for (i, v) in p.iter_mut().enumerate() {
+                *v = left(i / 4);
+            }
+        }
+        _ => {
+            let mut sum = 0;
+            if have_top {
+                sum += (0..4).map(top).sum::<i32>();
+            }
+            if have_left {
+                sum += (0..4).map(left).sum::<i32>();
+            }
+            let count = 4 * (have_top as i32 + have_left as i32);
+            p = [if count == 0 {
+                128
+            } else {
+                (sum + count / 2) / count
+            }; 16];
+        }
+    }
+    p
+}
+
+/// libaom's `av1_fwht4x4_c` without its final `× UNIT_QUANT_FACTOR`: the
+/// lossless levels. Row-major in and out (`[row * 4 + col]`), rows being the
+/// vertical frequency of the output.
+fn fwht4x4(input: &[i32; 16]) -> [i32; 16] {
+    let mut tmp = [0i32; 16];
+    for i in 0..4 {
+        let (mut a1, mut b1, mut c1, mut d1) =
+            (input[i], input[4 + i], input[8 + i], input[12 + i]);
+        a1 += b1;
+        d1 -= c1;
+        let e1 = (a1 - d1) >> 1;
+        b1 = e1 - b1;
+        c1 = e1 - c1;
+        a1 -= c1;
+        d1 += b1;
+        tmp[i] = a1;
+        tmp[4 + i] = c1;
+        tmp[8 + i] = d1;
+        tmp[12 + i] = b1;
+    }
+    let mut out = [0i32; 16];
+    for i in 0..4 {
+        let (mut a1, mut b1, mut c1, mut d1) =
+            (tmp[4 * i], tmp[4 * i + 1], tmp[4 * i + 2], tmp[4 * i + 3]);
+        a1 += b1;
+        d1 -= c1;
+        let e1 = (a1 - d1) >> 1;
+        b1 = e1 - b1;
+        c1 = e1 - c1;
+        a1 -= c1;
+        d1 += b1;
+        out[4 * i] = a1;
+        out[4 * i + 1] = c1;
+        out[4 * i + 2] = d1;
+        out[4 * i + 3] = b1;
+    }
+    out
 }

@@ -130,10 +130,13 @@ pub fn candle(ui: &mut Ui, parent: NodeId, style: FlameStyle, width: f32, seed: 
         s.width = Length::Px(w);
         s.height = Length::Px(h);
     });
-    ui.set_semantics(root, Semantics::new(Role::Image).label(match style {
-        FlameStyle::Simple => "A candle, its flame flickering",
-        FlameStyle::Realistic => "A candle with a realistic flame, flickering",
-    }));
+    ui.set_semantics(
+        root,
+        Semantics::new(Role::Image).label(match style {
+            FlameStyle::Simple => "A candle, its flame flickering",
+            FlameStyle::Realistic => "A candle with a realistic flame, flickering",
+        }),
+    );
     let px = |v: f32| Length::Px(v);
     let place = |ui: &mut Ui, n: NodeId, x: f32, y: f32, bw: f32, bh: f32| {
         ui.update_style(n, |s| {
@@ -151,7 +154,14 @@ pub fn candle(ui: &mut Ui, parent: NodeId, style: FlameStyle, width: f32, seed: 
 
     // The glow on what stands behind, round the flame.
     let glow = ui.add_box(root, style! { position: absolute; border-radius: 50%; background: radial-gradient(rgba(255, 168, 82, 0.5), rgba(255, 140, 60, 0.18) 45%, rgba(255, 120, 40, 0) 70%); pointer-events: none; });
-    place(ui, glow, cx - w * 0.5, flame_base - fh * 0.5 - w * 0.5, w, w);
+    place(
+        ui,
+        glow,
+        cx - w * 0.5,
+        flame_base - fh * 0.5 - w * 0.5,
+        w,
+        w,
+    );
 
     // The wax: shaded as a cylinder lit from the front left, a lighter
     // band where the flame's light comes through near the top.
@@ -161,16 +171,37 @@ pub fn candle(ui: &mut Ui, parent: NodeId, style: FlameStyle, width: f32, seed: 
     ui.update_style(lit_wax, |s| s.height = px((h - wax_top) * 0.45));
     // The melt pool, a lit ellipse.
     let pool = ui.add_box(root, style! { position: absolute; border-radius: 50%; background: radial-gradient(#fff4d6, #f6d9a4 55%, #d9b98a); });
-    place(ui, pool, cx - wax_w * 0.46, wax_top - wax_w * 0.06, wax_w * 0.92, wax_w * 0.2);
+    place(
+        ui,
+        pool,
+        cx - wax_w * 0.46,
+        wax_top - wax_w * 0.06,
+        wax_w * 0.92,
+        wax_w * 0.2,
+    );
     // The wick: dark, bent a little, its tip an ember.
     let wick = ui.add_box(root, style! { position: absolute; border-radius: 2px; background: linear-gradient(180deg, #ff6a2a, #2a1c12 30%, #1a120c); });
-    place(ui, wick, cx - 1.5, flame_base + 2.0, 3.0, wax_top - flame_base + 2.0);
+    place(
+        ui,
+        wick,
+        cx - 1.5,
+        flame_base + 2.0,
+        3.0,
+        wax_top - flame_base + 2.0,
+    );
 
     // The flame: nested teardrops (the simple flame, and the realistic
     // one's stand-in where shaders do not run).
     let flame_box = ui.add_box(root, style! { position: absolute; pointer-events: none; });
     let (bw, bh) = (fw * 1.6, fh * 1.15);
-    place(ui, flame_box, cx - bw / 2.0, flame_base - bh + bh * 0.03 / 1.12, bw, bh);
+    place(
+        ui,
+        flame_box,
+        cx - bw / 2.0,
+        flame_base - bh + bh * 0.03 / 1.12,
+        bw,
+        bh,
+    );
     let mut layers = vec![];
     // Outer orange, the yellow body and the white-hot core lifted off the
     // wick (the dark zone shows under them), then the thin blue cup round
@@ -180,21 +211,54 @@ pub fn candle(ui: &mut Ui, parent: NodeId, style: FlameStyle, width: f32, seed: 
         ("rgba(255, 190, 64, 0.95)", 0.82, 0.44, 14.0),
         ("rgba(255, 246, 220, 1)", 0.56, 0.28, 34.0),
     ] {
-        let path = ui.add_path(flame_box, style! { position: absolute; left: 0px; top: 0px; width: 100%; height: 100%; }, vec![teardrop_lifted(wide, scale, lift)], VIEW, None, true);
+        let path = ui.add_path(
+            flame_box,
+            style! { position: absolute; left: 0px; top: 0px; width: 100%; height: 100%; },
+            vec![teardrop_lifted(wide, scale, lift)],
+            VIEW,
+            None,
+            true,
+        );
         ui.update_style(path, |s| {
             crate::css::apply(s, "color", color);
         });
         layers.push((path, scale));
     }
-    let cup = ui.add_path(flame_box, style! { position: absolute; left: 0px; top: 0px; width: 100%; height: 100%; }, vec!["M28 178 A22 22 0 0 0 72 178".to_owned()], VIEW, Some(5.0), false);
-    ui.update_style(cup, |s| crate::css::apply(s, "color", "rgba(90, 150, 255, 0.55)"));
+    let cup = ui.add_path(
+        flame_box,
+        style! { position: absolute; left: 0px; top: 0px; width: 100%; height: 100%; },
+        vec!["M28 178 A22 22 0 0 0 72 178".to_owned()],
+        VIEW,
+        Some(5.0),
+        false,
+    );
+    ui.update_style(cup, |s| {
+        crate::css::apply(s, "color", "rgba(90, 150, 255, 0.55)")
+    });
     layers.push((cup, 1.0));
     if style == FlameStyle::Realistic {
         let shader = Shader::new(flame_source());
         debug_assert!(shader.error().is_none(), "{:?}", shader.error());
-        ui.set_effect(flame_box, Some(Effect::new(&shader).arg("t", 0.0).arg("flicker", 1.0).arg("lean", [0.0, 0.0]).arg("seed", seed)));
+        ui.set_effect(
+            flame_box,
+            Some(
+                Effect::new(&shader)
+                    .arg("t", 0.0)
+                    .arg("flicker", 1.0)
+                    .arg("lean", [0.0, 0.0])
+                    .arg("seed", seed),
+            ),
+        );
     }
-    Candle { root, glow, lit_wax, flame: flame_box, layers, style, seed }
+    Candle {
+        root,
+        glow,
+        lit_wax,
+        flame: flame_box,
+        layers,
+        style,
+        seed,
+    }
 }
 
 impl Candle {
@@ -206,7 +270,11 @@ impl Candle {
         // Each layer stretched as it flares and narrowed to keep its fire,
         // leaned with the draught, its base kept on the wick.
         for &(node, _) in &self.layers {
-            let mut t = Transformation { rotate: sx * 0.12, scale: (1.0 / f.sqrt(), f), translate: (0.0, 0.0) };
+            let mut t = Transformation {
+                rotate: sx * 0.12,
+                scale: (1.0 / f.sqrt(), f),
+                translate: (0.0, 0.0),
+            };
             let base = (50.0, 200.0);
             let moved = t.apply(base, (50.0, 100.0));
             t.translate = (base.0 - moved.0, base.1 - moved.1);
@@ -242,16 +310,33 @@ mod tests {
         let mut seen = vec![];
         for i in 0..40 {
             c.update(&mut ui, i as f32 * 0.09);
-            seen.push((ui.style(c.glow).opacity, ui.path_transform(c.layers[0].0).scale.1));
+            seen.push((
+                ui.style(c.glow).opacity,
+                ui.path_transform(c.layers[0].0).scale.1,
+            ));
         }
-        let spread = |v: Vec<f32>| v.iter().cloned().fold(f32::MIN, f32::max) - v.iter().cloned().fold(f32::MAX, f32::min);
-        assert!(spread(seen.iter().map(|s| s.0).collect()) > 0.05, "the glow breathes");
-        assert!(spread(seen.iter().map(|s| s.1).collect()) > 0.05, "the flame stretches");
+        let spread = |v: Vec<f32>| {
+            v.iter().cloned().fold(f32::MIN, f32::max) - v.iter().cloned().fold(f32::MAX, f32::min)
+        };
+        assert!(
+            spread(seen.iter().map(|s| s.0).collect()) > 0.05,
+            "the glow breathes"
+        );
+        assert!(
+            spread(seen.iter().map(|s| s.1).collect()) > 0.05,
+            "the flame stretches"
+        );
         // The base stays on the wick as the flame stretches and leans.
         let t = ui.path_transform(c.layers[0].0);
         let base = t.apply((50.0, 200.0), (50.0, 100.0));
-        assert!((base.0 - 50.0).abs() < 1e-3 && (base.1 - 200.0).abs() < 1e-3, "{base:?}");
-        assert!(ui.effect(c.flame).is_some(), "the realistic flame is an effect");
+        assert!(
+            (base.0 - 50.0).abs() < 1e-3 && (base.1 - 200.0).abs() < 1e-3,
+            "{base:?}"
+        );
+        assert!(
+            ui.effect(c.flame).is_some(),
+            "the realistic flame is an effect"
+        );
     }
 
     #[test]

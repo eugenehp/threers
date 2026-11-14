@@ -78,7 +78,12 @@ impl ArcShape {
     /// The box round its whole circle, `reach` wider each way.
     pub fn bounds(&self, reach: f32) -> Rect {
         let r = self.radius + reach;
-        Rect { x: self.cx - r, y: self.cy - r, width: 2.0 * r, height: 2.0 * r }
+        Rect {
+            x: self.cx - r,
+            y: self.cy - r,
+            width: 2.0 * r,
+            height: 2.0 * r,
+        }
     }
 
     /// How far `(x, y)` is from the arc stroked `width` wide with round
@@ -92,7 +97,11 @@ impl ArcShape {
         }
         // Turned so the arc's middle points along +y: then it is symmetric
         // about the y axis, and only |x| matters.
-        let (start, sweep) = if self.sweep < 0.0 { (self.start + self.sweep, -self.sweep) } else { (self.start, self.sweep) };
+        let (start, sweep) = if self.sweep < 0.0 {
+            (self.start + self.sweep, -self.sweep)
+        } else {
+            (self.start, self.sweep)
+        };
         let mid = start + sweep / 2.0;
         let (ms, mc) = mid.sin_cos();
         // Along the middle (screen direction (sin, -cos)), and across it.
@@ -130,7 +139,14 @@ impl ArcShape {
                 Some(SvgToken::Command('A')) => arc_cmd = true,
                 Some(SvgToken::Command(_)) => return None,
                 Some(SvgToken::Number(rx)) if arc_cmd => {
-                    let (ry, rot, large, sweep, x1, y1) = (num(&mut tokens)?, num(&mut tokens)?, num(&mut tokens)?, num(&mut tokens)?, num(&mut tokens)?, num(&mut tokens)?);
+                    let (ry, rot, large, sweep, x1, y1) = (
+                        num(&mut tokens)?,
+                        num(&mut tokens)?,
+                        num(&mut tokens)?,
+                        num(&mut tokens)?,
+                        num(&mut tokens)?,
+                        num(&mut tokens)?,
+                    );
                     if (rx - ry).abs() > 1e-3 * rx.abs().max(1.0) || rot != 0.0 || rx <= 0.0 {
                         return None;
                     }
@@ -140,11 +156,17 @@ impl ArcShape {
                         Some(o) => {
                             let tol = 1e-2 * o.radius.max(1.0);
                             let end = o.start + o.sweep;
-                            let joins = (o.cx - a.cx).abs() < tol && (o.cy - a.cy).abs() < tol && (o.radius - a.radius).abs() < tol && same_angle(end, a.start);
+                            let joins = (o.cx - a.cx).abs() < tol
+                                && (o.cy - a.cy).abs() < tol
+                                && (o.radius - a.radius).abs() < tol
+                                && same_angle(end, a.start);
                             if !joins || o.sweep.signum() != a.sweep.signum() {
                                 return None;
                             }
-                            ArcShape { sweep: o.sweep + a.sweep, ..o }
+                            ArcShape {
+                                sweep: o.sweep + a.sweep,
+                                ..o
+                            }
                         }
                     });
                     (x, y) = (x1, y1);
@@ -161,7 +183,12 @@ impl ArcShape {
         if (sx - sy).abs() > 1e-3 * sx.abs().max(1e-6) {
             return None;
         }
-        Some(ArcShape { cx: to.0 + (self.cx - ox) * sx, cy: to.1 + (self.cy - oy) * sy, radius: self.radius * sx, ..*self })
+        Some(ArcShape {
+            cx: to.0 + (self.cx - ox) * sx,
+            cy: to.1 + (self.cy - oy) * sy,
+            radius: self.radius * sx,
+            ..*self
+        })
     }
 }
 
@@ -173,7 +200,13 @@ fn same_angle(a: f32, b: f32) -> bool {
 /// The circle arc from `p0` to `p1` of radius `r` (SVG's endpoint form):
 /// the centre on the side `large` and `sweep` say; the radius grown if the
 /// ends are further apart than it allows, as SVG does.
-fn circle_arc(p0: (f32, f32), p1: (f32, f32), r: f32, large: bool, sweep: bool) -> Option<ArcShape> {
+fn circle_arc(
+    p0: (f32, f32),
+    p1: (f32, f32),
+    r: f32,
+    large: bool,
+    sweep: bool,
+) -> Option<ArcShape> {
     let (dx, dy) = (p1.0 - p0.0, p1.1 - p0.1);
     let chord = (dx * dx + dy * dy).sqrt();
     if chord < 1e-6 {
@@ -197,7 +230,13 @@ fn circle_arc(p0: (f32, f32), p1: (f32, f32), r: f32, large: bool, sweep: bool) 
     } else if delta >= 0.0 {
         delta -= std::f32::consts::TAU;
     }
-    Some(ArcShape { cx, cy, radius: r, start: a0, sweep: delta })
+    Some(ArcShape {
+        cx,
+        cy,
+        radius: r,
+        start: a0,
+        sweep: delta,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -223,7 +262,8 @@ fn svg_tokens(d: &str) -> Vec<SvgToken> {
             while i < b.len() {
                 let ch = b[i] as char;
                 let exp_sign = (ch == '-' || ch == '+') && matches!(b[i - 1], b'e' | b'E');
-                if ch.is_ascii_digit() || (ch == '.' && !dot) || ch == 'e' || ch == 'E' || exp_sign {
+                if ch.is_ascii_digit() || (ch == '.' && !dot) || ch == 'e' || ch == 'E' || exp_sign
+                {
                     dot |= ch == '.';
                     i += 1;
                 } else {
@@ -286,13 +326,21 @@ pub trait Painter: TextMeasure {
     /// one is [`fill_linear_gradient`](Self::fill_linear_gradient), and the
     /// others are bands of their colours across, as close as a painter with
     /// only that can come.
-    fn fill_gradient(&mut self, rect: Rect, shape: crate::GradientShape, stops: &[(f32, Rgba)], blur: f32) {
+    fn fill_gradient(
+        &mut self,
+        rect: Rect,
+        shape: crate::GradientShape,
+        stops: &[(f32, Rgba)],
+        blur: f32,
+    ) {
         if shape.is_across() {
             return self.fill_linear_gradient(rect, stops, blur);
         }
         let mid = (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
         let at = |x: f32| crate::gradient_at(stops, shape.t(rect, x, mid.1));
-        let across: Vec<(f32, Rgba)> = (0..=16).map(|i| (i as f32 / 16.0, at(rect.x + rect.width * i as f32 / 16.0))).collect();
+        let across: Vec<(f32, Rgba)> = (0..=16)
+            .map(|i| (i as f32 / 16.0, at(rect.x + rect.width * i as f32 / 16.0)))
+            .collect();
         self.fill_linear_gradient(rect, &across, blur);
     }
 
@@ -326,7 +374,14 @@ pub trait Painter: TextMeasure {
             d.push_str(&format!("{}{x:.3} {y:.3} ", if i == 0 { 'M' } else { 'L' }));
         }
         let b = arc.bounds(0.0);
-        self.path(b, &[d], [b.x, b.y, b.width.max(1e-6), b.height.max(1e-6)], Some(width), false, color);
+        self.path(
+            b,
+            &[d],
+            [b.x, b.y, b.width.max(1e-6), b.height.max(1e-6)],
+            Some(width),
+            false,
+            color,
+        );
     }
 
     /// Restricts painting to `rect` until the matching
@@ -459,7 +514,13 @@ impl Ui {
 
     /// `id` and what is inside it, at `opacity` (a reflection's copy).
     pub(crate) fn paint_node_pub(&self, id: NodeId, painter: &mut dyn Painter, opacity: f32) {
-        self.paint_node(id, painter, opacity / self.style(id).opacity.max(1e-6), false, EVERYWHERE);
+        self.paint_node(
+            id,
+            painter,
+            opacity / self.style(id).opacity.max(1e-6),
+            false,
+            EVERYWHERE,
+        );
     }
 
     /// Whether `id` can be left undrawn: nothing of it shows in `visible`
@@ -470,20 +531,40 @@ impl Ui {
             return false;
         }
         let node = &self.nodes[id.0];
-        if !(node.children.is_empty() || s.clip) || self.env.reflections.contains_key(&id) || self.env.effects.contains_key(&id) || self.transform3d(id).is_some() {
+        if !(node.children.is_empty() || s.clip)
+            || self.env.reflections.contains_key(&id)
+            || self.env.effects.contains_key(&id)
+            || self.transform3d(id).is_some()
+        {
             return false;
         }
         let r = node.rect;
-        let reach = s.box_shadow.iter().map(|sh| sh.blur * 3.0 + sh.spread.max(0.0) + sh.x.abs().max(sh.y.abs())).fold(1.0f32, f32::max);
-        r.x - reach > visible.x + visible.width || r.y - reach > visible.y + visible.height || r.x + r.width + reach < visible.x || r.y + r.height + reach < visible.y
+        let reach = s
+            .box_shadow
+            .iter()
+            .map(|sh| sh.blur * 3.0 + sh.spread.max(0.0) + sh.x.abs().max(sh.y.abs()))
+            .fold(1.0f32, f32::max);
+        r.x - reach > visible.x + visible.width
+            || r.y - reach > visible.y + visible.height
+            || r.x + r.width + reach < visible.x
+            || r.y + r.height + reach < visible.y
     }
 
-    fn paint_node(&self, id: NodeId, painter: &mut dyn Painter, opacity: f32, subpixel: bool, visible: Rect) {
+    fn paint_node(
+        &self,
+        id: NodeId,
+        painter: &mut dyn Painter,
+        opacity: f32,
+        subpixel: bool,
+        visible: Rect,
+    ) {
         let node = &self.nodes[id.0];
         // Text and shapes in the colour they inherit now, not the one they
         // were made with (see `Ui::color_of`).
         let inherited;
-        let s = if matches!(node.kind, NodeKind::Text(_) | NodeKind::Path { .. }) && self.color_of(id) != node.style.color {
+        let s = if matches!(node.kind, NodeKind::Text(_) | NodeKind::Path { .. })
+            && self.color_of(id) != node.style.color
+        {
             let mut st = node.style.clone();
             st.color = self.color_of(id);
             inherited = st;
@@ -556,7 +637,11 @@ impl Ui {
             r
         };
         if s.backdrop_blur > 0.0 && opacity > 0.0 {
-            let radius = s.border_radius.resolve(Some(r.width.min(r.height))).unwrap_or(0.0).min(r.width.min(r.height) / 2.0);
+            let radius = s
+                .border_radius
+                .resolve(Some(r.width.min(r.height)))
+                .unwrap_or(0.0)
+                .min(r.width.min(r.height) / 2.0);
             painter.backdrop(r, radius, s.backdrop_blur, s.backdrop_saturate);
         }
         let b = s.border;
@@ -579,7 +664,8 @@ impl Ui {
             && ory > 0.0
             && s.border_color[3] > 0.0
             && s.background.is_some()
-            && !s.background_clip_content;
+            && !s.background_clip_content
+            && !s.border_dashed;
         if rounded_border {
             painter.fill_rounded_rect(r, orx, ory, fade(s.border_color));
             let inner = Rect {
@@ -629,7 +715,9 @@ impl Ui {
                 painter.pop_clip();
             }
         }
-        if !rounded_border
+        if s.border_dashed && uniform && s.border_color[3] > 0.0 {
+            dashes(painter, r, orx.min(ory), b.top, fade(s.border_color));
+        } else if !rounded_border
             && s.border_color[3] > 0.0
             && (b.top > 0.0 || b.right > 0.0 || b.bottom > 0.0 || b.left > 0.0)
         {
@@ -682,13 +770,30 @@ impl Ui {
                 let h = content.height / n as f32;
                 let bar = fade(self.token(crate::environment::Token::Separator));
                 for i in 0..n {
-                    let w = node.line_widths.get(i).copied().unwrap_or(content.width).min(content.width);
-                    let r = Rect { x: content.x, y: content.y + i as f32 * h + h * 0.2, width: w, height: h * 0.6 };
+                    let w = node
+                        .line_widths
+                        .get(i)
+                        .copied()
+                        .unwrap_or(content.width)
+                        .min(content.width);
+                    let r = Rect {
+                        x: content.x,
+                        y: content.y + i as f32 * h + h * 0.2,
+                        width: w,
+                        height: h * 0.6,
+                    };
                     painter.fill_rounded_rect(r, 3.0, 3.0, bar);
                 }
             }
-            NodeKind::Image { .. } | NodeKind::Surface { .. } | NodeKind::Path { .. } if redacted => {
-                painter.fill_rounded_rect(content, 4.0, 4.0, fade(self.token(crate::environment::Token::Separator)));
+            NodeKind::Image { .. } | NodeKind::Surface { .. } | NodeKind::Path { .. }
+                if redacted =>
+            {
+                painter.fill_rounded_rect(
+                    content,
+                    4.0,
+                    4.0,
+                    fade(self.token(crate::environment::Token::Separator)),
+                );
             }
             NodeKind::Text(t) if !node.pieces.is_empty() => {
                 // Styled runs: each piece where layout put it, in its own
@@ -733,7 +838,10 @@ impl Ui {
                     let h = content.height / node.lines.len() as f32;
                     for (i, line) in node.lines.iter().enumerate() {
                         // Across the box by `text-align`, by the line's width.
-                        let shift = node.line_widths.get(i).map_or(0.0, |w| s.text_align.offset(content.width - w));
+                        let shift = node
+                            .line_widths
+                            .get(i)
+                            .map_or(0.0, |w| s.text_align.offset(content.width - w));
                         let r = Rect {
                             x: content.x + shift,
                             y: content.y + i as f32 * h,
@@ -745,8 +853,15 @@ impl Ui {
                     }
                 } else if let [line] = node.lines.as_slice() {
                     // An ellipsized (or once-wrapped) run.
-                    let shift = node.line_widths.first().map_or(0.0, |w| s.text_align.offset(content.width - w));
-                    let r = Rect { x: content.x + shift, width: content.width - shift, ..content };
+                    let shift = node
+                        .line_widths
+                        .first()
+                        .map_or(0.0, |w| s.text_align.offset(content.width - w));
+                    let r = Rect {
+                        x: content.x + shift,
+                        width: content.width - shift,
+                        ..content
+                    };
                     painter.text(r, line, &style);
                     decorate(painter, r, 0);
                 } else {
@@ -761,21 +876,45 @@ impl Ui {
                 fill,
             } => match node.transform {
                 Some(t) => {
-                    let centre = (view_box[0] + view_box[2] / 2.0, view_box[1] + view_box[3] / 2.0);
-                    let moved: Vec<String> = d.iter().map(|p| crate::transform::transform_path(p, &t, centre)).collect();
+                    let centre = (
+                        view_box[0] + view_box[2] / 2.0,
+                        view_box[1] + view_box[3] / 2.0,
+                    );
+                    let moved: Vec<String> = d
+                        .iter()
+                        .map(|p| crate::transform::transform_path(p, &t, centre))
+                        .collect();
                     painter.path(content, &moved, *view_box, *stroke, *fill, fade(s.color))
                 }
                 None => {
                     // Circular arcs, stroked: from their distance field.
-                    let (sx, sy) = (content.width / view_box[2].max(1e-6), content.height / view_box[3].max(1e-6));
+                    let (sx, sy) = (
+                        content.width / view_box[2].max(1e-6),
+                        content.height / view_box[3].max(1e-6),
+                    );
                     let arcs: Option<Vec<ArcShape>> = match stroke {
-                        Some(_) if !*fill && !d.is_empty() => d.iter().map(|p| ArcShape::from_svg(p).and_then(|a| a.mapped(view_box[0], view_box[1], sx, sy, (content.x, content.y)))).collect(),
+                        Some(_) if !*fill && !d.is_empty() => d
+                            .iter()
+                            .map(|p| {
+                                ArcShape::from_svg(p).and_then(|a| {
+                                    a.mapped(
+                                        view_box[0],
+                                        view_box[1],
+                                        sx,
+                                        sy,
+                                        (content.x, content.y),
+                                    )
+                                })
+                            })
+                            .collect(),
                         _ => None,
                     };
                     // Circles (`circle_path`'s): a filled one a disc, a
                     // rounded box's distance field; a stroked one a ring.
                     let uniform = (sx - sy).abs() <= 1e-3 * sx.abs().max(1e-6);
-                    let circles: Option<Vec<(f32, f32, f32)>> = (uniform && !d.is_empty()).then(|| d.iter().map(|p| parse_circle(p)).collect()).flatten();
+                    let circles: Option<Vec<(f32, f32, f32)>> = (uniform && !d.is_empty())
+                        .then(|| d.iter().map(|p| parse_circle(p)).collect())
+                        .flatten();
                     match (arcs, circles, stroke) {
                         (Some(arcs), _, Some(w)) => {
                             for a in arcs {
@@ -784,12 +923,32 @@ impl Ui {
                         }
                         (None, Some(circles), _) => {
                             for (cx, cy, r) in circles {
-                                let (x, y, r) = (content.x + (cx - view_box[0]) * sx, content.y + (cy - view_box[1]) * sy, r * sx);
+                                let (x, y, r) = (
+                                    content.x + (cx - view_box[0]) * sx,
+                                    content.y + (cy - view_box[1]) * sy,
+                                    r * sx,
+                                );
                                 if *fill {
-                                    painter.fill_rounded_rect(Rect { x: x - r, y: y - r, width: 2.0 * r, height: 2.0 * r }, r, r, fade(s.color));
+                                    painter.fill_rounded_rect(
+                                        Rect {
+                                            x: x - r,
+                                            y: y - r,
+                                            width: 2.0 * r,
+                                            height: 2.0 * r,
+                                        },
+                                        r,
+                                        r,
+                                        fade(s.color),
+                                    );
                                 }
                                 if let Some(w) = stroke {
-                                    let ring = ArcShape { cx: x, cy: y, radius: r, start: 0.0, sweep: std::f32::consts::TAU };
+                                    let ring = ArcShape {
+                                        cx: x,
+                                        cy: y,
+                                        radius: r,
+                                        start: 0.0,
+                                        sweep: std::f32::consts::TAU,
+                                    };
                                     painter.stroke_arc(ring, w * sx, fade(s.color));
                                 }
                             }
@@ -845,8 +1004,16 @@ impl Ui {
             EVERYWHERE
         } else if s.clip {
             let (x0, y0) = (visible.x.max(r.x), visible.y.max(r.y));
-            let (x1, y1) = ((visible.x + visible.width).min(r.x + r.width), (visible.y + visible.height).min(r.y + r.height));
-            Rect { x: x0, y: y0, width: (x1 - x0).max(0.0), height: (y1 - y0).max(0.0) }
+            let (x1, y1) = (
+                (visible.x + visible.width).min(r.x + r.width),
+                (visible.y + visible.height).min(r.y + r.height),
+            );
+            Rect {
+                x: x0,
+                y: y0,
+                width: (x1 - x0).max(0.0),
+                height: (y1 - y0).max(0.0),
+            }
         } else {
             visible
         };
@@ -859,7 +1026,10 @@ impl Ui {
         if s.clip {
             painter.pop_clip();
         }
-        if let Some(bar) = self.scrollbar(id).filter(|_| self.scrollbar_opacity(id) > 0.0) {
+        if let Some(bar) = self
+            .scrollbar(id)
+            .filter(|_| self.scrollbar_opacity(id) > 0.0)
+        {
             let shown = self.scrollbar_opacity(id);
             let (mut thumb, mut track) = self.scrollbar_colors(id);
             thumb[3] *= shown;
@@ -947,7 +1117,80 @@ pub fn parse_circle(d: &str) -> Option<(f32, f32, f32)> {
 }
 
 /// A view that culls nothing.
-const EVERYWHERE: Rect = Rect { x: -1e9, y: -1e9, width: 2e9, height: 2e9 };
+const EVERYWHERE: Rect = Rect {
+    x: -1e9,
+    y: -1e9,
+    width: 2e9,
+    height: 2e9,
+};
+
+/// A dashed border `width` wide round `r` (its corners of `radius`):
+/// dashes three widths long, as long apart, walked along the outline's
+/// middle — straight edges and corner arcs alike — each a run of
+/// `width`-square steps.
+fn dashes(painter: &mut dyn Painter, r: Rect, radius: f32, width: f32, color: Rgba) {
+    let half = width / 2.0;
+    // the outline's middle: a rounded rectangle inset half the width
+    let (x0, y0, x1, y1) = (
+        r.x + half,
+        r.y + half,
+        r.x + r.width - half,
+        r.y + r.height - half,
+    );
+    let rad = (radius - half).clamp(0.0, ((x1 - x0) / 2.0).min((y1 - y0) / 2.0));
+    let (w, h) = (
+        (x1 - x0 - 2.0 * rad).max(0.0),
+        (y1 - y0 - 2.0 * rad).max(0.0),
+    );
+    let arc = std::f32::consts::FRAC_PI_2 * rad;
+    let total = 2.0 * (w + h) + 4.0 * arc;
+    // the point `t` along it, clockwise from the top edge's start
+    let at = |mut t: f32| -> (f32, f32) {
+        let corner = |cx: f32, cy: f32, from: f32, u: f32| {
+            let a = from + u / rad.max(1e-6);
+            (cx + rad * a.cos(), cy + rad * a.sin())
+        };
+        let pi = std::f32::consts::PI;
+        let segs: [(f32, &dyn Fn(f32) -> (f32, f32)); 8] = [
+            (w, &|u| (x0 + rad + u, y0)),
+            (arc, &|u| corner(x1 - rad, y0 + rad, -pi / 2.0, u)),
+            (h, &|u| (x1, y0 + rad + u)),
+            (arc, &|u| corner(x1 - rad, y1 - rad, 0.0, u)),
+            (w, &|u| (x1 - rad - u, y1)),
+            (arc, &|u| corner(x0 + rad, y1 - rad, pi / 2.0, u)),
+            (h, &|u| (x0, y1 - rad - u)),
+            (arc, &|u| corner(x0 + rad, y0 + rad, pi, u)),
+        ];
+        for (len, f) in segs {
+            if t <= len {
+                return f(t);
+            }
+            t -= len;
+        }
+        (x0 + rad, y0)
+    };
+    let dash = (width * 3.0).max(2.0);
+    // whole dash-and-gap periods round it, so the ends meet
+    let periods = (total / (2.0 * dash)).round().max(1.0);
+    let period = total / periods;
+    let step = (width * 0.5).max(0.5);
+    let mut t = 0.0;
+    while t < total {
+        if t % period < period / 2.0 {
+            let (px, py) = at(t);
+            painter.fill_rect(
+                Rect {
+                    x: px - half,
+                    y: py - half,
+                    width,
+                    height: width,
+                },
+                color,
+            );
+        }
+        t += step;
+    }
+}
 
 #[cfg(test)]
 mod arc_tests {
@@ -958,18 +1201,35 @@ mod arc_tests {
     fn svg_arcs_are_read_as_circles() {
         // A quarter, clockwise from the top to the right.
         let a = ArcShape::from_svg("M50 10 A40 40 0 0 1 90 50").unwrap();
-        assert!((a.cx - 50.0).abs() < 1e-3 && (a.cy - 50.0).abs() < 1e-3 && (a.radius - 40.0).abs() < 1e-3, "{a:?}");
-        assert!(a.start.abs() < 1e-4 && (a.sweep - FRAC_PI_2).abs() < 1e-4, "{a:?}");
+        assert!(
+            (a.cx - 50.0).abs() < 1e-3
+                && (a.cy - 50.0).abs() < 1e-3
+                && (a.radius - 40.0).abs() < 1e-3,
+            "{a:?}"
+        );
+        assert!(
+            a.start.abs() < 1e-4 && (a.sweep - FRAC_PI_2).abs() < 1e-4,
+            "{a:?}"
+        );
         // The long way round, and anticlockwise.
         let long = ArcShape::from_svg("M50 10 A40 40 0 1 1 10 50").unwrap();
         assert!((long.sweep - 1.5 * PI).abs() < 1e-4, "{long:?}");
         let back = ArcShape::from_svg("M50 10 A40 40 0 0 0 10 50").unwrap();
         assert!((back.sweep + FRAC_PI_2).abs() < 1e-4, "{back:?}");
         // Two halves round one circle: the whole ring.
-        let ring = ArcShape::from_svg("M50.000 10.000 A40 40 0 0 1 50.000 90.000 A40 40 0 0 1 50.000 10.000").unwrap();
+        let ring = ArcShape::from_svg(
+            "M50.000 10.000 A40 40 0 0 1 50.000 90.000 A40 40 0 0 1 50.000 10.000",
+        )
+        .unwrap();
         assert!((ring.sweep - TAU).abs() < 1e-3);
         // Not an arc: lines, ellipses, a second circle.
-        for d in ["M0 0 L10 10", "M50 10 A40 20 0 0 1 90 50", "M50 10 A40 40 0 0 1 90 50 A10 10 0 0 1 80 60", "M50 10 A40 40 0 0 1 90 50 L0 0", ""] {
+        for d in [
+            "M0 0 L10 10",
+            "M50 10 A40 20 0 0 1 90 50",
+            "M50 10 A40 40 0 0 1 90 50 A10 10 0 0 1 80 60",
+            "M50 10 A40 40 0 0 1 90 50 L0 0",
+            "",
+        ] {
             assert_eq!(ArcShape::from_svg(d), None, "{d}");
         }
     }
@@ -977,7 +1237,13 @@ mod arc_tests {
     #[test]
     fn the_distance_field_has_round_ends_and_a_gap() {
         // The dial: three quarters from bottom left, clockwise.
-        let a = ArcShape { cx: 0.0, cy: 0.0, radius: 40.0, start: -0.75 * PI, sweep: 1.5 * PI };
+        let a = ArcShape {
+            cx: 0.0,
+            cy: 0.0,
+            radius: 40.0,
+            start: -0.75 * PI,
+            sweep: 1.5 * PI,
+        };
         let w = 10.0;
         // On the ring, top: inside by half the width.
         assert!((a.distance(w, 0.0, -40.0) + 5.0).abs() < 1e-3);
@@ -987,14 +1253,24 @@ mod arc_tests {
         assert!(a.distance(w, 0.0, 40.0) > 20.0);
         // Round ends: just past the start, along the ring, at most half the width out.
         let (ex, ey) = (40.0 * (-0.75 * PI).sin(), -40.0 * (-0.75 * PI).cos());
-        assert!((a.distance(w, ex, ey) + 5.0).abs() < 1e-3, "the end's centre");
+        assert!(
+            (a.distance(w, ex, ey) + 5.0).abs() < 1e-3,
+            "the end's centre"
+        );
         // A ring: the same everywhere round.
         let ring = ArcShape { sweep: TAU, ..a };
         assert!((ring.distance(w, 0.0, 40.0) + 5.0).abs() < 1e-3);
         // Anticlockwise draws the same as its clockwise twin.
-        let twin = ArcShape { start: 0.75 * PI, sweep: -1.5 * PI, ..a };
+        let twin = ArcShape {
+            start: 0.75 * PI,
+            sweep: -1.5 * PI,
+            ..a
+        };
         for (x, y) in [(0.0, -40.0), (30.0, 30.0), (-30.0, 30.0), (5.0, 41.0)] {
-            assert!((twin.distance(w, x, y) - a.distance(w, x, y)).abs() < 1e-3, "({x}, {y})");
+            assert!(
+                (twin.distance(w, x, y) - a.distance(w, x, y)).abs() < 1e-3,
+                "({x}, {y})"
+            );
         }
     }
 
@@ -1003,19 +1279,49 @@ mod arc_tests {
         let mut ui = crate::Ui::new();
         let root = ui.root();
         let st = || crate::style! { width: 40px; height: 40px; };
-        ui.add_path(root, st(), vec![circle_path(20.0, 20.0, 10.0)], [0.0, 0.0, 40.0, 40.0], None, true);
-        ui.add_path(root, st(), vec![circle_path(20.0, 20.0, 15.0)], [0.0, 0.0, 40.0, 40.0], Some(2.0), false);
+        ui.add_path(
+            root,
+            st(),
+            vec![circle_path(20.0, 20.0, 10.0)],
+            [0.0, 0.0, 40.0, 40.0],
+            None,
+            true,
+        );
+        ui.add_path(
+            root,
+            st(),
+            vec![circle_path(20.0, 20.0, 15.0)],
+            [0.0, 0.0, 40.0, 40.0],
+            Some(2.0),
+            false,
+        );
         ui.layout(200.0, 200.0, &mut crate::FixedWidthText(7.0));
         let mut scene = crate::scene::Scene::default();
         ui.paint(&mut scene.recorder());
-        let discs = scene.items.iter().filter(|i| matches!(i, crate::scene::Item::Rect { rx, .. } if (*rx - 10.0).abs() < 1e-3)).count();
-        let rings: Vec<_> = scene.items.iter().filter_map(|i| match i {
-            crate::scene::Item::Arc { arc, width, .. } => Some((arc.radius, arc.sweep, *width)),
-            _ => None,
-        }).collect();
+        let discs = scene
+            .items
+            .iter()
+            .filter(
+                |i| matches!(i, crate::scene::Item::Rect { rx, .. } if (*rx - 10.0).abs() < 1e-3),
+            )
+            .count();
+        let rings: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                crate::scene::Item::Arc { arc, width, .. } => Some((arc.radius, arc.sweep, *width)),
+                _ => None,
+            })
+            .collect();
         assert_eq!(discs, 1);
         assert_eq!(rings, vec![(15.0, std::f32::consts::TAU, 2.0)]);
-        assert!(!scene.items.iter().any(|i| matches!(i, crate::scene::Item::Path { .. })), "no path left to cut up");
+        assert!(
+            !scene
+                .items
+                .iter()
+                .any(|i| matches!(i, crate::scene::Item::Path { .. })),
+            "no path left to cut up"
+        );
     }
 
     #[test]
@@ -1029,14 +1335,33 @@ mod arc_tests {
         ui.layout(400.0, 300.0, &mut crate::FixedWidthText(7.0));
         let mut scene = crate::scene::Scene::default();
         ui.paint(&mut scene.recorder());
-        let arcs: Vec<_> = scene.items.iter().filter_map(|i| match i {
-            crate::scene::Item::Arc { arc, width, .. } => Some((*arc, *width)),
-            _ => None,
-        }).collect();
+        let arcs: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                crate::scene::Item::Arc { arc, width, .. } => Some((*arc, *width)),
+                _ => None,
+            })
+            .collect();
         // The track and the fill, 96 px across: radius 40 of 100, 9.6 wide.
-        assert_eq!(arcs.len(), 2, "{:?}", scene.items.iter().filter(|i| matches!(i, crate::scene::Item::Path { .. })).count());
-        assert!((arcs[0].0.radius - 38.4).abs() < 0.01 && (arcs[0].1 - 9.6).abs() < 0.01, "{arcs:?}");
-        assert!((arcs[1].0.sweep - 0.75 * PI).abs() < 1e-3, "half of three quarters: {arcs:?}");
+        assert_eq!(
+            arcs.len(),
+            2,
+            "{:?}",
+            scene
+                .items
+                .iter()
+                .filter(|i| matches!(i, crate::scene::Item::Path { .. }))
+                .count()
+        );
+        assert!(
+            (arcs[0].0.radius - 38.4).abs() < 0.01 && (arcs[0].1 - 9.6).abs() < 0.01,
+            "{arcs:?}"
+        );
+        assert!(
+            (arcs[1].0.sweep - 0.75 * PI).abs() < 1e-3,
+            "half of three quarters: {arcs:?}"
+        );
     }
 }
 
@@ -1138,5 +1463,51 @@ mod tests {
         assert_eq!(super::super::parse_circle(&d), Some((9.0, 6.0, 2.0)));
         assert_eq!(super::super::parse_circle("M11 6A2 2 0 1 1 7 6Z"), None);
     }
-}
 
+    #[test]
+    fn a_dashed_border_is_dashes_all_round() {
+        let mut p = Record::default();
+        crate::paint::dashes(
+            &mut p,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 40.0,
+            },
+            8.0,
+            1.0,
+            [0.0, 0.0, 0.0, 1.0],
+        );
+        let rects: Vec<[f32; 2]> =
+            p.0.iter()
+                .map(|l| {
+                    let v: Vec<f32> = l
+                        .split(' ')
+                        .skip(1)
+                        .take(2)
+                        .map(|x| x.parse().unwrap())
+                        .collect();
+                    [v[0], v[1]]
+                })
+                .collect();
+        // on the outline everywhere
+        assert!(rects.iter().all(|&[x, y]| x <= 1.0
+            || y <= 1.0
+            || x >= 98.0
+            || y >= 38.0
+            || (x < 9.0 || x > 90.0) && (y < 9.0 || y > 30.0)));
+        // along the top, in dashes with gaps between
+        let top: Vec<f32> = rects
+            .iter()
+            .filter(|r| r[1] < 0.5 && r[0] > 10.0 && r[0] < 90.0)
+            .map(|r| r[0])
+            .collect();
+        assert!(
+            top.len() > 40 && top.len() < 140,
+            "{} steps along the top",
+            top.len()
+        );
+        assert!(top.windows(2).any(|w| w[1] - w[0] > 2.0), "with gaps");
+    }
+}

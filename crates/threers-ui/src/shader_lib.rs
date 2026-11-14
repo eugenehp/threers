@@ -109,12 +109,19 @@ mod tests {
 
     #[test]
     fn parts_come_once_after_what_they_need() {
-        let s = with(&[Library::Fx, Library::Noise], "fn f(p: vec2<f32>) -> vec4<f32> { return vec4<f32>(ui_noise(p)); }");
+        let s = with(
+            &[Library::Fx, Library::Noise],
+            "fn f(p: vec2<f32>) -> vec4<f32> { return vec4<f32>(ui_noise(p)); }",
+        );
         assert_eq!(s.matches("fn ui_noise(").count(), 1);
         assert!(s.find("fn ui_noise(").unwrap() < s.find("fn ui_fire(").unwrap());
         assert!(s.find("fn ui_ramp3(").unwrap() < s.find("fn ui_fire(").unwrap());
         assert!(!s.contains("fn ui_rbox("), "only what was asked for");
         let shader = crate::shader::Shader::new(s);
-        assert_eq!(shader.function(), "f", "the user's function stays the effect");
+        assert_eq!(
+            shader.function(),
+            "f",
+            "the user's function stays the effect"
+        );
     }
 }

@@ -112,7 +112,10 @@ impl Default for TouchConfig {
             drag_caret: true,
             hold_caret: true,
             firm_press_selects: true,
-            selection_actions: vec![Cut, Copy, Paste, SelectAll, LookUp, Translate, Share, Uppercase, Lowercase, Capitalize],
+            selection_actions: vec![
+                Cut, Copy, Paste, SelectAll, LookUp, Translate, Share, Uppercase, Lowercase,
+                Capitalize,
+            ],
             caret_actions: vec![Paste, Select, SelectAll],
             read_actions: vec![Copy, SelectAll, LookUp, Translate, Share],
         }
@@ -214,7 +217,16 @@ enum Press {
     /// `words` is the word a second tap came down on: held and dragged, it
     /// selects by words from there. `long` is set once the press took the
     /// caret (held) or selected (pressed firmly), so lifting it is no tap.
-    Text { x: f32, y: f32, time: f64, index: usize, moved: bool, long: bool, words: Option<(usize, usize)>, base_force: Option<f32> },
+    Text {
+        x: f32,
+        y: f32,
+        time: f64,
+        index: usize,
+        moved: bool,
+        long: bool,
+        words: Option<(usize, usize)>,
+        base_force: Option<f32>,
+    },
     /// Dragging a handle; the finger's offset from the line's middle.
     Handle { dy: f32 },
 }
@@ -243,7 +255,10 @@ impl TouchSelection {
 
     /// Touch editing that behaves as `config` says.
     pub fn with_config(config: TouchConfig) -> Self {
-        Self { config, ..Self::default() }
+        Self {
+            config,
+            ..Self::default()
+        }
     }
 
     pub fn config(&self) -> &TouchConfig {
@@ -266,12 +281,18 @@ impl TouchSelection {
     /// menu offers Copy and Select All (and the app's actions), not Cut,
     /// Paste or Select.
     pub fn read_only() -> Self {
-        Self { read_only: true, ..Self::default() }
+        Self {
+            read_only: true,
+            ..Self::default()
+        }
     }
 
     /// This, for text that is only read (see [`read_only`](Self::read_only)).
     pub fn into_read_only(self) -> Self {
-        Self { read_only: true, ..self }
+        Self {
+            read_only: true,
+            ..self
+        }
     }
 
     /// Selects the word at character `index` and shows the menu, as a long
@@ -304,7 +325,12 @@ impl TouchSelection {
         let pages = all.len().div_ceil(per_page).max(1);
         let page = self.page.min(pages - 1);
         Some(MenuPage {
-            actions: all.iter().copied().skip(page * per_page).take(per_page).collect(),
+            actions: all
+                .iter()
+                .copied()
+                .skip(page * per_page)
+                .take(per_page)
+                .collect(),
             back: page > 0,
             more: page + 1 < pages,
         })
@@ -312,34 +338,61 @@ impl TouchSelection {
 
     /// A chevron tapped: the menu's next page, or the one before.
     pub fn turn_page(&mut self, forward: bool) {
-        self.page = if forward { self.page + 1 } else { self.page.saturating_sub(1) };
+        self.page = if forward {
+            self.page + 1
+        } else {
+            self.page.saturating_sub(1)
+        };
     }
 
     /// Whether a finger coming down at `(x, y)` is this field's: on the
     /// text (`inside`, the field's box, says so) or on a handle's knob.
-    pub fn wants(&self, field: &TextField, x: f32, y: f32, inside: bool, caret_at: &mut dyn FnMut(usize) -> Rect) -> bool {
+    pub fn wants(
+        &self,
+        field: &TextField,
+        x: f32,
+        y: f32,
+        inside: bool,
+        caret_at: &mut dyn FnMut(usize) -> Rect,
+    ) -> bool {
         inside || self.handle_at(field, x, y, caret_at).is_some()
     }
 
     /// The handle whose knob is under `(x, y)`: `false` the start, `true`
     /// the end.
-    fn handle_at(&self, field: &TextField, x: f32, y: f32, caret_at: &mut dyn FnMut(usize) -> Rect) -> Option<bool> {
+    fn handle_at(
+        &self,
+        field: &TextField,
+        x: f32,
+        y: f32,
+        caret_at: &mut dyn FnMut(usize) -> Rect,
+    ) -> Option<bool> {
         let h = self.handles(field, caret_at)?;
         let d = |(kx, ky): (f32, f32)| (kx - x).hypot(ky - y);
         // Near the knob, or by the bar on the knob's half of the line: a
         // fingertip lands a little off what it aims at, and the knob is
         // small. Across the middle of the line, the touch is the text's (a
         // tap on a short selected word is near both handles).
-        let (reach, bar, knob) = (self.config.handle_reach, self.config.bar_reach, self.config.knob);
+        let (reach, bar, knob) = (
+            self.config.handle_reach,
+            self.config.bar_reach,
+            self.config.knob,
+        );
         let by_bar = |r: Rect, below: bool| {
-            let on_knob_side = if below { y > r.y + r.height * 0.6 } else { y < r.y + r.height * 0.4 };
+            let on_knob_side = if below {
+                y > r.y + r.height * 0.6
+            } else {
+                y < r.y + r.height * 0.4
+            };
             (x - r.x).abs() <= bar
                 && on_knob_side
                 && y >= r.y - knob - reach
                 && y <= r.y + r.height + knob + reach
         };
-        let start = (d(h.start_knob) <= reach && y < h.start.y + h.start.height / 2.0) || by_bar(h.start, false);
-        let end = (d(h.end_knob) <= reach && y > h.end.y + h.end.height / 2.0) || by_bar(h.end, true);
+        let start = (d(h.start_knob) <= reach && y < h.start.y + h.start.height / 2.0)
+            || by_bar(h.start, false);
+        let end =
+            (d(h.end_knob) <= reach && y > h.end.y + h.end.height / 2.0) || by_bar(h.end, true);
         match (start, end) {
             (true, true) => Some(d(h.end_knob) < d(h.start_knob)),
             (true, false) => Some(false),
@@ -373,20 +426,35 @@ impl TouchSelection {
                     field.anchor = fixed;
                     field.caret = moving;
                     let r = caret_at(moving);
-                    self.press = Some(Press::Handle { dy: y - (r.y + r.height / 2.0) });
+                    self.press = Some(Press::Handle {
+                        dy: y - (r.y + r.height / 2.0),
+                    });
                     self.menu = false;
                 } else {
                     let index = index_at(x, y);
                     // The second of two taps: held and dragged, it selects
                     // by words.
                     let words = match self.last_tap {
-                        Some((t, i, 1)) if self.config.double_tap && time - t < self.config.multi_tap && i.abs_diff(index) <= 1 => {
+                        Some((t, i, 1))
+                            if self.config.double_tap
+                                && time - t < self.config.multi_tap
+                                && i.abs_diff(index) <= 1 =>
+                        {
                             let chars: Vec<char> = field.text.chars().collect();
                             (!chars.is_empty()).then(|| word_at(&chars, index.min(chars.len() - 1)))
                         }
                         _ => None,
                     };
-                    self.press = Some(Press::Text { x, y, time, index, moved: false, long: false, words, base_force: None });
+                    self.press = Some(Press::Text {
+                        x,
+                        y,
+                        time,
+                        index,
+                        moved: false,
+                        long: false,
+                        words,
+                        base_force: None,
+                    });
                 }
             }
             TouchPhase::Move => match &mut self.press {
@@ -394,18 +462,31 @@ impl TouchSelection {
                     let i = index_at(x, y - *dy);
                     // Never past the other end: a handle dragged over it
                     // stops there.
-                    field.caret = if field.caret >= field.anchor { i.max(field.anchor) } else { i.min(field.anchor) };
+                    field.caret = if field.caret >= field.anchor {
+                        i.max(field.anchor)
+                    } else {
+                        i.min(field.anchor)
+                    };
                 }
-                Some(Press::Text { x: x0, y: y0, moved, long, words, .. })
-                    if *moved || *long || (x - *x0).hypot(y - *y0) > self.config.tap_slop =>
-                {
+                Some(Press::Text {
+                    x: x0,
+                    y: y0,
+                    moved,
+                    long,
+                    words,
+                    ..
+                }) if *moved || *long || (x - *x0).hypot(y - *y0) > self.config.tap_slop => {
                     *moved = true;
                     self.menu = false;
                     let i = index_at(x, y);
                     if let Some((a, b)) = *words {
                         // From the word tapped twice, by whole words.
                         let chars: Vec<char> = field.text.chars().collect();
-                        let (c, d) = if chars.is_empty() { (0, 0) } else { word_at(&chars, i.min(chars.len() - 1)) };
+                        let (c, d) = if chars.is_empty() {
+                            (0, 0)
+                        } else {
+                            word_at(&chars, i.min(chars.len() - 1))
+                        };
                         if i < a {
                             field.anchor = b;
                             field.caret = c;
@@ -426,17 +507,37 @@ impl TouchSelection {
                     Some(Press::Handle { .. }) => self.menu = field.anchor != field.caret,
                     // The caret was held and carried, or a word was pressed
                     // firmly, or words dragged: the menu, where it ended.
-                    Some(Press::Text { long: true, .. }) | Some(Press::Text { words: Some(_), moved: true, .. }) => {
+                    Some(Press::Text { long: true, .. })
+                    | Some(Press::Text {
+                        words: Some(_),
+                        moved: true,
+                        ..
+                    }) => {
                         self.menu = true;
                         self.last_tap = None;
                     }
                     Some(Press::Text { moved: true, .. }) => self.last_tap = None,
-                    Some(Press::Text { index, moved: false, long: false, .. }) => {
+                    Some(Press::Text {
+                        index,
+                        moved: false,
+                        long: false,
+                        ..
+                    }) => {
                         let count = match self.last_tap {
-                            Some((t, i, n)) if time - t < self.config.multi_tap && i.abs_diff(index) <= 1 => n + 1,
+                            Some((t, i, n))
+                                if time - t < self.config.multi_tap && i.abs_diff(index) <= 1 =>
+                            {
+                                n + 1
+                            }
                             _ => 1,
                         };
-                        let most = if !self.config.double_tap { 1 } else if !self.config.triple_tap { 2 } else { 3 };
+                        let most = if !self.config.double_tap {
+                            1
+                        } else if !self.config.triple_tap {
+                            2
+                        } else {
+                            3
+                        };
                         let count = if count > most { 1 } else { count };
                         self.last_tap = Some((time, index, count));
                         let chars: Vec<char> = field.text.chars().collect();
@@ -450,7 +551,8 @@ impl TouchSelection {
                                 self.menu = on_caret && !self.menu;
                             }
                             2 => {
-                                let (a, b) = word_at(&chars, index.min(chars.len().saturating_sub(1)));
+                                let (a, b) =
+                                    word_at(&chars, index.min(chars.len().saturating_sub(1)));
                                 field.anchor = a;
                                 field.caret = b;
                                 self.menu = true;
@@ -477,7 +579,14 @@ impl TouchSelection {
     /// the caret, which goes where the finger is and then follows it.
     /// Returns whether the field changed.
     pub fn tick(&mut self, field: &mut TextField, time: f64) -> bool {
-        if let Some(Press::Text { time: t0, index, moved: false, long, words: None, .. }) = &mut self.press
+        if let Some(Press::Text {
+            time: t0,
+            index,
+            moved: false,
+            long,
+            words: None,
+            ..
+        }) = &mut self.press
             && !*long
             && self.config.hold_caret
             && time - *t0 >= self.config.long_press
@@ -496,7 +605,16 @@ impl TouchSelection {
     /// the screen measures it). Pressed firmly before moving, it selects the
     /// word under it. Returns whether the field changed.
     pub fn force(&mut self, field: &mut TextField, force: f32) -> bool {
-        let Some(Press::Text { index, moved: false, long, base_force, .. }) = &mut self.press else { return false };
+        let Some(Press::Text {
+            index,
+            moved: false,
+            long,
+            base_force,
+            ..
+        }) = &mut self.press
+        else {
+            return false;
+        };
         let base = *base_force.get_or_insert(force);
         let c = &self.config;
         if c.firm_press_selects && !*long && force >= c.firm_press && force - base >= c.firm_rise {
@@ -521,11 +639,24 @@ impl TouchSelection {
 
     /// Whether a frame is wanted to notice a long press.
     pub fn needs_frame(&self) -> bool {
-        self.config.hold_caret && matches!(self.press, Some(Press::Text { moved: false, long: false, words: None, .. }))
+        self.config.hold_caret
+            && matches!(
+                self.press,
+                Some(Press::Text {
+                    moved: false,
+                    long: false,
+                    words: None,
+                    ..
+                })
+            )
     }
 
     /// The selection's handles, while there is a selection.
-    pub fn handles(&self, field: &TextField, caret_at: &mut dyn FnMut(usize) -> Rect) -> Option<Handles> {
+    pub fn handles(
+        &self,
+        field: &TextField,
+        caret_at: &mut dyn FnMut(usize) -> Rect,
+    ) -> Option<Handles> {
         let (lo, hi) = field.selection();
         if lo == hi {
             return None;
@@ -553,14 +684,19 @@ impl TouchSelection {
         } else {
             c.caret_actions.clone()
         };
-        all.extend(self.custom.iter().enumerate().filter_map(|(i, (_, shows))| {
-            let shown = match shows {
-                Shows::WithSelection => selection,
-                Shows::AtCaret => !selection,
-                Shows::Always => true,
-            };
-            shown.then_some(EditAction::Custom(i))
-        }));
+        all.extend(
+            self.custom
+                .iter()
+                .enumerate()
+                .filter_map(|(i, (_, shows))| {
+                    let shown = match shows {
+                        Shows::WithSelection => selection,
+                        Shows::AtCaret => !selection,
+                        Shows::Always => true,
+                    };
+                    shown.then_some(EditAction::Custom(i))
+                }),
+        );
         Some(all)
     }
 
@@ -615,7 +751,11 @@ impl TouchSelection {
                             .flat_map(|c| {
                                 let up = start;
                                 start = !c.is_alphanumeric();
-                                if up { c.to_uppercase().collect::<Vec<_>>() } else { vec![c] }
+                                if up {
+                                    c.to_uppercase().collect::<Vec<_>>()
+                                } else {
+                                    vec![c]
+                                }
                             })
                             .collect()
                     }
@@ -656,14 +796,27 @@ mod tests {
     fn geometry(n: usize) -> (impl FnMut(f32, f32) -> usize, impl FnMut(usize) -> Rect) {
         (
             move |x: f32, _y: f32| ((x / 10.0).round().max(0.0) as usize).min(n),
-            |i: usize| Rect { x: i as f32 * 10.0, y: 0.0, width: 1.0, height: 20.0 },
+            |i: usize| Rect {
+                x: i as f32 * 10.0,
+                y: 0.0,
+                width: 1.0,
+                height: 20.0,
+            },
         )
     }
 
     fn tap(t: &mut TouchSelection, f: &mut TextField, x: f32, time: f64) {
         let (mut at, mut caret) = geometry(f.len());
         t.touch(f, TouchPhase::Start, x, 10.0, time, &mut at, &mut caret);
-        t.touch(f, TouchPhase::End, x, 10.0, time + 0.05, &mut at, &mut caret);
+        t.touch(
+            f,
+            TouchPhase::End,
+            x,
+            10.0,
+            time + 0.05,
+            &mut at,
+            &mut caret,
+        );
     }
 
     #[test]
@@ -675,7 +828,10 @@ mod tests {
         assert!(t.menu(&f).is_none());
         // On the caret: the menu, for a bare caret.
         tap(&mut t, &mut f, 50.0, 1.0);
-        assert_eq!(t.menu(&f).unwrap(), [EditAction::Paste, EditAction::Select, EditAction::SelectAll]);
+        assert_eq!(
+            t.menu(&f).unwrap(),
+            [EditAction::Paste, EditAction::Select, EditAction::SelectAll]
+        );
         // Three in a row: the word, then everything.
         tap(&mut t, &mut f, 52.0, 2.0);
         tap(&mut t, &mut f, 52.0, 2.2);
@@ -692,37 +848,137 @@ mod tests {
         let (mut at, mut caret) = geometry(f.len());
         // Held: the caret comes to the finger, follows it, and the menu
         // shows where it is let go.
-        t.touch(&mut f, TouchPhase::Start, 95.0, 10.0, 0.0, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::Start,
+            95.0,
+            10.0,
+            0.0,
+            &mut at,
+            &mut caret,
+        );
         assert!(t.needs_frame());
         assert!(!t.tick(&mut f, 0.2));
         assert!(t.tick(&mut f, 0.5));
         assert_eq!((f.anchor, f.caret), (10, 10));
-        t.touch(&mut f, TouchPhase::Move, 98.0, 10.0, 0.6, &mut at, &mut caret);
-        t.touch(&mut f, TouchPhase::Move, 31.0, 11.0, 0.7, &mut at, &mut caret);
-        assert_eq!((f.anchor, f.caret), (3, 3), "even a small move after holding");
-        t.touch(&mut f, TouchPhase::End, 31.0, 11.0, 0.8, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::Move,
+            98.0,
+            10.0,
+            0.6,
+            &mut at,
+            &mut caret,
+        );
+        t.touch(
+            &mut f,
+            TouchPhase::Move,
+            31.0,
+            11.0,
+            0.7,
+            &mut at,
+            &mut caret,
+        );
+        assert_eq!(
+            (f.anchor, f.caret),
+            (3, 3),
+            "even a small move after holding"
+        );
+        t.touch(
+            &mut f,
+            TouchPhase::End,
+            31.0,
+            11.0,
+            0.8,
+            &mut at,
+            &mut caret,
+        );
         assert_eq!(t.menu(&f).unwrap()[0], EditAction::Paste);
 
         // Dragged straight away: the caret too, and no menu.
-        t.touch(&mut f, TouchPhase::Start, 10.0, 10.0, 2.0, &mut at, &mut caret);
-        t.touch(&mut f, TouchPhase::Move, 40.0, 10.0, 2.1, &mut at, &mut caret);
-        t.touch(&mut f, TouchPhase::Move, 62.0, 12.0, 2.2, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::Start,
+            10.0,
+            10.0,
+            2.0,
+            &mut at,
+            &mut caret,
+        );
+        t.touch(
+            &mut f,
+            TouchPhase::Move,
+            40.0,
+            10.0,
+            2.1,
+            &mut at,
+            &mut caret,
+        );
+        t.touch(
+            &mut f,
+            TouchPhase::Move,
+            62.0,
+            12.0,
+            2.2,
+            &mut at,
+            &mut caret,
+        );
         assert_eq!((f.anchor, f.caret), (6, 6));
-        t.touch(&mut f, TouchPhase::End, 62.0, 12.0, 2.3, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::End,
+            62.0,
+            12.0,
+            2.3,
+            &mut at,
+            &mut caret,
+        );
         assert!(t.menu(&f).is_none());
         assert_eq!((f.anchor, f.caret), (6, 6), "a drag is not a tap");
 
         // Pressed firmly: the word. (A screen reporting the same middling
         // force throughout is no firm press.)
-        t.touch(&mut f, TouchPhase::Start, 52.0, 10.0, 3.0, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::Start,
+            52.0,
+            10.0,
+            3.0,
+            &mut at,
+            &mut caret,
+        );
         assert!(!t.force(&mut f, 0.5) && !t.force(&mut f, 0.5));
-        t.touch(&mut f, TouchPhase::End, 52.0, 10.0, 3.05, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::End,
+            52.0,
+            10.0,
+            3.05,
+            &mut at,
+            &mut caret,
+        );
         assert_eq!(f.selection(), (5, 5), "a tap");
-        t.touch(&mut f, TouchPhase::Start, 52.0, 10.0, 4.0, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::Start,
+            52.0,
+            10.0,
+            4.0,
+            &mut at,
+            &mut caret,
+        );
         assert!(!t.force(&mut f, 0.2));
         assert!(t.force(&mut f, 0.7));
         assert_eq!(f.selection(), (4, 7));
-        t.touch(&mut f, TouchPhase::End, 52.0, 10.0, 4.1, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::End,
+            52.0,
+            10.0,
+            4.1,
+            &mut at,
+            &mut caret,
+        );
         assert_eq!(f.selection(), (4, 7), "lifting it is no tap");
         assert_eq!(t.menu(&f).unwrap()[0], EditAction::Cut);
     }
@@ -733,13 +989,45 @@ mod tests {
         let mut t = TouchSelection::new();
         let (mut at, mut caret) = geometry(f.len());
         tap(&mut t, &mut f, 52.0, 0.0);
-        t.touch(&mut f, TouchPhase::Start, 52.0, 10.0, 0.15, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::Start,
+            52.0,
+            10.0,
+            0.15,
+            &mut at,
+            &mut caret,
+        );
         assert!(!t.needs_frame(), "no long press on the second tap");
-        t.touch(&mut f, TouchPhase::Move, 100.0, 10.0, 0.25, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::Move,
+            100.0,
+            10.0,
+            0.25,
+            &mut at,
+            &mut caret,
+        );
         assert_eq!(f.selection(), (4, 13), "two through three, whole");
-        t.touch(&mut f, TouchPhase::Move, 15.0, 10.0, 0.35, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::Move,
+            15.0,
+            10.0,
+            0.35,
+            &mut at,
+            &mut caret,
+        );
         assert_eq!(f.selection(), (0, 7), "back over one: one through two");
-        t.touch(&mut f, TouchPhase::End, 15.0, 10.0, 0.4, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::End,
+            15.0,
+            10.0,
+            0.4,
+            &mut at,
+            &mut caret,
+        );
         assert!(t.menu(&f).is_some());
     }
 
@@ -752,7 +1040,10 @@ mod tests {
         let (mut at, mut caret) = geometry(f.len());
         let h = t.handles(&f, &mut caret).unwrap();
         assert_eq!((h.start.x, h.end.x), (40.0, 70.0));
-        assert!(t.wants(&f, 70.0, 28.0, false, &mut caret), "the end's knob, under the line");
+        assert!(
+            t.wants(&f, 70.0, 28.0, false, &mut caret),
+            "the end's knob, under the line"
+        );
         // A fingertip landing a little high, by the bar's lower half, still
         // takes it; the middle of the line is the text's.
         assert_eq!(t.handle_at(&f, 76.0, 13.0, &mut caret), Some(true));
@@ -760,19 +1051,75 @@ mod tests {
         assert_eq!(t.handle_at(&f, 55.0, 10.0, &mut caret), None);
         assert!(!t.wants(&f, 140.0, 80.0, false, &mut caret));
         // The end handle out to the end of the text.
-        t.touch(&mut f, TouchPhase::Start, 70.0, 26.0, 0.0, &mut at, &mut caret);
-        t.touch(&mut f, TouchPhase::Move, 128.0, 26.0, 0.1, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::Start,
+            70.0,
+            26.0,
+            0.0,
+            &mut at,
+            &mut caret,
+        );
+        t.touch(
+            &mut f,
+            TouchPhase::Move,
+            128.0,
+            26.0,
+            0.1,
+            &mut at,
+            &mut caret,
+        );
         assert_eq!(f.selection(), (4, 13));
         // Back past the start: it stops at the start.
-        t.touch(&mut f, TouchPhase::Move, 10.0, 26.0, 0.2, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::Move,
+            10.0,
+            26.0,
+            0.2,
+            &mut at,
+            &mut caret,
+        );
         assert_eq!(f.selection(), (4, 4));
-        t.touch(&mut f, TouchPhase::Move, 90.0, 26.0, 0.3, &mut at, &mut caret);
-        t.touch(&mut f, TouchPhase::End, 90.0, 26.0, 0.4, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::Move,
+            90.0,
+            26.0,
+            0.3,
+            &mut at,
+            &mut caret,
+        );
+        t.touch(
+            &mut f,
+            TouchPhase::End,
+            90.0,
+            26.0,
+            0.4,
+            &mut at,
+            &mut caret,
+        );
         assert_eq!(f.selection(), (4, 9));
         assert!(t.menu(&f).is_some());
         // The start handle, above the line.
-        t.touch(&mut f, TouchPhase::Start, 40.0, -6.0, 1.0, &mut at, &mut caret);
-        t.touch(&mut f, TouchPhase::Move, 0.0, -6.0, 1.1, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::Start,
+            40.0,
+            -6.0,
+            1.0,
+            &mut at,
+            &mut caret,
+        );
+        t.touch(
+            &mut f,
+            TouchPhase::Move,
+            0.0,
+            -6.0,
+            1.1,
+            &mut at,
+            &mut caret,
+        );
         t.touch(&mut f, TouchPhase::End, 0.0, -6.0, 1.2, &mut at, &mut caret);
         assert_eq!(f.selection(), (0, 9));
     }
@@ -783,7 +1130,10 @@ mod tests {
         f.anchor = 4;
         f.caret = 8;
         let mut t = TouchSelection::new();
-        assert_eq!(t.apply(&mut f, EditAction::Cut), Some(Request::Copy("two ".into())));
+        assert_eq!(
+            t.apply(&mut f, EditAction::Cut),
+            Some(Request::Copy("two ".into()))
+        );
         assert_eq!(f.text, "one three");
         assert_eq!(t.apply(&mut f, EditAction::Paste), Some(Request::Paste));
         f.insert("two ");
@@ -805,13 +1155,44 @@ mod tests {
         tap(&mut t, &mut f, 52.0, 0.0);
         tap(&mut t, &mut f, 52.0, 0.2);
         let p = t.menu_page(&f, 4).unwrap();
-        assert_eq!((p.actions.clone(), p.back, p.more), (vec![EditAction::Cut, EditAction::Copy, EditAction::Paste, EditAction::SelectAll], false, true));
+        assert_eq!(
+            (p.actions.clone(), p.back, p.more),
+            (
+                vec![
+                    EditAction::Cut,
+                    EditAction::Copy,
+                    EditAction::Paste,
+                    EditAction::SelectAll
+                ],
+                false,
+                true
+            )
+        );
         t.turn_page(true);
         let p = t.menu_page(&f, 4).unwrap();
-        assert_eq!((p.actions.clone(), p.back, p.more), (vec![EditAction::LookUp, EditAction::Translate, EditAction::Share, EditAction::Uppercase], true, true));
+        assert_eq!(
+            (p.actions.clone(), p.back, p.more),
+            (
+                vec![
+                    EditAction::LookUp,
+                    EditAction::Translate,
+                    EditAction::Share,
+                    EditAction::Uppercase
+                ],
+                true,
+                true
+            )
+        );
         t.turn_page(true);
         let p = t.menu_page(&f, 4).unwrap();
-        assert_eq!((p.actions.clone(), p.back, p.more), (vec![EditAction::Lowercase, EditAction::Capitalize, stamp], true, false));
+        assert_eq!(
+            (p.actions.clone(), p.back, p.more),
+            (
+                vec![EditAction::Lowercase, EditAction::Capitalize, stamp],
+                true,
+                false
+            )
+        );
         t.turn_page(false);
         assert!(t.menu_page(&f, 4).unwrap().back);
         // An app's action is the app's: the menu closes, nothing else.
@@ -819,7 +1200,10 @@ mod tests {
         assert!(t.menu(&f).is_none());
         assert_eq!(f.selection(), (4, 7));
         // The platform's: a request; the case: done, still selected.
-        assert_eq!(t.apply(&mut f, EditAction::LookUp), Some(Request::LookUp("two".into())));
+        assert_eq!(
+            t.apply(&mut f, EditAction::LookUp),
+            Some(Request::LookUp("two".into()))
+        );
         assert_eq!(t.apply(&mut f, EditAction::Capitalize), None);
         assert_eq!((f.text.as_str(), f.selection()), ("one Two three", (4, 7)));
         assert_eq!(t.apply(&mut f, EditAction::Uppercase), None);
@@ -829,7 +1213,16 @@ mod tests {
         let mut g = TextField::new("read me");
         let mut r = r;
         r.select_word(&mut g, 1);
-        assert_eq!(r.menu(&g).unwrap(), [EditAction::Copy, EditAction::SelectAll, EditAction::LookUp, EditAction::Translate, EditAction::Share]);
+        assert_eq!(
+            r.menu(&g).unwrap(),
+            [
+                EditAction::Copy,
+                EditAction::SelectAll,
+                EditAction::LookUp,
+                EditAction::Translate,
+                EditAction::Share
+            ]
+        );
         // At a caret, the caret's.
         tap(&mut t, &mut f, 120.0, 2.0);
         tap(&mut t, &mut f, 120.0, 3.0);
@@ -850,15 +1243,47 @@ mod tests {
         tap(&mut t, &mut f, 52.0, 0.2);
         assert_eq!(f.selection(), (5, 5), "two taps are two taps");
         let (mut at, mut caret) = geometry(f.len());
-        t.touch(&mut f, TouchPhase::Start, 95.0, 10.0, 1.0, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::Start,
+            95.0,
+            10.0,
+            1.0,
+            &mut at,
+            &mut caret,
+        );
         assert!(!t.needs_frame());
         assert!(!t.tick(&mut f, 2.0), "no hold");
-        t.touch(&mut f, TouchPhase::End, 95.0, 10.0, 2.1, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::End,
+            95.0,
+            10.0,
+            2.1,
+            &mut at,
+            &mut caret,
+        );
         f.anchor = 4;
         f.caret = 7;
         t.config_mut().selection_actions.push(EditAction::Share);
-        t.touch(&mut f, TouchPhase::Start, 70.0, 26.0, 3.0, &mut at, &mut caret);
-        t.touch(&mut f, TouchPhase::End, 70.0, 26.0, 3.1, &mut at, &mut caret);
+        t.touch(
+            &mut f,
+            TouchPhase::Start,
+            70.0,
+            26.0,
+            3.0,
+            &mut at,
+            &mut caret,
+        );
+        t.touch(
+            &mut f,
+            TouchPhase::End,
+            70.0,
+            26.0,
+            3.1,
+            &mut at,
+            &mut caret,
+        );
         assert_eq!(t.menu(&f).unwrap(), [EditAction::Copy, EditAction::Share]);
     }
 }

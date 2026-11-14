@@ -35,15 +35,28 @@ const STEP: f32 = 16.0;
 /// Splits a new box under `parent` along `axis`: the first pane `size`
 /// pixels, each pane at least `min` pixels. Give the container a size (it
 /// grows to fill a flex parent).
-pub fn split<S: 'static>(ui: &mut Ui, input: &mut Input<S>, parent: NodeId, axis: Axis, size: f32, min: f32) -> Split {
+pub fn split<S: 'static>(
+    ui: &mut Ui,
+    input: &mut Input<S>,
+    parent: NodeId,
+    axis: Axis,
+    size: f32,
+    min: f32,
+) -> Split {
     let horizontal = axis == Axis::Horizontal;
-    let container = ui.add_box(parent, style! { display: flex; flex-grow: 1; min-width: 0; min-height: 0; });
+    let container = ui.add_box(
+        parent,
+        style! { display: flex; flex-grow: 1; min-width: 0; min-height: 0; },
+    );
     if !horizontal {
         ui.style_mut(container).flex_direction = crate::FlexDirection::Column;
     }
     let first = ui.add_box(container, style! { flex-shrink: 0; overflow: hidden; });
     let handle = ui.add_box(container, style! { flex-shrink: 0; background: #2a303c; });
-    let second = ui.add_box(container, style! { flex-grow: 1; min-width: 0; min-height: 0; overflow: hidden; });
+    let second = ui.add_box(
+        container,
+        style! { flex-grow: 1; min-width: 0; min-height: 0; overflow: hidden; },
+    );
     {
         let h = ui.style_mut(handle);
         if horizontal {
@@ -54,7 +67,10 @@ pub fn split<S: 'static>(ui: &mut Ui, input: &mut Input<S>, parent: NodeId, axis
             h.cursor = Cursor::ResizeVertical;
         }
     }
-    ui.token_style(handle, &[("background", crate::environment::Token::Separator)]);
+    ui.token_style(
+        handle,
+        &[("background", crate::environment::Token::Separator)],
+    );
     ui.hover_style(handle, "background: #2563eb");
     ui.focus_visible_style(handle, "background: #2563eb");
     let start = size;
@@ -63,7 +79,11 @@ pub fn split<S: 'static>(ui: &mut Ui, input: &mut Input<S>, parent: NodeId, axis
     let set = Rc::new(move |ui: &mut Ui, want: f32| -> f32 {
         let r = ui.rect(container);
         let room = if horizontal { r.width } else { r.height } - 6.0;
-        let to = if room > 2.0 * min { want.clamp(min, room - min) } else { want.max(0.0) };
+        let to = if room > 2.0 * min {
+            want.clamp(min, room - min)
+        } else {
+            want.max(0.0)
+        };
         ui.update_style(first, |s| {
             if horizontal {
                 s.width = Length::Px(to);
@@ -71,10 +91,18 @@ pub fn split<S: 'static>(ui: &mut Ui, input: &mut Input<S>, parent: NodeId, axis
                 s.height = Length::Px(to);
             }
         });
-        let share = if room > 0.0 { (to / room * 100.0).round() } else { 0.0 };
+        let share = if room > 0.0 {
+            (to / room * 100.0).round()
+        } else {
+            0.0
+        };
         let mut sem = Semantics::new(Role::Separator).label("Resize").tab_index(0);
         sem.value = Some(format!("{share}%"));
-        sem.range = Some(crate::a11y::RangeValue { min: 0.0, max: 100.0, now: share });
+        sem.range = Some(crate::a11y::RangeValue {
+            min: 0.0,
+            max: 100.0,
+            now: share,
+        });
         ui.set_semantics(handle, sem);
         to
     });
@@ -112,7 +140,11 @@ pub fn split<S: 'static>(ui: &mut Ui, input: &mut Input<S>, parent: NodeId, axis
     input.on_key(handle, move |_, ui, key, _, _| {
         let r = ui.rect(container);
         let room = if horizontal { r.width } else { r.height };
-        let (less, more) = if horizontal { ("ArrowLeft", "ArrowRight") } else { ("ArrowUp", "ArrowDown") };
+        let (less, more) = if horizontal {
+            ("ArrowLeft", "ArrowRight")
+        } else {
+            ("ArrowUp", "ArrowDown")
+        };
         let want = match key {
             k if k == less => cur.get() - STEP,
             k if k == more => cur.get() + STEP,
@@ -123,5 +155,10 @@ pub fn split<S: 'static>(ui: &mut Ui, input: &mut Input<S>, parent: NodeId, axis
         cur.set(s2(ui, want));
         true
     });
-    Split { container, first, second, handle }
+    Split {
+        container,
+        first,
+        second,
+        handle,
+    }
 }

@@ -56,14 +56,20 @@ impl Keyframes {
     /// A track of numbers at times (seconds from the start), eased
     /// smoothly (in and out) from each to the next.
     pub fn track(self, property: Property, keys: &[(f32, f32)]) -> Self {
-        let keys: Vec<(f32, f32, Easing)> = keys.iter().map(|&(t, v)| (t, v, Easing::SineInOut)).collect();
+        let keys: Vec<(f32, f32, Easing)> = keys
+            .iter()
+            .map(|&(t, v)| (t, v, Easing::SineInOut))
+            .collect();
         self.track_eased(property, &keys)
     }
 
     /// A track of numbers at times, each with the easing that leads into
     /// it.
     pub fn track_eased(mut self, property: Property, keys: &[(f32, f32, Easing)]) -> Self {
-        let mut keys: Vec<(f32, Value, Easing)> = keys.iter().map(|&(t, v, e)| (t.max(0.0), Value::Number(v), e)).collect();
+        let mut keys: Vec<(f32, Value, Easing)> = keys
+            .iter()
+            .map(|&(t, v, e)| (t.max(0.0), Value::Number(v), e))
+            .collect();
         keys.sort_by(|a, b| a.0.total_cmp(&b.0));
         self.tracks.push(Track { property, keys });
         self
@@ -71,7 +77,10 @@ impl Keyframes {
 
     /// A track of colours (straight RGBA) at times.
     pub fn track_colors(mut self, property: Property, keys: &[(f32, [f32; 4])]) -> Self {
-        let mut keys: Vec<(f32, Value, Easing)> = keys.iter().map(|&(t, c)| (t.max(0.0), Value::Color(c), Easing::SineInOut)).collect();
+        let mut keys: Vec<(f32, Value, Easing)> = keys
+            .iter()
+            .map(|&(t, c)| (t.max(0.0), Value::Color(c), Easing::SineInOut))
+            .collect();
         keys.sort_by(|a, b| a.0.total_cmp(&b.0));
         self.tracks.push(Track { property, keys });
         self
@@ -111,7 +120,10 @@ impl Keyframes {
 
     /// Seconds one run takes: to its latest key.
     pub fn duration(&self) -> f32 {
-        self.tracks.iter().filter_map(|t| t.keys.last().map(|k| k.0)).fold(0.0, f32::max)
+        self.tracks
+            .iter()
+            .filter_map(|t| t.keys.last().map(|k| k.0))
+            .fold(0.0, f32::max)
     }
 
     /// Each track's value `t` seconds into a run.
@@ -129,7 +141,11 @@ impl Keyframes {
                     None => keys.last()?.1,
                     Some(i) => {
                         let ((t0, a, _), (t1, b, e)) = (keys[i], keys[i + 1]);
-                        let f = if t1 > t0 { e.apply((t - t0) / (t1 - t0)) } else { 1.0 };
+                        let f = if t1 > t0 {
+                            e.apply((t - t0) / (t1 - t0))
+                        } else {
+                            1.0
+                        };
                         lerp(a, b, f)
                     }
                 };
@@ -142,7 +158,9 @@ impl Keyframes {
 fn lerp(a: Value, b: Value, t: f32) -> Value {
     match (a, b) {
         (Value::Number(a), Value::Number(b)) => Value::Number(a + (b - a) * t),
-        (Value::Color(a), Value::Color(b)) => Value::Color(std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t)),
+        (Value::Color(a), Value::Color(b)) => {
+            Value::Color(std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t))
+        }
         (_, b) => b,
     }
 }
@@ -161,20 +179,36 @@ impl Ui {
     pub fn play_keyframes(&mut self, node: NodeId, keyframes: Keyframes) {
         self.env.keyframes.retain(|p| p.node != node);
         // Reduced motion: motion goes straight to where it ends.
-        let skipped: Vec<Track> = keyframes.tracks.iter().filter(|t| self.motion_skipped(t.property)).cloned().collect();
+        let skipped: Vec<Track> = keyframes
+            .tracks
+            .iter()
+            .filter(|t| self.motion_skipped(t.property))
+            .cloned()
+            .collect();
         for t in &skipped {
             if let Some(k) = t.keys.last() {
                 self.write(node, t.property, k.1);
             }
         }
-        let rest = Keyframes { tracks: keyframes.tracks.into_iter().filter(|t| !self.motion_skipped(t.property)).collect(), repeat: keyframes.repeat };
+        let rest = Keyframes {
+            tracks: keyframes
+                .tracks
+                .into_iter()
+                .filter(|t| !self.motion_skipped(t.property))
+                .collect(),
+            repeat: keyframes.repeat,
+        };
         if rest.tracks.is_empty() {
             return;
         }
         for (p, v) in rest.sample(0.0) {
             self.write(node, p, v);
         }
-        self.env.keyframes.push(Playing { node, keyframes: Rc::new(rest), elapsed: 0.0 });
+        self.env.keyframes.push(Playing {
+            node,
+            keyframes: Rc::new(rest),
+            elapsed: 0.0,
+        });
     }
 
     /// Stops `node`'s keyframes where they are.
@@ -225,8 +259,18 @@ mod tests {
         let root = ui.root();
         let b = ui.add_box(root, style! { width: 20px; height: 20px; });
         let k = Keyframes::new()
-            .track_eased(Property::Opacity, &[(0.0, 1.0, Easing::Linear), (1.0, 0.0, Easing::Linear)])
-            .track_eased(Property::Scale, &[(0.0, 1.0, Easing::Linear), (0.5, 2.0, Easing::Linear), (1.0, 1.0, Easing::Linear)]);
+            .track_eased(
+                Property::Opacity,
+                &[(0.0, 1.0, Easing::Linear), (1.0, 0.0, Easing::Linear)],
+            )
+            .track_eased(
+                Property::Scale,
+                &[
+                    (0.0, 1.0, Easing::Linear),
+                    (0.5, 2.0, Easing::Linear),
+                    (1.0, 1.0, Easing::Linear),
+                ],
+            );
         assert_eq!(k.duration(), 1.0);
         ui.play_keyframes(b, k);
         ui.step(0.25);
@@ -234,7 +278,10 @@ mod tests {
         assert!((ui.transform3d(b).unwrap().scale - 1.5).abs() < 1e-4);
         assert!(ui.needs_frame());
         ui.step(0.5);
-        assert!((ui.transform3d(b).unwrap().scale - 1.5).abs() < 1e-4, "on its way back");
+        assert!(
+            (ui.transform3d(b).unwrap().scale - 1.5).abs() < 1e-4,
+            "on its way back"
+        );
         ui.step(0.5);
         assert_eq!(ui.style(b).opacity, 0.0);
         assert_eq!(ui.transform3d(b).unwrap().scale, 1.0);
@@ -246,13 +293,24 @@ mod tests {
         let mut ui = Ui::new();
         let root = ui.root();
         let b = ui.add_box(root, style! { width: 20px; height: 20px; });
-        let pulse = Keyframes::phases(&[&[(Property::Scale, 1.0), (Property::Opacity, 1.0)], &[(Property::Scale, 1.3), (Property::Opacity, 0.5)]], 0.5, Easing::Linear).repeat(Repeat::Forever);
+        let pulse = Keyframes::phases(
+            &[
+                &[(Property::Scale, 1.0), (Property::Opacity, 1.0)],
+                &[(Property::Scale, 1.3), (Property::Opacity, 0.5)],
+            ],
+            0.5,
+            Easing::Linear,
+        )
+        .repeat(Repeat::Forever);
         assert_eq!(pulse.duration(), 1.0, "there and back");
         ui.play_keyframes(b, pulse.clone());
         ui.step(0.5);
         assert!((ui.transform3d(b).unwrap().scale - 1.3).abs() < 1e-4);
         ui.step(0.75);
-        assert!((ui.transform3d(b).unwrap().scale - 1.15).abs() < 1e-3, "round again");
+        assert!(
+            (ui.transform3d(b).unwrap().scale - 1.15).abs() < 1e-3,
+            "round again"
+        );
         assert!(ui.playing_keyframes(b));
         ui.stop_keyframes(b);
         // Reduced motion: no pulse in size; the fade still plays.

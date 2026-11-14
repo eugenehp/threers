@@ -14,7 +14,10 @@
 //! assert_eq!(again.live_nodes(), ui.live_nodes());
 //! ```
 
-use super::style::{AlignItems, Display, Edges, FlexDirection, GridPlacement, Length, Position, Style, Track, TrackSize};
+use super::style::{
+    AlignItems, Display, Edges, FlexDirection, GridPlacement, Length, Position, Style, Track,
+    TrackSize,
+};
 use super::tree::{NodeId, Ui};
 
 /// xorshift64: small, fast and the same everywhere, which is what a
@@ -52,7 +55,14 @@ impl Rng {
 }
 
 /// Words of different widths, for text that wraps differently by where it is.
-pub const WORDS: [&str; 6] = ["mill", "wide words", "i", "lattice", "m w m", "a longer run of text"];
+pub const WORDS: [&str; 6] = [
+    "mill",
+    "wide words",
+    "i",
+    "lattice",
+    "m w m",
+    "a longer run of text",
+];
 
 /// A style with some of everything layout reads: flex or block, sizes,
 /// margins and padding, gaps, wrapping and ellipsis, clipping, absolute
@@ -79,7 +89,11 @@ pub fn random_style(rng: &mut Rng) -> Style {
     s.ellipsis = rng.one_in(6);
     s.clip = s.ellipsis || rng.one_in(5);
     s.font_size = [11.0, 13.0, 16.0][rng.below(3)];
-    s.align_items = [AlignItems::Stretch, AlignItems::Center, AlignItems::FlexStart][rng.below(3)];
+    s.align_items = [
+        AlignItems::Stretch,
+        AlignItems::Center,
+        AlignItems::FlexStart,
+    ][rng.below(3)];
     s.background = Some([rng.range(0.0, 1.0), 0.2, 0.3, 1.0]);
     if rng.one_in(8) {
         s.position = Position::Absolute;
@@ -99,12 +113,19 @@ pub fn random_style(rng: &mut Rng) -> Style {
                 0 => Track::px(rng.range(10.0, 80.0)),
                 1 => Track::fr(rng.range(0.5, 3.0)),
                 2 => Track::auto(),
-                _ => Track { min: TrackSize::Px(rng.range(10.0, 40.0)), max: TrackSize::Fr(1.0) },
+                _ => Track {
+                    min: TrackSize::Px(rng.range(10.0, 40.0)),
+                    max: TrackSize::Fr(1.0),
+                },
             })
             .collect();
     }
     if rng.one_in(6) {
-        s.grid_column = GridPlacement { start: None, end: None, span: 1 + rng.below(2) as u32 };
+        s.grid_column = GridPlacement {
+            start: None,
+            end: None,
+            span: 1 + rng.below(2) as u32,
+        };
     }
     if rng.one_in(15) {
         s.pointer_events = false;

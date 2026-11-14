@@ -39,12 +39,18 @@ pub enum Transition {
 impl Transition {
     /// From the side: `Move` by `distance` pixels to the right.
     pub fn from_right(distance: f32) -> Self {
-        Transition::Move { dx: distance, dy: 0.0 }
+        Transition::Move {
+            dx: distance,
+            dy: 0.0,
+        }
     }
 
     /// From below: `Move` by `distance` pixels down.
     pub fn from_below(distance: f32) -> Self {
-        Transition::Move { dx: 0.0, dy: distance }
+        Transition::Move {
+            dx: 0.0,
+            dy: distance,
+        }
     }
 }
 
@@ -76,9 +82,25 @@ impl Ui {
         // hidden from hit tests and assistive technology, and one appearing
         // is there to use from the start.
         let (a, b) = if coming { (0.02, 1.0) } else { (1.0, 0.0) };
-        let opacity = if coming { self.style(node).opacity.max(0.0) } else { self.style(node).opacity };
-        let full = if coming && opacity == 0.0 { 1.0 } else { opacity };
-        self.animate(node, Animation::new(Property::Opacity, Value::Number(a * full), Value::Number(b * full), seconds));
+        let opacity = if coming {
+            self.style(node).opacity.max(0.0)
+        } else {
+            self.style(node).opacity
+        };
+        let full = if coming && opacity == 0.0 {
+            1.0
+        } else {
+            opacity
+        };
+        self.animate(
+            node,
+            Animation::new(
+                Property::Opacity,
+                Value::Number(a * full),
+                Value::Number(b * full),
+                seconds,
+            ),
+        );
         if let Transition::Move { dx, dy } = transition {
             if self.style(node).position == Position::Static {
                 self.update_style(node, |s| s.position = Position::Relative);
@@ -90,12 +112,27 @@ impl Ui {
             // stretch it between the two.
             let by_right = s.left == Length::Auto && s.right != Length::Auto;
             let by_bottom = s.top == Length::Auto && s.bottom != Length::Auto;
-            let across = if by_right { (Property::Right, px(s.right), -dx) } else { (Property::Left, px(s.left), dx) };
-            let down = if by_bottom { (Property::Bottom, px(s.bottom), -dy) } else { (Property::Top, px(s.top), dy) };
+            let across = if by_right {
+                (Property::Right, px(s.right), -dx)
+            } else {
+                (Property::Left, px(s.left), dx)
+            };
+            let down = if by_bottom {
+                (Property::Bottom, px(s.bottom), -dy)
+            } else {
+                (Property::Top, px(s.top), dy)
+            };
             for (p, home, off) in [across, down] {
                 if off != 0.0 {
-                    let (from, to) = if coming { (home + off, home) } else { (home, home + off) };
-                    self.animate(node, Animation::new(p, Value::Number(from), Value::Number(to), seconds));
+                    let (from, to) = if coming {
+                        (home + off, home)
+                    } else {
+                        (home, home + off)
+                    };
+                    self.animate(
+                        node,
+                        Animation::new(p, Value::Number(from), Value::Number(to), seconds),
+                    );
                 }
             }
         }
@@ -119,7 +156,10 @@ impl Ui {
             self.remove(n);
         }
         let leaving = std::mem::take(&mut self.leaving);
-        self.leaving = leaving.into_iter().filter(|&(n, _)| self.contains(n)).collect();
+        self.leaving = leaving
+            .into_iter()
+            .filter(|&(n, _)| self.contains(n))
+            .collect();
     }
 }
 
@@ -134,7 +174,10 @@ mod tests {
     fn a_bottom_anchored_box_slides_by_its_bottom() {
         let mut ui = Ui::new();
         let root = ui.root();
-        let panel = ui.add_box(root, style! { position: absolute; left: 0px; bottom: 0px; width: 100%; height: 100px; });
+        let panel = ui.add_box(
+            root,
+            style! { position: absolute; left: 0px; bottom: 0px; width: 100%; height: 100px; },
+        );
         ui.appear(panel, Transition::from_below(80.0), 0.2);
         ui.layout(400.0, 600.0, &mut FixedWidthText(7.0));
         assert_eq!(ui.rect(panel).y, 580.0, "starting 80 px lower");

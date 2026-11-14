@@ -8,8 +8,18 @@ fn boxes(ui: &mut Ui, parent: NodeId, n: usize, css: threers_ui::Style) -> Vec<N
 }
 
 fn r(ui: &Ui, n: NodeId) -> (f32, f32, f32, f32) {
-    let Rect { x, y, width, height } = ui.rect(n);
-    ((x * 100.0).round() / 100.0, (y * 100.0).round() / 100.0, (width * 100.0).round() / 100.0, (height * 100.0).round() / 100.0)
+    let Rect {
+        x,
+        y,
+        width,
+        height,
+    } = ui.rect(n);
+    (
+        (x * 100.0).round() / 100.0,
+        (y * 100.0).round() / 100.0,
+        (width * 100.0).round() / 100.0,
+        (height * 100.0).round() / 100.0,
+    )
 }
 
 fn lay(ui: &mut Ui) {
@@ -20,7 +30,10 @@ fn lay(ui: &mut Ui) {
 fn fixed_and_fractional_columns_share_what_is_left() {
     let mut ui = Ui::new();
     let root = ui.root();
-    let g = ui.add_box(root, style! { display: grid; grid-template-columns: 100px 1fr 2fr; gap: 10px; });
+    let g = ui.add_box(
+        root,
+        style! { display: grid; grid-template-columns: 100px 1fr 2fr; gap: 10px; },
+    );
     let items = boxes(&mut ui, g, 5, style! { height: 20px; });
     lay(&mut ui);
     // 400 − 100 − 2×10 = 280 shared 1:2.
@@ -36,7 +49,10 @@ fn fixed_and_fractional_columns_share_what_is_left() {
 fn spans_and_explicit_lines_place_items_and_the_rest_flow_round_them() {
     let mut ui = Ui::new();
     let root = ui.root();
-    let g = ui.add_box(root, style! { display: grid; grid-template-columns: repeat(3, 1fr); width: 300px; });
+    let g = ui.add_box(
+        root,
+        style! { display: grid; grid-template-columns: repeat(3, 1fr); width: 300px; },
+    );
     let header = ui.add_box(g, style! { grid-column: 1 / -1; height: 10px; });
     let side = ui.add_box(g, style! { grid-column: 3; grid-row: 2 / span 2; });
     let rest = boxes(&mut ui, g, 4, style! { height: 20px; });
@@ -45,7 +61,11 @@ fn spans_and_explicit_lines_place_items_and_the_rest_flow_round_them() {
     assert_eq!(r(&ui, header), (0.0, 0.0, 300.0, 10.0));
     // The side column takes rows 2 and 3 of column 3; the four flow into
     // columns 1 and 2 of those rows; the wide one wraps to row 4.
-    assert_eq!(r(&ui, side), (200.0, 10.0, 100.0, 40.0), "stretched over its two rows");
+    assert_eq!(
+        r(&ui, side),
+        (200.0, 10.0, 100.0, 40.0),
+        "stretched over its two rows"
+    );
     assert_eq!(r(&ui, rest[0]), (0.0, 10.0, 100.0, 20.0));
     assert_eq!(r(&ui, rest[1]), (100.0, 10.0, 100.0, 20.0));
     assert_eq!(r(&ui, rest[2]), (0.0, 30.0, 100.0, 20.0));
@@ -57,7 +77,10 @@ fn spans_and_explicit_lines_place_items_and_the_rest_flow_round_them() {
 fn auto_tracks_fit_content_and_share_free_space_without_fr() {
     let mut ui = Ui::new();
     let root = ui.root();
-    let g = ui.add_box(root, style! { display: grid; grid-template-columns: auto auto; });
+    let g = ui.add_box(
+        root,
+        style! { display: grid; grid-template-columns: auto auto; },
+    );
     let a = ui.add_box(g, style! { width: 50px; height: 10px; });
     let b = ui.add_box(g, style! { width: 30px; height: 10px; });
     lay(&mut ui);
@@ -71,11 +94,14 @@ fn auto_tracks_fit_content_and_share_free_space_without_fr() {
 fn minmax_keeps_a_minimum_and_rows_flex_in_a_definite_height() {
     let mut ui = Ui::new();
     let root = ui.root();
-    let g = ui.add_box(root, style! {
-        display: grid; width: 150px; height: 100px;
-        grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr);
-        grid-template-rows: 20px 1fr 3fr;
-    });
+    let g = ui.add_box(
+        root,
+        style! {
+            display: grid; width: 150px; height: 100px;
+            grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr);
+            grid-template-rows: 20px 1fr 3fr;
+        },
+    );
     let items = boxes(&mut ui, g, 6, style! {});
     lay(&mut ui);
     // Each column wants at least 100: the grid overflows its 150.
@@ -90,7 +116,10 @@ fn a_grid_without_a_width_is_as_wide_as_its_tracks() {
     let mut ui = Ui::new();
     let root = ui.root();
     let row = ui.add_box(root, style! { display: flex; });
-    let g = ui.add_box(row, style! { display: grid; grid-template-columns: 40px auto; gap: 5px; });
+    let g = ui.add_box(
+        row,
+        style! { display: grid; grid-template-columns: 40px auto; gap: 5px; },
+    );
     ui.add_box(g, style! { height: 10px; });
     ui.add_box(g, style! { width: 70px; height: 10px; });
     let after = ui.add_box(row, style! { width: 10px; height: 10px; });
@@ -104,8 +133,20 @@ fn grid_css_reads_as_written() {
     use threers_ui::{Track, TrackSize};
     let s = style! { grid-template-columns: 200px repeat(2, minmax(0, 1fr)) auto 25%; grid-row: 2 / span 3; row-gap: 4px; };
     assert_eq!(s.grid_columns.len(), 5);
-    assert_eq!(s.grid_columns[1], Track { min: TrackSize::Px(0.0), max: TrackSize::Fr(1.0) });
-    assert_eq!(s.grid_columns[4], Track { min: TrackSize::Percent(0.25), max: TrackSize::Percent(0.25) });
+    assert_eq!(
+        s.grid_columns[1],
+        Track {
+            min: TrackSize::Px(0.0),
+            max: TrackSize::Fr(1.0)
+        }
+    );
+    assert_eq!(
+        s.grid_columns[4],
+        Track {
+            min: TrackSize::Percent(0.25),
+            max: TrackSize::Percent(0.25)
+        }
+    );
     assert_eq!((s.grid_row.start, s.grid_row.span), (Some(2), 3));
     assert_eq!(s.row_gap, Some(4.0));
 }
@@ -116,7 +157,10 @@ fn grid_css_reads_as_written() {
 fn fr_rows_fill_a_placed_grid_without_a_set_height() {
     let mut ui = Ui::new();
     let root = ui.root();
-    ui.set_style(root, style! { display: grid; grid-template-rows: 50px 1fr; });
+    ui.set_style(
+        root,
+        style! { display: grid; grid-template-rows: 50px 1fr; },
+    );
     let top = ui.add_box(root, style! {});
     let rest = ui.add_box(root, style! {});
     lay(&mut ui);

@@ -7,10 +7,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::input::Input;
 use crate::environment::Token;
-use crate::transitions::Transition;
+use crate::input::Input;
 use crate::states::Appearance;
+use crate::transitions::Transition;
 use crate::tree::{NodeId, Ui};
 use crate::{style, Role, Semantics};
 
@@ -41,7 +41,12 @@ pub struct Notice {
 
 impl Notice {
     pub fn new(title: impl Into<String>, body: impl Into<String>) -> Self {
-        Self { title: title.into(), body: body.into(), timeout: Some(5.0), ..Self::default() }
+        Self {
+            title: title.into(),
+            body: body.into(),
+            timeout: Some(5.0),
+            ..Self::default()
+        }
     }
 
     pub fn action(mut self, label: impl Into<String>) -> Self {
@@ -84,12 +89,23 @@ impl<S: 'static> Notifications<S> {
         );
         ui.set_semantics(stack, Semantics::new(Role::Region).label("Notifications"));
         ui.defer(stack, 800);
-        Self { stack, shown: Rc::default(), max: 4, _state: std::marker::PhantomData }
+        Self {
+            stack,
+            shown: Rc::default(),
+            max: 4,
+            _state: std::marker::PhantomData,
+        }
     }
 
     /// Shows `notice`; `on_action` runs when its action is pressed (and it
     /// closes). Returns its node.
-    pub fn push(&mut self, ui: &mut Ui, input: &mut Input<S>, notice: Notice, on_action: Option<ActionFn<S>>) -> NodeId {
+    pub fn push(
+        &mut self,
+        ui: &mut Ui,
+        input: &mut Input<S>,
+        notice: Notice,
+        on_action: Option<ActionFn<S>>,
+    ) -> NodeId {
         // The oldest goes when there are too many.
         {
             let mut shown = self.shown.borrow_mut();
@@ -107,8 +123,15 @@ impl<S: 'static> Notifications<S> {
             },
         );
         // The border's colour is the tone's (below).
-        ui.token_style(card, &[("background", Token::Raised), ("color", Token::Text)]);
-        ui.appearance_style(card, Appearance::Light, "box-shadow: 0 8px 22px rgba(0,0,0,0.15)");
+        ui.token_style(
+            card,
+            &[("background", Token::Raised), ("color", Token::Text)],
+        );
+        ui.appearance_style(
+            card,
+            Appearance::Light,
+            "box-shadow: 0 8px 22px rgba(0,0,0,0.15)",
+        );
         let accent = match notice.tone {
             Tone::Info => [0.145, 0.388, 0.922, 1.0],
             Tone::Success => [0.06, 0.73, 0.51, 1.0],
@@ -119,7 +142,10 @@ impl<S: 'static> Notifications<S> {
             s.border.left = 3.0;
             s.border_color = accent;
         });
-        let head = ui.add_box(card, style! { display: flex; align-items: center; gap: 8px; });
+        let head = ui.add_box(
+            card,
+            style! { display: flex; align-items: center; gap: 8px; },
+        );
         let title = ui.add_box(head, style! { font-weight: bold; flex-grow: 1; });
         ui.add_text(title, notice.title.clone());
         let close = ui.add_box(head, style! { padding: 0 4px; cursor: pointer; });
@@ -131,8 +157,16 @@ impl<S: 'static> Notifications<S> {
             ui.token_style(body, &[("color", Token::SecondaryText)]);
             ui.add_text(body, notice.body.clone());
         }
-        let role = if notice.tone == Tone::Error { Role::Alert } else { Role::Status };
-        let name = if notice.body.is_empty() { notice.title.clone() } else { format!("{}. {}", notice.title, notice.body) };
+        let role = if notice.tone == Tone::Error {
+            Role::Alert
+        } else {
+            Role::Status
+        };
+        let name = if notice.body.is_empty() {
+            notice.title.clone()
+        } else {
+            format!("{}. {}", notice.title, notice.body)
+        };
         let mut sem = Semantics::new(role).label(name);
         sem.live = true;
         ui.set_semantics(card, sem);
@@ -142,7 +176,10 @@ impl<S: 'static> Notifications<S> {
         });
         if let Some(label) = notice.action {
             let b = ui.add_box(card, style! { align-self: flex-start; padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; });
-            ui.token_style(b, &[("background", Token::Accent), ("color", Token::OnAccent)]);
+            ui.token_style(
+                b,
+                &[("background", Token::Accent), ("color", Token::OnAccent)],
+            );
             ui.add_text(b, label.clone());
             ui.set_semantics(b, Semantics::new(Role::Button).label(label));
             let mut f = on_action;
@@ -155,7 +192,9 @@ impl<S: 'static> Notifications<S> {
         }
         if let Some(t) = notice.timeout {
             // Gone with the card if it is closed first.
-            input.after_for(card, t, move |_, ui| ui.remove_with(card, Transition::Fade, LEAVE));
+            input.after_for(card, t, move |_, ui| {
+                ui.remove_with(card, Transition::Fade, LEAVE)
+            });
         }
         ui.appear(card, Transition::from_right(24.0), 0.2);
         self.shown.borrow_mut().push(card);
@@ -164,6 +203,11 @@ impl<S: 'static> Notifications<S> {
 
     /// The notices showing, oldest first.
     pub fn shown(&self, ui: &Ui) -> Vec<NodeId> {
-        self.shown.borrow().iter().copied().filter(|&n| ui.contains(n) && !ui.is_leaving(n)).collect()
+        self.shown
+            .borrow()
+            .iter()
+            .copied()
+            .filter(|&n| ui.contains(n) && !ui.is_leaving(n))
+            .collect()
     }
 }

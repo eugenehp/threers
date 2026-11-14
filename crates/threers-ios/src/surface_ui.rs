@@ -24,7 +24,10 @@ impl SurfaceUi {
         if let Some(a) = crate::system_appearance() {
             ui.set_system_appearance(a);
         }
-        let (w, h) = ((surface.width * surface.scale).round() as u32, (surface.height * surface.scale).round() as u32);
+        let (w, h) = (
+            (surface.width * surface.scale).round() as u32,
+            (surface.height * surface.scale).round() as u32,
+        );
         let changed = self.pixels.update(ui, w, h, surface.scale) || !self.shown;
         self.shown = true;
         (true, changed)

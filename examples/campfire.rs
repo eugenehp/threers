@@ -193,20 +193,28 @@ fn main() {
 
     // Candles stood on the left log, as someone left them: two with the
     // volumetric flame and one with the simple one.
-    let candles: Vec<_> = [(-2.12, 0.62, 0.2, FlameStyle::Realistic), (-1.92, 0.55, 0.14, FlameStyle::Simple), (-1.74, 0.64, 0.1, FlameStyle::Realistic)]
-        .into_iter()
-        .enumerate()
-        .map(|(i, (x, z, height, style))| {
-            let mut c = Candle::new(style).with_size(height, 0.035).with_seed(i as f32 * 2.3);
-            c.light_intensity = 0.25;
-            // On the snow lying on the log, not sunk in it.
-            let top = match particles.layer_mut(snow) {
-                Some(threers::particles::Layer::Snow(cover)) => cover.field.height_at(x, z).unwrap_or(0.41),
-                _ => 0.41,
-            };
-            c.add_to(&mut scene, Vector3::new(x, top.max(0.41), z))
-        })
-        .collect();
+    let candles: Vec<_> = [
+        (-2.12, 0.62, 0.2, FlameStyle::Realistic),
+        (-1.92, 0.55, 0.14, FlameStyle::Simple),
+        (-1.74, 0.64, 0.1, FlameStyle::Realistic),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, (x, z, height, style))| {
+        let mut c = Candle::new(style)
+            .with_size(height, 0.035)
+            .with_seed(i as f32 * 2.3);
+        c.light_intensity = 0.25;
+        // On the snow lying on the log, not sunk in it.
+        let top = match particles.layer_mut(snow) {
+            Some(threers::particles::Layer::Snow(cover)) => {
+                cover.field.height_at(x, z).unwrap_or(0.41)
+            }
+            _ => 0.41,
+        };
+        c.add_to(&mut scene, Vector3::new(x, top.max(0.41), z))
+    })
+    .collect();
     for c in &candles {
         c.update(&mut scene, 4.0);
     }

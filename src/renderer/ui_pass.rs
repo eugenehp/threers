@@ -633,7 +633,9 @@ fn threers_fs(in: ThreersOut) -> @location(0) vec4<f32> {{
 
 /// The layer as it is: what a box with a broken shader is drawn through.
 fn passthrough() -> Shader {
-    Shader::new("fn threers_passthrough(p: vec2<f32>, color: vec4<f32>) -> vec4<f32> { return color; }")
+    Shader::new(
+        "fn threers_passthrough(p: vec2<f32>, color: vec4<f32>) -> vec4<f32> { return color; }",
+    )
 }
 
 /// [`ThreersEffect`] in the prelude.
@@ -841,7 +843,12 @@ pub struct UiPass {
     shader: wgpu::ShaderModule,
     layout: wgpu::BindGroupLayout,
     /// By output format: the pass's pipeline, and the one for surfaces.
-    pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline)>,
+    pipelines: Vec<(
+        wgpu::TextureFormat,
+        wgpu::RenderPipeline,
+        wgpu::RenderPipeline,
+        wgpu::RenderPipeline,
+    )>,
     surface_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     /// Textures shown by surface nodes, by id, with their bind groups.
@@ -869,7 +876,12 @@ pub struct UiPass {
     effect_layout: wgpu::BindGroupLayout,
     effect_pipelines: HashMap<(u64, wgpu::TextureFormat, crate::ui::BlendMode), EffectPipeline>,
     effect_uniforms: Option<(wgpu::Buffer, u64)>,
-    layers: Vec<(wgpu::Texture, wgpu::TextureView, (u32, u32), wgpu::TextureFormat)>,
+    layers: Vec<(
+        wgpu::Texture,
+        wgpu::TextureView,
+        (u32, u32),
+        wgpu::TextureFormat,
+    )>,
     passthrough: Shader,
     /// [`draw_retained`](Self::draw_retained)'s last frame: its picture,
     /// the scene and scale it was painted from.
@@ -923,7 +935,12 @@ fn fs_blur(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
 struct Backdrops {
     layout: Option<wgpu::BindGroupLayout>,
     pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
-    scratch: Vec<(wgpu::Texture, wgpu::TextureView, (u32, u32), wgpu::TextureFormat)>,
+    scratch: Vec<(
+        wgpu::Texture,
+        wgpu::TextureView,
+        (u32, u32),
+        wgpu::TextureFormat,
+    )>,
     uniforms: Option<(wgpu::Buffer, u64)>,
 }
 
@@ -989,7 +1006,9 @@ impl UiPass {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<Globals>() as u64),
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<Globals>() as u64
+                        ),
                     },
                     count: None,
                 },
@@ -1093,7 +1112,9 @@ impl UiPass {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<EffectUniform>() as u64),
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<EffectUniform>() as u64,
+                        ),
                     },
                     count: None,
                 },
@@ -1116,7 +1137,15 @@ impl UiPass {
             ],
         });
         let edges = Self::edge_texture(device, 1);
-        let bind_group = Self::make_bind_group(device, &layout, &globals, &texture, &image_texture, &image_sampler, &edges);
+        let bind_group = Self::make_bind_group(
+            device,
+            &layout,
+            &globals,
+            &texture,
+            &image_texture,
+            &image_sampler,
+            &edges,
+        );
         UiPass {
             edges,
             edge_data: vec![],
@@ -1316,7 +1345,18 @@ impl UiPass {
         });
         queue.submit(Some(encoder.finish()));
         // Its own texture: materials can read what is under them.
-        self.draw_with(device, queue, scene, scale, &view, Some(&target), size, format, None, None);
+        self.draw_with(
+            device,
+            queue,
+            scene,
+            scale,
+            &view,
+            Some(&target),
+            size,
+            format,
+            None,
+            None,
+        );
         super::readback::texture_bytes(device, queue, &target)
     }
 
@@ -1336,11 +1376,25 @@ impl UiPass {
         format: wgpu::TextureFormat,
         regions: &[Rect],
     ) {
-        let scissors: Vec<[u32; 4]> = regions.iter().filter_map(|r| device_rect(*r, scale, size)).collect();
+        let scissors: Vec<[u32; 4]> = regions
+            .iter()
+            .filter_map(|r| device_rect(*r, scale, size))
+            .collect();
         if scissors.is_empty() {
             return;
         }
-        self.draw_with(device, queue, scene, scale, target, None, size, format, None, Some(&scissors));
+        self.draw_with(
+            device,
+            queue,
+            scene,
+            scale,
+            target,
+            None,
+            size,
+            format,
+            None,
+            Some(&scissors),
+        );
     }
 
     /// Draws the patch `region` (UI pixels) of `scene` alone, filling
@@ -1360,7 +1414,9 @@ impl UiPass {
     ) {
         let scale = size.0 as f32 / region.width.max(1e-3);
         self.origin = (region.x, region.y);
-        self.draw_with(device, queue, scene, scale, target, None, size, format, None, None);
+        self.draw_with(
+            device, queue, scene, scale, target, None, size, format, None, None,
+        );
         self.origin = (0.0, 0.0);
     }
 
@@ -1369,8 +1425,19 @@ impl UiPass {
     /// sRGB-encoded, `(region.width * scale).round()` by
     /// `(region.height * scale).round()`, rows from the top.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn render_patch_to_rgba(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &Scene, region: Rect, scale: f32, clear: Rgba) -> ((u32, u32), Vec<u8>) {
-        let size = (((region.width * scale).round() as u32).max(1), ((region.height * scale).round() as u32).max(1));
+    pub fn render_patch_to_rgba(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene: &Scene,
+        region: Rect,
+        scale: f32,
+        clear: Rgba,
+    ) -> ((u32, u32), Vec<u8>) {
+        let size = (
+            ((region.width * scale).round() as u32).max(1),
+            ((region.height * scale).round() as u32).max(1),
+        );
         self.origin = (region.x, region.y);
         let image = self.render_to_rgba(device, queue, scene, scale, size, clear);
         self.origin = (0.0, 0.0);
@@ -1406,7 +1473,12 @@ impl UiPass {
             "fs_surface",
             &[Some(&self.layout), Some(&self.surface_layout)],
         );
-        let backdrop = self.make_pipeline(device, format, "fs_backdrop", &[Some(&self.layout), Some(&self.surface_layout)]);
+        let backdrop = self.make_pipeline(
+            device,
+            format,
+            "fs_backdrop",
+            &[Some(&self.layout), Some(&self.surface_layout)],
+        );
         self.pipelines.push((format, main, surface, backdrop));
         self.pipelines.len() - 1
     }
@@ -1497,7 +1569,9 @@ impl UiPass {
         size: (u32, u32),
         format: wgpu::TextureFormat,
     ) {
-        self.draw_with(device, queue, scene, scale, target, None, size, format, None, None);
+        self.draw_with(
+            device, queue, scene, scale, target, None, size, format, None, None,
+        );
     }
 
     /// Draws `scene` as [`draw`](Self::draw) does, into a picture kept from
@@ -1522,23 +1596,43 @@ impl UiPass {
         if size.0 == 0 || size.1 == 0 {
             return SceneDamage::None;
         }
-        let fresh = self.retained.as_ref().is_none_or(|r| r.size != size || r.format != format || r.scale != scale || r.clear != clear);
+        let fresh = self.retained.as_ref().is_none_or(|r| {
+            r.size != size || r.format != format || r.scale != scale || r.clear != clear
+        });
         if fresh {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("threers ui retained"),
-                size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: size.0,
+                    height: size.1,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             let view = texture.create_view(&Default::default());
-            self.retained = Some(Retained { texture, view, size, format, scene: Scene::default(), scale, clear });
+            self.retained = Some(Retained {
+                texture,
+                view,
+                size,
+                format,
+                scene: Scene::default(),
+                scale,
+                clear,
+            });
         }
         let r = self.retained.take().expect("just made");
-        let damage = if fresh { SceneDamage::Full } else { scene.damage(&r.scene, size.0 as f32 / scale, size.1 as f32 / scale) };
+        let damage = if fresh {
+            SceneDamage::Full
+        } else {
+            scene.damage(&r.scene, size.0 as f32 / scale, size.1 as f32 / scale)
+        };
         let scissors: Option<Vec<[u32; 4]>> = match &damage {
             SceneDamage::None => Some(vec![]),
             SceneDamage::Full => None,
@@ -1556,10 +1650,24 @@ impl UiPass {
             ),
         };
         if scissors.as_ref().is_none_or(|s| !s.is_empty()) {
-            self.draw_with(device, queue, scene, scale, &r.view, Some(&r.texture), size, format, Some(clear), scissors.as_deref());
+            self.draw_with(
+                device,
+                queue,
+                scene,
+                scale,
+                &r.view,
+                Some(&r.texture),
+                size,
+                format,
+                Some(clear),
+                scissors.as_deref(),
+            );
         }
         self.blit(device, queue, &r.view, target, format);
-        self.retained = Some(Retained { scene: scene.clone(), ..r });
+        self.retained = Some(Retained {
+            scene: scene.clone(),
+            ..r
+        });
         damage
     }
 
@@ -1569,28 +1677,55 @@ impl UiPass {
         self.retained = None;
     }
 
-    fn blit(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, picture: &wgpu::TextureView, target: &wgpu::TextureView, format: wgpu::TextureFormat) {
+    fn blit(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        picture: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+    ) {
         let (layout, pipeline) = self.blits.entry(format).or_insert_with(|| {
-            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("threers ui blit"), source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(BLIT)) });
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("threers ui blit"),
+                source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(BLIT)),
+            });
             let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("threers ui blit"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 }],
             });
-            let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("threers ui blit"), bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
+            let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("threers ui blit"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
             let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("threers ui blit"),
                 layout: Some(&pl),
-                vertex: wgpu::VertexState { module: &module, entry_point: Some("vs_blit"), compilation_options: Default::default(), buffers: &[] },
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs_blit"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
                     entry_point: Some("fs_blit"),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
                 }),
                 primitive: Default::default(),
                 depth_stencil: None,
@@ -1603,7 +1738,10 @@ impl UiPass {
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("threers ui blit"),
             layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(picture) }],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(picture),
+            }],
         });
         let mut encoder = device.create_command_encoder(&Default::default());
         {
@@ -1613,7 +1751,10 @@ impl UiPass {
                     view: target,
                     depth_slice: None,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -1648,10 +1789,24 @@ impl UiPass {
             return;
         }
         // Past the edges: a box ending on them shades its corners as edges.
-        let whole = Rect { x: -2.0, y: -2.0, width: size.0 as f32 / scale + 4.0, height: size.1 as f32 / scale + 4.0 };
+        let whole = Rect {
+            x: -2.0,
+            y: -2.0,
+            width: size.0 as f32 / scale + 4.0,
+            height: size.1 as f32 / scale + 4.0,
+        };
         let mut uploads = Uploads::default();
         self.edge_data.clear();
-        let mut builder = Builder::new(&mut self.edge_data, self.gpu_path_area, &mut self.atlas, &mut self.images, &mut self.measure, &mut uploads, scale, false);
+        let mut builder = Builder::new(
+            &mut self.edge_data,
+            self.gpu_path_area,
+            &mut self.atlas,
+            &mut self.images,
+            &mut self.measure,
+            &mut uploads,
+            scale,
+            false,
+        );
         if let Some(bg) = background {
             builder.fill_rect(whole, bg);
         }
@@ -1677,14 +1832,30 @@ impl UiPass {
             }
             uploads = Uploads::default();
             self.edge_data.clear();
-            let mut builder = Builder::new(&mut self.edge_data, self.gpu_path_area, &mut self.atlas, &mut self.images, &mut self.measure, &mut uploads, scale, true);
+            let mut builder = Builder::new(
+                &mut self.edge_data,
+                self.gpu_path_area,
+                &mut self.atlas,
+                &mut self.images,
+                &mut self.measure,
+                &mut uploads,
+                scale,
+                true,
+            );
             if let Some(bg) = background {
                 builder.fill_rect(whole, bg);
             }
             scene.replay(&mut builder);
             frame = Frame::take(&mut builder);
         }
-        let Frame { mut stats, mut instances, surfaces, targets, effects, done } = frame;
+        let Frame {
+            mut stats,
+            mut instances,
+            surfaces,
+            targets,
+            effects,
+            done,
+        } = frame;
         // Materials: each backdrop's region within the target it is read
         // from, and its place among this frame's blurs.
         let mut backdrop_slot: HashMap<u32, usize> = HashMap::new();
@@ -1699,7 +1870,11 @@ impl UiPass {
                     let (x1, y1) = ((x + w).clamp(0.0, tw as f32), (y + h).clamp(0.0, th as f32));
                     inst.sprite = [x0, y0, x1 - x0, y1 - y0];
                     backdrop_slot.insert(at, backdrop_list.len());
-                    backdrop_list.push(([x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32], sigma, inst.color[1]));
+                    backdrop_list.push((
+                        [x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32],
+                        sigma,
+                        inst.color[1],
+                    ));
                 }
             }
         }
@@ -1735,7 +1910,8 @@ impl UiPass {
                 unused: 0.0,
             };
             let at = t * UNIFORM_STRIDE as usize;
-            blocks[at..at + std::mem::size_of::<Globals>()].copy_from_slice(bytemuck::bytes_of(&globals));
+            blocks[at..at + std::mem::size_of::<Globals>()]
+                .copy_from_slice(bytemuck::bytes_of(&globals));
         }
         queue.write_buffer(&self.globals, 0, &blocks);
         let bytes: &[u8] = bytemuck::cast_slice(&instances);
@@ -1776,7 +1952,11 @@ impl UiPass {
         let mut effect_groups = Vec::with_capacity(effects.len());
         if !effects.is_empty() {
             let need = UNIFORM_STRIDE * effects.len() as u64;
-            if self.effect_uniforms.as_ref().is_none_or(|(_, cap)| *cap < need) {
+            if self
+                .effect_uniforms
+                .as_ref()
+                .is_none_or(|(_, cap)| *cap < need)
+            {
                 let cap = need.next_power_of_two().max(UNIFORM_STRIDE * 8);
                 let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("threers ui effects"),
@@ -1789,7 +1969,8 @@ impl UiPass {
             let mut blocks = vec![0u8; need as usize];
             for (i, e) in effects.iter().enumerate() {
                 let at = i * UNIFORM_STRIDE as usize;
-                blocks[at..at + std::mem::size_of::<EffectUniform>()].copy_from_slice(bytemuck::bytes_of(&e.uniform));
+                blocks[at..at + std::mem::size_of::<EffectUniform>()]
+                    .copy_from_slice(bytemuck::bytes_of(&e.uniform));
             }
             let (buffer, _) = self.effect_uniforms.as_ref().expect("just made");
             queue.write_buffer(buffer, 0, &blocks);
@@ -1804,7 +1985,9 @@ impl UiPass {
                             resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                                 buffer,
                                 offset: 0,
-                                size: wgpu::BufferSize::new(std::mem::size_of::<EffectUniform>() as u64),
+                                size: wgpu::BufferSize::new(
+                                    std::mem::size_of::<EffectUniform>() as u64
+                                ),
                             }),
                         },
                         wgpu::BindGroupEntry {
@@ -1819,12 +2002,24 @@ impl UiPass {
                 }));
             }
             // Each effect's, and the stand-in for one that fails, in its blend.
-            let shaders: Vec<(Shader, crate::ui::BlendMode)> = effects.iter().flat_map(|e| [(e.shader.clone(), e.blend), (self.passthrough.clone(), e.blend)]).collect();
+            let shaders: Vec<(Shader, crate::ui::BlendMode)> = effects
+                .iter()
+                .flat_map(|e| {
+                    [
+                        (e.shader.clone(), e.blend),
+                        (self.passthrough.clone(), e.blend),
+                    ]
+                })
+                .collect();
             for (shader, blend) in shaders {
                 self.effect_pipeline(device, &shader, format, blend);
             }
         }
-        let backdrop_groups = if backdrop_list.is_empty() { None } else { Some(self.prepare_backdrops(device, queue, format, &backdrop_list)) };
+        let backdrop_groups = if backdrop_list.is_empty() {
+            None
+        } else {
+            Some(self.prepare_backdrops(device, queue, format, &backdrop_list))
+        };
         let effect_pipelines: Vec<&wgpu::RenderPipeline> = effects
             .iter()
             .map(|e| {
@@ -1872,7 +2067,12 @@ impl UiPass {
                 let mut lo = [f32::MAX; 2];
                 let mut hi = [f32::MIN; 2];
                 let mut behind = false;
-                for (cx, cy) in [(x - 2.0, y - 2.0), (x + w + 2.0, y - 2.0), (x - 2.0, y + hgt + 2.0), (x + w + 2.0, y + hgt + 2.0)] {
+                for (cx, cy) in [
+                    (x - 2.0, y - 2.0),
+                    (x + w + 2.0, y - 2.0),
+                    (x - 2.0, y + hgt + 2.0),
+                    (x + w + 2.0, y + hgt + 2.0),
+                ] {
                     let q = [0, 1, 2].map(|r| h[r][0] * cx + h[r][1] * cy + h[r][2]);
                     if q[2] <= 1e-6 {
                         behind = true;
@@ -1884,14 +2084,22 @@ impl UiPass {
                     }
                 }
                 let touches = behind
-                    || regions.iter().any(|&[rx, ry, rw, rh]| lo[0] < (rx + rw) as f32 && hi[0] > rx as f32 && lo[1] < (ry + rh) as f32 && hi[1] > ry as f32);
+                    || regions.iter().any(|&[rx, ry, rw, rh]| {
+                        lo[0] < (rx + rw) as f32
+                            && hi[0] > rx as f32
+                            && lo[1] < (ry + rh) as f32
+                            && hi[1] > ry as f32
+                    });
                 *skipped = !touches;
             }
         }
         // Each layer before the passes that put it back, the target last.
         for t in done.iter().copied().filter(|&t| !skip[t]).chain([0]) {
             let (view, load) = match layer_views[t] {
-                Some(i) => (&self.layers[i].1, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)),
+                Some(i) => (
+                    &self.layers[i].1,
+                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                ),
                 None => (target, wgpu::LoadOp::Load),
             };
             // A pass on this target: begun again, keeping what it holds,
@@ -1904,7 +2112,10 @@ impl UiPass {
                             view,
                             depth_slice: None,
                             resolve_target: None,
-                            ops: wgpu::Operations { load: $load, store: wgpu::StoreOp::Store },
+                            ops: wgpu::Operations {
+                                load: $load,
+                                store: wgpu::StoreOp::Store,
+                            },
                         })],
                         depth_stencil_attachment: None,
                         timestamp_writes: None,
@@ -1918,7 +2129,11 @@ impl UiPass {
             }
             let mut pass = begin!(load);
             // What a material reads: this target's texture.
-            let source = if t == 0 { target_texture } else { layer_views[t].map(|i| &self.layers[i].0) };
+            let source = if t == 0 {
+                target_texture
+            } else {
+                layer_views[t].map(|i| &self.layers[i].0)
+            };
             // The target's pass, once for each region to paint again (all
             // of it when there are none given); a layer's, once.
             let regions: Vec<Option<[u32; 4]>> = match scissors {
@@ -1936,18 +2151,28 @@ impl UiPass {
                             pass.draw(0..6, a..b);
                         }
                         Op::Surface(at, id) => {
-                            let Some((_, Some(group))) = self.surfaces.get(&id) else { continue };
+                            let Some((_, Some(group))) = self.surfaces.get(&id) else {
+                                continue;
+                            };
                             pass.set_pipeline(surface);
                             pass.set_bind_group(1, group, &[]);
                             pass.draw(0..6, at..at + 1);
                         }
                         Op::Effect(at, e) => {
                             pass.set_pipeline(effect_pipelines[e]);
-                            pass.set_bind_group(1, &effect_groups[e], &[(e as u64 * UNIFORM_STRIDE) as u32]);
+                            pass.set_bind_group(
+                                1,
+                                &effect_groups[e],
+                                &[(e as u64 * UNIFORM_STRIDE) as u32],
+                            );
                             pass.draw(0..6, at..at + 1);
                         }
                         Op::Backdrop(at, _) => {
-                            let (Some(src), Some(groups), Some(&slot)) = (source, backdrop_groups.as_ref(), backdrop_slot.get(&at)) else { continue };
+                            let (Some(src), Some(groups), Some(&slot)) =
+                                (source, backdrop_groups.as_ref(), backdrop_slot.get(&at))
+                            else {
+                                continue;
+                            };
                             let ([x, y, w, h], _, step) = backdrop_list[slot];
                             if w == 0 || h == 0 {
                                 continue;
@@ -1957,27 +2182,59 @@ impl UiPass {
                             drop(pass);
                             let b = &self.backdrops;
                             encoder.copy_texture_to_texture(
-                                wgpu::TexelCopyTextureInfo { texture: src, mip_level: 0, origin: wgpu::Origin3d { x, y, z: 0 }, aspect: wgpu::TextureAspect::All },
-                                wgpu::TexelCopyTextureInfo { texture: &b.scratch[0].0, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: src,
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d { x, y, z: 0 },
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: &b.scratch[0].0,
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d::ZERO,
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                wgpu::Extent3d {
+                                    width: w,
+                                    height: h,
+                                    depth_or_array_layers: 1,
+                                },
                             );
-                            let (sw, sh) = ((w as f32 / step).ceil() as u32, (h as f32 / step).ceil() as u32);
-                            for (k, (group, into)) in [(&groups.0, 1usize), (&groups.1, 2usize)].into_iter().enumerate() {
-                                let mut blur = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                    label: Some("threers ui backdrop blur"),
-                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                        view: &b.scratch[into].1,
-                                        depth_slice: None,
-                                        resolve_target: None,
-                                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
-                                    })],
-                                    depth_stencil_attachment: None,
-                                    timestamp_writes: None,
-                                    occlusion_query_set: None,
-                                    multiview_mask: None,
-                                });
+                            let (sw, sh) = (
+                                (w as f32 / step).ceil() as u32,
+                                (h as f32 / step).ceil() as u32,
+                            );
+                            for (k, (group, into)) in [(&groups.0, 1usize), (&groups.1, 2usize)]
+                                .into_iter()
+                                .enumerate()
+                            {
+                                let mut blur =
+                                    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                        label: Some("threers ui backdrop blur"),
+                                        color_attachments: &[Some(
+                                            wgpu::RenderPassColorAttachment {
+                                                view: &b.scratch[into].1,
+                                                depth_slice: None,
+                                                resolve_target: None,
+                                                ops: wgpu::Operations {
+                                                    load: wgpu::LoadOp::Clear(
+                                                        wgpu::Color::TRANSPARENT,
+                                                    ),
+                                                    store: wgpu::StoreOp::Store,
+                                                },
+                                            },
+                                        )],
+                                        depth_stencil_attachment: None,
+                                        timestamp_writes: None,
+                                        occlusion_query_set: None,
+                                        multiview_mask: None,
+                                    });
                                 blur.set_pipeline(&b.pipelines[&format]);
-                                blur.set_bind_group(0, group, &[((slot * 2 + k) as u64 * UNIFORM_STRIDE) as u32]);
+                                blur.set_bind_group(
+                                    0,
+                                    group,
+                                    &[((slot * 2 + k) as u64 * UNIFORM_STRIDE) as u32],
+                                );
                                 blur.set_scissor_rect(0, 0, sw.max(1), sh.max(1));
                                 blur.draw(0..3, 0..1);
                             }
@@ -2015,35 +2272,66 @@ impl UiPass {
             let texture = |binding| wgpu::BindGroupLayoutEntry {
                 binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
                 count: None,
             };
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("threers ui backdrop blur"),
                 entries: &[
                     texture(0),
-                    wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<BlurUniform>() as u64) },
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: true,
+                            min_binding_size: wgpu::BufferSize::new(
+                                std::mem::size_of::<BlurUniform>() as u64,
+                            ),
+                        },
                         count: None,
                     },
                 ],
             })
         });
         if let std::collections::hash_map::Entry::Vacant(slot) = b.pipelines.entry(format) {
-            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("threers ui backdrop blur"), source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(BLUR)) });
-            let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("threers ui backdrop blur"), bind_group_layouts: &[Some(&*layout)], immediate_size: 0 });
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("threers ui backdrop blur"),
+                source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(BLUR)),
+            });
+            let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("threers ui backdrop blur"),
+                bind_group_layouts: &[Some(&*layout)],
+                immediate_size: 0,
+            });
             let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("threers ui backdrop blur"),
                 layout: Some(&pl),
-                vertex: wgpu::VertexState { module: &module, entry_point: Some("vs_blur"), compilation_options: Default::default(), buffers: &[] },
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs_blur"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
                     entry_point: Some("fs_blur"),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
                 }),
                 primitive: Default::default(),
                 depth_stencil: None,
@@ -2054,24 +2342,47 @@ impl UiPass {
             slot.insert(pipeline);
         }
         // Scratch: the copy at full size, the blurs smaller.
-        let full = list.iter().fold((1, 1), |a, (r, ..)| (a.0.max(r[2]), a.1.max(r[3])));
-        let small = list.iter().fold((1, 1), |a, (r, _, step)| (a.0.max((r[2] as f32 / step).ceil() as u32), a.1.max((r[3] as f32 / step).ceil() as u32)));
+        let full = list
+            .iter()
+            .fold((1, 1), |a, (r, ..)| (a.0.max(r[2]), a.1.max(r[3])));
+        let small = list.iter().fold((1, 1), |a, (r, _, step)| {
+            (
+                a.0.max((r[2] as f32 / step).ceil() as u32),
+                a.1.max((r[3] as f32 / step).ceil() as u32),
+            )
+        });
         for (i, want) in [full, small, small].into_iter().enumerate() {
-            let fits = b.scratch.get(i).is_some_and(|s| s.2.0 >= want.0 && s.2.1 >= want.1 && s.3 == format);
+            let fits = b
+                .scratch
+                .get(i)
+                .is_some_and(|s| s.2 .0 >= want.0 && s.2 .1 >= want.1 && s.3 == format);
             if fits {
                 continue;
             }
             let step = |v: u32| v.div_ceil(128) * 128;
-            let have = b.scratch.get(i).filter(|s| s.3 == format).map_or((0, 0), |s| s.2);
-            let grown = (step(want.0).max(have.0).min(MAX_LAYER_SIDE), step(want.1).max(have.1).min(MAX_LAYER_SIDE));
+            let have = b
+                .scratch
+                .get(i)
+                .filter(|s| s.3 == format)
+                .map_or((0, 0), |s| s.2);
+            let grown = (
+                step(want.0).max(have.0).min(MAX_LAYER_SIDE),
+                step(want.1).max(have.1).min(MAX_LAYER_SIDE),
+            );
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("threers ui backdrop"),
-                size: wgpu::Extent3d { width: grown.0, height: grown.1, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: grown.0,
+                    height: grown.1,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],
             });
             let view = texture.create_view(&Default::default());
@@ -2086,14 +2397,37 @@ impl UiPass {
         let need = UNIFORM_STRIDE * 2 * list.len() as u64;
         if b.uniforms.as_ref().is_none_or(|(_, cap)| *cap < need) {
             let cap = need.next_power_of_two().max(UNIFORM_STRIDE * 8);
-            b.uniforms = Some((device.create_buffer(&wgpu::BufferDescriptor { label: Some("threers ui backdrop blurs"), size: cap, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }), cap));
+            b.uniforms = Some((
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("threers ui backdrop blurs"),
+                    size: cap,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                cap,
+            ));
         }
         let mut blocks = vec![0u8; need as usize];
         for (i, &(_, sigma, step)) in list.iter().enumerate() {
             let s = (sigma / step).max(0.5);
-            for (k, u) in [BlurUniform { dir: [1.0, 0.0], ratio: step, sigma: s }, BlurUniform { dir: [0.0, 1.0], ratio: 1.0, sigma: s }].iter().enumerate() {
+            for (k, u) in [
+                BlurUniform {
+                    dir: [1.0, 0.0],
+                    ratio: step,
+                    sigma: s,
+                },
+                BlurUniform {
+                    dir: [0.0, 1.0],
+                    ratio: 1.0,
+                    sigma: s,
+                },
+            ]
+            .iter()
+            .enumerate()
+            {
                 let at = (i * 2 + k) * UNIFORM_STRIDE as usize;
-                blocks[at..at + std::mem::size_of::<BlurUniform>()].copy_from_slice(bytemuck::bytes_of(u));
+                blocks[at..at + std::mem::size_of::<BlurUniform>()]
+                    .copy_from_slice(bytemuck::bytes_of(u));
             }
         }
         let (buffer, _) = b.uniforms.as_ref().expect("just made");
@@ -2103,11 +2437,21 @@ impl UiPass {
                 label: Some("threers ui backdrop blur"),
                 layout,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer, offset: 0, size: wgpu::BufferSize::new(std::mem::size_of::<BlurUniform>() as u64) }),
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer,
+                            offset: 0,
+                            size: wgpu::BufferSize::new(std::mem::size_of::<BlurUniform>() as u64),
+                        }),
                     },
                 ],
             })
@@ -2118,8 +2462,14 @@ impl UiPass {
             label: Some("threers ui backdrop"),
             layout: &self.surface_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&b.scratch[2].1) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&b.scratch[2].1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
             ],
         });
         (across, down, result)
@@ -2128,14 +2478,32 @@ impl UiPass {
     /// The layer texture `i`, at least `size` and in `format`: kept from
     /// frame to frame, grown in steps so a box that grows a little does not
     /// make a new one each frame.
-    fn layer(&mut self, device: &wgpu::Device, i: usize, size: (u32, u32), format: wgpu::TextureFormat) -> usize {
-        let fits = |l: &(wgpu::Texture, wgpu::TextureView, (u32, u32), wgpu::TextureFormat)| l.2.0 >= size.0 && l.2.1 >= size.1 && l.3 == format;
+    fn layer(
+        &mut self,
+        device: &wgpu::Device,
+        i: usize,
+        size: (u32, u32),
+        format: wgpu::TextureFormat,
+    ) -> usize {
+        let fits = |l: &(
+            wgpu::Texture,
+            wgpu::TextureView,
+            (u32, u32),
+            wgpu::TextureFormat,
+        )| l.2 .0 >= size.0 && l.2 .1 >= size.1 && l.3 == format;
         if self.layers.get(i).is_some_and(fits) {
             return i;
         }
         let step = |v: u32| v.div_ceil(128) * 128;
-        let have = self.layers.get(i).filter(|l| l.3 == format).map_or((0, 0), |l| l.2);
-        let grown = (step(size.0).max(have.0).min(MAX_LAYER_SIDE), step(size.1).max(have.1).min(MAX_LAYER_SIDE));
+        let have = self
+            .layers
+            .get(i)
+            .filter(|l| l.3 == format)
+            .map_or((0, 0), |l| l.2);
+        let grown = (
+            step(size.0).max(have.0).min(MAX_LAYER_SIDE),
+            step(size.1).max(have.1).min(MAX_LAYER_SIDE),
+        );
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers ui layer"),
             size: wgpu::Extent3d {
@@ -2147,7 +2515,9 @@ impl UiPass {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -2162,7 +2532,13 @@ impl UiPass {
 
     /// `shader`'s pipeline for `format`, made the first time and checked by
     /// the compiler as it comes in.
-    fn effect_pipeline(&mut self, device: &wgpu::Device, shader: &Shader, format: wgpu::TextureFormat, blend: crate::ui::BlendMode) {
+    fn effect_pipeline(
+        &mut self,
+        device: &wgpu::Device,
+        shader: &Shader,
+        format: wgpu::TextureFormat,
+        blend: crate::ui::BlendMode,
+    ) {
         use std::future::Future;
         let key = (shader.id(), format, blend);
         if let Some(p) = self.effect_pipelines.get_mut(&key) {
@@ -2227,14 +2603,24 @@ impl UiPass {
             std::task::Poll::Ready(result) => (None, result.map(|e| e.to_string())),
             std::task::Poll::Pending => (Some(check as _), None),
         };
-        self.effect_pipelines.insert(key, EffectPipeline { pipeline, check, error });
+        self.effect_pipelines.insert(
+            key,
+            EffectPipeline {
+                pipeline,
+                check,
+                error,
+            },
+        );
     }
 
     /// What the GPU's compiler said about `shader`, if it failed: boxes
     /// with it are drawn as they are. `None` too before it has been drawn,
     /// or while a browser is still compiling it.
     pub fn effect_error(&self, shader: &Shader) -> Option<&str> {
-        self.effect_pipelines.iter().find(|((id, ..), _)| *id == shader.id()).and_then(|(_, p)| p.error.as_deref())
+        self.effect_pipelines
+            .iter()
+            .find(|((id, ..), _)| *id == shader.id())
+            .and_then(|(_, p)| p.error.as_deref())
     }
 }
 
@@ -2242,16 +2628,40 @@ impl UiPass {
 fn blend_state(mode: crate::ui::BlendMode) -> wgpu::BlendState {
     use crate::ui::BlendMode;
     use wgpu::{BlendComponent as C, BlendFactor as F, BlendOperation as O};
-    let over = C { src_factor: F::One, dst_factor: F::OneMinusSrcAlpha, operation: O::Add };
+    let over = C {
+        src_factor: F::One,
+        dst_factor: F::OneMinusSrcAlpha,
+        operation: O::Add,
+    };
     let color = match mode {
         BlendMode::Normal => over,
         // src·dst + dst·(1 − αs): the colours multiplied where it covers.
-        BlendMode::Multiply => C { src_factor: F::Dst, dst_factor: F::OneMinusSrcAlpha, operation: O::Add },
+        BlendMode::Multiply => C {
+            src_factor: F::Dst,
+            dst_factor: F::OneMinusSrcAlpha,
+            operation: O::Add,
+        },
         // src + dst − src·dst.
-        BlendMode::Screen => C { src_factor: F::One, dst_factor: F::OneMinusSrc, operation: O::Add },
-        BlendMode::Plus => C { src_factor: F::One, dst_factor: F::One, operation: O::Add },
-        BlendMode::Darken => C { src_factor: F::One, dst_factor: F::One, operation: O::Min },
-        BlendMode::Lighten => C { src_factor: F::One, dst_factor: F::One, operation: O::Max },
+        BlendMode::Screen => C {
+            src_factor: F::One,
+            dst_factor: F::OneMinusSrc,
+            operation: O::Add,
+        },
+        BlendMode::Plus => C {
+            src_factor: F::One,
+            dst_factor: F::One,
+            operation: O::Add,
+        },
+        BlendMode::Darken => C {
+            src_factor: F::One,
+            dst_factor: F::One,
+            operation: O::Min,
+        },
+        BlendMode::Lighten => C {
+            src_factor: F::One,
+            dst_factor: F::One,
+            operation: O::Max,
+        },
     };
     wgpu::BlendState { color, alpha: over }
 }
@@ -2292,7 +2702,16 @@ struct Uploads {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn upload(queue: &wgpu::Queue, texture: &wgpu::Texture, x: u32, y: u32, w: u32, h: u32, texel: u32, pixels: &[u8]) {
+fn upload(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    texel: u32,
+    pixels: &[u8],
+) {
     let row = (w * texel) as usize;
     let padded = (w * texel).div_ceil(256) * 256;
     let mut rows = vec![0u8; (padded * h) as usize];
@@ -2434,14 +2853,20 @@ impl<'a> Builder<'a> {
         }
         let (sx, sy) = sprite.unwrap_or((0, 0));
         let h = self.xforms.last().copied().unwrap_or(IDENTITY);
-        let (c2, r2) = second.map_or(([0.0; 4], 0.0), |(r, radius)| ([r.x, r.y, r.width, r.height], radius));
+        let (c2, r2) = second.map_or(([0.0; 4], 0.0), |(r, radius)| {
+            ([r.x, r.y, r.width, r.height], radius)
+        });
         self.instances.push(Instance {
             rect: [rect.x, rect.y, rect.width, rect.height],
             color: [c.r, c.g, c.b, color[3]],
             clip: [clip.x, clip.y, clip.width, clip.height],
             params: [radius, clip_radius, sprite.is_some() as u32 as f32, clipped],
             sprite: [sx as f32, sy as f32, 0.0, 0.0],
-            xform: [[h[0], h[1], h[2], r2], [h[3], h[4], h[5], 0.0], [h[6], h[7], h[8], 0.0]],
+            xform: [
+                [h[0], h[1], h[2], r2],
+                [h[3], h[4], h[5], 0.0],
+                [h[6], h[7], h[8], 0.0],
+            ],
             clip2: c2,
         });
         self.record(self.instances.len() - 1);
@@ -2470,7 +2895,13 @@ impl<'a> Builder<'a> {
         };
         let mut overlay = Overlay::new(w, h);
         draw(&mut OverlayPainter::with_scale(&mut overlay, self.scale));
-        let coverage: Vec<u8> = overlay.pixels().as_chunks::<4>().0.iter().map(|p| p[3]).collect();
+        let coverage: Vec<u8> = overlay
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[3])
+            .collect();
         self.uploads.sprites.push((x, y, w, h, coverage));
         self.stats.rasterized += 1;
         let slot = Slot { x, y, w, h };
@@ -2510,7 +2941,14 @@ impl<'a> Builder<'a> {
     /// pieces (a stroke) and its winding (a fill), worked out on the GPU,
     /// exact at any size.
     #[allow(clippy::too_many_arguments)]
-    fn gpu_path(&mut self, flat: &[Subpath], scale: f32, stroke: Option<f32>, fill: bool, color: Rgba) {
+    fn gpu_path(
+        &mut self,
+        flat: &[Subpath],
+        scale: f32,
+        stroke: Option<f32>,
+        fill: bool,
+        color: Rgba,
+    ) {
         for (points, closed) in flat {
             let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
             for &(x, y) in points {
@@ -2523,7 +2961,12 @@ impl<'a> Builder<'a> {
                     let (a, b) = (points[i], points[(i + n - 1) % n]);
                     self.edges.push([a.0, a.1, b.0, b.1]);
                 }
-                let quad = Rect { x: x0 - 1.0, y: y0 - 1.0, width: x1 - x0 + 2.0, height: y1 - y0 + 2.0 };
+                let quad = Rect {
+                    x: x0 - 1.0,
+                    y: y0 - 1.0,
+                    width: x1 - x0 + 2.0,
+                    height: y1 - y0 + 2.0,
+                };
                 self.push_edges(quad, color, 6.0, start, n, 0.0);
             }
             if let Some(w) = stroke {
@@ -2534,17 +2977,31 @@ impl<'a> Builder<'a> {
                 }
                 let start = self.edges.len();
                 for pair in pts.windows(2) {
-                    self.edges.push([pair[0].0, pair[0].1, pair[1].0, pair[1].1]);
+                    self.edges
+                        .push([pair[0].0, pair[0].1, pair[1].0, pair[1].1]);
                 }
                 let pad = half + 1.0;
-                let quad = Rect { x: x0 - pad, y: y0 - pad, width: x1 - x0 + 2.0 * pad, height: y1 - y0 + 2.0 * pad };
+                let quad = Rect {
+                    x: x0 - pad,
+                    y: y0 - pad,
+                    width: x1 - x0 + 2.0 * pad,
+                    height: y1 - y0 + 2.0 * pad,
+                };
                 self.push_edges(quad, color, 7.0, start, pts.len() - 1, half);
             }
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn push_edges(&mut self, quad: Rect, color: Rgba, kind: f32, start: usize, count: usize, half: f32) {
+    fn push_edges(
+        &mut self,
+        quad: Rect,
+        color: Rgba,
+        kind: f32,
+        start: usize,
+        count: usize,
+        half: f32,
+    ) {
         let before = self.instances.len();
         self.push(quad, color, 0.0, None);
         if self.instances.len() > before {
@@ -2603,7 +3060,10 @@ impl Painter for Builder<'_> {
             if t >= last.0 {
                 return last.1;
             }
-            let i = stops.windows(2).position(|w| t >= w[0].0 && t < w[1].0).unwrap_or(0);
+            let i = stops
+                .windows(2)
+                .position(|w| t >= w[0].0 && t < w[1].0)
+                .unwrap_or(0);
             let ((t0, c0), (t1, c1)) = (stops[i], stops[i + 1]);
             let f = if t1 > t0 { (t - t0) / (t1 - t0) } else { 0.0 };
             std::array::from_fn(|c| c0[c] + (c1[c] - c0[c]) * f)
@@ -2621,9 +3081,18 @@ impl Painter for Builder<'_> {
         }
         // Stretches between the stops, within what shows.
         let mut cuts = vec![x0];
-        cuts.extend(stops.iter().map(|&(t, _)| r.x + r.width * t).filter(|&x| x > x0 && x < x1));
+        cuts.extend(
+            stops
+                .iter()
+                .map(|&(t, _)| r.x + r.width * t)
+                .filter(|&x| x > x0 && x < x1),
+        );
         cuts.push(x1);
-        let clips = if square { std::mem::take(&mut self.clips) } else { vec![] };
+        let clips = if square {
+            std::mem::take(&mut self.clips)
+        } else {
+            vec![]
+        };
         for w in cuts.windows(2) {
             let (a, b) = (w[0], w[1]);
             if b <= a {
@@ -2631,7 +3100,17 @@ impl Painter for Builder<'_> {
             }
             let (c0, c1) = (at((a - r.x) / r.width), at((b - r.x) / r.width));
             let before = self.instances.len();
-            self.push(Rect { x: a, y: y0, width: b - a, height: y1 - y0 }, c0, 0.0, None);
+            self.push(
+                Rect {
+                    x: a,
+                    y: y0,
+                    width: b - a,
+                    height: y1 - y0,
+                },
+                c0,
+                0.0,
+                None,
+            );
             if self.instances.len() > before {
                 let right = crate::ui::linear(c1);
                 let last = self.instances.last_mut().expect("just pushed");
@@ -2647,7 +3126,13 @@ impl Painter for Builder<'_> {
     /// A radial, conic or turned linear gradient: one instance, `t` worked
     /// out at each fragment, its colour from a 256-texel ramp of the stops
     /// kept in the image atlas.
-    fn fill_gradient(&mut self, rect: Rect, shape: crate::ui::GradientShape, stops: &[(f32, Rgba)], blur: f32) {
+    fn fill_gradient(
+        &mut self,
+        rect: Rect,
+        shape: crate::ui::GradientShape,
+        stops: &[(f32, Rgba)],
+        blur: f32,
+    ) {
         use crate::ui::GradientShape;
         if shape.is_across() || stops.is_empty() {
             return self.fill_linear_gradient(rect, stops, blur);
@@ -2661,7 +3146,9 @@ impl Painter for Builder<'_> {
                     return;
                 };
                 let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-                let ramp: Vec<u8> = (0..256).flat_map(|i| crate::ui::gradient_at(stops, i as f32 / 255.0).map(byte)).collect();
+                let ramp: Vec<u8> = (0..256)
+                    .flat_map(|i| crate::ui::gradient_at(stops, i as f32 / 255.0).map(byte))
+                    .collect();
                 let slot = Slot { x, y, w: 256, h: 1 };
                 self.images.slots.insert(key, slot);
                 self.uploads.images.push((x, y, 256, 1, ramp));
@@ -2674,17 +3161,30 @@ impl Painter for Builder<'_> {
                 let a = deg.to_radians();
                 let (dx, dy) = (a.sin(), -a.cos());
                 let len = (r.width * dx).abs() + (r.height * dy).abs();
-                (r.x + r.width / 2.0, r.y + r.height / 2.0, [0.0, dx, dy, len])
+                (
+                    r.x + r.width / 2.0,
+                    r.y + r.height / 2.0,
+                    [0.0, dx, dy, len],
+                )
             }
             GradientShape::Radial { cx, cy } => {
                 let (px, py) = (r.x + r.width * cx, r.y + r.height * cy);
-                let far = [(r.x, r.y), (r.x + r.width, r.y), (r.x, r.y + r.height), (r.x + r.width, r.y + r.height)]
-                    .iter()
-                    .map(|&(qx, qy)| ((qx - px).powi(2) + (qy - py).powi(2)).sqrt())
-                    .fold(0.0f32, f32::max);
+                let far = [
+                    (r.x, r.y),
+                    (r.x + r.width, r.y),
+                    (r.x, r.y + r.height),
+                    (r.x + r.width, r.y + r.height),
+                ]
+                .iter()
+                .map(|&(qx, qy)| ((qx - px).powi(2) + (qy - py).powi(2)).sqrt())
+                .fold(0.0f32, f32::max);
                 (px, py, [1.0, far, 0.0, 0.0])
             }
-            GradientShape::Conic { cx, cy, from } => (r.x + r.width * cx, r.y + r.height * cy, [2.0, from.to_radians(), 0.0, 0.0]),
+            GradientShape::Conic { cx, cy, from } => (
+                r.x + r.width * cx,
+                r.y + r.height * cy,
+                [2.0, from.to_radians(), 0.0, 0.0],
+            ),
         };
         let before = self.instances.len();
         self.push(r, WHITE, 0.0, None);
@@ -2741,7 +3241,14 @@ impl Painter for Builder<'_> {
         // Where it lands: under a plain move, snapped where it shows; under
         // a turn or a scale, no pixel grid lines up with it anyway.
         let h = self.xforms.last().copied().unwrap_or(IDENTITY);
-        if h[0] == 1.0 && h[1] == 0.0 && h[3] == 0.0 && h[4] == 1.0 && h[6] == 0.0 && h[7] == 0.0 && h[8] == 1.0 {
+        if h[0] == 1.0
+            && h[1] == 0.0
+            && h[3] == 0.0
+            && h[4] == 1.0
+            && h[6] == 0.0
+            && h[7] == 0.0
+            && h[8] == 1.0
+        {
             dev.y = (dev.y + h[5]).round() - h[5];
             dev.x = ((dev.x + h[2]) * 4.0).round() / 4.0 - h[2];
         }
@@ -2820,14 +3327,19 @@ impl Painter for Builder<'_> {
         let w = (dev.width + fx).ceil() as u32 + 2 * pad as u32;
         let h = (dev.height + fy).ceil() as u32 + 2 * pad as u32;
         let size = || (w, h);
-        let key = format!("P{k:?}|{fx:?}|{fy:?}|{:?}|{:?}|{view_box:?}|{stroke:?}|{fill}|{d:?}", dev.width, dev.height);
+        let key = format!(
+            "P{k:?}|{fx:?}|{fy:?}|{:?}|{:?}|{view_box:?}|{stroke:?}|{fill}|{d:?}",
+            dev.width, dev.height
+        );
         let local = Rect {
             x: (fx + pad as f32) / k,
             y: (fy + pad as f32) / k,
             width: rect.width,
             height: rect.height,
         };
-        if let Some(slot) = self.sprite(key, size, |p| p.path(local, d, view_box, stroke, fill, WHITE)) {
+        if let Some(slot) = self.sprite(key, size, |p| {
+            p.path(local, d, view_box, stroke, fill, WHITE)
+        }) {
             self.push_sprite(slot, x0, y0, color);
         }
     }
@@ -2838,7 +3350,12 @@ impl Painter for Builder<'_> {
         let half = width * k / 2.0;
         let (r, cx, cy) = (arc.radius * k, arc.cx * k, arc.cy * k);
         let reach = r + half + 1.0;
-        let quad = Rect { x: cx - reach, y: cy - reach, width: 2.0 * reach, height: 2.0 * reach };
+        let quad = Rect {
+            x: cx - reach,
+            y: cy - reach,
+            width: 2.0 * reach,
+            height: 2.0 * reach,
+        };
         let before = self.instances.len();
         self.push(quad, color, 0.0, None);
         if self.instances.len() > before {
@@ -2912,15 +3429,33 @@ impl Painter for Builder<'_> {
         let h = self.xforms.last().copied().unwrap_or(IDENTITY);
         let reach = (sigma * 3.0).ceil();
         let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
-        for (x, y) in [(r.x - reach, r.y - reach), (r.x + r.width + reach, r.y - reach), (r.x - reach, r.y + r.height + reach), (r.x + r.width + reach, r.y + r.height + reach)] {
+        for (x, y) in [
+            (r.x - reach, r.y - reach),
+            (r.x + r.width + reach, r.y - reach),
+            (r.x - reach, r.y + r.height + reach),
+            (r.x + r.width + reach, r.y + r.height + reach),
+        ] {
             let w = (h[6] * x + h[7] * y + h[8]).max(1e-4);
-            let (px, py) = ((h[0] * x + h[1] * y + h[2]) / w, (h[3] * x + h[4] * y + h[5]) / w);
+            let (px, py) = (
+                (h[0] * x + h[1] * y + h[2]) / w,
+                (h[3] * x + h[4] * y + h[5]) / w,
+            );
             lo = [lo[0].min(px), lo[1].min(py)];
             hi = [hi[0].max(px), hi[1].max(py)];
         }
-        let region = [lo[0].floor(), lo[1].floor(), hi[0].ceil() - lo[0].floor(), hi[1].ceil() - lo[1].floor()];
+        let region = [
+            lo[0].floor(),
+            lo[1].floor(),
+            hi[0].ceil() - lo[0].floor(),
+            hi[1].ceil() - lo[1].floor(),
+        ];
         let before = self.instances.len();
-        self.push(r, [saturate, backdrop_step(sigma), 0.0, 1.0], radius * k, None);
+        self.push(
+            r,
+            [saturate, backdrop_step(sigma), 0.0, 1.0],
+            radius * k,
+            None,
+        );
         if self.instances.len() > before {
             let last = self.instances.last_mut().expect("just pushed");
             // The colour carries numbers, not a colour: as given.
@@ -2947,7 +3482,10 @@ impl Painter for Builder<'_> {
             Some(slot) => *slot,
             None => {
                 let Some((x, y)) = self.images.place(image.width, image.height) else {
-                    if self.drop_overflow || image.width > self.images.size || image.height > self.images.size {
+                    if self.drop_overflow
+                        || image.width > self.images.size
+                        || image.height > self.images.size
+                    {
                         self.stats.dropped += 1;
                     } else {
                         self.images_overflowed = true;
@@ -2961,7 +3499,9 @@ impl Painter for Builder<'_> {
                     h: image.height,
                 };
                 self.images.slots.insert(key, slot);
-                self.uploads.images.push((x, y, image.width, image.height, image.rgba.clone()));
+                self.uploads
+                    .images
+                    .push((x, y, image.width, image.height, image.rgba.clone()));
                 self.stats.rasterized += 1;
                 slot
             }
@@ -2988,12 +3528,29 @@ impl Painter for Builder<'_> {
         if let Some(&h) = self.xforms.last() {
             let at = |x: f32, y: f32| {
                 let w = h[6] * x + h[7] * y + h[8];
-                ((h[0] * x + h[1] * y + h[2]) / w, (h[3] * x + h[4] * y + h[5]) / w)
+                (
+                    (h[0] * x + h[1] * y + h[2]) / w,
+                    (h[3] * x + h[4] * y + h[5]) / w,
+                )
             };
-            let c = [at(r.x, r.y), at(r.x + r.width, r.y), at(r.x, r.y + r.height), at(r.x + r.width, r.y + r.height)];
-            let (x0, x1) = c.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
-            let (y0, y1) = c.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
-            r = Rect { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+            let c = [
+                at(r.x, r.y),
+                at(r.x + r.width, r.y),
+                at(r.x, r.y + r.height),
+                at(r.x + r.width, r.y + r.height),
+            ];
+            let (x0, x1) = c
+                .iter()
+                .fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+            let (y0, y1) = c
+                .iter()
+                .fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+            r = Rect {
+                x: x0,
+                y: y0,
+                width: x1 - x0,
+                height: y1 - y0,
+            };
         }
         let radius = rx.min(ry) * self.scale;
         let clip = match self.clips.last() {
@@ -3014,7 +3571,11 @@ impl Painter for Builder<'_> {
                 // as its box alone would.
                 let clear = |inner: Rect, outer: Rect, r: f32| {
                     let k = r * (1.0 - std::f32::consts::FRAC_1_SQRT_2) + 0.5;
-                    r <= 0.0 || (inner.x >= outer.x + k && inner.y >= outer.y + k && inner.x + inner.width <= outer.x + outer.width - k && inner.y + inner.height <= outer.y + outer.height - k)
+                    r <= 0.0
+                        || (inner.x >= outer.x + k
+                            && inner.y >= outer.y + k
+                            && inner.x + inner.width <= outer.x + outer.width - k
+                            && inner.y + inner.height <= outer.y + outer.height - k)
                 };
                 if cut == r && clear(r, top, top_radius) {
                     // Inside it, clear of its corners: its own shape.
@@ -3048,7 +3609,17 @@ impl Painter for Builder<'_> {
     fn push_projective(&mut self, h: [f32; 9], _affine: [f32; 6]) {
         // In device pixels: scaled in, mapped, scaled out.
         let s = self.scale;
-        let dev = [h[0], h[1], h[2] * s, h[3], h[4], h[5] * s, h[6] / s, h[7] / s, h[8]];
+        let dev = [
+            h[0],
+            h[1],
+            h[2] * s,
+            h[3],
+            h[4],
+            h[5] * s,
+            h[6] / s,
+            h[7] / s,
+            h[8],
+        ];
         let top = self.xforms.last().copied().unwrap_or(IDENTITY);
         self.xforms.push(compose(top, dev));
     }
@@ -3064,7 +3635,10 @@ impl Painter for Builder<'_> {
         let k = self.scale;
         let pad = effect.overflow;
         let (x0, y0) = (((rect.x - pad) * k).floor(), ((rect.y - pad) * k).floor());
-        let (x1, y1) = (((rect.x + rect.width + pad) * k).ceil(), ((rect.y + rect.height + pad) * k).ceil());
+        let (x1, y1) = (
+            ((rect.x + rect.width + pad) * k).ceil(),
+            ((rect.y + rect.height + pad) * k).ceil(),
+        );
         let (w, h) = ((x1 - x0) as u32, (y1 - y0) as u32);
         let room = self.targets.len() <= MAX_LAYERS;
         if w == 0 || h == 0 || w > MAX_LAYER_SIDE || h > MAX_LAYER_SIDE || !room {
@@ -3072,7 +3646,10 @@ impl Painter for Builder<'_> {
             return;
         }
         let target = self.targets.len();
-        self.targets.push(Target { size: (w, h), ops: vec![] });
+        self.targets.push(Target {
+            size: (w, h),
+            ops: vec![],
+        });
         let uniform = EffectUniform {
             origin: [x0, y0],
             box_origin: [rect.x, rect.y],
@@ -3084,13 +3661,21 @@ impl Painter for Builder<'_> {
             args: *effect.values(),
         };
         let clips = std::mem::take(&mut self.clips);
-        let xforms = std::mem::replace(&mut self.xforms, vec![[1.0, 0.0, -x0, 0.0, 1.0, -y0, 0.0, 0.0, 1.0]]);
+        let xforms = std::mem::replace(
+            &mut self.xforms,
+            vec![[1.0, 0.0, -x0, 0.0, 1.0, -y0, 0.0, 0.0, 1.0]],
+        );
         self.open.push(Some(OpenLayer {
             target,
             clips,
             xforms,
             rect: [x0, y0, w as f32, h as f32],
-            effect: EffectDraw { shader: effect.shader.clone(), blend: effect.blend, uniform, target },
+            effect: EffectDraw {
+                shader: effect.shader.clone(),
+                blend: effect.blend,
+                uniform,
+                target,
+            },
         }));
         // Each pass knows the one it is drawn into by the stack of open ones.
         self.current = target;
@@ -3098,14 +3683,31 @@ impl Painter for Builder<'_> {
 
     /// Closes the layer and puts it back, through its effect, where it was.
     fn pop_effect(&mut self) {
-        let Some(Some(open)) = self.open.pop() else { return };
+        let Some(Some(open)) = self.open.pop() else {
+            return;
+        };
         self.clips = open.clips;
         self.xforms = open.xforms;
-        self.current = self.open.iter().rev().find_map(|o| o.as_ref().map(|o| o.target)).unwrap_or(0);
+        self.current = self
+            .open
+            .iter()
+            .rev()
+            .find_map(|o| o.as_ref().map(|o| o.target))
+            .unwrap_or(0);
         self.done.push(open.target);
         let [x, y, w, h] = open.rect;
         let before = self.instances.len();
-        self.push(Rect { x, y, width: w, height: h }, WHITE, 0.0, None);
+        self.push(
+            Rect {
+                x,
+                y,
+                width: w,
+                height: h,
+            },
+            WHITE,
+            0.0,
+            None,
+        );
         if self.instances.len() > before {
             self.instances.last_mut().expect("just pushed").params[2] = 8.0;
             self.effects.push(open.effect);
@@ -3120,6 +3722,9 @@ fn device_rect(r: Rect, scale: f32, size: (u32, u32)) -> Option<[u32; 4]> {
     let x0 = (r.x * scale).floor().max(0.0) as u32;
     let y0 = (r.y * scale).floor().max(0.0) as u32;
     let x1 = ((r.x + r.width) * scale).ceil().max(0.0).min(size.0 as f32) as u32;
-    let y1 = ((r.y + r.height) * scale).ceil().max(0.0).min(size.1 as f32) as u32;
+    let y1 = ((r.y + r.height) * scale)
+        .ceil()
+        .max(0.0)
+        .min(size.1 as f32) as u32;
     (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0])
 }

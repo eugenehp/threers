@@ -69,7 +69,8 @@ impl FontMetrics {
 static UI_FACE: std::sync::Mutex<Option<std::sync::Arc<TtfFont>>> = std::sync::Mutex::new(None);
 /// The UI face's other files, set with [`CaptionFont::set_ui_style`]:
 /// italic, bold, bold italic.
-static UI_STYLES: std::sync::Mutex<[Option<std::sync::Arc<[u8]>>; 3]> = std::sync::Mutex::new([None, None, None]);
+static UI_STYLES: std::sync::Mutex<[Option<std::sync::Arc<[u8]>>; 3]> =
+    std::sync::Mutex::new([None, None, None]);
 
 enum Face {
     Builtin,
@@ -907,8 +908,13 @@ impl CaptionFont {
         let set = UI_FACE.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(base) = set {
             let mut face = TtfFace::shared(base);
-            let [italic, bold, bold_italic] = UI_STYLES.lock().unwrap_or_else(|e| e.into_inner()).clone();
-            (face.family.italic, face.family.bold, face.family.bold_italic) = (italic, bold, bold_italic);
+            let [italic, bold, bold_italic] =
+                UI_STYLES.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            (
+                face.family.italic,
+                face.family.bold,
+                face.family.bold_italic,
+            ) = (italic, bold, bold_italic);
             return Self::from_face(Face::Ttf(Box::new(face)));
         }
         Self::try_sf_compact().unwrap_or_else(Self::builtin)
@@ -936,7 +942,8 @@ impl CaptionFont {
             (true, true) => 2,
             (false, false) => return Self::set_ui(bytes),
         };
-        UI_STYLES.lock().unwrap_or_else(|e| e.into_inner())[slot] = Some(std::sync::Arc::from(bytes));
+        UI_STYLES.lock().unwrap_or_else(|e| e.into_inner())[slot] =
+            Some(std::sync::Arc::from(bytes));
         Ok(())
     }
 

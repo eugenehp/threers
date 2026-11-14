@@ -22,9 +22,9 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use crate::input::Input;
 use crate::button::{button, ButtonRole};
 use crate::environment::Token;
+use crate::input::Input;
 use crate::tree::{NodeId, Ui};
 use crate::{style, Role, Semantics};
 
@@ -88,7 +88,14 @@ pub fn prompt_with<S: 'static>(
             border-radius: 12px; background: #1f2430; border: 1px solid #3a4150; color: #e5e7eb; box-shadow: 0 16px 40px rgba(0,0,0,0.55);
         },
     );
-    ui.token_style(dialog, &[("background", Token::Raised), ("border-color", Token::Border), ("color", Token::Text)]);
+    ui.token_style(
+        dialog,
+        &[
+            ("background", Token::Raised),
+            ("border-color", Token::Border),
+            ("color", Token::Text),
+        ],
+    );
     ui.defer(dialog, 951);
     ui.appear(dialog, crate::transitions::Transition::Fade, 0.12);
     ui.appear(backdrop, crate::transitions::Transition::Fade, 0.12);
@@ -103,7 +110,10 @@ pub fn prompt_with<S: 'static>(
     let mut sem = Semantics::new(Role::AlertDialog).label(title);
     sem.description = (!message.is_empty()).then(|| message.to_owned());
     ui.set_semantics(dialog, sem);
-    let row = ui.add_box(dialog, style! { display: flex; gap: 8px; justify-content: flex-end; });
+    let row = ui.add_box(
+        dialog,
+        style! { display: flex; gap: 8px; justify-content: flex-end; },
+    );
     let answered: Rc<Cell<Option<usize>>> = Rc::default();
     let on_answer = Rc::new(std::cell::RefCell::new(on_answer));
     let mut nodes = vec![];
@@ -117,14 +127,24 @@ pub fn prompt_with<S: 'static>(
         });
         nodes.push(b);
     }
-    let cancel = buttons.iter().position(|b| b.1 == ButtonRole::Cancel).unwrap_or(buttons.len().saturating_sub(1));
-    let primary = buttons.iter().position(|b| b.1 == ButtonRole::Primary).unwrap_or(0);
+    let cancel = buttons
+        .iter()
+        .position(|b| b.1 == ButtonRole::Cancel)
+        .unwrap_or(buttons.len().saturating_sub(1));
+    let primary = buttons
+        .iter()
+        .position(|b| b.1 == ButtonRole::Primary)
+        .unwrap_or(0);
     let (a, f, all) = (answered.clone(), on_answer.clone(), nodes.clone());
     input.on_key(dialog, move |s, ui, key, _, _| {
         let i = match key {
             "Escape" => cancel,
             // Enter presses the button with focus, or else the primary one.
-            "Enter" => ui.interaction().focused.and_then(|f| all.iter().position(|&n| n == f)).unwrap_or(primary),
+            "Enter" => ui
+                .interaction()
+                .focused
+                .and_then(|f| all.iter().position(|&n| n == f))
+                .unwrap_or(primary),
             _ => return false,
         };
         if a.get().is_none() {

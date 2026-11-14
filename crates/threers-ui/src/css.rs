@@ -6,8 +6,9 @@
 //! in the macro, a Rust value of the property's type ([`Value`]).
 
 use super::style::{
-    AlignContent, AlignItems, BoxShadow, BoxSizing, Cursor, FlexWrap, GridPlacement, Scrollbar, ScrollbarVisibility, Track, UserSelect, TrackSize, Display, Edges, FlexDirection, FontWeight, JustifyContent,
-    Length, ObjectFit, Position, Rgba, Style,
+    AlignContent, AlignItems, BoxShadow, BoxSizing, Cursor, Display, Edges, FlexDirection,
+    FlexWrap, FontWeight, GridPlacement, JustifyContent, Length, ObjectFit, Position, Rgba,
+    Scrollbar, ScrollbarVisibility, Style, Track, TrackSize, UserSelect,
 };
 
 /// A computed value for a property, given as a Rust expression.
@@ -61,6 +62,15 @@ from! {
     Vec<(f32, Rgba)> => Gradient,
     Cursor => Cursor,
     ObjectFit => ObjectFit,
+}
+
+/// `solid` or `dashed`: whether dashed.
+fn dashed(v: &str) -> Option<bool> {
+    match v {
+        "solid" => Some(false),
+        "dashed" => Some(true),
+        _ => None,
+    }
 }
 
 fn bad(name: &str, value: &str) -> ! {
@@ -147,8 +157,9 @@ fn px(v: &str) -> Option<f32> {
     }
 }
 
-/// A CSS colour: `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb(…)`, `rgba(…)` (0–255
-/// and an alpha 0–1), or `white`, `black`, `transparent`, `orange`.
+/// A CSS colour: `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb(…)`/`rgba(…)` (0–255
+/// or percentages; commas, or spaces and `/ alpha`), `hsl(…)`, `oklch(…)`,
+/// or `white`, `black`, `transparent`, `orange` and a few more names.
 /// `linear-gradient(…)`, `radial-gradient(…)` or `conic-gradient(…)`:
 /// the shape and the stops (positions given or spread evenly).
 fn gradient(v: &str) -> Option<(crate::style::GradientShape, Vec<(f32, Rgba)>)> {
@@ -183,7 +194,11 @@ fn gradient(v: &str) -> Option<(crate::style::GradientShape, Vec<(f32, Rgba)>)> 
                 "center" => {}
                 p => {
                     let f = p.strip_suffix('%')?.parse::<f32>().ok()? / 100.0;
-                    if i == 0 { xy.0 = f } else { xy.1 = f }
+                    if i == 0 {
+                        xy.0 = f
+                    } else {
+                        xy.1 = f
+                    }
                 }
             }
         }
@@ -213,7 +228,10 @@ fn gradient(v: &str) -> Option<(crate::style::GradientShape, Vec<(f32, Rgba)>)> 
                 a => angle(a),
             };
             // A gradient with no direction runs top to bottom, as in CSS.
-            (GradientShape::Linear(side.unwrap_or(180.0)), usize::from(side.is_some()))
+            (
+                GradientShape::Linear(side.unwrap_or(180.0)),
+                usize::from(side.is_some()),
+            )
         }
         "radial-gradient" => {
             let config = !first.starts_with('#') && color(first).is_none();
@@ -228,7 +246,9 @@ fn gradient(v: &str) -> Option<(crate::style::GradientShape, Vec<(f32, Rgba)>)> 
             let mut from = 0.0;
             let mut at = (0.5, 0.5);
             if config {
-                let (head, tail) = first.split_once("at ").map_or((first, None), |(h, t)| (h, Some(t)));
+                let (head, tail) = first
+                    .split_once("at ")
+                    .map_or((first, None), |(h, t)| (h, Some(t)));
                 if let Some(f) = head.trim().strip_prefix("from ") {
                     from = angle(f.trim())?;
                 }
@@ -236,14 +256,24 @@ fn gradient(v: &str) -> Option<(crate::style::GradientShape, Vec<(f32, Rgba)>)> 
                     at = place(t)?;
                 }
             }
-            (GradientShape::Conic { cx: at.0, cy: at.1, from }, usize::from(config))
+            (
+                GradientShape::Conic {
+                    cx: at.0,
+                    cy: at.1,
+                    from,
+                },
+                usize::from(config),
+            )
         }
         _ => return None,
     };
     let stops: Vec<(Rgba, Option<f32>)> = args[from..]
         .iter()
         .map(|a| match a.rsplit_once(' ') {
-            Some((c, p)) if p.ends_with('%') => Some((color(c)?, Some(p.strip_suffix('%')?.parse::<f32>().ok()? / 100.0))),
+            Some((c, p)) if p.ends_with('%') => Some((
+                color(c)?,
+                Some(p.strip_suffix('%')?.parse::<f32>().ok()? / 100.0),
+            )),
             _ => Some((color(a)?, None)),
         })
         .collect::<Option<_>>()?;
@@ -251,7 +281,14 @@ fn gradient(v: &str) -> Option<(crate::style::GradientShape, Vec<(f32, Rgba)>)> 
         return None;
     }
     let n = stops.len() - 1;
-    Some((shape, stops.iter().enumerate().map(|(i, &(c, p))| (p.unwrap_or(i as f32 / n as f32), c)).collect()))
+    Some((
+        shape,
+        stops
+            .iter()
+            .enumerate()
+            .map(|(i, &(c, p))| (p.unwrap_or(i as f32 / n as f32), c))
+            .collect(),
+    ))
 }
 
 pub fn color(v: &str) -> Option<Rgba> {
@@ -287,19 +324,93 @@ pub fn color(v: &str) -> Option<Rgba> {
             a,
         ]);
     }
-    let args = v
-        .strip_prefix("rgba(")
-        .or_else(|| v.strip_prefix("rgb("))?
-        .strip_suffix(')')?;
-    let n: Vec<f32> = args
-        .split(',')
-        .map(|a| a.trim().parse().ok())
-        .collect::<Option<_>>()?;
-    match n[..] {
-        [r, g, b] => Some([r / 255.0, g / 255.0, b / 255.0, 1.0]),
-        [r, g, b, a] => Some([r / 255.0, g / 255.0, b / 255.0, a]),
-        _ => None,
+    let (function, args) = v.strip_suffix(')')?.split_once('(')?;
+    // `rgb(1, 2, 3, 0.5)` or `rgb(1 2 3 / 50%)`: three channels and an alpha.
+    let (channels, alpha) = match args.split_once('/') {
+        Some((c, a)) => (c, Some(a.trim())),
+        None => (args, None),
+    };
+    let mut parts: Vec<&str> = if channels.contains(',') {
+        channels.split(',').map(str::trim).collect()
+    } else {
+        channels.split_whitespace().collect()
+    };
+    let alpha = match (alpha, parts.len()) {
+        (Some(a), 3) => a,
+        (None, 4) => parts.pop()?,
+        (None, 3) => "1",
+        _ => return None,
+    };
+    let alpha = match alpha.strip_suffix('%') {
+        Some(p) => p.trim().parse::<f32>().ok()? / 100.0,
+        None => alpha.parse::<f32>().ok()?,
     }
+    .clamp(0.0, 1.0);
+    // A number, or a percentage of `full`.
+    let num = |s: &str, full: f32| -> Option<f32> {
+        match s.strip_suffix('%') {
+            Some(p) => Some(p.trim().parse::<f32>().ok()? / 100.0 * full),
+            None => s.trim_end_matches("deg").parse().ok(),
+        }
+    };
+    let [r, g, b] = match function.trim() {
+        "rgb" | "rgba" => [
+            num(parts[0], 255.0)? / 255.0,
+            num(parts[1], 255.0)? / 255.0,
+            num(parts[2], 255.0)? / 255.0,
+        ],
+        "hsl" | "hsla" => hsl_to_rgb(
+            num(parts[0], 360.0)?,
+            num(parts[1], 1.0)?,
+            num(parts[2], 1.0)?,
+        ),
+        // Lightness 0–1 (or a percentage), chroma about 0–0.4, hue in degrees.
+        "oklch" => oklch_to_rgb(
+            num(parts[0], 1.0)?,
+            num(parts[1], 0.4)?,
+            num(parts[2], 360.0)?,
+        ),
+        _ => return None,
+    };
+    Some([
+        r.clamp(0.0, 1.0),
+        g.clamp(0.0, 1.0),
+        b.clamp(0.0, 1.0),
+        alpha,
+    ])
+}
+
+/// HSL (hue in degrees, saturation and lightness 0–1) to sRGB.
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> [f32; 3] {
+    let (s, l) = (s.clamp(0.0, 1.0), l.clamp(0.0, 1.0));
+    let a = s * l.min(1.0 - l);
+    let f = |n: f32| {
+        let k = (n + h.rem_euclid(360.0) / 30.0) % 12.0;
+        l - a * (k - 3.0).min(9.0 - k).clamp(-1.0, 1.0)
+    };
+    [f(0.0), f(8.0), f(4.0)]
+}
+
+/// OKLCH to sRGB (CSS Color 4), clipped to the gamut.
+fn oklch_to_rgb(l: f32, c: f32, h: f32) -> [f32; 3] {
+    let (l, c, h) = (l as f64, c.max(0.0) as f64, (h as f64).to_radians());
+    let (a, b) = (c * h.cos(), c * h.sin());
+    let l_ = (l + 0.3963377774 * a + 0.2158037573 * b).powi(3);
+    let m_ = (l - 0.1055613458 * a - 0.0638541728 * b).powi(3);
+    let s_ = (l - 0.0894841775 * a - 1.2914855480 * b).powi(3);
+    let linear = [
+        4.0767416621 * l_ - 3.3077115913 * m_ + 0.2309699292 * s_,
+        -1.2684380046 * l_ + 2.6097574011 * m_ - 0.3413193965 * s_,
+        -0.0041960863 * l_ - 0.7034186147 * m_ + 1.7076147010 * s_,
+    ];
+    linear.map(|v| {
+        let v = v.clamp(0.0, 1.0);
+        (if v <= 0.0031308 {
+            12.92 * v
+        } else {
+            1.055 * v.powf(1.0 / 2.4) - 0.055
+        }) as f32
+    })
 }
 
 /// `margin`/`padding`/`border-width`: one to four lengths, CSS order.
@@ -369,7 +480,10 @@ fn track_size(v: &str) -> Option<TrackSize> {
 fn track(v: &str) -> Option<Track> {
     if let Some(inner) = v.strip_prefix("minmax(").and_then(|r| r.strip_suffix(')')) {
         let (a, b) = inner.split_once(',')?;
-        return Some(Track { min: track_size(a.trim())?, max: track_size(b.trim())? });
+        return Some(Track {
+            min: track_size(a.trim())?,
+            max: track_size(b.trim())?,
+        });
     }
     Some(match track_size(v)? {
         TrackSize::Fr(f) => Track::fr(f),
@@ -415,7 +529,11 @@ fn placement(v: &str) -> Option<GridPlacement> {
         Some((a, b)) => (side(a)?, Some(side(b)?)),
         None => (side(v)?, None),
     };
-    let mut p = GridPlacement { start: a.0, end: None, span: a.1 };
+    let mut p = GridPlacement {
+        start: a.0,
+        end: None,
+        span: a.1,
+    };
     if let Some((end, span)) = b {
         p.end = end;
         if span > 0 {
@@ -453,12 +571,21 @@ fn align(v: &str) -> Option<AlignItems> {
         "flex-start" | "start" => AlignItems::FlexStart,
         "center" => AlignItems::Center,
         "flex-end" | "end" => AlignItems::FlexEnd,
+        "baseline" | "first baseline" => AlignItems::Baseline,
         _ => return None,
     })
 }
 
 /// Sets property `name` from CSS text.
 pub fn apply(s: &mut Style, name: &str, value: &str) {
+    if !try_apply(s, name, value) {
+        bad(name, &normalize(value));
+    }
+}
+
+/// [`apply`], saying whether the property and value are supported rather
+/// than panicking. Where they are not, `s` may be partly changed.
+pub fn try_apply(s: &mut Style, name: &str, value: &str) -> bool {
     let value = normalize(value);
     let v = value.as_str();
     let ok = (|| -> Option<()> {
@@ -578,9 +705,15 @@ pub fn apply(s: &mut Style, name: &str, value: &str) {
                         "wrap" => s.flex_wrap = FlexWrap::Wrap,
                         "wrap-reverse" => s.flex_wrap = FlexWrap::WrapReverse,
                         "row" => (s.flex_direction, s.flex_reverse) = (FlexDirection::Row, false),
-                        "column" => (s.flex_direction, s.flex_reverse) = (FlexDirection::Column, false),
-                        "row-reverse" => (s.flex_direction, s.flex_reverse) = (FlexDirection::Row, true),
-                        "column-reverse" => (s.flex_direction, s.flex_reverse) = (FlexDirection::Column, true),
+                        "column" => {
+                            (s.flex_direction, s.flex_reverse) = (FlexDirection::Column, false)
+                        }
+                        "row-reverse" => {
+                            (s.flex_direction, s.flex_reverse) = (FlexDirection::Row, true)
+                        }
+                        "column-reverse" => {
+                            (s.flex_direction, s.flex_reverse) = (FlexDirection::Column, true)
+                        }
                         _ => return None,
                     }
                 }
@@ -645,15 +778,16 @@ pub fn apply(s: &mut Style, name: &str, value: &str) {
             "padding" => s.padding = edges(v)?,
             "border-width" => s.border = edges(v)?,
             "border-color" => s.border_color = color(v)?,
-            // `border: <width> [solid] [<color>]`.
+            "border-style" => s.border_dashed = dashed(v)?,
+            // `border: <width> [solid|dashed] [<color>]`.
             "border" => {
                 for w in words(v) {
                     if let Some(p) = px(w) {
                         s.border = Edges::all(p);
                     } else if let Some(c) = color(w) {
                         s.border_color = c;
-                    } else if w != "solid" {
-                        return None;
+                    } else {
+                        s.border_dashed = dashed(w)?;
                     }
                 }
             }
@@ -688,14 +822,21 @@ pub fn apply(s: &mut Style, name: &str, value: &str) {
                 s.color = color(v)?;
                 s.color_set = true;
             }
-            "font-family" => s.font_family = v.trim_matches('"').to_owned(),
-            "font-size" => s.font_size = px(v)?,
+            "font-family" => {
+                s.font_family = v.trim_matches('"').to_owned();
+                s.font_family_set = true;
+            }
+            "font-size" => {
+                s.font_size = px(v)?;
+                s.font_size_set = true;
+            }
             "font-weight" => {
                 s.font_weight = match v {
                     "normal" => FontWeight::Normal,
                     "bold" => FontWeight::Bold,
                     n => FontWeight::Weight(n.parse().ok()?),
-                }
+                };
+                s.font_weight_set = true;
             }
             // A bare number is times the font size (as set by then).
             "line-height" => {
@@ -703,7 +844,8 @@ pub fn apply(s: &mut Style, name: &str, value: &str) {
                     _ if v == "normal" => None,
                     Ok(n) => Some(n * s.font_size),
                     Err(_) => Some(px(v)?),
-                }
+                };
+                s.line_height_set = true;
             }
             "top" => s.top = length(v)?,
             "left" => s.left = length(v)?,
@@ -733,7 +875,8 @@ pub fn apply(s: &mut Style, name: &str, value: &str) {
                     "right" | "end" => crate::style::TextAlign::End,
                     "left" | "start" | "justify" => crate::style::TextAlign::Start,
                     _ => return None,
-                }
+                };
+                s.text_align_set = true;
             }
             "word-wrap" | "overflow-wrap" => s.wrap |= v == "break-word" || v == "anywhere",
             "writing-mode" => s.vertical = v.starts_with("vertical"),
@@ -773,7 +916,11 @@ pub fn apply(s: &mut Style, name: &str, value: &str) {
                 };
             }
             "mask-image" | "mask" => {
-                s.mask = if v == "none" { None } else { Some(gradient(v)?) };
+                s.mask = if v == "none" {
+                    None
+                } else {
+                    Some(gradient(v)?)
+                };
             }
             "clip-path" => {
                 use crate::style::ClipShape;
@@ -797,7 +944,9 @@ pub fn apply(s: &mut Style, name: &str, value: &str) {
                 // `16 / 9`, `1.5`, or `auto`.
                 s.aspect_ratio = match v.split_once('/') {
                     _ if v == "auto" => 0.0,
-                    Some((a, b)) => a.trim().parse::<f32>().ok()? / b.trim().parse::<f32>().ok()?.max(1e-6),
+                    Some((a, b)) => {
+                        a.trim().parse::<f32>().ok()? / b.trim().parse::<f32>().ok()?.max(1e-6)
+                    }
                     None => v.parse::<f32>().ok()?,
                 }
                 .max(0.0);
@@ -806,7 +955,11 @@ pub fn apply(s: &mut Style, name: &str, value: &str) {
                 // `blur(20px) saturate(180%)`, either or both, or `none`.
                 s.backdrop_blur = 0.0;
                 s.backdrop_saturate = 1.0;
-                for f in v.split(')').map(str::trim).filter(|f| !f.is_empty() && *f != "none") {
+                for f in v
+                    .split(')')
+                    .map(str::trim)
+                    .filter(|f| !f.is_empty() && *f != "none")
+                {
                     let (name, arg) = f.split_once('(')?;
                     match name.trim() {
                         "blur" => s.backdrop_blur = px(arg.trim())?.max(0.0),
@@ -832,9 +985,7 @@ pub fn apply(s: &mut Style, name: &str, value: &str) {
         }
         Some(())
     })();
-    if ok.is_none() {
-        bad(name, v);
-    }
+    ok.is_some()
 }
 
 /// Sets property `name` from a Rust value.
@@ -879,6 +1030,7 @@ pub fn set(s: &mut Style, name: &str, value: Value) {
         }
         ("font-weight", V::FontWeight(w)) => {
             s.font_weight = w;
+            s.font_weight_set = true;
             true
         }
         ("margin", V::Edges(e)) => {
@@ -915,6 +1067,7 @@ pub fn set(s: &mut Style, name: &str, value: Value) {
         }
         ("font-family", V::Text(t)) => {
             s.font_family = t;
+            s.font_family_set = true;
             true
         }
         ("overflow", V::Bool(b)) => {
@@ -941,10 +1094,12 @@ pub fn set(s: &mut Style, name: &str, value: Value) {
             }
             "font-size" => {
                 s.font_size = n;
+                s.font_size_set = true;
                 true
             }
             "line-height" => {
                 s.line_height = Some(n);
+                s.line_height_set = true;
                 true
             }
             "gap" => {
@@ -1102,8 +1257,24 @@ macro_rules! __style_value {
 /// assert_eq!(tree.children(bar).len(), 2);
 /// ```
 ///
-/// A node is `div(<declarations>) { <children> }`, a string literal (a text
+/// A node is `div(<declarations>) { <children> }`, `div["<tailwind classes>"]
+/// { <children> }` (see [`Ui::tw`](super::Ui::tw)), a string literal (a text
 /// run in its parent's font) or `{expr}` (text from a Rust expression).
+///
+/// ```
+/// use threers_ui::{ui, FixedWidthText, Ui};
+///
+/// let mut tree = Ui::new();
+/// let root = tree.root();
+/// let card = ui!(tree, root,
+///     div["flex flex-col gap-2 p-4 rounded-lg bg-white hover:bg-slate-50"] {
+///         div["text-lg font-semibold text-slate-900"] { "Title" }
+///         div(height: 1px; background: #e5e7eb) {}
+///     }
+/// );
+/// tree.layout(400.0, 300.0, &mut FixedWidthText(7.0));
+/// assert_eq!(tree.style(card).padding.top, 16.0);
+/// ```
 #[macro_export]
 macro_rules! ui {
     ($tree:expr, $parent:expr, $($nodes:tt)+) => {{
@@ -1119,6 +1290,16 @@ macro_rules! ui {
 #[macro_export]
 macro_rules! __ui_nodes {
     ($tree:ident, $parent:ident, $first:ident;) => {};
+    ($tree:ident, $parent:ident, $first:ident; div [ $classes:expr ] { $($children:tt)* } $($rest:tt)*) => {
+        let node = $tree.add_tw($parent, $classes);
+        $first.get_or_insert(node);
+        {
+            #[allow(unused_variables, unused_mut)]
+            let mut first: Option<$crate::NodeId> = None;
+            $crate::__ui_nodes!($tree, node, first; $($children)*);
+        }
+        $crate::__ui_nodes!($tree, $parent, $first; $($rest)*);
+    };
     ($tree:ident, $parent:ident, $first:ident; div ( $($style:tt)* ) { $($children:tt)* } $($rest:tt)*) => {
         let node = $tree.add_box($parent, $crate::style!($($style)*));
         $first.get_or_insert(node);
@@ -1178,6 +1359,11 @@ mod tests {
         apply(&mut e, "border-bottom", "3px");
         assert_eq!(e.border, Edges::new(0.0, 0.0, 3.0, 2.0));
         assert_eq!(e.border_color, color("#181818").unwrap());
+        // dashed, in the shorthand or on its own
+        apply(&mut e, "border", "1px dashed #000000");
+        assert!(e.border_dashed && e.border == Edges::all(1.0));
+        apply(&mut e, "border-style", "solid");
+        assert!(!e.border_dashed);
         assert_eq!(normalize("- 1 px"), "-1 px");
         assert_eq!(normalize("rgba (0 , 0 , 0 , 0.3)"), "rgba(0, 0, 0, 0.3)");
         assert_eq!(normalize("# 222"), "#222");

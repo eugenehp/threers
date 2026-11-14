@@ -97,9 +97,17 @@ impl IndicatorTheme {
     /// The theme in effect at `node`: every theme set on it and the boxes
     /// round it, the nearest over the rest.
     pub fn at(ui: &Ui, node: NodeId) -> IndicatorTheme {
-        let mut chain: Vec<IndicatorTheme> = ui.ancestors(node).filter_map(|n| ui.own_environment::<IndicatorTheme>(n)).collect();
+        let mut chain: Vec<IndicatorTheme> = ui
+            .ancestors(node)
+            .filter_map(|n| ui.own_environment::<IndicatorTheme>(n))
+            .collect();
         chain.reverse();
-        chain.into_iter().fold(ui.global::<IndicatorTheme>().map(|g| g.read().clone()).unwrap_or_default(), IndicatorTheme::with)
+        chain.into_iter().fold(
+            ui.global::<IndicatorTheme>()
+                .map(|g| g.read().clone())
+                .unwrap_or_default(),
+            IndicatorTheme::with,
+        )
     }
 
     /// `style` with this theme's settings over it.
@@ -132,9 +140,21 @@ impl IndicatorTheme {
 
 /// An indicator of `shape` in `parent`, looking as the [`IndicatorTheme`]
 /// in effect there says (and labelled, if it gives a label).
-pub fn indicator_themed(ui: &mut Ui, parent: NodeId, label: &str, shape: Shape, value: Option<f32>) -> Indicator {
+pub fn indicator_themed(
+    ui: &mut Ui,
+    parent: NodeId,
+    label: &str,
+    shape: Shape,
+    value: Option<f32>,
+) -> Indicator {
     let theme = IndicatorTheme::at(ui, parent);
-    let ind = indicator(ui, parent, label, theme.apply(IndicatorStyle::new(shape)), value);
+    let ind = indicator(
+        ui,
+        parent,
+        label,
+        theme.apply(IndicatorStyle::new(shape)),
+        value,
+    );
     match theme.label {
         Some(l) => ind.labelled(ui, l),
         None => ind,
@@ -143,7 +163,13 @@ pub fn indicator_themed(ui: &mut Ui, parent: NodeId, label: &str, shape: Shape, 
 
 /// A plain indicator of `kind` in `parent`, in the [`IndicatorTheme`]'s
 /// tint (and label) in effect there.
-pub fn progress_view_themed(ui: &mut Ui, parent: NodeId, label: &str, kind: PlainKind, value: Option<f32>) -> ProgressView {
+pub fn progress_view_themed(
+    ui: &mut Ui,
+    parent: NodeId,
+    label: &str,
+    kind: PlainKind,
+    value: Option<f32>,
+) -> ProgressView {
     let theme = IndicatorTheme::at(ui, parent);
     let mut st = PlainStyle::new(kind);
     st.tint = theme.tint;

@@ -56,7 +56,10 @@ impl TargetRayMode {
     /// Whether the input exists only while it presses (a pinch, a tap): an
     /// app treats it as a finger rather than a mouse.
     pub fn is_transient(self) -> bool {
-        matches!(self, TargetRayMode::Screen | TargetRayMode::TransientPointer)
+        matches!(
+            self,
+            TargetRayMode::Screen | TargetRayMode::TransientPointer
+        )
     }
 }
 
@@ -105,7 +108,10 @@ impl XrInput {
 /// A pose's position and its -Z (where a ray points).
 pub fn ray_of(m: &[f32; 16]) -> (crate::math::Vector3, crate::math::Vector3) {
     use crate::math::Vector3;
-    (Vector3::new(m[12], m[13], m[14]), Vector3::new(-m[8], -m[9], -m[10]).normalize())
+    (
+        Vector3::new(m[12], m[13], m[14]),
+        Vector3::new(-m[8], -m[9], -m[10]).normalize(),
+    )
 }
 
 /// A ray's pose: at `start`, looking down `direction` (its -Z), with its
@@ -115,10 +121,16 @@ pub fn ray_of(m: &[f32; 16]) -> (crate::math::Vector3, crate::math::Vector3) {
 pub fn ray_pose(start: crate::math::Vector3, direction: crate::math::Vector3) -> [f32; 16] {
     use crate::math::Vector3;
     let z = -direction.normalize();
-    let up = if z.y.abs() > 0.99 { Vector3::new(0.0, 0.0, 1.0) } else { Vector3::new(0.0, 1.0, 0.0) };
+    let up = if z.y.abs() > 0.99 {
+        Vector3::new(0.0, 0.0, 1.0)
+    } else {
+        Vector3::new(0.0, 1.0, 0.0)
+    };
     let x = up.cross(z).normalize();
     let y = z.cross(x);
-    [x.x, x.y, x.z, 0.0, y.x, y.y, y.z, 0.0, z.x, z.y, z.z, 0.0, start.x, start.y, start.z, 1.0]
+    [
+        x.x, x.y, x.z, 0.0, y.x, y.y, y.z, 0.0, z.x, z.y, z.z, 0.0, start.x, start.y, start.z, 1.0,
+    ]
 }
 
 /// What an input did.
@@ -224,9 +236,16 @@ mod tests {
 
     #[test]
     fn a_ray_pose_reads_back_as_its_ray() {
-        for (start, dir) in [(Vector3::new(1.0, 2.0, 3.0), Vector3::new(0.0, 0.0, -2.0)), (Vector3::ZERO, Vector3::new(0.0, 1.0, 0.0)), (Vector3::ZERO, Vector3::new(0.3, -0.2, 0.9))] {
+        for (start, dir) in [
+            (Vector3::new(1.0, 2.0, 3.0), Vector3::new(0.0, 0.0, -2.0)),
+            (Vector3::ZERO, Vector3::new(0.0, 1.0, 0.0)),
+            (Vector3::ZERO, Vector3::new(0.3, -0.2, 0.9)),
+        ] {
             let (s, d) = ray_of(&ray_pose(start, dir));
-            assert!((s - start).length() < 1e-6 && (d - dir.normalize()).length() < 1e-5, "{start:?} {dir:?}");
+            assert!(
+                (s - start).length() < 1e-6 && (d - dir.normalize()).length() < 1e-5,
+                "{start:?} {dir:?}"
+            );
         }
     }
 }

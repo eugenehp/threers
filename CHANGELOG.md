@@ -9,6 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tailwind classes** (`threers_ui::tailwind`): `ui.add_tw(parent, "flex
+  items-center gap-2 px-4 rounded-lg bg-blue-500 hover:bg-blue-600
+  md:flex-row")`, `ui.tw(node, …)`, `tw("…")` for a `Style`, and
+  `div["…"] { … }` in `ui!`.
+  - **Themes:** Tailwind 3.4's defaults (palette, spacing, type scale,
+    radii, shadows, blurs, perspectives, breakpoints), or
+    `Tailwind::shadcn()`: shadcn/ui's neutral theme, its colours switching
+    with the appearance (`bg-background`, `text-primary-foreground`,
+    `border-input`, `ring-ring`, …), its radius, and its components as
+    classes (`button button-outline button-sm`, `card`, `card-title`,
+    `input`, `badge`, `alert`, `tabs-trigger`, `dialog`, …). A `Tailwind`
+    set as the UI's global changes any of it — colours fixed or adaptive,
+    spacing, screens, components made of other classes (`@apply`) — or
+    reads a `tailwind.config`-shaped JSON (`Tailwind::extend_json`, with
+    `json`).
+  - **Variants that stack:** `hover:`, `active:`, `focus:`,
+    `focus-visible:`, `focus-within:`, `disabled:`, `dark:`,
+    `group-hover:`/`-active:`/`-focus:` (named groups too), `sm:` to `2xl:`,
+    `max-*:` and `min-[…]:`, in any combination (`dark:hover:`,
+    `md:focus-visible:`), in Tailwind's order.
+  - **3D:** `rotate-x-*`, `rotate-y-*`, `rotate-*`, `translate-x/y/z-*`,
+    `scale-*`, `perspective-*`, `origin-*`, `backface-hidden`, and
+    threers' `glare`, `shading`, `depth-shadow` and `parallax-*`, onto
+    `depth::Transform3d`. In states they move with `transition`
+    (`hover:-translate-y-1 hover:scale-105`).
+  - Arbitrary values and properties, negatives, fractions, colour opacity,
+    gradients, `ring-*` with `ring-offset-*` over `shadow-*`, and
+    Tailwind's preflight (`border-box`, a default border colour).
+  - What the UI has no property for (`fixed`, `z-10`, `mx-auto`,
+    `space-x-2`, per-corner radii, inset shadows, `ease-*`, fractional
+    translations, `peer-*:`) is refused, naming the class and what to use
+    instead; misspelt colours and variants get a suggestion.
+  - The UI demo has a Tailwind page: utility classes, shadcn/ui's
+    components in light and dark, stacked variants, and 3D cards.
+- **Conditional styles** (`Ui::when_style`, `states::When`): declarations
+  under conditions that combine — states, a group's state, the appearance,
+  the window's width — restyled as the window resizes. They may move a box
+  in 3D (`rotate-y`, `translate-z`, `scale`, …: `depth::apply_property`),
+  over its transition. `Property::TranslateY` animates.
+- **CSS colours:** `oklch(…)`, `hsl(…)`, and `rgb(r g b / a)` with
+  percentages. `css::try_apply` reports an unsupported declaration instead
+  of panicking.
+- **Lossless AV1** (`threers_codec::av1::Av1Encoder` at `qidx` 0, which it
+  used to refuse): AV1's lossless mode, 4×4 Walsh–Hadamard transforms
+  without quantisation, so any conforming decoder returns the planes
+  exactly; checked against the crate's decoder and dav1d. Each 4×4 is
+  reconstructed through the decoder's own inverse and compared with the
+  source as it is coded. Blocks are predicted with DC or Paeth, whichever
+  leaves less residual. On camera frames (Raspberry Pi CM4, 1280×720 I420) it
+  takes 2.63× off in ~280 ms; 47% smaller than its first version on the test
+  picture.
+
 - **Progress indicators** (`threers_ui::indicators`).
   - **Plain ones,** as a platform draws them (`progress_view`): a bar, a
     ring and an activity indicator's spokes, in the theme's colours or a
@@ -1292,6 +1344,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The AV1 encoder's probabilities adapt** (`disable_cdf_update` off): every
+  symbol updates its CDF as the decoder does, so the arithmetic coder learns
+  the picture. 12–19% smaller frames at the same quantiser and the same
+  decoded picture; checked against the crate's decoder and dav1d.
 - **Destructive colours pass WCAG contrast.** Filled destructive buttons
   use a new `Token::DestructiveFill` (white text 4.7:1 in both themes;
   dark was 3.7:1). The destructive text red is lighter in dark (5.6:1 or

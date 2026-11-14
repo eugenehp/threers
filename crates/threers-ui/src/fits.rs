@@ -30,7 +30,11 @@ impl Ui {
     /// Makes `container` show only the first of its children (as they are
     /// now) that fits its content width. See the [module docs](self).
     pub fn view_that_fits(&mut self, container: NodeId) {
-        let shown: Vec<Display> = self.children(container).iter().map(|&c| self.style(c).display).collect();
+        let shown: Vec<Display> = self
+            .children(container)
+            .iter()
+            .map(|&c| self.style(c).display)
+            .collect();
         self.fits.retain(|(c, _)| *c != container);
         self.fits.push((container, shown));
         self.invalidate_layout();
@@ -58,7 +62,8 @@ impl Ui {
                 let own = shown.get(i).copied().unwrap_or(Display::Block);
                 let now = self.nodes[k.0].style.display;
                 self.nodes[k.0].style.display = own;
-                let w = crate::layout::min_content_width_of(self, k, text) + self.style(k).margin.horizontal();
+                let w = crate::layout::min_content_width_of(self, k, text)
+                    + self.style(k).margin.horizontal();
                 self.nodes[k.0].style.display = now;
                 if w <= room + 0.01 {
                     pick = i;
@@ -66,7 +71,11 @@ impl Ui {
                 }
             }
             for (i, &k) in kids.iter().enumerate() {
-                let want = if i == pick { shown.get(i).copied().unwrap_or(Display::Block) } else { Display::None };
+                let want = if i == pick {
+                    shown.get(i).copied().unwrap_or(Display::Block)
+                } else {
+                    Display::None
+                };
                 if self.style(k).display != want {
                     self.update_style(k, |s| s.display = want);
                     changed = true;

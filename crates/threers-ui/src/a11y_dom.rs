@@ -147,7 +147,15 @@ fn attributes(n: &AccessNode, parent: Option<&AccessNode>) -> Vec<(String, Strin
         }
     }
     if n.live {
-        put("aria-live", if n.role == Role::Alert { "assertive" } else { "polite" }.into());
+        put(
+            "aria-live",
+            if n.role == Role::Alert {
+                "assertive"
+            } else {
+                "polite"
+            }
+            .into(),
+        );
     }
     if let (Some(r), Some(v)) = (n.range, &n.value) {
         // A value read as words ("50%", "Medium"), beside the number.
@@ -165,7 +173,10 @@ fn attributes(n: &AccessNode, parent: Option<&AccessNode>) -> Vec<(String, Strin
     if let Some(why) = &n.invalid {
         put("aria-invalid", "true".into());
         // Read with it: there is no element of its own to point at.
-        let d = n.description.as_ref().map_or_else(|| why.clone(), |d| format!("{d}. {why}"));
+        let d = n
+            .description
+            .as_ref()
+            .map_or_else(|| why.clone(), |d| format!("{d}. {why}"));
         put("aria-description", d);
     }
     if n.current {
@@ -184,7 +195,10 @@ fn attributes(n: &AccessNode, parent: Option<&AccessNode>) -> Vec<(String, Strin
         _ => {}
     }
     if let Some(up) = n.sort {
-        put("aria-sort", if up { "ascending" } else { "descending" }.into());
+        put(
+            "aria-sort",
+            if up { "ascending" } else { "descending" }.into(),
+        );
     }
     if matches!(n.role, Role::TextBox | Role::TextArea) && !n.focusable {
         put("aria-readonly", "true".into());
@@ -230,7 +244,11 @@ impl DomAccessibility {
         canvas.parent_element()?;
         let root = document.create_element("div").ok()?;
         let place = placement(canvas);
-        root.set_attribute("style", &format!("{place};pointer-events:none;overflow:hidden")).ok()?;
+        root.set_attribute(
+            "style",
+            &format!("{place};pointer-events:none;overflow:hidden"),
+        )
+        .ok()?;
         root.set_attribute("data-threers-a11y", "").ok()?;
         canvas.after_with_node_1(&root).ok()?;
         let actions: Rc<RefCell<Vec<A11yAction>>> = Rc::default();
@@ -292,8 +310,12 @@ impl DomAccessibility {
                 let action = match (k.key().as_str(), role.as_str()) {
                     ("Enter" | " ", "slider") => None,
                     ("Enter" | " ", _) => Some(A11yAction::Activate(id)),
-                    ("ArrowUp" | "ArrowRight", "slider" | "separator") => Some(A11yAction::Increment(id)),
-                    ("ArrowDown" | "ArrowLeft", "slider" | "separator") => Some(A11yAction::Decrement(id)),
+                    ("ArrowUp" | "ArrowRight", "slider" | "separator") => {
+                        Some(A11yAction::Increment(id))
+                    }
+                    ("ArrowDown" | "ArrowLeft", "slider" | "separator") => {
+                        Some(A11yAction::Decrement(id))
+                    }
                     _ => None,
                 };
                 if let Some(action) = action {
@@ -332,7 +354,10 @@ impl DomAccessibility {
     pub fn update(&mut self, ui: &Ui) {
         let place = placement(&self.canvas);
         if place != self.placed {
-            let _ = self.root.set_attribute("style", &format!("{place};pointer-events:none;overflow:hidden"));
+            let _ = self.root.set_attribute(
+                "style",
+                &format!("{place};pointer-events:none;overflow:hidden"),
+            );
             self.placed = place;
         }
         let tree = ui.accessibility_tree();

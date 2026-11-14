@@ -113,7 +113,10 @@ fn bands(painter: &mut dyn Painter, outer: Rect, inner: Rect, color: Rgba) {
     let left = inner.x - outer.x;
     let right = outer.x + outer.width - inner.x - inner.width;
     for r in [
-        Rect { height: top, ..outer },
+        Rect {
+            height: top,
+            ..outer
+        },
         Rect {
             y: inner.y + inner.height,
             height: bottom,
@@ -154,9 +157,21 @@ impl fmt::Display for Inspection {
             write!(f, " at {}:{}", o.file(), o.line())?;
         }
         let r = self.rect;
-        writeln!(f, "\n  box {} × {} at ({}, {})", r.width, r.height, r.x, r.y)?;
+        writeln!(
+            f,
+            "\n  box {} × {} at ({}, {})",
+            r.width, r.height, r.x, r.y
+        )?;
         if let Some(s) = &self.semantics {
-            writeln!(f, "  role {:?}{}", s.role, s.label.as_ref().map(|l| format!(" {l:?}")).unwrap_or_default())?;
+            writeln!(
+                f,
+                "  role {:?}{}",
+                s.role,
+                s.label
+                    .as_ref()
+                    .map(|l| format!(" {l:?}"))
+                    .unwrap_or_default()
+            )?;
         }
         if let Some(p) = self.deferred {
             writeln!(f, "  deferred, priority {p}")?;

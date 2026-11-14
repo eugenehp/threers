@@ -3,12 +3,12 @@
 
 // Candles: a wax body, a wick, a flame (simple or volumetric) and its light.
 pub mod candle;
-pub mod progress;
 mod ccd_ik;
 pub mod cube_uv;
 pub(crate) mod marching_cubes;
 mod octree;
 pub mod pmrem;
+pub mod progress;
 mod room_environment;
 mod simplex_noise;
 mod three_simplex_noise;

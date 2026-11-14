@@ -88,20 +88,31 @@ impl Ui {
             return None;
         }
         let inside = |n: NodeId| self.contains(n) && self.ancestors(n).any(|a| a == scope);
-        let mut own: Vec<NodeId> = self.env.anchors.iter().filter(|(n, a)| a.as_str() == name && inside(**n)).map(|(n, _)| *n).collect();
+        let mut own: Vec<NodeId> = self
+            .env
+            .anchors
+            .iter()
+            .filter(|(n, a)| a.as_str() == name && inside(**n))
+            .map(|(n, _)| *n)
+            .collect();
         own.sort();
         // Headings, in tree order.
         let mut headings = vec![];
         let mut stack = vec![scope];
         while let Some(n) = stack.pop() {
-            if matches!(self.semantics(n).map(|s| s.role), Some(Role::Heading(_))) && !self.env.anchors.contains_key(&n) && self.anchor_name(n).as_deref() == Some(name) {
+            if matches!(self.semantics(n).map(|s| s.role), Some(Role::Heading(_)))
+                && !self.env.anchors.contains_key(&n)
+                && self.anchor_name(n).as_deref() == Some(name)
+            {
                 headings.push(n);
             }
             stack.extend(self.children(n).iter().rev().copied());
         }
         // What shows first, a name given before a heading's; then the rest.
         let all = || own.iter().chain(&headings).copied();
-        all().find(|&n| self.anchor_shows(n)).or_else(|| all().next())
+        all()
+            .find(|&n| self.anchor_shows(n))
+            .or_else(|| all().next())
     }
 
     /// Every name a link can reach, with its node, in tree order: what a
@@ -119,7 +130,8 @@ impl Ui {
     }
 
     fn anchor_shows(&self, node: NodeId) -> bool {
-        self.ancestors(node).all(|a| self.style(a).display != Display::None)
+        self.ancestors(node)
+            .all(|a| self.style(a).display != Display::None)
     }
 }
 
@@ -155,7 +167,10 @@ mod tests {
         let mut ui = Ui::new();
         let mut input: Input<()> = Input::new();
         let root = ui.root();
-        let list = ui.add_box(root, style! { height: 100px; overflow: scroll; flex-direction: column; });
+        let list = ui.add_box(
+            root,
+            style! { height: 100px; overflow: scroll; flex-direction: column; },
+        );
         let mut rows = vec![];
         for i in 0..20 {
             let r = ui.add_box(list, style! { height: 40px; flex-shrink: 0; });
@@ -168,18 +183,34 @@ mod tests {
         ui.set_anchor(hidden, "section-15");
         ui.layout(400.0, 300.0, &mut FixedWidthText(7.0));
         assert_eq!(ui.find_anchor("#section-15"), Some(rows[15]));
-        assert_eq!(input.go_to_anchor(&mut ui, &mut (), "section-15"), Some(rows[15]));
+        assert_eq!(
+            input.go_to_anchor(&mut ui, &mut (), "section-15"),
+            Some(rows[15])
+        );
         ui.layout(400.0, 300.0, &mut FixedWidthText(7.0));
         let (r, view) = (ui.rect(rows[15]), ui.rect(list));
-        assert!(r.y >= view.y - 0.5 && r.y + r.height <= view.y + view.height + 0.5, "{r:?} in {view:?}");
+        assert!(
+            r.y >= view.y - 0.5 && r.y + r.height <= view.y + view.height + 0.5,
+            "{r:?} in {view:?}"
+        );
         assert_eq!(input.focused(), Some(rows[15]));
         assert_eq!(input.go_to_anchor(&mut ui, &mut (), "nowhere"), None);
         // In a scope, and listed.
         assert_eq!(ui.find_anchor_in(list, "section-2"), Some(rows[2]));
         assert_eq!(ui.find_anchor_in(hidden, "section-2"), None);
-        assert_eq!(ui.anchors().iter().filter(|(a, _)| a.starts_with("section-")).count(), 21);
+        assert_eq!(
+            ui.anchors()
+                .iter()
+                .filter(|(a, _)| a.starts_with("section-"))
+                .count(),
+            21
+        );
         // In the accessibility tree.
-        let node = ui.accessibility_tree().into_iter().find(|a| a.id == rows[3]).unwrap();
+        let node = ui
+            .accessibility_tree()
+            .into_iter()
+            .find(|a| a.id == rows[3])
+            .unwrap();
         assert_eq!(node.anchor.as_deref(), Some("section-3"));
     }
 }

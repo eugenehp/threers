@@ -25,7 +25,11 @@ fn a_modal_dialog_is_all_assistive_technology_sees() {
     ui.set_semantics(ok, Semantics::new(Role::Button).label("OK"));
     layout(&mut ui);
     input.set_modal(&mut ui, &mut (), Some(dialog));
-    let names: Vec<String> = ui.accessibility_tree().into_iter().map(|a| a.name).collect();
+    let names: Vec<String> = ui
+        .accessibility_tree()
+        .into_iter()
+        .map(|a| a.name)
+        .collect();
     assert_eq!(names, ["", "Settings", "OK"]);
     assert!(ui.accessibility_tree()[1].modal);
     input.set_modal(&mut ui, &mut (), None);
@@ -55,15 +59,27 @@ fn names_and_descriptions_from_other_nodes_and_the_states_read() {
     let f = tree.iter().find(|a| a.id == field).unwrap();
     assert_eq!(f.name, "Email address");
     assert_eq!(f.description.as_deref(), Some("We never share it"));
-    assert_eq!((f.invalid.as_deref(), f.shortcut.as_deref()), (Some("Needs an @"), Some("Alt+E")));
-    assert!(tree.iter().find(|a| a.id == list).unwrap().busy, "a placeholder is busy");
+    assert_eq!(
+        (f.invalid.as_deref(), f.shortcut.as_deref()),
+        (Some("Needs an @"), Some("Alt+E"))
+    );
+    assert!(
+        tree.iter().find(|a| a.id == list).unwrap().busy,
+        "a placeholder is busy"
+    );
 }
 
 #[test]
 fn rows_of_a_virtual_list_know_their_place_in_all_of_it() {
     let mut ui = Ui::new();
     let root = ui.root();
-    let mut list = VirtualList::new(&mut ui, root, style! { height: 100px; overflow: auto; }, 100_000, RowHeight::Uniform(20.0));
+    let mut list = VirtualList::new(
+        &mut ui,
+        root,
+        style! { height: 100px; overflow: auto; },
+        100_000,
+        RowHeight::Uniform(20.0),
+    );
     layout(&mut ui);
     list.sync(&mut ui, |ui, row, i| {
         ui.add_text(row, format!("Row {}", i + 1));
@@ -71,13 +87,24 @@ fn rows_of_a_virtual_list_know_their_place_in_all_of_it() {
     layout(&mut ui);
     let tree = ui.accessibility_tree();
     let first = tree.iter().find(|a| a.name == "Row 1").unwrap();
-    assert_eq!((first.role, first.position), (Role::ListItem, Some((1, 100_000))));
+    assert_eq!(
+        (first.role, first.position),
+        (Role::ListItem, Some((1, 100_000)))
+    );
     list.set_len(&mut ui, 50);
     list.sync(&mut ui, |ui, row, i| {
         ui.add_text(row, format!("Row {}", i + 1));
     });
-    let first = ui.accessibility_tree().into_iter().find(|a| a.name == "Row 1").unwrap();
-    assert_eq!(first.position, Some((1, 50)), "kept right as the list changes");
+    let first = ui
+        .accessibility_tree()
+        .into_iter()
+        .find(|a| a.name == "Row 1")
+        .unwrap();
+    assert_eq!(
+        first.position,
+        Some((1, 50)),
+        "kept right as the list changes"
+    );
 }
 
 #[test]
@@ -86,7 +113,10 @@ fn announcements_are_kept_in_order_with_their_urgency() {
     ui.announce("Saved");
     ui.announce_assertive("Connection lost");
     let all = ui.announcements_since(0);
-    assert_eq!(all.iter().map(|a| (a.1.as_str(), a.2)).collect::<Vec<_>>(), [("Saved", false), ("Connection lost", true)]);
+    assert_eq!(
+        all.iter().map(|a| (a.1.as_str(), a.2)).collect::<Vec<_>>(),
+        [("Saved", false), ("Connection lost", true)]
+    );
     assert_eq!(ui.announcements_since(all[0].0).len(), 1);
     for i in 0..20 {
         ui.announce(format!("n{i}"));
@@ -107,7 +137,10 @@ fn a_ring_shows_round_a_node_focused_from_the_keyboard_without_its_own_style() {
     layout(&mut ui);
     let ring = |ui: &Ui| {
         let focus = ui.token(threers_ui::environment::Token::Focus);
-        ui.scene().items.iter().any(|i| matches!(i, Item::Rect { color, .. } if *color == focus))
+        ui.scene()
+            .items
+            .iter()
+            .any(|i| matches!(i, Item::Rect { color, .. } if *color == focus))
     };
     input.simulate_keystrokes(&mut ui, &mut (), "tab").unwrap();
     assert_eq!(input.focused(), Some(a));
@@ -115,7 +148,9 @@ fn a_ring_shows_round_a_node_focused_from_the_keyboard_without_its_own_style() {
     input.simulate_keystrokes(&mut ui, &mut (), "tab").unwrap();
     assert!(!ring(&ui), "the styled one shows its own");
     ui.set_focus_ring(false);
-    input.simulate_keystrokes(&mut ui, &mut (), "shift-tab").unwrap();
+    input
+        .simulate_keystrokes(&mut ui, &mut (), "shift-tab")
+        .unwrap();
     assert!(!ring(&ui));
 }
 
@@ -154,5 +189,8 @@ fn the_audit_finds_what_will_trouble_people() {
     assert!(has(Audit::HeadingSkipsLevel, h3));
     assert!(has(Audit::HiddenFocusable, hidden));
     assert!(found.iter().any(|i| i.kind == Audit::LowContrast));
-    assert!(!found.iter().any(|i| i.id == fine), "nothing wrong with this one: {found:?}");
+    assert!(
+        !found.iter().any(|i| i.id == fine),
+        "nothing wrong with this one: {found:?}"
+    );
 }

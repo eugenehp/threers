@@ -74,14 +74,35 @@ pub fn button<S: 'static>(
         ButtonStyle::Borderless => false,
     };
     if filled {
-        let fill = if role == ButtonRole::Destructive { Token::DestructiveFill } else { Token::Accent };
+        let fill = if role == ButtonRole::Destructive {
+            Token::DestructiveFill
+        } else {
+            Token::Accent
+        };
         ui.token_style(b, &[("background", fill), ("color", Token::OnAccent)]);
     } else if style == ButtonStyle::Bordered {
         ui.token_style(b, &[("border-color", Token::Border), ("color", colour)]);
     } else {
-        ui.token_style(b, &[("color", if role == ButtonRole::Normal { Token::Accent } else { colour })]);
+        ui.token_style(
+            b,
+            &[(
+                "color",
+                if role == ButtonRole::Normal {
+                    Token::Accent
+                } else {
+                    colour
+                },
+            )],
+        );
     }
-    ui.hover_style(b, if filled { "opacity: 0.88" } else { "background: rgba(128,138,160,0.2)" });
+    ui.hover_style(
+        b,
+        if filled {
+            "opacity: 0.88"
+        } else {
+            "background: rgba(128,138,160,0.2)"
+        },
+    );
     ui.active_style(b, "opacity: 0.75");
     ui.focus_visible_style(b, "box-shadow: 0 0 0 2px #93c5fd");
     input.on_click(b, move |s, ui, _| on_click(s, ui));

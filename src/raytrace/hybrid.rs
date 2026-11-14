@@ -35,20 +35,36 @@ pub struct HybridParams {
 
 impl Default for HybridParams {
     fn default() -> Self {
-        Self { mix: 1.0, detail: 1.0, edge_sigma: 0.35, bloom_strength: 0.0, bloom_threshold: 0.75, bloom_knee: 0.25, bloom_levels: 6 }
+        Self {
+            mix: 1.0,
+            detail: 1.0,
+            edge_sigma: 0.35,
+            bloom_strength: 0.0,
+            bloom_threshold: 0.75,
+            bloom_knee: 0.25,
+            bloom_levels: 6,
+        }
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum HybridError {
-    Size { what: &'static str, expected: usize, got: usize },
+    Size {
+        what: &'static str,
+        expected: usize,
+        got: usize,
+    },
     Empty,
 }
 
 impl std::fmt::Display for HybridError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Size { what, expected, got } => write!(f, "{what}: expected {expected} bytes, got {got}"),
+            Self::Size {
+                what,
+                expected,
+                got,
+            } => write!(f, "{what}: expected {expected} bytes, got {got}"),
             Self::Empty => write!(f, "zero-sized image"),
         }
     }
@@ -70,7 +86,11 @@ fn lum(c: [f32; 3]) -> f32 {
 #[inline]
 fn linear_to_srgb8(v: f32) -> u8 {
     let v = v.clamp(0.0, 1.0);
-    let s = if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+    let s = if v <= 0.003_130_8 {
+        12.92 * v
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    };
     (s * 255.0 + 0.5) as u8
 }
 
@@ -84,7 +104,11 @@ struct Img {
 
 impl Img {
     fn new(w: usize, h: usize) -> Self {
-        Self { w, h, px: vec![[0.0; 3]; w * h] }
+        Self {
+            w,
+            h,
+            px: vec![[0.0; 3]; w * h],
+        }
     }
     #[inline]
     fn at(&self, x: usize, y: usize) -> [f32; 3] {
@@ -166,8 +190,17 @@ impl Img {
                 let v = (y as f32 + 0.5) * sy;
                 // 3x3 tent around the bilinear tap (a softer, rounder kernel than plain bilinear)
                 let mut acc = [0.0f32; 3];
-                for (dx, dy, wgt) in [(-1.0, -1.0, 1.0), (0.0, -1.0, 2.0), (1.0, -1.0, 1.0), (-1.0, 0.0, 2.0), (0.0, 0.0, 4.0),
-                                      (1.0, 0.0, 2.0), (-1.0, 1.0, 1.0), (0.0, 1.0, 2.0), (1.0, 1.0, 1.0)] {
+                for (dx, dy, wgt) in [
+                    (-1.0, -1.0, 1.0),
+                    (0.0, -1.0, 2.0),
+                    (1.0, -1.0, 1.0),
+                    (-1.0, 0.0, 2.0),
+                    (0.0, 0.0, 4.0),
+                    (1.0, 0.0, 2.0),
+                    (-1.0, 1.0, 1.0),
+                    (0.0, 1.0, 2.0),
+                    (1.0, 1.0, 1.0),
+                ] {
                     let c = self.bilinear(u + dx * 0.5, v + dy * 0.5);
                     for k in 0..3 {
                         acc[k] += c[k] * (wgt / 16.0);
@@ -184,7 +217,10 @@ impl Img {
 
 impl HybridCompositor {
     pub fn new(params: HybridParams) -> Self {
-        Self { params, lut: Vec::new() }
+        Self {
+            params,
+            lut: Vec::new(),
+        }
     }
 
     fn decode(&mut self, rgba: &[u8], w: usize, h: usize) -> Img {
@@ -192,37 +228,64 @@ impl HybridCompositor {
             self.lut = (0..256)
                 .map(|i| {
                     let s = i as f32 / 255.0;
-                    if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+                    if s <= 0.04045 {
+                        s / 12.92
+                    } else {
+                        ((s + 0.055) / 1.055).powf(2.4)
+                    }
                 })
                 .collect();
         }
         let mut img = Img::new(w, h);
         for (i, p) in img.px.iter_mut().enumerate() {
-            *p = [self.lut[rgba[4 * i] as usize], self.lut[rgba[4 * i + 1] as usize], self.lut[rgba[4 * i + 2] as usize]];
+            *p = [
+                self.lut[rgba[4 * i] as usize],
+                self.lut[rgba[4 * i + 1] as usize],
+                self.lut[rgba[4 * i + 2] as usize],
+            ];
         }
         img
     }
 
-    fn check(what: &'static str, buf: &[u8], w: u32, h: u32) -> Result<(usize, usize), HybridError> {
+    fn check(
+        what: &'static str,
+        buf: &[u8],
+        w: u32,
+        h: u32,
+    ) -> Result<(usize, usize), HybridError> {
         if w == 0 || h == 0 {
             return Err(HybridError::Empty);
         }
         let n = w as usize * h as usize * 4;
         if buf.len() != n {
-            return Err(HybridError::Size { what, expected: n, got: buf.len() });
+            return Err(HybridError::Size {
+                what,
+                expected: n,
+                got: buf.len(),
+            });
         }
         Ok((w as usize, h as usize))
     }
 
     /// Composite a (w, h) raster frame with a (tw, th) traced frame -> (w, h) RGBA8. Alpha is the raster's.
-    pub fn composite(&mut self, raster: &[u8], w: u32, h: u32, trace: &[u8], tw: u32, th: u32) -> Result<Vec<u8>, HybridError> {
+    pub fn composite(
+        &mut self,
+        raster: &[u8],
+        w: u32,
+        h: u32,
+        trace: &[u8],
+        tw: u32,
+        th: u32,
+    ) -> Result<Vec<u8>, HybridError> {
         let (w, h) = Self::check("raster", raster, w, h)?;
         let (tw, th) = Self::check("trace", trace, tw, th)?;
         let p = self.params;
         let r = self.decode(raster, w, h);
         let t = self.decode(trace, tw, th);
-        let mut out = if p.mix <= 0.0 { r.clone() } else {
-            let rl = r.box_down(tw, th);                       // the raster as the tracer "sees" it
+        let mut out = if p.mix <= 0.0 {
+            r.clone()
+        } else {
+            let rl = r.box_down(tw, th); // the raster as the tracer "sees" it
             let inv2s2 = 1.0 / (2.0 * p.edge_sigma.max(1e-3).powi(2));
             let llog = |c: [f32; 3]| (lum(c) + 1e-3).ln();
             let (sx, sy) = (tw as f32 / w as f32, th as f32 / h as f32);
@@ -237,11 +300,14 @@ impl HybridCompositor {
                     let fy = ((y as f32 + 0.5) * sy - 0.5).clamp(0.0, (th - 1) as f32);
                     let (x0, y0) = (fx.floor() as isize, fy.floor() as isize);
                     let (mut tc, mut rc, mut ws) = ([0.0f32; 3], [0.0f32; 3], 0.0f32);
-                    let (mut tb, mut rb, mut wbs) = ([0.0f32; 3], [0.0f32; 3], 0.0f32);   // spatial-only fallback
-                    // 4x4 window: a pixel at an edge can reach a coarse pixel that is wholly on its own side
+                    let (mut tb, mut rb, mut wbs) = ([0.0f32; 3], [0.0f32; 3], 0.0f32); // spatial-only fallback
+                                                                                        // 4x4 window: a pixel at an edge can reach a coarse pixel that is wholly on its own side
                     for dy in -1..=2isize {
                         for dx in -1..=2isize {
-                            let (xx, yy) = ((x0 + dx).clamp(0, tw as isize - 1) as usize, (y0 + dy).clamp(0, th as isize - 1) as usize);
+                            let (xx, yy) = (
+                                (x0 + dx).clamp(0, tw as isize - 1) as usize,
+                                (y0 + dy).clamp(0, th as isize - 1) as usize,
+                            );
                             let (ddx, ddy) = ((x0 + dx) as f32 - fx, (y0 + dy) as f32 - fy);
                             let wb = (-(ddx * ddx + ddy * ddy) * (1.0 / (2.0 * 0.6 * 0.6))).exp();
                             let n = rl.at(xx, yy);
@@ -260,11 +326,17 @@ impl HybridCompositor {
                             wbs += wb;
                         }
                     }
-                    let (tb, rb) = ([tb[0] / wbs, tb[1] / wbs, tb[2] / wbs], [rb[0] / wbs, rb[1] / wbs, rb[2] / wbs]);
+                    let (tb, rb) = (
+                        [tb[0] / wbs, tb[1] / wbs, tb[2] / wbs],
+                        [rb[0] / wbs, rb[1] / wbs, rb[2] / wbs],
+                    );
                     let (tu, ru) = if ws > 1e-6 {
-                        ([tc[0] / ws, tc[1] / ws, tc[2] / ws], [rc[0] / ws, rc[1] / ws, rc[2] / ws])
+                        (
+                            [tc[0] / ws, tc[1] / ws, tc[2] / ws],
+                            [rc[0] / ws, rc[1] / ws, rc[2] / ws],
+                        )
                     } else {
-                        (tb, rb)                                   // no neighbour agrees: thin feature
+                        (tb, rb) // no neighbour agrees: thin feature
                     };
                     // detail transfer: the raster's own ratio to its low-pass, per channel - equivalently the raster
                     // relit by traced / raster-low-res light, so coloured traced light (an LED's tint) still shows
@@ -332,7 +404,7 @@ impl HybridCompositor {
         }
         let mut glow = Img::new(img.w, img.h);
         pyr[0].add_up_into(&mut glow);
-        let norm = p.bloom_strength / pyr.len() as f32;   // the sum over levels -> stable brightness vs levels
+        let norm = p.bloom_strength / pyr.len() as f32; // the sum over levels -> stable brightness vs levels
         for (c, g) in img.px.iter_mut().zip(&glow.px) {
             for k in 0..3 {
                 c[k] += g[k] * norm;
@@ -363,7 +435,10 @@ mod tests {
     fn mix_zero_returns_the_raster() {
         let r = img(16, 12, |x, y| [(x * 13) as u8, (y * 17) as u8, 90]);
         let t = img(4, 3, |_, _| [0, 0, 0]);
-        let mut c = HybridCompositor::new(HybridParams { mix: 0.0, ..Default::default() });
+        let mut c = HybridCompositor::new(HybridParams {
+            mix: 0.0,
+            ..Default::default()
+        });
         assert_eq!(c.composite(&r, 16, 12, &t, 4, 3).unwrap(), r);
     }
 
@@ -371,12 +446,34 @@ mod tests {
     fn a_trace_that_agrees_with_the_raster_changes_nothing() {
         // the trace is exactly the raster at quarter resolution: the composite must give the raster back
         let (w, h) = (32, 24);
-        let r = img(w, h, |x, y| [(40 + x * 5) as u8, (60 + y * 6) as u8, (100 + ((x + y) % 3) * 30) as u8]);
+        let r = img(w, h, |x, y| {
+            [
+                (40 + x * 5) as u8,
+                (60 + y * 6) as u8,
+                (100 + ((x + y) % 3) * 30) as u8,
+            ]
+        });
         let mut c = HybridCompositor::new(HybridParams::default());
         let lin = c.decode(&r, w, h).box_down(8, 6);
-        let t: Vec<u8> = lin.px.iter().flat_map(|p| [linear_to_srgb8(p[0]), linear_to_srgb8(p[1]), linear_to_srgb8(p[2]), 255]).collect();
+        let t: Vec<u8> = lin
+            .px
+            .iter()
+            .flat_map(|p| {
+                [
+                    linear_to_srgb8(p[0]),
+                    linear_to_srgb8(p[1]),
+                    linear_to_srgb8(p[2]),
+                    255,
+                ]
+            })
+            .collect();
         let o = c.composite(&r, w as u32, h as u32, &t, 8, 6).unwrap();
-        let worst = o.iter().zip(&r).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
+        let worst = o
+            .iter()
+            .zip(&r)
+            .map(|(a, b)| (*a as i32 - *b as i32).abs())
+            .max()
+            .unwrap();
         assert!(worst <= 3, "max deviation {worst}");
     }
 
@@ -384,14 +481,24 @@ mod tests {
     fn traced_shadow_is_applied_and_raster_texture_survives() {
         // raster: uniform grey with a fine 1-px checker; trace: left half in shadow (quarter brightness)
         let (w, h) = (64, 32);
-        let r = img(w, h, |x, y| if (x + y) % 2 == 0 { [200; 3] } else { [150; 3] });
+        let r = img(
+            w,
+            h,
+            |x, y| if (x + y) % 2 == 0 { [200; 3] } else { [150; 3] },
+        );
         let t = img(16, 8, |x, _| if x < 8 { [90; 3] } else { [178; 3] });
         let mut c = HybridCompositor::new(HybridParams::default());
         let o = c.composite(&r, w as u32, h as u32, &t, 16, 8).unwrap();
         let (l0, l1) = (g(&o, w, 10, 16), g(&o, w, 11, 16));
         let (r0, r1) = (g(&o, w, 50, 16), g(&o, w, 51, 16));
-        assert!(l0.max(l1) < r0.min(r1), "shadow side must be darker: {l0} {l1} vs {r0} {r1}");
-        assert!(l0.abs_diff(l1) >= 15 && r0.abs_diff(r1) >= 20, "checker detail lost: {l0} {l1} / {r0} {r1}");
+        assert!(
+            l0.max(l1) < r0.min(r1),
+            "shadow side must be darker: {l0} {l1} vs {r0} {r1}"
+        );
+        assert!(
+            l0.abs_diff(l1) >= 15 && r0.abs_diff(r1) >= 20,
+            "checker detail lost: {l0} {l1} / {r0} {r1}"
+        );
     }
 
     #[test]
@@ -400,37 +507,79 @@ mod tests {
         let (w, h) = (64, 16);
         let r = img(w, h, |x, _| if x < 30 { [5; 3] } else { [230; 3] });
         let t = img(8, 2, |x, _| if x < 4 { [5; 3] } else { [230; 3] });
-        let mut c = HybridCompositor::new(HybridParams { detail: 0.0, ..Default::default() });
+        let mut c = HybridCompositor::new(HybridParams {
+            detail: 0.0,
+            ..Default::default()
+        });
         let o = c.composite(&r, w as u32, h as u32, &t, 8, 2).unwrap();
-        assert!(g(&o, w, 30, 8) > 180, "white side next to the edge went dark: {}", g(&o, w, 30, 8));
-        assert!(g(&o, w, 29, 8) < 40, "black side next to the edge picked up light: {}", g(&o, w, 29, 8));
+        assert!(
+            g(&o, w, 30, 8) > 180,
+            "white side next to the edge went dark: {}",
+            g(&o, w, 30, 8)
+        );
+        assert!(
+            g(&o, w, 29, 8) < 40,
+            "black side next to the edge picked up light: {}",
+            g(&o, w, 29, 8)
+        );
     }
 
     #[test]
     fn bloom_spreads_a_bright_pixel_and_is_off_at_zero_strength() {
         let (w, h) = (33, 33);
-        let r = img(w, h, |x, y| if x == 16 && y == 16 { [255; 3] } else { [10; 3] });
-        let mut off = HybridCompositor::new(HybridParams { mix: 0.0, bloom_strength: 0.0, ..Default::default() });
+        let r = img(w, h, |x, y| {
+            if x == 16 && y == 16 {
+                [255; 3]
+            } else {
+                [10; 3]
+            }
+        });
+        let mut off = HybridCompositor::new(HybridParams {
+            mix: 0.0,
+            bloom_strength: 0.0,
+            ..Default::default()
+        });
         assert_eq!(off.bloom_rgba(&r, 33, 33).unwrap(), r);
-        let mut on = HybridCompositor::new(HybridParams { mix: 0.0, bloom_strength: 4.0, bloom_threshold: 0.5, ..Default::default() });
+        let mut on = HybridCompositor::new(HybridParams {
+            mix: 0.0,
+            bloom_strength: 4.0,
+            bloom_threshold: 0.5,
+            ..Default::default()
+        });
         let o = on.bloom_rgba(&r, 33, 33).unwrap();
         assert!(g(&o, w, 18, 16) > g(&r, w, 18, 16) + 3, "no glow 2 px away");
         assert!(g(&o, w, 16, 22) > g(&r, w, 16, 22), "no glow 6 px away");
-        assert!(g(&o, w, 18, 16) >= g(&o, w, 22, 16), "glow must fall off with distance");
-        assert_eq!(g(&o, w, 0, 0), g(&r, w, 0, 0).max(g(&o, w, 0, 0)));   // never darkens
+        assert!(
+            g(&o, w, 18, 16) >= g(&o, w, 22, 16),
+            "glow must fall off with distance"
+        );
+        assert_eq!(g(&o, w, 0, 0), g(&r, w, 0, 0).max(g(&o, w, 0, 0))); // never darkens
     }
 
     #[test]
     fn dim_pixels_below_the_threshold_do_not_glow() {
-        let r = img(16, 16, |_, _| [120; 3]);                  // linear ~0.19, far below the 0.75 threshold
-        let mut c = HybridCompositor::new(HybridParams { bloom_strength: 3.0, ..Default::default() });
+        let r = img(16, 16, |_, _| [120; 3]); // linear ~0.19, far below the 0.75 threshold
+        let mut c = HybridCompositor::new(HybridParams {
+            bloom_strength: 3.0,
+            ..Default::default()
+        });
         assert_eq!(c.bloom_rgba(&r, 16, 16).unwrap(), r);
     }
 
     #[test]
     fn size_errors_are_reported() {
         let mut c = HybridCompositor::default();
-        assert_eq!(c.composite(&[0; 8], 2, 2, &[0; 4], 1, 1), Err(HybridError::Size { what: "raster", expected: 16, got: 8 }));
-        assert_eq!(c.composite(&[], 0, 2, &[0; 4], 1, 1), Err(HybridError::Empty));
+        assert_eq!(
+            c.composite(&[0; 8], 2, 2, &[0; 4], 1, 1),
+            Err(HybridError::Size {
+                what: "raster",
+                expected: 16,
+                got: 8
+            })
+        );
+        assert_eq!(
+            c.composite(&[], 0, 2, &[0; 4], 1, 1),
+            Err(HybridError::Empty)
+        );
     }
 }

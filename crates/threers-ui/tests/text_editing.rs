@@ -27,14 +27,27 @@ impl Setup {
         let root = ui.root();
         let para = ui.add_box(root, style! { width: 300px; height: 40px; });
         ui.add_text(para, "Some words to read and copy");
-        let field = ui.add_box(root, style! { width: 200px; padding: 4px; overflow: hidden; });
+        let field = ui.add_box(
+            root,
+            style! { width: 200px; padding: 4px; overflow: hidden; },
+        );
         ui.set_semantics(field, Semantics::new(Role::TextBox).label("Name"));
         let text = ui.add_text(field, "");
         let mut input = Input::new();
         let mut editing = TextEditing::new(&mut ui, &mut input);
         editing.add_field(&mut ui, field, text, |s: &mut State| &mut s.field);
-        let state = State { field: TextField::new("one two three") };
-        let mut s = Setup { ui, input, state, editing, field, para, t: 0.0 };
+        let state = State {
+            field: TextField::new("one two three"),
+        };
+        let mut s = Setup {
+            ui,
+            input,
+            state,
+            editing,
+            field,
+            para,
+            t: 0.0,
+        };
         s.frame();
         s
     }
@@ -43,10 +56,12 @@ impl Setup {
         self.t += 1.0 / 60.0;
         let m = &mut FixedWidthText(10.0);
         self.input.tick(&mut self.ui, &mut self.state, self.t);
-        self.editing.tick(&mut self.ui, &self.input, &mut self.state, self.t, m);
+        self.editing
+            .tick(&mut self.ui, &self.input, &mut self.state, self.t, m);
         for _ in 0..2 {
             self.ui.layout(400.0, 300.0, m);
-            self.editing.place(&mut self.ui, &mut self.input, &mut self.state, m);
+            self.editing
+                .place(&mut self.ui, &mut self.input, &mut self.state, m);
         }
         self.ui.layout(400.0, 300.0, m);
     }
@@ -54,18 +69,49 @@ impl Setup {
     fn tap(&mut self, id: u64, (x, y): (f32, f32)) {
         let m = &mut FixedWidthText(10.0);
         let t = self.t;
-        self.editing.touch(&mut self.ui, &mut self.input, &mut self.state, id, TouchPhase::Start, x, y, t, m);
-        self.editing.touch(&mut self.ui, &mut self.input, &mut self.state, id, TouchPhase::End, x, y, t + 0.05, m);
+        self.editing.touch(
+            &mut self.ui,
+            &mut self.input,
+            &mut self.state,
+            id,
+            TouchPhase::Start,
+            x,
+            y,
+            t,
+            m,
+        );
+        self.editing.touch(
+            &mut self.ui,
+            &mut self.input,
+            &mut self.state,
+            id,
+            TouchPhase::End,
+            x,
+            y,
+            t + 0.05,
+            m,
+        );
         self.t += 0.1;
         self.frame();
     }
 
     fn names(&self) -> Vec<String> {
-        self.ui.accessibility_tree().into_iter().filter(|a| a.role == Role::MenuItem).map(|a| a.name).collect()
+        self.ui
+            .accessibility_tree()
+            .into_iter()
+            .filter(|a| a.role == Role::MenuItem)
+            .map(|a| a.name)
+            .collect()
     }
 
     fn centre(&self, name: &str) -> (f32, f32) {
-        let b = self.ui.accessibility_tree().into_iter().find(|a| a.name == name).unwrap().bounds;
+        let b = self
+            .ui
+            .accessibility_tree()
+            .into_iter()
+            .find(|a| a.name == name)
+            .unwrap()
+            .bounds;
         (b.x + b.width / 2.0, b.y + b.height / 2.0)
     }
 
@@ -107,21 +153,67 @@ fn page_text_selects_with_a_held_finger_and_the_mouse() {
     // Held: the word, and a read-only menu.
     let m = &mut FixedWidthText(10.0);
     let t = s.t;
-    s.editing.touch(&mut s.ui, &mut s.input, &mut s.state, 9, TouchPhase::Start, x, y, t, m);
+    s.editing.touch(
+        &mut s.ui,
+        &mut s.input,
+        &mut s.state,
+        9,
+        TouchPhase::Start,
+        x,
+        y,
+        t,
+        m,
+    );
     for _ in 0..40 {
         s.frame();
     }
     let t = s.t;
-    s.editing.touch(&mut s.ui, &mut s.input, &mut s.state, 9, TouchPhase::End, x, y, t, m);
+    s.editing.touch(
+        &mut s.ui,
+        &mut s.input,
+        &mut s.state,
+        9,
+        TouchPhase::End,
+        x,
+        y,
+        t,
+        m,
+    );
     s.frame();
     assert_eq!(s.editing.page_selection().as_deref(), Some("words"));
     assert!(s.names().contains(&"Copy".to_owned()) && !s.names().contains(&"Cut".to_owned()));
     // The mouse drags out "Some words" and ⌘C copies it.
-    s.editing.pointer_down(&mut s.ui, &mut s.input, &mut s.state, r.x + 1.0, y, PointerButton::Primary, false, m);
-    s.editing.pointer_move(&mut s.ui, &mut s.input, &mut s.state, r.x + 100.0, y, m);
-    s.editing.pointer_up(&mut s.ui, &mut s.input, &mut s.state, r.x + 100.0, y, PointerButton::Primary);
-    assert!(s.editing.key("c", KeyModifiers { meta: true, ..Default::default() }));
-    assert_eq!(s.editing.take_requests(), [Request::Copy("Some words".into())]);
+    s.editing.pointer_down(
+        &mut s.ui,
+        &mut s.input,
+        &mut s.state,
+        r.x + 1.0,
+        y,
+        PointerButton::Primary,
+        false,
+        m,
+    );
+    s.editing
+        .pointer_move(&mut s.ui, &mut s.input, &mut s.state, r.x + 100.0, y, m);
+    s.editing.pointer_up(
+        &mut s.ui,
+        &mut s.input,
+        &mut s.state,
+        r.x + 100.0,
+        y,
+        PointerButton::Primary,
+    );
+    assert!(s.editing.key(
+        "c",
+        KeyModifiers {
+            meta: true,
+            ..Default::default()
+        }
+    ));
+    assert_eq!(
+        s.editing.take_requests(),
+        [Request::Copy("Some words".into())]
+    );
 }
 
 #[test]
@@ -129,7 +221,9 @@ fn a_long_line_scrolls_to_its_caret() {
     let mut s = Setup::new();
     let p = s.at(1.0);
     s.tap(1, p);
-    s.state.field.insert(" and many more words past the end of the field");
+    s.state
+        .field
+        .insert(" and many more words past the end of the field");
     s.frame();
     let text = s.ui.children(s.field)[0];
     assert!(s.ui.rect(text).x < s.ui.rect(s.field).x, "scrolled left");

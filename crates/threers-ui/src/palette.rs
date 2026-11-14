@@ -23,8 +23,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::input::Input;
 use crate::environment::Token;
+use crate::input::Input;
 use crate::tree::{NodeId, Ui};
 use crate::{style, Display, Role, Semantics};
 
@@ -39,7 +39,11 @@ pub struct Command {
 
 impl Command {
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
-        Self { id: id.into(), label: label.into(), shortcut: None }
+        Self {
+            id: id.into(),
+            label: label.into(),
+            shortcut: None,
+        }
     }
 
     pub fn shortcut(mut self, label: impl Into<String>) -> Self {
@@ -81,10 +85,18 @@ pub(crate) fn place_in_window(ui: &mut Ui, panel: NodeId, width: f32, top: f32) 
     const MARGIN: f32 = 8.0;
     let window = ui.rect(ui.root());
     let w = width.min(window.width - 2.0 * MARGIN).max(0.0);
-    let (left, top) = (((window.width - w) / 2.0).max(MARGIN), (window.height * top).max(MARGIN));
+    let (left, top) = (
+        ((window.width - w) / 2.0).max(MARGIN),
+        (window.height * top).max(MARGIN),
+    );
     let max_h = (window.height - top - MARGIN).max(0.0);
     let s = ui.style(panel);
-    let want = (crate::Length::Px(w), crate::Length::Px(left), crate::Length::Px(top), crate::Length::Px(max_h));
+    let want = (
+        crate::Length::Px(w),
+        crate::Length::Px(left),
+        crate::Length::Px(top),
+        crate::Length::Px(max_h),
+    );
     if (s.width, s.left, s.top, s.max_height) != want {
         ui.update_style(panel, |s| (s.width, s.left, s.top, s.max_height) = want);
     }
@@ -117,7 +129,11 @@ impl Palette {
     }
 
     fn show(&self, ui: &mut Ui) {
-        let shown = if self.query.is_empty() { "Type a command…".to_owned() } else { self.query.clone() };
+        let shown = if self.query.is_empty() {
+            "Type a command…".to_owned()
+        } else {
+            self.query.clone()
+        };
         ui.set_text(self.query_text, shown);
         for (k, &(row, label, keys)) in self.rows.iter().enumerate() {
             match self.matches.get(k).map(|&i| &self.commands[i]) {
@@ -127,12 +143,28 @@ impl Palette {
                     ui.set_text(keys, c.shortcut.clone().unwrap_or_default());
                     let on = k == self.highlighted;
                     ui.style_mut(row).background = on.then(|| ui.token(Token::Accent));
-                    ui.style_mut(row).color = if on { ui.token(Token::OnAccent) } else { [1.0; 4] };
+                    ui.style_mut(row).color = if on {
+                        ui.token(Token::OnAccent)
+                    } else {
+                        [1.0; 4]
+                    };
                     // The shortcut, readable on the highlight.
                     if let Some(k) = ui.parent(keys) {
-                        ui.token_style(k, &[("color", if on { Token::OnAccent } else { Token::SecondaryText })]);
+                        ui.token_style(
+                            k,
+                            &[(
+                                "color",
+                                if on {
+                                    Token::OnAccent
+                                } else {
+                                    Token::SecondaryText
+                                },
+                            )],
+                        );
                     }
-                    let mut sem = Semantics::new(Role::Option).label(c.label.clone()).selected(on);
+                    let mut sem = Semantics::new(Role::Option)
+                        .label(c.label.clone())
+                        .selected(on);
                     sem.description = c.shortcut.clone();
                     ui.set_semantics(row, sem);
                 }
@@ -160,15 +192,33 @@ pub fn open_palette<S: 'static>(
             box-shadow: 0 18px 44px rgba(0,0,0,0.55); font-size: 13px;
         },
     );
-    ui.token_style(panel, &[("background", Token::Raised), ("border-color", Token::Border), ("color", Token::Text)]);
+    ui.token_style(
+        panel,
+        &[
+            ("background", Token::Raised),
+            ("border-color", Token::Border),
+            ("color", Token::Text),
+        ],
+    );
     place_in_window(ui, panel, 440.0, 0.12);
     ui.set_semantics(panel, Semantics::new(Role::Dialog).label("Command palette"));
     ui.defer(panel, 960);
     ui.appear(panel, crate::transitions::Transition::Fade, 0.12);
-    let field = ui.add_box(panel, style! { padding: 8px 10px; border-bottom: 1px solid #3a4150; });
-    ui.token_style(field, &[("border-color", Token::Separator), ("color", Token::SecondaryText)]);
+    let field = ui.add_box(
+        panel,
+        style! { padding: 8px 10px; border-bottom: 1px solid #3a4150; },
+    );
+    ui.token_style(
+        field,
+        &[
+            ("border-color", Token::Separator),
+            ("color", Token::SecondaryText),
+        ],
+    );
     let query_text = ui.add_text(field, "");
-    let mut sem = Semantics::new(Role::ComboBox).label("Command").tab_index(-1);
+    let mut sem = Semantics::new(Role::ComboBox)
+        .label("Command")
+        .tab_index(-1);
     sem.expanded = Some(true);
     ui.set_semantics(field, sem);
     // Scrolls when the window is too short for every row.
@@ -186,7 +236,15 @@ pub fn open_palette<S: 'static>(
             (r, l, kt)
         })
         .collect();
-    let mut p = Palette { commands, query: String::new(), matches: vec![], highlighted: 0, query_text, rows: rows.clone(), closing: false };
+    let mut p = Palette {
+        commands,
+        query: String::new(),
+        matches: vec![],
+        highlighted: 0,
+        query_text,
+        rows: rows.clone(),
+        closing: false,
+    };
     p.refilter();
     p.show(ui);
     let p = Rc::new(RefCell::new(p));
@@ -219,7 +277,9 @@ pub fn open_palette<S: 'static>(
                 pk(s, ui, k);
                 return true;
             }
-            "ArrowDown" => b.highlighted = (b.highlighted + 1).min(b.matches.len().min(ROWS).saturating_sub(1)),
+            "ArrowDown" => {
+                b.highlighted = (b.highlighted + 1).min(b.matches.len().min(ROWS).saturating_sub(1))
+            }
             "ArrowUp" => b.highlighted = b.highlighted.saturating_sub(1),
             "Backspace" => {
                 b.query.pop();

@@ -69,7 +69,12 @@ impl Image {
     /// The pixel at `(x, y)`.
     pub fn pixel(&self, x: u32, y: u32) -> [u8; 4] {
         let i = (y as usize * self.width as usize + x as usize) * 4;
-        [self.rgba[i], self.rgba[i + 1], self.rgba[i + 2], self.rgba[i + 3]]
+        [
+            self.rgba[i],
+            self.rgba[i + 1],
+            self.rgba[i + 2],
+            self.rgba[i + 3],
+        ]
     }
 }
 
@@ -97,7 +102,11 @@ pub fn fit(fit: ObjectFit, content: Rect, iw: f32, ih: f32) -> Rect {
         ObjectFit::Contain | ObjectFit::Cover | ObjectFit::ScaleDown => {
             let sx = bw / iw.max(1e-6);
             let sy = bh / ih.max(1e-6);
-            let mut s = if fit == ObjectFit::Cover { sx.max(sy) } else { sx.min(sy) };
+            let mut s = if fit == ObjectFit::Cover {
+                sx.max(sy)
+            } else {
+                sx.min(sy)
+            };
             if fit == ObjectFit::ScaleDown {
                 s = s.min(1.0);
             }
@@ -123,7 +132,13 @@ impl Ui {
     /// A node showing the renderer's texture `id` (see
     /// [`NodeKind::Surface`]), `size` texels, sized and fitted like an image.
     #[track_caller]
-    pub fn add_surface(&mut self, parent: NodeId, style: Style, id: u64, size: (u32, u32)) -> NodeId {
+    pub fn add_surface(
+        &mut self,
+        parent: NodeId,
+        style: Style,
+        id: u64,
+        size: (u32, u32),
+    ) -> NodeId {
         self.add_kind(
             parent,
             style,
@@ -179,7 +194,10 @@ pub struct ImageCache {
     /// Frames an image is kept after the last one that asked for it.
     pub keep_frames: u64,
     #[cfg(not(target_arch = "wasm32"))]
-    done: (std::sync::mpsc::Sender<Done>, std::sync::mpsc::Receiver<Done>),
+    done: (
+        std::sync::mpsc::Sender<Done>,
+        std::sync::mpsc::Receiver<Done>,
+    ),
 }
 
 impl Default for ImageCache {
@@ -271,7 +289,9 @@ impl ImageCache {
 
     /// Whether a load is still running.
     pub fn loading(&self) -> bool {
-        self.entries.values().any(|e| matches!(e.state, ImageState::Loading))
+        self.entries
+            .values()
+            .any(|e| matches!(e.state, ImageState::Loading))
     }
 
     /// Ends a frame: images no frame has asked for in

@@ -671,7 +671,12 @@ impl Painter for CanvasPainter {
         c.set_shadow_offset_x(AWAY * dpr);
         c.set_shadow_offset_y(0.0);
         c.set_fill_style_str("#000");
-        let rect = (r.x as f64 - AWAY, r.y as f64, r.width as f64, r.height as f64);
+        let rect = (
+            r.x as f64 - AWAY,
+            r.y as f64,
+            r.width as f64,
+            r.height as f64,
+        );
         rounded_path(c, rect, (radius as f64, radius as f64));
         c.fill();
         c.restore();
@@ -682,10 +687,18 @@ impl Painter for CanvasPainter {
         let c = self.ctx();
         if !wavy {
             c.set_fill_style_str(&css(color));
-            c.fill_rect(x as f64, (y - thickness / 2.0) as f64, width as f64, thickness as f64);
+            c.fill_rect(
+                x as f64,
+                (y - thickness / 2.0) as f64,
+                width as f64,
+                thickness as f64,
+            );
             return;
         }
-        let (a, period) = (thickness * crate::paint::WAVE_AMPLITUDE, thickness * crate::paint::WAVE_PERIOD);
+        let (a, period) = (
+            thickness * crate::paint::WAVE_AMPLITUDE,
+            thickness * crate::paint::WAVE_PERIOD,
+        );
         let k = std::f32::consts::TAU / period.max(1e-3);
         c.save();
         c.set_stroke_style_str(&css(color));
@@ -709,7 +722,9 @@ impl Painter for CanvasPainter {
     fn image(&mut self, r: Rect, image: &crate::image::ImageRef, opacity: f32) {
         self.before_shape();
         if !self.images.contains_key(&image.id()) {
-            let Some(canvas) = self.image_canvas(image) else { return };
+            let Some(canvas) = self.image_canvas(image) else {
+                return;
+            };
             self.images.insert(image.id(), canvas);
         }
         let source = &self.images[&image.id()];
@@ -737,7 +752,13 @@ impl Painter for CanvasPainter {
 
     /// A radial, conic or turned linear gradient, through the canvas's own
     /// gradients.
-    fn fill_gradient(&mut self, r: Rect, shape: crate::GradientShape, stops: &[(f32, Rgba)], blur: f32) {
+    fn fill_gradient(
+        &mut self,
+        r: Rect,
+        shape: crate::GradientShape,
+        stops: &[(f32, Rgba)],
+        blur: f32,
+    ) {
         use crate::GradientShape;
         if shape.is_across() {
             return self.fill_linear_gradient(r, stops, blur);
@@ -751,11 +772,19 @@ impl Painter for CanvasPainter {
                 let (dx, dy) = (a.sin(), -a.cos());
                 let half = ((w * dx).abs() + (h * dy).abs()) / 2.0;
                 let (mx, my) = (x + w / 2.0, y + h / 2.0);
-                c.create_linear_gradient(mx - dx * half, my - dy * half, mx + dx * half, my + dy * half)
+                c.create_linear_gradient(
+                    mx - dx * half,
+                    my - dy * half,
+                    mx + dx * half,
+                    my + dy * half,
+                )
             }
             GradientShape::Radial { cx, cy } => {
                 let (px, py) = (x + w * cx as f64, y + h * cy as f64);
-                let far = [(x, y), (x + w, y), (x, y + h), (x + w, y + h)].iter().map(|&(qx, qy)| ((qx - px).powi(2) + (qy - py).powi(2)).sqrt()).fold(0.0f64, f64::max);
+                let far = [(x, y), (x + w, y), (x, y + h), (x + w, y + h)]
+                    .iter()
+                    .map(|&(qx, qy)| ((qx - px).powi(2) + (qy - py).powi(2)).sqrt())
+                    .fold(0.0f64, f64::max);
                 match c.create_radial_gradient(px, py, 0.0, px, py, far) {
                     Ok(g) => g,
                     Err(_) => return,
@@ -767,17 +796,33 @@ impl Painter for CanvasPainter {
                 // set.
                 let start = (from as f64).to_radians() - std::f64::consts::FRAC_PI_2;
                 let (px, py) = (x + w * cx as f64, y + h * cy as f64);
-                let made = js_sys::Reflect::get(c.as_ref(), &wasm_bindgen::JsValue::from_str("createConicGradient"))
-                    .ok()
-                    .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
-                    .and_then(|f| f.call3(c.as_ref(), &start.into(), &px.into(), &py.into()).ok())
-                    .and_then(|g| g.dyn_into::<web_sys::CanvasGradient>().ok());
+                let made = js_sys::Reflect::get(
+                    c.as_ref(),
+                    &wasm_bindgen::JsValue::from_str("createConicGradient"),
+                )
+                .ok()
+                .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+                .and_then(|f| {
+                    f.call3(c.as_ref(), &start.into(), &px.into(), &py.into())
+                        .ok()
+                })
+                .and_then(|g| g.dyn_into::<web_sys::CanvasGradient>().ok());
                 match made {
                     Some(g) => g,
                     None => {
                         // Bands of its colours across instead.
                         let mid = r.y + r.height / 2.0;
-                        let across: Vec<(f32, Rgba)> = (0..=16).map(|i| (i as f32 / 16.0, crate::gradient_at(stops, shape.t(r, r.x + r.width * i as f32 / 16.0, mid)))).collect();
+                        let across: Vec<(f32, Rgba)> = (0..=16)
+                            .map(|i| {
+                                (
+                                    i as f32 / 16.0,
+                                    crate::gradient_at(
+                                        stops,
+                                        shape.t(r, r.x + r.width * i as f32 / 16.0, mid),
+                                    ),
+                                )
+                            })
+                            .collect();
                         return self.fill_linear_gradient(r, &across, blur);
                     }
                 }
@@ -957,13 +1002,29 @@ impl Painter for CanvasPainter {
     fn stroke_arc(&mut self, arc: super::ArcShape, width: f32, color: Rgba) {
         self.before_shape();
         let c = self.ctx();
-        let (start, end) = if arc.sweep >= 0.0 { (arc.start, arc.start + arc.sweep) } else { (arc.start + arc.sweep, arc.start) };
+        let (start, end) = if arc.sweep >= 0.0 {
+            (arc.start, arc.start + arc.sweep)
+        } else {
+            (arc.start + arc.sweep, arc.start)
+        };
         let q = std::f64::consts::FRAC_PI_2;
         c.begin_path();
         if (end - start).abs() >= std::f32::consts::TAU - 1e-4 {
-            let _ = c.arc(arc.cx as f64, arc.cy as f64, arc.radius as f64, 0.0, std::f64::consts::TAU);
+            let _ = c.arc(
+                arc.cx as f64,
+                arc.cy as f64,
+                arc.radius as f64,
+                0.0,
+                std::f64::consts::TAU,
+            );
         } else {
-            let _ = c.arc(arc.cx as f64, arc.cy as f64, arc.radius as f64, start as f64 - q, end as f64 - q);
+            let _ = c.arc(
+                arc.cx as f64,
+                arc.cy as f64,
+                arc.radius as f64,
+                start as f64 - q,
+                end as f64 - q,
+            );
         }
         c.set_line_width(width as f64);
         c.set_line_cap("round");
@@ -1016,7 +1077,12 @@ impl Painter for CanvasPainter {
     }
 
     fn push_blur(&mut self, radius: f32) {
-        let clip = Clip { rect: (-1e7, -1e7, 2e7, 2e7), radii: None, transform: None, blur: Some(radius as f64) };
+        let clip = Clip {
+            rect: (-1e7, -1e7, 2e7, 2e7),
+            radii: None,
+            transform: None,
+            blur: Some(radius as f64),
+        };
         apply_clip(self.ctx(), &clip);
         self.clips.push(clip);
     }

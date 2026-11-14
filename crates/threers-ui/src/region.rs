@@ -95,7 +95,13 @@ impl Painter for Culled<'_> {
         }
     }
 
-    fn fill_gradient(&mut self, rect: Rect, shape: crate::GradientShape, stops: &[(f32, Rgba)], blur: f32) {
+    fn fill_gradient(
+        &mut self,
+        rect: Rect,
+        shape: crate::GradientShape,
+        stops: &[(f32, Rgba)],
+        blur: f32,
+    ) {
         if self.visible(rect) {
             self.inner.fill_gradient(rect, shape, stops, blur);
         }

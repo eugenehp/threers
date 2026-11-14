@@ -92,7 +92,14 @@ impl WebScene {
         cast_shadow: bool,
     ) -> WebObjectHandle {
         use crate::extras::candle::{Candle, FlameStyle};
-        let mut c = Candle::new(if realistic { FlameStyle::Realistic } else { FlameStyle::Simple }).with_size(height, radius).with_wax(crate::math::Color::from_hex(wax)).with_seed(seed);
+        let mut c = Candle::new(if realistic {
+            FlameStyle::Realistic
+        } else {
+            FlameStyle::Simple
+        })
+        .with_size(height, radius)
+        .with_wax(crate::math::Color::from_hex(wax))
+        .with_seed(seed);
         c.flame_height = flame_height;
         c.light_intensity = light_intensity;
         c.steps = steps.clamp(8, 256);
@@ -109,7 +116,10 @@ impl WebScene {
     /// page keeps them among the node's children.
     #[wasm_bindgen(js_name = candleParts)]
     pub fn candle_parts(&self, node: &WebObjectHandle) -> Vec<f64> {
-        self.inner.get(node.id).map(|o| o.children.iter().map(|c| object_id_to_f64(*c)).collect()).unwrap_or_default()
+        self.inner
+            .get(node.id)
+            .map(|o| o.children.iter().map(|c| object_id_to_f64(*c)).collect())
+            .unwrap_or_default()
     }
 
     /// Flickers every candle's flame and light for `time` seconds.

@@ -16,6 +16,7 @@ pub mod pages;
 pub mod progress;
 pub mod shaders;
 pub mod showcase;
+pub mod tailwind;
 pub mod toolkit;
 // The demo in a headset: the browser's (WebXR) and visionOS's.
 #[cfg(any(target_arch = "wasm32", target_os = "visionos"))]
@@ -45,7 +46,10 @@ mod web {
 
     impl threers_ui::storage::Storage for LocalStorage {
         fn get(&self, key: &str) -> Option<String> {
-            self.0.get_item(&format!("threers-ui-demo.{key}")).ok().flatten()
+            self.0
+                .get_item(&format!("threers-ui-demo.{key}"))
+                .ok()
+                .flatten()
         }
         fn set(&self, key: &str, value: &str) {
             let _ = self.0.set_item(&format!("threers-ui-demo.{key}"), value);
@@ -157,7 +161,9 @@ mod web {
         /// WebGL2 (only WebGL2 without `webgpu`). Fails (and leaves the canvas unusable for 2D: use a
         /// fresh one then) when there is neither.
         pub async fn new_gpu(canvas: HtmlCanvasElement, webgpu: bool) -> Result<Demo, JsValue> {
-            let gpu = crate::gpu::Gpu::open(canvas.clone(), webgpu).await.map_err(|e| JsValue::from_str(&e))?;
+            let gpu = crate::gpu::Gpu::open(canvas.clone(), webgpu)
+                .await
+                .map_err(|e| JsValue::from_str(&e))?;
             let mut app = App::new();
             if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
                 app.set_storage(std::rc::Rc::new(LocalStorage(s)));
@@ -165,7 +171,10 @@ mod web {
             let xr_support: Rc<Cell<Option<(bool, bool)>>> = Default::default();
             let found = xr_support.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                found.set(Some((XrSession::is_supported("immersive-vr").await, XrSession::is_supported("immersive-ar").await)));
+                found.set(Some((
+                    XrSession::is_supported("immersive-vr").await,
+                    XrSession::is_supported("immersive-ar").await,
+                )));
             });
             Ok(Demo {
                 app,
@@ -185,12 +194,14 @@ mod web {
         /// bytes: the page fetches one, as a browser has no font files to
         /// read. Call before [`new_gpu`](Self::new_gpu).
         pub fn set_gpu_font(bytes: &[u8]) -> Result<(), JsValue> {
-            threers::captions::CaptionFont::set_ui(bytes).map_err(|e| JsValue::from_str(&format!("{e:?}")))
+            threers::captions::CaptionFont::set_ui(bytes)
+                .map_err(|e| JsValue::from_str(&format!("{e:?}")))
         }
 
         /// The GPU renderer's face's bold file (fetched beside the regular).
         pub fn set_gpu_font_bold(bytes: &[u8]) -> Result<(), JsValue> {
-            threers::captions::CaptionFont::set_ui_style(true, false, bytes).map_err(|e| JsValue::from_str(&format!("{e:?}")))
+            threers::captions::CaptionFont::set_ui_style(true, false, bytes)
+                .map_err(|e| JsValue::from_str(&format!("{e:?}")))
         }
 
         /// Runs the demo's heavy work (the 3D model's drawing) on Web
@@ -222,7 +233,9 @@ mod web {
         /// The XR page's request, if it made one: open a session (from the
         /// tap that asked, as browsers want) or end the one showing.
         fn start_xr(&mut self) {
-            let Some(mode) = self.app.state.xr_request.take() else { return };
+            let Some(mode) = self.app.state.xr_request.take() else {
+                return;
+            };
             if mode == "end" {
                 if let Some((h, _)) = &mut self.headset {
                     h.session.end();
@@ -233,15 +246,19 @@ mod web {
                 self.app.state.toast = Some("XR needs the GPU renderer".into());
                 return;
             };
-            let (canvas, opening, tick) = (g.canvas(), self.xr_opening.clone(), self.ticker.clone());
+            let (canvas, opening, tick) =
+                (g.canvas(), self.xr_opening.clone(), self.ticker.clone());
             wasm_bindgen_futures::spawn_local(async move {
                 // The phone's look-around view (its sensors and camera), or
                 // a WebXR session.
                 let r = match mode.as_str() {
                     "phone" => PhoneView::start(canvas, true).await.map(View::Phone),
-                    _ => XrSession::request(&mode, canvas, "local-floor", 1.0, &[]).await.map(View::Xr),
+                    _ => XrSession::request(&mode, canvas, "local-floor", 1.0, &[])
+                        .await
+                        .map(View::Xr),
                 };
-                *opening.borrow_mut() = Some(r.map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}"))));
+                *opening.borrow_mut() =
+                    Some(r.map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}"))));
                 // A frame to take it up in, the page's being idle.
                 if let (Some(w), Some(t)) = (web_sys::window(), tick) {
                     let _ = w.request_animation_frame(&t);
@@ -276,10 +293,15 @@ mod web {
                         // until its width fits it (a headset's is wide).
                         if phone && let Paint::Gpu(g) = &self.painter {
                             let c = g.canvas();
-                            let aspect = c.client_width().max(1) as f32 / c.client_height().max(1) as f32;
-                            let half_across = ((threers::xr::phone::FOV_Y.to_radians() / 2.0).tan() * aspect).atan();
-                            let half_width = headset.ui.panel.size.0 * headset.ui.panel.metres_per_pixel / 2.0;
-                            headset.ui.panel.distance = (half_width / half_across.tan() * 1.06).clamp(1.3, 4.5);
+                            let aspect =
+                                c.client_width().max(1) as f32 / c.client_height().max(1) as f32;
+                            let half_across =
+                                ((threers::xr::phone::FOV_Y.to_radians() / 2.0).tan() * aspect)
+                                    .atan();
+                            let half_width =
+                                headset.ui.panel.size.0 * headset.ui.panel.metres_per_pixel / 2.0;
+                            headset.ui.panel.distance =
+                                (half_width / half_across.tan() * 1.06).clamp(1.3, 4.5);
                         }
                         self.headset = Some((headset, ended));
                     }
@@ -305,9 +327,13 @@ mod web {
             // The phone's view where there is no immersive WebXR to open.
             let gpu = matches!(self.painter, Paint::Gpu(_));
             let (vr, ar) = self.xr_support.get().unwrap_or((false, false));
-            let phone = gpu && !vr && !ar && self.xr_support.get().is_some() && PhoneView::is_supported();
+            let phone =
+                gpu && !vr && !ar && self.xr_support.get().is_some() && PhoneView::is_supported();
             s.xr_can = if gpu { [vr, ar, phone] } else { [false; 3] };
-            let phone_showing = matches!(self.headset.as_ref().map(|h| &h.0.session), Some(View::Phone(_)));
+            let phone_showing = matches!(
+                self.headset.as_ref().map(|h| &h.0.session),
+                Some(View::Phone(_))
+            );
             s.xr_status = match (&self.painter, self.headset.is_some(), self.xr_support.get()) {
                 _ if phone_showing => "Looking around: turn the phone to look, tap the panel to press. Exit at the top left.".into(),
                 (_, true, _) => "Showing in the headset. Exit here, or from the headset's own menu.".into(),
@@ -328,11 +354,15 @@ mod web {
             let (w, h) = crate::xr::PANEL_PX;
             let scale = crate::xr::PANEL_SCALE;
             self.app.ui.set_pixel_ratio(scale);
-            let Some((headset, _)) = &mut self.headset else { return };
+            let Some((headset, _)) = &mut self.headset else {
+                return;
+            };
             let t = time / 1000.0;
             let frame = threers::xr::Frame::take(&mut headset.session, t, t - headset.last);
             headset.last = t;
-            headset.room.animate(&mut headset.scene, t, frame.see_through);
+            headset
+                .room
+                .animate(&mut headset.scene, t, frame.see_through);
             {
                 let mut m = self.painter.measure(scale);
                 headset.ui.input(&mut self.app, &frame, &mut *m);
@@ -342,13 +372,19 @@ mod web {
             {
                 let mut m = self.painter.measure(scale);
                 let mut measure = self.text_cache.measure_with(&mut *m);
-                self.app.frame_timed(time / 1000.0, w, h, &mut measure, &clock);
+                self.app
+                    .frame_timed(time / 1000.0, w, h, &mut measure, &clock);
             }
             self.text_cache.finish_frame();
             if let Paint::Gpu(g) = &mut self.painter {
                 let mut scene = threers_ui::scene::Scene::default();
                 self.app.paint(&mut scene.recorder());
-                let bg = self.app.ui.style(self.app.ui.root()).background.unwrap_or([0.0, 0.0, 0.0, 1.0]);
+                let bg = self
+                    .app
+                    .ui
+                    .style(self.app.ui.root())
+                    .background
+                    .unwrap_or([0.0, 0.0, 0.0, 1.0]);
                 g.draw_xr(&scene, scale, bg, headset);
             }
             if let Some(m) = &mut self.mirror {
@@ -414,10 +450,17 @@ mod web {
                 return phone;
             }
             self.app.ui.set_pixel_ratio(dpr as f32);
-            for a in self.mirror.as_mut().map(|m| m.take_actions()).unwrap_or_default() {
+            for a in self
+                .mirror
+                .as_mut()
+                .map(|m| m.take_actions())
+                .unwrap_or_default()
+            {
                 match a {
                     A11yAction::Focus(n) => {
-                        self.app.input.set_focus(&mut self.app.ui, &mut self.app.state, Some(n));
+                        self.app
+                            .input
+                            .set_focus(&mut self.app.ui, &mut self.app.state, Some(n));
                     }
                     A11yAction::Activate(n) => {
                         let r = self.app.ui.rect(n);
@@ -427,12 +470,23 @@ mod web {
                         self.app.event(Event::PointerUp { x, y, button: b });
                     }
                     A11yAction::Custom(n, name) => {
-                        self.app.input.accessibility_action(&mut self.app.ui, &mut self.app.state, n, &name);
+                        self.app.input.accessibility_action(
+                            &mut self.app.ui,
+                            &mut self.app.state,
+                            n,
+                            &name,
+                        );
                     }
                     // A screen reader's step: the arrow key, on it.
                     A11yAction::Increment(n) | A11yAction::Decrement(n) => {
-                        let key = if matches!(a, A11yAction::Increment(_)) { "ArrowRight" } else { "ArrowLeft" };
-                        self.app.input.set_focus(&mut self.app.ui, &mut self.app.state, Some(n));
+                        let key = if matches!(a, A11yAction::Increment(_)) {
+                            "ArrowRight"
+                        } else {
+                            "ArrowLeft"
+                        };
+                        self.app
+                            .input
+                            .set_focus(&mut self.app.ui, &mut self.app.state, Some(n));
                         self.app.key(key, KeyModifiers::default());
                     }
                 }
@@ -444,11 +498,15 @@ mod web {
                 // Strings measured once while they show, not every layout.
                 let mut m = self.painter.measure(dpr as f32);
                 let mut measure = self.text_cache.measure_with(&mut *m);
-                self.app.frame_timed(time / 1000.0, width, height, &mut measure, &clock);
+                self.app
+                    .frame_timed(time / 1000.0, width, height, &mut measure, &clock);
             }
             self.text_cache.finish_frame();
             let t1 = clock();
-            let (w, h) = ((width as f64 * dpr).round() as u32, (height as f64 * dpr).round() as u32);
+            let (w, h) = (
+                (width as f64 * dpr).round() as u32,
+                (height as f64 * dpr).round() as u32,
+            );
             match &mut self.painter {
                 Paint::Canvas(c) => {
                     c.begin(w, h, dpr);
@@ -459,7 +517,12 @@ mod web {
                     // Recorded, then drawn in one go.
                     let mut scene = threers_ui::scene::Scene::default();
                     self.app.paint(&mut scene.recorder());
-                    let bg = self.app.ui.style(self.app.ui.root()).background.unwrap_or([0.0, 0.0, 0.0, 1.0]);
+                    let bg = self
+                        .app
+                        .ui
+                        .style(self.app.ui.root())
+                        .background
+                        .unwrap_or([0.0, 0.0, 0.0, 1.0]);
                     g.draw(&scene, dpr as f32, bg);
                 }
             }
@@ -485,7 +548,8 @@ mod web {
             if self.headset.is_some() {
                 return;
             }
-            self.app.pointer_move(x, y, &mut *self.painter.measure(self.size.2 as f32));
+            self.app
+                .pointer_move(x, y, &mut *self.painter.measure(self.size.2 as f32));
         }
 
         pub fn pointer_down(&mut self, x: f32, y: f32, button_: i16, shift: bool) {
@@ -493,7 +557,13 @@ mod web {
             if self.headset.is_some() {
                 return;
             }
-            self.app.pointer_down(x, y, button(button_), shift, &mut *self.painter.measure(self.size.2 as f32));
+            self.app.pointer_down(
+                x,
+                y,
+                button(button_),
+                shift,
+                &mut *self.painter.measure(self.size.2 as f32),
+            );
         }
 
         pub fn pointer_up(&mut self, x: f32, y: f32, button_: i16) {
@@ -524,7 +594,14 @@ mod web {
                 "end" => TouchPhase::End,
                 _ => TouchPhase::Cancel,
             };
-            self.app.touch(id as u64, phase, x, y, time / 1000.0, &mut *self.painter.measure(self.size.2 as f32));
+            self.app.touch(
+                id as u64,
+                phase,
+                x,
+                y,
+                time / 1000.0,
+                &mut *self.painter.measure(self.size.2 as f32),
+            );
             if force > 0.0 {
                 self.app.touch_force(id as u64, force);
             }
@@ -534,7 +611,15 @@ mod web {
         /// A key (DOM `KeyboardEvent.key`); returns whether to prevent the
         /// page's default.
         pub fn key(&mut self, key: &str, shift: bool, ctrl: bool, alt: bool, meta: bool) -> bool {
-            let handled = self.app.key(key, KeyModifiers { shift, control: ctrl, alt, meta });
+            let handled = self.app.key(
+                key,
+                KeyModifiers {
+                    shift,
+                    control: ctrl,
+                    alt,
+                    meta,
+                },
+            );
             self.start_xr();
             handled
         }
@@ -546,7 +631,10 @@ mod web {
                 "end" => Ime::Commit(text),
                 _ => {
                     let n = text.len();
-                    Ime::Preedit { text, cursor: Some((n, n)) }
+                    Ime::Preedit {
+                        text,
+                        cursor: Some((n, n)),
+                    }
                 }
             };
             self.app.event(Event::Ime(ime));
@@ -558,8 +646,7 @@ mod web {
             let t = std::mem::take(&mut self.timings);
             format!(
                 "{{\"frames\":{:?},\"layouts\":{}}}",
-                t,
-                self.app.layouts_last
+                t, self.app.layouts_last
             )
         }
 
@@ -597,22 +684,33 @@ mod web {
         /// The field's box `[x, y, width, height]` in CSS pixels, empty
         /// while a tap there would not reach it.
         pub fn field_rect(&self) -> Vec<f32> {
-            self.app.field_rect().map_or(vec![], |r| vec![r.x, r.y, r.width, r.height])
+            self.app
+                .field_rect()
+                .map_or(vec![], |r| vec![r.x, r.y, r.width, r.height])
         }
 
         /// The field's box and its text's box, `[x, y, width, height]` each,
         /// in CSS pixels; empty while a tap there would not reach it.
         pub fn field_boxes(&self) -> Vec<f32> {
-            self.app.field_rect_and_text().map_or(vec![], |(r, t, _, _)| vec![r.x, r.y, r.width, r.height, t.x, t.y, t.width, t.height])
+            self.app
+                .field_rect_and_text()
+                .map_or(vec![], |(r, t, _, _)| {
+                    vec![r.x, r.y, r.width, r.height, t.x, t.y, t.width, t.height]
+                })
         }
 
         /// The field text's CSS `font` and `color`, for the page's input to
         /// draw it in.
         pub fn field_font(&self) -> Vec<String> {
-            self.app.field_rect_and_text().map_or(vec![], |(_, _, font, c)| {
-                let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-                vec![font, format!("rgba({},{},{},{})", b(c[0]), b(c[1]), b(c[2]), c[3])]
-            })
+            self.app
+                .field_rect_and_text()
+                .map_or(vec![], |(_, _, font, c)| {
+                    let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                    vec![
+                        font,
+                        format!("rgba({},{},{},{})", b(c[0]), b(c[1]), b(c[2]), c[3]),
+                    ]
+                })
         }
 
         /// See [`App::set_native_field`].
@@ -681,7 +779,9 @@ mod web {
         /// The caret's box `[x, y, width, height]` in CSS pixels, empty when
         /// the field does not have focus.
         pub fn ime_area(&self) -> Vec<f32> {
-            self.app.ime_area().map_or(vec![], |r| vec![r.x, r.y, r.width, r.height])
+            self.app
+                .ime_area()
+                .map_or(vec![], |r| vec![r.x, r.y, r.width, r.height])
         }
     }
 }

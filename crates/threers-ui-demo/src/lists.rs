@@ -27,7 +27,13 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 5] = [Kind::Rows, Kind::Messages, Kind::Contacts, Kind::Cards, Kind::Select];
+    pub const ALL: [Kind; 5] = [
+        Kind::Rows,
+        Kind::Messages,
+        Kind::Contacts,
+        Kind::Cards,
+        Kind::Select,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -80,15 +86,39 @@ fn mix(i: usize) -> u64 {
 }
 
 const WORDS: [&str; 24] = [
-    "sure", "the", "layout", "is", "done", "can", "you", "check", "scrolling", "on", "your", "phone", "it", "glides", "now",
-    "and", "the", "keyboard", "opens", "great", "thanks", "one", "more", "thing",
+    "sure",
+    "the",
+    "layout",
+    "is",
+    "done",
+    "can",
+    "you",
+    "check",
+    "scrolling",
+    "on",
+    "your",
+    "phone",
+    "it",
+    "glides",
+    "now",
+    "and",
+    "the",
+    "keyboard",
+    "opens",
+    "great",
+    "thanks",
+    "one",
+    "more",
+    "thing",
 ];
 
 /// Message `i`: who sent it, and its text, from a few words to a paragraph.
 fn message(i: usize) -> (bool, String) {
     let h = mix(i);
     let words = 2 + (h % 7) as usize * (1 + (h >> 8) as usize % 5);
-    let text: Vec<&str> = (0..words).map(|k| WORDS[(mix(i * 31 + k) % WORDS.len() as u64) as usize]).collect();
+    let text: Vec<&str> = (0..words)
+        .map(|k| WORDS[(mix(i * 31 + k) % WORDS.len() as u64) as usize])
+        .collect();
     let mut text = text.join(" ");
     if let Some(c) = text.get_mut(0..1) {
         c.make_ascii_uppercase();
@@ -96,7 +126,9 @@ fn message(i: usize) -> (bool, String) {
     (h & 1 == 0, text + ".")
 }
 
-const FIRST: [&str; 12] = ["Ada", "Ben", "Cleo", "Dev", "Eli", "Fay", "Gus", "Hana", "Ivo", "Jun", "Kai", "Lea"];
+const FIRST: [&str; 12] = [
+    "Ada", "Ben", "Cleo", "Dev", "Eli", "Fay", "Gus", "Hana", "Ivo", "Jun", "Kai", "Lea",
+];
 
 /// Contact row `i` of the `Contacts` list: a letter's heading, or a person.
 fn contact(i: usize, seed: usize) -> Result<char, (String, String)> {
@@ -106,8 +138,14 @@ fn contact(i: usize, seed: usize) -> Result<char, (String, String)> {
         0 => Ok(letter),
         k => {
             let first = FIRST[(mix(i + seed) % FIRST.len() as u64) as usize];
-            let last = format!("{letter}{}", ["ardy", "elton", "ines", "ovak", "urst", "ash"][(mix(i + seed + 7) % 6) as usize]);
-            Err((format!("{first} {last}"), format!("+1 555 {:04}", (k * 37 + i) % 10_000)))
+            let last = format!(
+                "{letter}{}",
+                ["ardy", "elton", "ines", "ovak", "urst", "ash"][(mix(i + seed + 7) % 6) as usize]
+            );
+            Err((
+                format!("{first} {last}"),
+                format!("+1 555 {:04}", (k * 37 + i) % 10_000),
+            ))
         }
     }
 }
@@ -130,8 +168,14 @@ impl Lists {
             input.on_click(tab, move |s: &mut State, _, _| s.list_tab = i);
             tabs.push(tab);
         }
-        let caption = ui.add_box(panel, style! { font-size: 11px; color: #8b93a5; white-space: normal; });
-        ui.token_style(caption, &[("color", threers_ui::environment::Token::SecondaryText)]);
+        let caption = ui.add_box(
+            panel,
+            style! { font-size: 11px; color: #8b93a5; white-space: normal; },
+        );
+        ui.token_style(
+            caption,
+            &[("color", threers_ui::environment::Token::SecondaryText)],
+        );
         ui.add_text(caption, "");
         // As tall as the list is pulled down: the list below moves down
         // with the finger.
@@ -139,7 +183,10 @@ impl Lists {
             panel,
             style! { display: none; height: 0px; flex-shrink: 0; align-items: flex-end; justify-content: center; overflow: hidden; font-size: 12px; color: #8b93a5; },
         );
-        ui.token_style(pull, &[("color", threers_ui::environment::Token::SecondaryText)]);
+        ui.token_style(
+            pull,
+            &[("color", threers_ui::environment::Token::SecondaryText)],
+        );
         let pull_label = ui.add_text(pull, "");
         ui.set_semantics(pull, Semantics::new(Role::Status).live());
         let list_style = style! {
@@ -151,16 +198,26 @@ impl Lists {
             let (count, height) = match kind {
                 Kind::Rows => (100_000, RowHeight::Uniform(26.0)),
                 Kind::Messages => (MESSAGES, RowHeight::Measured { estimate: 48.0 }),
-                Kind::Contacts => (26 * (CONTACTS_PER_LETTER + 1), RowHeight::Measured { estimate: 46.0 }),
+                Kind::Contacts => (
+                    26 * (CONTACTS_PER_LETTER + 1),
+                    RowHeight::Measured { estimate: 46.0 },
+                ),
                 Kind::Cards => (CARDS.div_ceil(CARDS_PER_ROW), RowHeight::Uniform(92.0)),
                 Kind::Select => (SELECTABLE, RowHeight::Uniform(36.0)),
             };
             let list = VirtualList::new(ui, panel, list_style.clone(), count, height);
-            ui.appearance_style(list.container(), threers_ui::states::Appearance::Light, "background: #f7f8fa");
+            ui.appearance_style(
+                list.container(),
+                threers_ui::states::Appearance::Light,
+                "background: #f7f8fa",
+            );
             let c = list.container();
             // Focusable: the arrow keys then move through its rows (the app
             // handles them).
-            ui.set_semantics(c, Semantics::new(Role::List).label(kind.label()).tab_index(0));
+            ui.set_semantics(
+                c,
+                Semantics::new(Role::List).label(kind.label()).tab_index(0),
+            );
             let tab = lists.len();
             input.on_refresh(c, move |s: &mut State, _| s.refreshing = Some(tab));
             // A tap on a row (to tick it, or on its Delete action): the row
@@ -234,12 +291,18 @@ impl Lists {
         let tab = state.list_tab.min(self.lists.len() - 1);
         let row_of = |lists: &Self, n: NodeId| {
             let list = &lists.lists[tab].1;
-            list.built().iter().copied().find(|&(_, row)| ui.contains(n) && ui.ancestors(n).any(|a| a == row))
+            list.built()
+                .iter()
+                .copied()
+                .find(|&(_, row)| ui.contains(n) && ui.ancestors(n).any(|a| a == row))
         };
         if let Some(target) = state.list_clicked.take()
             && let Some((i, row)) = row_of(self, target)
         {
-            let on_action = self.parts.get(&row).is_some_and(|&(action, _)| ui.ancestors(target).any(|a| a == action));
+            let on_action = self
+                .parts
+                .get(&row)
+                .is_some_and(|&(action, _)| ui.ancestors(target).any(|a| a == action));
             if on_action {
                 self.delete(ui, state, tab, i);
             } else if Kind::ALL[tab] == Kind::Select {
@@ -261,7 +324,11 @@ impl Lists {
             self.drawn_appearance = Some(appearance);
             self.shown = Some(tab);
             for (i, (_, list)) in self.lists.iter().enumerate() {
-                let display = if i == tab { threers_ui::Display::Block } else { threers_ui::Display::None };
+                let display = if i == tab {
+                    threers_ui::Display::Block
+                } else {
+                    threers_ui::Display::None
+                };
                 if ui.style(list.container()).display != display {
                     ui.update_style(list.container(), |s| s.display = display);
                 }
@@ -280,8 +347,20 @@ impl Lists {
                 }
                 ui.set_style(t, style);
                 // The chosen tab keeps its accent under the pointer.
-                ui.set_hover_style(t, if i == tab { "background: #1d4ed8" } else { "background: rgba(128,138,160,0.3)" });
-                ui.set_semantics(t, Semantics::new(Role::Tab).label(Kind::ALL[i].label()).selected(i == tab));
+                ui.set_hover_style(
+                    t,
+                    if i == tab {
+                        "background: #1d4ed8"
+                    } else {
+                        "background: rgba(128,138,160,0.3)"
+                    },
+                );
+                ui.set_semantics(
+                    t,
+                    Semantics::new(Role::Tab)
+                        .label(Kind::ALL[i].label())
+                        .selected(i == tab),
+                );
             }
         }
         if self.drawn_refreshes != state.refreshes {
@@ -298,10 +377,18 @@ impl Lists {
         }
         let mut caption = match Kind::ALL[tab] {
             Kind::Rows => "100,000 rows of one height, built as they show.".to_owned(),
-            Kind::Messages => format!("{MESSAGES} messages, each as tall as its text: measured as it shows."),
-            Kind::Contacts => format!("{} contacts under letter headings.", 26 * CONTACTS_PER_LETTER),
+            Kind::Messages => {
+                format!("{MESSAGES} messages, each as tall as its text: measured as it shows.")
+            }
+            Kind::Contacts => format!(
+                "{} contacts under letter headings.",
+                26 * CONTACTS_PER_LETTER
+            ),
             Kind::Cards => format!("{CARDS} cards, {CARDS_PER_ROW} to a row."),
-            Kind::Select => format!("{} of {SELECTABLE} selected. Tap a row to tick it.", state.selected.len()),
+            Kind::Select => format!(
+                "{} of {SELECTABLE} selected. Tap a row to tick it.",
+                state.selected.len()
+            ),
         };
         if state.refreshes > 0 {
             caption += &format!(" Refreshed {}×.", state.refreshes);
@@ -375,7 +462,11 @@ impl Lists {
             if ui.style(content).left != threers_ui::Length::Px(offset) {
                 ui.style_mut(content).left = threers_ui::Length::Px(offset);
                 let a = ui.style_mut(action);
-                a.display = if offset < 0.0 { threers_ui::Display::Flex } else { threers_ui::Display::None };
+                a.display = if offset < 0.0 {
+                    threers_ui::Display::Flex
+                } else {
+                    threers_ui::Display::None
+                };
                 a.width = threers_ui::Length::Px(-offset);
             }
         }
@@ -386,7 +477,9 @@ impl Lists {
     fn delete(&mut self, ui: &mut Ui, state: &mut State, tab: usize, i: usize) {
         let (kind, list) = &mut self.lists[tab];
         let d = data_index(&self.removed[tab], i);
-        if *kind == Kind::Cards || (*kind == Kind::Contacts && contact(d, state.refreshes * 7919).is_ok()) {
+        if *kind == Kind::Cards
+            || (*kind == Kind::Contacts && contact(d, state.refreshes * 7919).is_ok())
+        {
             return;
         }
         let at = self.removed[tab].partition_point(|&r| r < d);
@@ -419,62 +512,95 @@ fn build(kind: Kind, ui: &mut Ui, row: NodeId, i: usize, seed: usize, selected: 
                 ui.style_mut(row).background = Some([1.0, 1.0, 1.0, 0.03]);
             }
             ui.hover_style(row, "background: rgba(59,130,246,0.18)");
-        },
+        }
         Kind::Messages => {
             let (mine, text) = message(i + seed);
             ui.set_style(row, style! { display: flex; padding: 3px 8px; });
-            ui.style_mut(row).justify_content =
-                if mine { threers_ui::JustifyContent::FlexEnd } else { threers_ui::JustifyContent::FlexStart };
+            ui.style_mut(row).justify_content = if mine {
+                threers_ui::JustifyContent::FlexEnd
+            } else {
+                threers_ui::JustifyContent::FlexStart
+            };
             let bubble = ui.add_box(
                 row,
                 style! { max-width: 78%; padding: 6px 10px; border-radius: 12px; font-size: 12px; line-height: 16px; white-space: normal; },
             );
-            ui.style_mut(bubble).background = Some(if mine { [0.145, 0.388, 0.922, 1.0] } else { [0.17, 0.19, 0.24, 1.0] });
+            ui.style_mut(bubble).background = Some(if mine {
+                [0.145, 0.388, 0.922, 1.0]
+            } else {
+                [0.17, 0.19, 0.24, 1.0]
+            });
             if mine {
                 ui.style_mut(bubble).color = [0.99, 0.99, 0.99, 1.0];
             } else {
-                ui.appearance_style(bubble, threers_ui::states::Appearance::Light, "background: #e6e9ee; color: #1f2329");
+                ui.appearance_style(
+                    bubble,
+                    threers_ui::states::Appearance::Light,
+                    "background: #e6e9ee; color: #1f2329",
+                );
             }
             ui.add_text(bubble, text);
-        },
-        Kind::Contacts => match contact(i, seed) {
-            Ok(letter) => {
-                ui.set_style(
+        }
+        Kind::Contacts => {
+            match contact(i, seed) {
+                Ok(letter) => {
+                    ui.set_style(
                     row,
                     style! { padding: 4px 10px; font-size: 11px; font-weight: bold; color: #8b93a5; background: #1d222b; },
                 );
-                ui.appearance_style(
-                    row,
-                    threers_ui::states::Appearance::Light,
-                    "background: #eef0f3",
-                );
-                ui.token_style(row, &[("color", threers_ui::environment::Token::SecondaryText)]);
-                ui.add_text(row, letter.to_string());
-                ui.set_semantics(row, Semantics::new(Role::Heading(3)).label(letter.to_string()));
-            }
-            Err((name, phone)) => {
-                ui.set_style(row, style! { display: flex; align-items: center; gap: 10px; padding: 6px 10px; });
-                let avatar = ui.add_box(
+                    ui.appearance_style(
+                        row,
+                        threers_ui::states::Appearance::Light,
+                        "background: #eef0f3",
+                    );
+                    ui.token_style(
+                        row,
+                        &[("color", threers_ui::environment::Token::SecondaryText)],
+                    );
+                    ui.add_text(row, letter.to_string());
+                    ui.set_semantics(
+                        row,
+                        Semantics::new(Role::Heading(3)).label(letter.to_string()),
+                    );
+                }
+                Err((name, phone)) => {
+                    ui.set_style(row, style! { display: flex; align-items: center; gap: 10px; padding: 6px 10px; });
+                    let avatar = ui.add_box(
                     row,
                     style! { width: 30px; height: 30px; border-radius: 15px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; color: #fcfcfc; },
                 );
-                let hue = (mix(i + seed) % 6) as usize;
-                // Dark enough for white initials (4.5:1 at least).
-                let colours = [[0.706, 0.137, 0.094], [0.180, 0.490, 0.196], [0.114, 0.306, 0.847], [0.706, 0.325, 0.035], [0.427, 0.157, 0.851], [0.059, 0.463, 0.431]];
-                let c = colours[hue];
-                ui.style_mut(avatar).background = Some([c[0], c[1], c[2], 1.0]);
-                let initials: String = name.split(' ').filter_map(|w| w.chars().next()).collect();
-                ui.add_text(avatar, initials);
-                let col = ui.add_box(row, style! { display: flex; flex-direction: column; gap: 2px; });
-                let n = ui.add_box(col, style! { font-size: 12px; });
-                ui.add_text(n, name.clone());
-                let p = ui.add_box(col, style! { font-size: 11px; color: #8b93a5; });
-                ui.token_style(p, &[("color", threers_ui::environment::Token::SecondaryText)]);
-                ui.add_text(p, phone);
-                ui.set_semantics(row, Semantics::new(Role::ListItem).label(name));
-                ui.hover_style(row, "background: rgba(59,130,246,0.12)");
+                    let hue = (mix(i + seed) % 6) as usize;
+                    // Dark enough for white initials (4.5:1 at least).
+                    let colours = [
+                        [0.706, 0.137, 0.094],
+                        [0.180, 0.490, 0.196],
+                        [0.114, 0.306, 0.847],
+                        [0.706, 0.325, 0.035],
+                        [0.427, 0.157, 0.851],
+                        [0.059, 0.463, 0.431],
+                    ];
+                    let c = colours[hue];
+                    ui.style_mut(avatar).background = Some([c[0], c[1], c[2], 1.0]);
+                    let initials: String =
+                        name.split(' ').filter_map(|w| w.chars().next()).collect();
+                    ui.add_text(avatar, initials);
+                    let col = ui.add_box(
+                        row,
+                        style! { display: flex; flex-direction: column; gap: 2px; },
+                    );
+                    let n = ui.add_box(col, style! { font-size: 12px; });
+                    ui.add_text(n, name.clone());
+                    let p = ui.add_box(col, style! { font-size: 11px; color: #8b93a5; });
+                    ui.token_style(
+                        p,
+                        &[("color", threers_ui::environment::Token::SecondaryText)],
+                    );
+                    ui.add_text(p, phone);
+                    ui.set_semantics(row, Semantics::new(Role::ListItem).label(name));
+                    ui.hover_style(row, "background: rgba(59,130,246,0.12)");
+                }
             }
-        },
+        }
         Kind::Cards => {
             ui.set_style(
                 row,
@@ -495,10 +621,13 @@ fn build(kind: Kind, ui: &mut Ui, row: NodeId, i: usize, seed: usize, selected: 
                 let title = ui.add_box(card, style! { font-weight: bold; font-size: 12px; });
                 ui.add_text(title, format!("Card {}", n + 1));
                 ui.add_text(card, format!("{} items", mix(n + seed) % 90 + 1));
-                ui.set_semantics(card, Semantics::new(Role::ListItem).label(format!("Card {}", n + 1)));
+                ui.set_semantics(
+                    card,
+                    Semantics::new(Role::ListItem).label(format!("Card {}", n + 1)),
+                );
                 ui.hover_style(card, "border: 1px solid #2563eb");
             }
-        },
+        }
         Kind::Select => {
             let on = selected.contains(&i);
             ui.set_style(row, style! { height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 10px; font-size: 12px; cursor: pointer; });
@@ -510,8 +639,13 @@ fn build(kind: Kind, ui: &mut Ui, row: NodeId, i: usize, seed: usize, selected: 
                 ui.style_mut(tick).background = Some([0.145, 0.388, 0.922, 1.0]);
             }
             ui.add_text(row, format!("Item {}", i + 1));
-            ui.set_semantics(row, Semantics::new(Role::Checkbox).label(format!("Item {}", i + 1)).checked(on));
+            ui.set_semantics(
+                row,
+                Semantics::new(Role::Checkbox)
+                    .label(format!("Item {}", i + 1))
+                    .checked(on),
+            );
             ui.hover_style(row, "background: rgba(59,130,246,0.12)");
-        },
+        }
     }
 }

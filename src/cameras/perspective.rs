@@ -124,7 +124,6 @@ impl PerspectiveCamera {
         }
     }
 
-
     /// The projection of the full picture, before any
     /// [`view_offset`](Self::view_offset).
     pub fn full_projection(&self) -> Matrix4 {
@@ -150,8 +149,23 @@ impl PerspectiveCamera {
     /// Renders only the patch `(x, y, width, height)` of a `full_width` ×
     /// `full_height` picture (see [`ViewOffset`](super::ViewOffset)); the
     /// aspect stays the full picture's.
-    pub fn set_view_offset(&mut self, full_width: f32, full_height: f32, x: f32, y: f32, width: f32, height: f32) -> &mut Self {
-        self.view_offset = Some(super::ViewOffset { full_width, full_height, x, y, width, height });
+    pub fn set_view_offset(
+        &mut self,
+        full_width: f32,
+        full_height: f32,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> &mut Self {
+        self.view_offset = Some(super::ViewOffset {
+            full_width,
+            full_height,
+            x,
+            y,
+            width,
+            height,
+        });
         self
     }
 

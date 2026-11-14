@@ -50,7 +50,8 @@ impl Ui {
                 continue;
             }
             for (m, k, v) in &self.prefs {
-                if *m == n && *k == key
+                if *m == n
+                    && *k == key
                     && let Some(v) = (v.as_ref() as &dyn Any).downcast_ref::<T>()
                 {
                     out.push((n, v.clone()));

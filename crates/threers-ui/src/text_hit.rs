@@ -53,7 +53,14 @@ impl Ui {
             vec![]
         };
         if wrapped.is_empty() {
-            return (text.clone(), vec![Line { rect: content, start: 0, end: text.len() }]);
+            return (
+                text.clone(),
+                vec![Line {
+                    rect: content,
+                    start: 0,
+                    end: text.len(),
+                }],
+            );
         }
         let h = content.height / wrapped.len() as f32;
         let mut at = 0;
@@ -81,7 +88,14 @@ impl Ui {
     }
 
     /// How wide `text[start..end]` draws, each run in its own style.
-    fn span_width(&self, id: NodeId, text: &str, start: usize, end: usize, measure: &mut dyn TextMeasure) -> f32 {
+    fn span_width(
+        &self,
+        id: NodeId,
+        text: &str,
+        start: usize,
+        end: usize,
+        measure: &mut dyn TextMeasure,
+    ) -> f32 {
         if end <= start {
             return 0.0;
         }
@@ -92,7 +106,9 @@ impl Ui {
             Some(runs) => split(text, runs, start, end)
                 .into_iter()
                 .map(|(a, b, k)| {
-                    let st = runs.get(k as usize).map_or_else(|| style.clone(), |r| r.style(style));
+                    let st = runs
+                        .get(k as usize)
+                        .map_or_else(|| style.clone(), |r| r.style(style));
                     measure.measure(&text[a..b], &st).0
                 })
                 .sum(),
@@ -134,7 +150,14 @@ impl Ui {
             let control = self.semantics(n).is_some_and(|s| {
                 matches!(
                     s.role,
-                    Role::Button | Role::Tab | Role::MenuItem | Role::Checkbox | Role::Switch | Role::Radio | Role::Slider | Role::Option
+                    Role::Button
+                        | Role::Tab
+                        | Role::MenuItem
+                        | Role::Checkbox
+                        | Role::Switch
+                        | Role::Radio
+                        | Role::Slider
+                        | Role::Option
                 )
             });
             if control {
@@ -144,7 +167,13 @@ impl Ui {
         Some(hit)
     }
 
-    pub fn text_index_at(&self, id: NodeId, x: f32, y: f32, measure: &mut dyn TextMeasure) -> usize {
+    pub fn text_index_at(
+        &self,
+        id: NodeId,
+        x: f32,
+        y: f32,
+        measure: &mut dyn TextMeasure,
+    ) -> usize {
         let (text, lines) = self.text_lines(id);
         let Some(line) = lines
             .iter()
@@ -176,15 +205,21 @@ impl Ui {
     /// tall.
     pub fn text_caret(&self, id: NodeId, index: usize, measure: &mut dyn TextMeasure) -> Rect {
         let (text, lines) = self.text_lines(id);
-        let byte = text.char_indices().nth(index).map_or(text.len(), |(b, _)| b);
-        let Some(line) = lines
-            .iter()
-            .find(|l| byte <= l.end)
-            .or(lines.last())
-        else {
+        let byte = text
+            .char_indices()
+            .nth(index)
+            .map_or(text.len(), |(b, _)| b);
+        let Some(line) = lines.iter().find(|l| byte <= l.end).or(lines.last()) else {
             return Rect::default();
         };
-        let x = line.rect.x + self.span_width(id, &text, line.start, byte.clamp(line.start, line.end), measure);
+        let x = line.rect.x
+            + self.span_width(
+                id,
+                &text,
+                line.start,
+                byte.clamp(line.start, line.end),
+                measure,
+            );
         Rect {
             x,
             width: 1.0,
@@ -194,7 +229,13 @@ impl Ui {
 
     /// The boxes characters `a..b` cover, one per line they are on: what to
     /// fill behind a selection.
-    pub fn text_selection_rects(&self, id: NodeId, a: usize, b: usize, measure: &mut dyn TextMeasure) -> Vec<Rect> {
+    pub fn text_selection_rects(
+        &self,
+        id: NodeId,
+        a: usize,
+        b: usize,
+        measure: &mut dyn TextMeasure,
+    ) -> Vec<Rect> {
         let (a, b) = (a.min(b), a.max(b));
         let (text, lines) = self.text_lines(id);
         let byte = |i: usize| text.char_indices().nth(i).map_or(text.len(), |(b, _)| b);
@@ -279,8 +320,14 @@ pub fn word_at(chars: &[char], i: usize) -> (usize, usize) {
 /// range, without its newline.
 pub fn line_at(chars: &[char], i: usize) -> (usize, usize) {
     let i = i.min(chars.len());
-    let a = chars[..i].iter().rposition(|&c| c == '\n').map_or(0, |p| p + 1);
-    let b = chars[i..].iter().position(|&c| c == '\n').map_or(chars.len(), |p| i + p);
+    let a = chars[..i]
+        .iter()
+        .rposition(|&c| c == '\n')
+        .map_or(0, |p| p + 1);
+    let b = chars[i..]
+        .iter()
+        .position(|&c| c == '\n')
+        .map_or(chars.len(), |p| i + p);
     (a, b)
 }
 
@@ -314,7 +361,9 @@ macro_rules! pointer_selection {
             /// [`pointer_down`](Self::pointer_down): the selection runs from
             /// where it was pressed, by the unit it was pressed with.
             pub fn pointer_drag(&mut self, index: usize) {
-                let Some((a, b, unit)) = self.pointer else { return };
+                let Some((a, b, unit)) = self.pointer else {
+                    return;
+                };
                 let chars: Vec<char> = self.text.chars().collect();
                 let index = index.min(chars.len());
                 let (lo, hi) = match unit {
@@ -377,7 +426,11 @@ mod tests {
         let lh = ui.text_caret(t, 0, m).height;
         // Lines "abc def " and "ghi": the second line's start is index 8.
         assert_eq!(ui.text_index_at(t, 0.0, lh * 1.5, m), 8);
-        assert_eq!(ui.text_index_at(t, 1000.0, 1.0, m), 7, "past a line's end: before its break");
+        assert_eq!(
+            ui.text_index_at(t, 1000.0, 1.0, m),
+            7,
+            "past a line's end: before its break"
+        );
         let c = ui.text_caret(t, 9, m);
         assert_eq!((c.x, c.y), (7.0, lh));
         let rects = ui.text_selection_rects(t, 4, 10, m);

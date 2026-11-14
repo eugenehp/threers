@@ -922,7 +922,10 @@ mod uv_tests {
     #[test]
     fn render_target_textures_are_read_upright() {
         let plain = Texture::new(4, 4, TextureFormat::Rgba8Unorm, vec![0; 64]);
-        assert_eq!(plain.uv_transform_rows(), [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+        assert_eq!(
+            plain.uv_transform_rows(),
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        );
         let mut rt = Texture::from_render_target(7, 4, 4, TextureFormat::Rgba8Unorm);
         assert_eq!(rt.uv_transform_rows(), [[1.0, 0.0, 0.0], [-0.0, -1.0, 1.0]]);
         // Its own offset first: v' = 1 - (v + 0.25).

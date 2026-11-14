@@ -29,7 +29,10 @@ pub enum Ime {
     /// The text being composed, replacing any before it, and where the
     /// method's cursor (or selection) is in it, in bytes; `None` hides the
     /// cursor. Empty text ends composing without committing.
-    Preedit { text: String, cursor: Option<(usize, usize)> },
+    Preedit {
+        text: String,
+        cursor: Option<(usize, usize)>,
+    },
     /// The final text, in place of the preedit.
     Commit(String),
 }
@@ -64,7 +67,10 @@ macro_rules! composition {
                 }
                 self.marked = Some((start, start + n));
                 let (c0, c1) = cursor.map_or((n, n), |(a, b)| {
-                    ($crate::ime::chars_before(text, a), $crate::ime::chars_before(text, b))
+                    (
+                        $crate::ime::chars_before(text, a),
+                        $crate::ime::chars_before(text, b),
+                    )
                 });
                 self.anchor = start + c0;
                 self.caret = start + c1;
@@ -111,7 +117,10 @@ mod tests {
         f.preedit("x", None);
         assert_eq!((f.text.as_str(), f.marked), ("axc", Some((1, 2))));
         f.preedit("xyz", Some((1, 2)));
-        assert_eq!((f.text.as_str(), f.marked, f.anchor, f.caret), ("axyzc", Some((1, 4)), 2, 3));
+        assert_eq!(
+            (f.text.as_str(), f.marked, f.anchor, f.caret),
+            ("axyzc", Some((1, 4)), 2, 3)
+        );
         f.cancel_preedit();
         assert_eq!((f.text.as_str(), f.marked, f.caret), ("ac", None, 1));
     }

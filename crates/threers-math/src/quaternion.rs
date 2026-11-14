@@ -57,7 +57,11 @@ impl Quaternion {
         let (x, y, z) = if r < 1e-8 {
             // opposite: any axis at right angles to `from`
             r = 0.0;
-            if from.x.abs() > from.z.abs() { (-from.y, from.x, 0.0) } else { (0.0, -from.z, from.y) }
+            if from.x.abs() > from.z.abs() {
+                (-from.y, from.x, 0.0)
+            } else {
+                (0.0, -from.z, from.y)
+            }
         } else {
             let c = from.cross(to);
             (c.x, c.y, c.z)
@@ -290,11 +294,18 @@ mod op_tests {
 
     #[test]
     fn from_unit_vectors_turns_one_onto_the_other() {
-        let q = Quaternion::from_unit_vectors(Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 0.0, 0.0));
+        let q =
+            Quaternion::from_unit_vectors(Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 0.0, 0.0));
         let v = Vector3::new(0.0, 1.0, 0.0).apply_quaternion(q);
-        assert!((v.x - 1.0).abs() < 1e-6 && v.y.abs() < 1e-6 && v.z.abs() < 1e-6, "{v:?}");
+        assert!(
+            (v.x - 1.0).abs() < 1e-6 && v.y.abs() < 1e-6 && v.z.abs() < 1e-6,
+            "{v:?}"
+        );
         // opposite: a half turn
-        let q = Quaternion::from_unit_vectors(Vector3::new(1.0, 0.0, 0.0), Vector3::new(-1.0, 0.0, 0.0));
+        let q = Quaternion::from_unit_vectors(
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(-1.0, 0.0, 0.0),
+        );
         let v = Vector3::new(1.0, 0.0, 0.0).apply_quaternion(q);
         assert!((v.x + 1.0).abs() < 1e-6, "{v:?}");
     }

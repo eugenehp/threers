@@ -1,8 +1,10 @@
 //! AV1's multi-symbol range encoder, the inverse of
 //! [`decode::av1::msac`](crate::decode::av1::msac).
 //!
-//! CDFs are inverted (`32768 - cdf`) as the decoder keeps them. Probabilities
-//! never adapt here: frames set `disable_cdf_update`.
+//! CDFs are inverted (`32768 - cdf`) as the decoder keeps them. The `_adapt`
+//! methods then move them towards the symbol coded, exactly as the decoder's
+//! `symbol_adapt` and `bool_adapt` do (the count in the slot after the last
+//! symbol sets the rate), so both sides keep the same probabilities.
 
 const PROB_SHIFT: u32 = 6;
 const MIN_PROB: u32 = 4;
@@ -42,6 +44,47 @@ impl RangeEncoder {
         }
     }
 
+    /// [`Self::symbol`], then adapt `cdf` (`n + 1` entries and the count).
+    pub(super) fn symbol_adapt(&mut self, cdf: &mut [u16], n: usize, s: usize) {
+        self.symbol(cdf, n, s);
+        let count = cdf[n] as u32;
+        let rate = 4 + (count >> 4) + (n > 2) as u32;
+        for x in cdf.iter_mut().take(s) {
+            *x += (32768 - *x) >> rate;
+        }
+        for x in cdf.iter_mut().take(n).skip(s) {
+            *x -= *x >> rate;
+        }
+        cdf[n] = (count + (count < 32) as u32) as u16;
+    }
+
+    /// A binary symbol coded with `cdf[0]`, which then adapts (`cdf[1]` counts).
+    pub(super) fn bool_adapt(&mut self, cdf: &mut [u16], bit: bool) {
+        self.bool(cdf[0] as u32, bit);
+        let count = cdf[1] as u32;
+        let rate = 4 + (count >> 4);
+        if bit {
+            cdf[0] += (32768 - cdf[0]) >> rate;
+        } else {
+            cdf[0] -= cdf[0] >> rate;
+        }
+        cdf[1] = (count + (count < 32) as u32) as u16;
+    }
+
+    /// A coefficient level from 3 to 15, in steps of up to three, with an
+    /// adapting CDF.
+    pub(super) fn hi_tok_adapt(&mut self, cdf: &mut [u16], tok: u32) {
+        let mut rest = tok - 3;
+        for _ in 0..4 {
+            let s = rest.min(3);
+            self.symbol_adapt(cdf, 3, s as usize);
+            if s < 3 {
+                break;
+            }
+            rest -= 3;
+        }
+    }
+
     /// A binary symbol with `f` as its inverted probability of 0.
     pub(super) fn bool(&mut self, f: u32, bit: bool) {
         self.symbol(&[f as u16], 1, bit as usize);
@@ -67,19 +110,6 @@ impl RangeEncoder {
         }
         self.bool_equi(true);
         self.bools(x & ((1 << len) - 1), len);
-    }
-
-    /// A coefficient level from 3 to 15, in steps of up to three.
-    pub(super) fn hi_tok(&mut self, cdf: &[u16], tok: u32) {
-        let mut rest = tok - 3;
-        for _ in 0..4 {
-            let s = rest.min(3);
-            self.symbol(cdf, 3, s as usize);
-            if s < 3 {
-                break;
-            }
-            rest -= 3;
-        }
     }
 
     fn normalize(&mut self, rng: u32) {
@@ -139,8 +169,9 @@ mod tests {
     use super::*;
     use crate::decode::av1::msac::Msac;
 
-    /// Against the decoder: symbols of every alphabet size, skewed and flat,
-    /// with enough of them that carries occur.
+    /// Against the decoder, adapting on both sides: symbols of every alphabet
+    /// size, skewed and flat, with enough of them that carries occur and the
+    /// probabilities move a long way from where they started.
     #[test]
     fn the_decoder_reads_back_what_was_written() {
         let mut seed = 0x9e3779b97f4a7c15u64;
@@ -154,25 +185,33 @@ mod tests {
         let cdf2 = [30000u16, 0, 0];
         let mut script = Vec::new();
         let mut enc = RangeEncoder::new();
+        let (mut e4, mut e2, mut eh) = (cdf4, cdf2, cdf4);
         for _ in 0..20000 {
             let kind = next() % 5;
             let v = next();
+            // Skewed, so adaptation has something to learn.
+            let skew = |v: u64| if v % 8 < 6 { 0 } else { v % 4 };
             match kind {
-                0 => enc.symbol(&cdf4, 3, (v % 4) as usize),
-                1 => enc.bool(cdf2[0] as u32, v & 1 != 0),
+                0 => enc.symbol_adapt(&mut e4, 3, skew(v) as usize),
+                1 => enc.bool_adapt(&mut e2, v % 8 < 6),
                 2 => enc.bools((v & 0xff) as u32, 8),
                 3 => enc.golomb((v % 5000) as u32),
-                _ => enc.hi_tok(&cdf4, 3 + (v % 13) as u32),
+                _ => enc.hi_tok_adapt(&mut eh, 3 + (v % 13) as u32),
             }
             script.push((kind, v));
         }
+        assert_ne!(e4, cdf4, "the probabilities moved");
         let bytes = enc.finish();
-        let mut dec = Msac::new(&bytes, true);
+        let mut dec = Msac::new(&bytes, false);
+        let mut ch = cdf4;
         let (mut c4, mut c2) = (cdf4, cdf2);
         for (kind, v) in script {
             match kind {
-                0 => assert_eq!(dec.symbol_adapt(&mut c4, 3), (v % 4) as u32),
-                1 => assert_eq!(dec.bool_adapt(&mut c2), v & 1 != 0),
+                0 => assert_eq!(
+                    dec.symbol_adapt(&mut c4, 3),
+                    if v % 8 < 6 { 0 } else { (v % 4) as u32 }
+                ),
+                1 => assert_eq!(dec.bool_adapt(&mut c2), v % 8 < 6),
                 2 => assert_eq!(dec.bools(8), (v & 0xff) as u32),
                 3 => {
                     let mut len = 0;
@@ -185,8 +224,13 @@ mod tests {
                     }
                     assert_eq!(x - 1, (v % 5000) as u32);
                 }
-                _ => assert_eq!(dec.hi_tok(&mut c4), 3 + (v % 13) as u32),
+                _ => assert_eq!(dec.hi_tok(&mut ch), 3 + (v % 13) as u32),
             }
         }
+        assert_eq!(
+            (c4, c2, ch),
+            (e4, e2, eh),
+            "both sides end with the same probabilities"
+        );
     }
 }

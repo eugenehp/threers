@@ -43,7 +43,10 @@ impl Ui {
             return;
         }
         self.env.bold_text = on;
-        let texts: Vec<NodeId> = (0..self.nodes.len()).filter(|&i| !self.nodes[i].removed && matches!(self.nodes[i].kind, NodeKind::Text(_))).map(|i| self.id_at(i)).collect();
+        let texts: Vec<NodeId> = (0..self.nodes.len())
+            .filter(|&i| !self.nodes[i].removed && matches!(self.nodes[i].kind, NodeKind::Text(_)))
+            .map(|i| self.id_at(i))
+            .collect();
         for id in texts {
             self.embolden_text(id);
         }
@@ -55,7 +58,11 @@ impl Ui {
 
     /// A text node's weight from its own and the setting.
     pub(crate) fn embolden_text(&mut self, id: NodeId) {
-        let own = *self.env.unbolded.entry(id).or_insert(self.nodes[id.0].style.font_weight);
+        let own = *self
+            .env
+            .unbolded
+            .entry(id)
+            .or_insert(self.nodes[id.0].style.font_weight);
         let want = if self.env.bold_text { bolder(own) } else { own };
         if self.nodes[id.0].style.font_weight != want {
             self.style_mut(id).font_weight = want;
@@ -75,7 +82,12 @@ impl Ui {
 
     /// The text node's weight before Bold Text made it bolder.
     pub(crate) fn own_weight(&self, id: NodeId) -> FontWeight {
-        self.env.unbolded.get(&id).copied().filter(|_| self.env.bold_text).unwrap_or(self.nodes[id.0].style.font_weight)
+        self.env
+            .unbolded
+            .get(&id)
+            .copied()
+            .filter(|_| self.env.bold_text)
+            .unwrap_or(self.nodes[id.0].style.font_weight)
     }
 
     /// The theme's quieter colours stronger (or as they were): a user's
@@ -95,7 +107,14 @@ impl Ui {
 /// `token`'s colour `c`, stronger: secondary text half way to the text's
 /// colour `text`, borders and separators a third of the way.
 pub(crate) fn stronger(token: Token, c: Rgba, text: Rgba) -> Rgba {
-    let toward = |k: f32| -> Rgba { [c[0] + (text[0] - c[0]) * k, c[1] + (text[1] - c[1]) * k, c[2] + (text[2] - c[2]) * k, c[3] + (1.0 - c[3]) * k] };
+    let toward = |k: f32| -> Rgba {
+        [
+            c[0] + (text[0] - c[0]) * k,
+            c[1] + (text[1] - c[1]) * k,
+            c[2] + (text[2] - c[2]) * k,
+            c[3] + (1.0 - c[3]) * k,
+        ]
+    };
     match token {
         Token::SecondaryText => toward(0.5),
         Token::Border | Token::Separator => toward(0.35),
@@ -149,7 +168,11 @@ mod tests {
     fn increased_contrast_strengthens_quiet_colours() {
         for dark in [false, true] {
             let mut ui = Ui::new();
-            ui.set_theme(if dark { crate::states::Theme::Dark } else { crate::states::Theme::Light });
+            ui.set_theme(if dark {
+                crate::states::Theme::Dark
+            } else {
+                crate::states::Theme::Light
+            });
             let root = ui.root();
             let note = ui.add_text(root, "A note");
             ui.token_style(note, &[("color", Token::SecondaryText)]);
@@ -161,8 +184,19 @@ mod tests {
             assert!(after > before * 1.3, "dark {dark}: {before} to {after}");
             // (Through CSS: to a 255th.)
             let (got, want) = (ui.style(note).color, ui.token(Token::SecondaryText));
-            assert!((0..4).all(|i| (got[i] - want[i]).abs() < 1.0 / 255.0), "the node took it: {got:?} {want:?}");
-            assert_eq!(ui.token(Token::Accent), { let mut u = Ui::new(); u.set_theme(if dark { crate::states::Theme::Dark } else { crate::states::Theme::Light }); u.token(Token::Accent) });
+            assert!(
+                (0..4).all(|i| (got[i] - want[i]).abs() < 1.0 / 255.0),
+                "the node took it: {got:?} {want:?}"
+            );
+            assert_eq!(ui.token(Token::Accent), {
+                let mut u = Ui::new();
+                u.set_theme(if dark {
+                    crate::states::Theme::Dark
+                } else {
+                    crate::states::Theme::Light
+                });
+                u.token(Token::Accent)
+            });
         }
     }
 }

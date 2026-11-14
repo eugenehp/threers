@@ -65,7 +65,12 @@ pub(crate) fn erf_approx(x: f32) -> f32 {
 /// How much of a box shadow covers `point`: the rounded box `(x0, y0, x1,
 /// y1)` with corner `radius`, blurred by `sigma`. Wallace's closed form; see
 /// [`Overlay::shadow`].
-pub(crate) fn shadow_coverage(b: (f32, f32, f32, f32), point: (f32, f32), sigma: f32, radius: f32) -> f32 {
+pub(crate) fn shadow_coverage(
+    b: (f32, f32, f32, f32),
+    point: (f32, f32),
+    sigma: f32,
+    radius: f32,
+) -> f32 {
     let (cx, cy) = ((b.0 + b.2) * 0.5, (b.1 + b.3) * 0.5);
     let (hx, hy) = ((b.2 - b.0) * 0.5, (b.3 - b.1) * 0.5);
     let corner = radius.clamp(0.0, hx.min(hy));
@@ -111,7 +116,16 @@ fn wave_centre(px: f32, py: f32, x0: f32, x1: f32, y: f32, a: f32, k: f32) -> f3
 /// side covers, by the rule strokes use ([`sdf::coverage_stroke`] over the
 /// pixel's footprint). The GPU UI pass computes the same.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn wave_coverage(px: f32, py: f32, x0: f32, x1: f32, y: f32, a: f32, k: f32, half: f32) -> f32 {
+pub(crate) fn wave_coverage(
+    px: f32,
+    py: f32,
+    x0: f32,
+    x1: f32,
+    y: f32,
+    a: f32,
+    k: f32,
+    half: f32,
+) -> f32 {
     const BAND: f32 = std::f32::consts::FRAC_1_SQRT_2;
     let f = |x: f32, y2: f32| wave_centre(x, y2, x0, x1, y, a, k) - half;
     let d = f(px, py);
@@ -122,8 +136,12 @@ pub(crate) fn wave_coverage(px: f32, py: f32, x0: f32, x1: f32, y: f32, a: f32, 
         return 1.0;
     }
     let e = 0.5;
-    let gx = ((f(px + e, py) - d) / e).abs().max(((d - f(px - e, py)) / e).abs());
-    let gy = ((f(px, py + e) - d) / e).abs().max(((d - f(px, py - e)) / e).abs());
+    let gx = ((f(px + e, py) - d) / e)
+        .abs()
+        .max(((d - f(px - e, py)) / e).abs());
+    let gy = ((f(px, py + e) - d) / e)
+        .abs()
+        .max(((d - f(px, py - e)) / e).abs());
     let w = sdf::footprint(Vector2::new(gx, gy));
     sdf::coverage_stroke(d + half, half, w)
 }
@@ -575,10 +593,17 @@ impl Overlay {
         clip: Option<(f32, f32, f32, f32)>,
     ) {
         let (iw, ih) = (image_width as usize, image_height as usize);
-        if width <= 0.0 || height <= 0.0 || iw == 0 || ih == 0 || rgba.len() < iw * ih * 4 || alpha <= 0.0 {
+        if width <= 0.0
+            || height <= 0.0
+            || iw == 0
+            || ih == 0
+            || rgba.len() < iw * ih * 4
+            || alpha <= 0.0
+        {
             return;
         }
-        let (cx0, cy0, cx1, cy1) = clip.unwrap_or((0.0, 0.0, self.width as f32, self.height as f32));
+        let (cx0, cy0, cx1, cy1) =
+            clip.unwrap_or((0.0, 0.0, self.width as f32, self.height as f32));
         let (x0, y0) = (x.max(cx0).max(0.0), y.max(cy0).max(0.0));
         let (x1, y1) = (
             (x + width).min(cx1).min(self.width as f32),
@@ -592,12 +617,18 @@ impl Overlay {
         let texel = |tx: usize, ty: usize| -> [f32; 4] {
             let i = (ty * iw + tx) * 4;
             let a = rgba[i + 3] as f32 / 255.0;
-            [table[rgba[i] as usize] * a, table[rgba[i + 1] as usize] * a, table[rgba[i + 2] as usize] * a, a]
+            [
+                table[rgba[i] as usize] * a,
+                table[rgba[i + 1] as usize] * a,
+                table[rgba[i + 2] as usize] * a,
+                a,
+            ]
         };
         // The drawn region's field, and coverage by the rule `paint` uses.
         let (hx, hy) = ((x1 - x0) * 0.5, (y1 - y0) * 0.5);
         let (mx, my) = (x0 + hx, y0 + hy);
-        let field = |px: f32, py: f32| d2::rect(Vector2::new(px - mx, py - my), Vector2::new(hx, hy));
+        let field =
+            |px: f32, py: f32| d2::rect(Vector2::new(px - mx, py - my), Vector2::new(hx, hy));
         const BAND: f32 = std::f32::consts::FRAC_1_SQRT_2;
         let coverage = |cx: f32, cy: f32| {
             let d = field(cx, cy);
@@ -613,8 +644,14 @@ impl Overlay {
         };
         // A pixel either side: anti-aliasing reaches just past the edge, as
         // `paint` pads its box.
-        let (py0, py1) = ((y0 - 1.0).floor().max(0.0) as u32, (y1.ceil() as u32 + 1).min(self.height));
-        let (px0, px1) = ((x0 - 1.0).floor().max(0.0) as u32, (x1.ceil() as u32 + 1).min(self.width));
+        let (py0, py1) = (
+            (y0 - 1.0).floor().max(0.0) as u32,
+            (y1.ceil() as u32 + 1).min(self.height),
+        );
+        let (px0, px1) = (
+            (x0 - 1.0).floor().max(0.0) as u32,
+            (x1.ceil() as u32 + 1).min(self.width),
+        );
         self.mark_rows(py0, py1);
         for py in py0..py1 {
             // Texel coordinates of this row's pixel centres.
@@ -626,10 +663,16 @@ impl Overlay {
                 if cover <= 0.0 {
                     continue;
                 }
-                let u = ((px as f32 + 0.5 - x) / width * iw as f32 - 0.5).clamp(0.0, (iw - 1) as f32);
+                let u =
+                    ((px as f32 + 0.5 - x) / width * iw as f32 - 0.5).clamp(0.0, (iw - 1) as f32);
                 let (tx0, fx) = (u.floor() as usize, u - u.floor());
                 let tx1 = (tx0 + 1).min(iw - 1);
-                let (a, b, c, d) = (texel(tx0, ty0), texel(tx1, ty0), texel(tx0, ty1), texel(tx1, ty1));
+                let (a, b, c, d) = (
+                    texel(tx0, ty0),
+                    texel(tx1, ty0),
+                    texel(tx0, ty1),
+                    texel(tx1, ty1),
+                );
                 let mix = |k: usize| {
                     let top = a[k] + (b[k] - a[k]) * fx;
                     let bottom = c[k] + (d[k] - c[k]) * fx;
@@ -640,7 +683,13 @@ impl Overlay {
                 if src_a <= 0.0 {
                     continue;
                 }
-                let lin = [0, 1, 2].map(|k| if sample_a > 0.0 { mix(k) / sample_a } else { 0.0 });
+                let lin = [0, 1, 2].map(|k| {
+                    if sample_a > 0.0 {
+                        mix(k) / sample_a
+                    } else {
+                        0.0
+                    }
+                });
                 let i = (py as usize * self.width as usize + px as usize) * 4;
                 let dst = &mut self.pixels[i..i + 4];
                 let da = dst[3] as f32 / 255.0;
@@ -692,7 +741,10 @@ impl Overlay {
             return;
         }
         let reach = 3.0 * sigma;
-        let (px0, py0) = ((x - reach).floor().max(0.0) as u32, (y - reach).floor().max(0.0) as u32);
+        let (px0, py0) = (
+            (x - reach).floor().max(0.0) as u32,
+            (y - reach).floor().max(0.0) as u32,
+        );
         let px1 = ((x + width + reach).ceil().max(0.0) as u32).min(self.width);
         let py1 = ((y + height + reach).ceil().max(0.0) as u32).min(self.height);
         if px0 >= px1 || py0 >= py1 {
@@ -727,7 +779,10 @@ impl Overlay {
         let half = self.stroke_weight * 0.5;
         let (a, k) = (amplitude, std::f32::consts::TAU / period.max(1e-3));
         let reach = a + 2.0 * half + 1.0;
-        let (px0, py0) = ((x0 - reach).floor().max(0.0) as u32, (y - reach).floor().max(0.0) as u32);
+        let (px0, py0) = (
+            (x0 - reach).floor().max(0.0) as u32,
+            (y - reach).floor().max(0.0) as u32,
+        );
         let px1 = ((x1 + reach).ceil().max(0.0) as u32).min(self.width);
         let py1 = ((y + reach).ceil().max(0.0) as u32).min(self.height);
         if px0 >= px1 || py0 >= py1 || paint.alpha <= 0.0 {
@@ -770,7 +825,15 @@ impl Overlay {
     /// rectangle `clip` (`[x, y, width, height]`): the part inside it, its
     /// own corners still round.
     #[allow(clippy::too_many_arguments)]
-    pub fn rounded_rect_clipped(&mut self, x: f32, y: f32, width: f32, height: f32, radius: f32, clip: [f32; 4]) {
+    pub fn rounded_rect_clipped(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        radius: f32,
+        clip: [f32; 4],
+    ) {
         let (hx, hy) = (width.abs() * 0.5, height.abs() * 0.5);
         let (cx, cy) = (x.min(x + width) + hx, y.min(y + height) + hy);
         let r = radius.clamp(0.0, hx.min(hy));
@@ -779,7 +842,10 @@ impl Overlay {
         let (ccx, ccy) = (clip[0] + chx, clip[1] + chy);
         let clip_half = Vector2::new(chx, chy);
         // inside both: the farther of the two distances
-        let sdf = move |px: f32, py: f32| d2::round_rect(Vector2::new(px - cx, py - cy), half, r).max(d2::rect(Vector2::new(px - ccx, py - ccy), clip_half));
+        let sdf = move |px: f32, py: f32| {
+            d2::round_rect(Vector2::new(px - cx, py - cy), half, r)
+                .max(d2::rect(Vector2::new(px - ccx, py - ccy), clip_half))
+        };
         let (x0, y0) = ((cx - hx).max(ccx - chx), (cy - hy).max(ccy - chy));
         let (x1, y1) = ((cx + hx).min(ccx + chx), (cy + hy).min(ccy + chy));
         if x1 > x0 && y1 > y0 {
@@ -1178,6 +1244,22 @@ impl Overlay {
             .get_or_insert_with(crate::captions::CaptionPainter::new);
         painter.set_style(style);
         let laid = painter.measure(text, w);
+        (laid.width, laid.height)
+    }
+
+    /// The size of `text` as one line, however wide: [`measure_text`]
+    /// (Self::measure_text) lays it out as a caption, which wraps it inside
+    /// the frame's safe width — a UI's line of text wider than that came out
+    /// narrower than it is drawn (so mis-wrapped and mis-centred).
+    #[cfg(feature = "captions")]
+    pub fn measure_line(&mut self, text: &str) -> (f32, f32) {
+        let style = self.text_style();
+        self.apply_text_style();
+        let painter = self
+            .painter
+            .get_or_insert_with(crate::captions::CaptionPainter::new);
+        painter.set_style(style);
+        let laid = painter.measure(text, 1 << 24);
         (laid.width, laid.height)
     }
 

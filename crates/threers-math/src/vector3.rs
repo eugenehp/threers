@@ -137,6 +137,13 @@ impl Vector3 {
         )
     }
 
+    /// World space to normalised device coordinates through a camera's
+    /// `view` and `projection` (three.js `Vector3.project`): the inverse of
+    /// [`unproject`](Self::unproject).
+    pub fn project(&self, view: &crate::Matrix4, projection: &crate::Matrix4) -> Self {
+        self.apply_matrix4(view).apply_matrix4(projection)
+    }
+
     /// Project from NDC (or any inverse-projection matrix) back to world space.
     pub fn unproject(&self, view: &crate::Matrix4, projection: &crate::Matrix4) -> Self {
         let inv_proj = projection.invert();
@@ -182,6 +189,22 @@ mod tests {
         let x = Vector3::new(1.0, 0.0, 0.0);
         let y = Vector3::new(0.0, 1.0, 0.0);
         assert_eq!(x.cross(y), Vector3::new(0.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn project_and_unproject_round_trip() {
+        let view = crate::Matrix4::look_at(
+            Vector3::new(0.0, 0.0, 5.0),
+            Vector3::ZERO,
+            Vector3::new(0.0, 1.0, 0.0),
+        );
+        let projection = crate::Matrix4::perspective(0.8, 1.5, 0.1, 50.0);
+        let p = Vector3::new(0.4, -0.3, 1.0);
+        let ndc = p.project(&view, &projection);
+        // in front of the camera: inside the view's depth range
+        assert!(ndc.z > -1.0 && ndc.z < 1.0, "{ndc:?}");
+        let back = ndc.unproject(&view, &projection);
+        assert!((back - p).length() < 1e-4, "{back:?} vs {p:?}");
     }
 
     #[test]

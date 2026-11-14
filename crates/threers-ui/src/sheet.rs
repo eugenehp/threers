@@ -83,7 +83,11 @@ pub fn sheet<S: 'static>(
     fill: impl Fn(&mut Ui, &mut Input<S>, &S, NodeId) + 'static,
 ) {
     let label = label.to_owned();
-    let detents = Rc::new(if detents.is_empty() { vec![Detent::Medium] } else { detents });
+    let detents = Rc::new(if detents.is_empty() {
+        vec![Detent::Medium]
+    } else {
+        detents
+    });
     let shown = presented.clone();
     input.present(
         move |s| shown.get(s),
@@ -103,7 +107,10 @@ fn open<S: 'static>(
     let root = ui.root();
     // One box over the window holds the backdrop and the panel: it is what
     // is modal, and what goes.
-    let layer = ui.add_box(root, style! { position: absolute; left: 0px; top: 0px; width: 100%; height: 100%; });
+    let layer = ui.add_box(
+        root,
+        style! { position: absolute; left: 0px; top: 0px; width: 100%; height: 100%; },
+    );
     ui.defer(layer, 940);
     let backdrop = ui.add_box(layer, style! { position: absolute; left: 0px; top: 0px; width: 100%; height: 100%; background: rgba(0,0,0,0.4); });
     let panel = ui.add_box(
@@ -113,12 +120,18 @@ fn open<S: 'static>(
             border-radius: 14px; padding: 0 16px 16px 16px; box-shadow: 0 -8px 30px rgba(0,0,0,0.35); overflow: hidden;
         },
     );
-    ui.token_style(panel, &[("background", Token::Raised), ("color", Token::Text)]);
+    ui.token_style(
+        panel,
+        &[("background", Token::Raised), ("color", Token::Text)],
+    );
     let mut sem = Semantics::new(Role::Dialog).label(label).tab_index(-1);
     sem.description = Some("Drag down or press Escape to close".into());
     ui.set_semantics(panel, sem);
     let grab = ui.add_box(panel, style! { display: flex; justify-content: center; padding: 8px 0 10px 0; cursor: grab; flex-shrink: 0; });
-    let bar = ui.add_box(grab, style! { width: 36px; height: 5px; border-radius: 3px; });
+    let bar = ui.add_box(
+        grab,
+        style! { width: 36px; height: 5px; border-radius: 3px; },
+    );
     ui.token_style(bar, &[("background", Token::Border)]);
     let content = ui.add_box(panel, style! { display: flex; flex-direction: column; gap: 8px; flex-grow: 1; min-height: 0; overflow: auto; });
     fill(ui, input, state, content);
@@ -136,7 +149,11 @@ fn open<S: 'static>(
             let top = window - h;
             if animate {
                 let from = ui.read(panel, Property::Top);
-                ui.animate(panel, Animation::new(Property::Top, from, Value::Number(top), MOVE).easing(threers_math::easing::Easing::CubicOut));
+                ui.animate(
+                    panel,
+                    Animation::new(Property::Top, from, Value::Number(top), MOVE)
+                        .easing(threers_math::easing::Easing::CubicOut),
+                );
             } else if ui.style(panel).top != Length::Px(top) {
                 ui.update_style(panel, |s| s.top = Length::Px(top));
             }
@@ -163,7 +180,10 @@ fn open<S: 'static>(
             }
             let window = ui.rect(ui.root()).height;
             let from = ui.read(panel, Property::Top);
-            ui.animate(panel, Animation::new(Property::Top, from, Value::Number(window), MOVE));
+            ui.animate(
+                panel,
+                Animation::new(Property::Top, from, Value::Number(window), MOVE),
+            );
             ui.remove_with(layer, Transition::Fade, MOVE);
         }
     };
@@ -178,7 +198,13 @@ fn open<S: 'static>(
         false
     });
     // The grabber drags it: between detents, or down and away.
-    let (dr, a, ds, d, pl) = (drag.clone(), at.clone(), detents.clone(), dismiss.clone(), place.clone());
+    let (dr, a, ds, d, pl) = (
+        drag.clone(),
+        at.clone(),
+        detents.clone(),
+        dismiss.clone(),
+        place.clone(),
+    );
     input.on(grab, Phase::Bubble, move |_, ui, e, cx| match *e {
         Event::PointerDown { y, .. } => {
             let top = match ui.style(panel).top {
@@ -202,22 +228,26 @@ fn open<S: 'static>(
             }
         }
         Event::PointerUp { .. } if dr.take().is_some() => {
-            {
-                let window = ui.rect(ui.root()).height;
-                let shown = window
-                    - match ui.style(panel).top {
-                        Length::Px(t) => t,
-                        _ => 0.0,
-                    };
-                let heights: Vec<f32> = ds.iter().map(|d| d.height(ui)).collect();
-                let lowest = heights.iter().copied().fold(f32::INFINITY, f32::min);
-                if shown < lowest * 2.0 / 3.0 {
-                    d(ui);
-                } else {
-                    let nearest = (0..heights.len()).min_by(|&i, &j| (heights[i] - shown).abs().total_cmp(&(heights[j] - shown).abs())).unwrap_or(0);
-                    a.set(nearest);
-                    pl(ui, true);
-                }
+            let window = ui.rect(ui.root()).height;
+            let shown = window
+                - match ui.style(panel).top {
+                    Length::Px(t) => t,
+                    _ => 0.0,
+                };
+            let heights: Vec<f32> = ds.iter().map(|d| d.height(ui)).collect();
+            let lowest = heights.iter().copied().fold(f32::INFINITY, f32::min);
+            if shown < lowest * 2.0 / 3.0 {
+                d(ui);
+            } else {
+                let nearest = (0..heights.len())
+                    .min_by(|&i, &j| {
+                        (heights[i] - shown)
+                            .abs()
+                            .total_cmp(&(heights[j] - shown).abs())
+                    })
+                    .unwrap_or(0);
+                a.set(nearest);
+                pl(ui, true);
             }
         }
         _ => {}

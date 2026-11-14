@@ -135,7 +135,10 @@ fn intersect(a: Rect, b: Rect) -> Option<Rect> {
 impl OverlayPainter<'_> {
     fn draw_image(&mut self, rect: Rect, image: &image::Image, opacity: f32) {
         let r = self.px(rect);
-        let clip = self.clips.last().map(|c| (c.x, c.y, c.x + c.width, c.y + c.height));
+        let clip = self
+            .clips
+            .last()
+            .map(|c| (c.x, c.y, c.x + c.width, c.y + c.height));
         self.overlay.image(
             r.x,
             r.y,
@@ -160,10 +163,10 @@ impl TextMeasure for OverlayPainter<'_> {
         // run ending in a space (before the next run) needs that space. So
         // such a run is measured between two bars, and the bars taken off.
         let w = if text.starts_with(char::is_whitespace) || text.ends_with(char::is_whitespace) {
-            let bar = self.overlay.measure_text("|").0;
-            self.overlay.measure_text(&format!("|{text}|")).0 - 2.0 * bar
+            let bar = self.overlay.measure_line("|").0;
+            self.overlay.measure_line(&format!("|{text}|")).0 - 2.0 * bar
         } else {
-            self.overlay.measure_text(text).0
+            self.overlay.measure_line(text).0
         };
         let bold = if weight >= 600 && !real { 0.5 } else { 0.0 };
         (
@@ -177,7 +180,13 @@ impl Painter for OverlayPainter<'_> {
     /// A radial, conic or turned linear gradient, pixel by pixel: each the
     /// colour at its centre, its edges covered by how far the box reaches
     /// into them, cut to the clip.
-    fn fill_gradient(&mut self, rect: Rect, shape: crate::ui::GradientShape, stops: &[(f32, Rgba)], blur: f32) {
+    fn fill_gradient(
+        &mut self,
+        rect: Rect,
+        shape: crate::ui::GradientShape,
+        stops: &[(f32, Rgba)],
+        blur: f32,
+    ) {
         use threers_math::srgb::{linear_to_srgb, srgb_to_linear, srgb_to_linear_f32};
         if shape.is_across() || stops.is_empty() {
             return self.fill_linear_gradient(rect, stops, blur);
@@ -192,7 +201,10 @@ impl Painter for OverlayPainter<'_> {
         }
         let (cw, ch) = self.overlay.size();
         let (bx0, by0) = (x0.floor().max(0.0) as i32, y0.floor().max(0.0) as i32);
-        let (bx1, by1) = (x1.ceil().min(cw as f32) as i32, y1.ceil().min(ch as f32) as i32);
+        let (bx1, by1) = (
+            x1.ceil().min(cw as f32) as i32,
+            y1.ceil().min(ch as f32) as i32,
+        );
         if bx1 <= bx0 || by1 <= by0 {
             return;
         }
@@ -222,12 +234,15 @@ impl Painter for OverlayPainter<'_> {
                 let out_a = sa + da * (1.0 - sa);
                 for i in 0..3 {
                     let d = srgb_to_linear(px[i]);
-                    px[i] = linear_to_srgb((srgb_to_linear_f32(c[i]) * sa + d * da * (1.0 - sa)) / out_a.max(1e-6));
+                    px[i] = linear_to_srgb(
+                        (srgb_to_linear_f32(c[i]) * sa + d * da * (1.0 - sa)) / out_a.max(1e-6),
+                    );
                 }
                 px[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
             }
         }
-        self.overlay.put_image_data(bx0, by0, bw as u32, bh as u32, &buf);
+        self.overlay
+            .put_image_data(bx0, by0, bw as u32, bh as u32, &buf);
     }
 
     /// From its distance field, pixel by pixel: each pixel covered by how
@@ -246,12 +261,20 @@ impl Painter for OverlayPainter<'_> {
         }
         let (cw, ch) = self.overlay.size();
         let (bx0, by0) = (x0.floor().max(0.0) as i32, y0.floor().max(0.0) as i32);
-        let (bx1, by1) = (x1.ceil().min(cw as f32) as i32, y1.ceil().min(ch as f32) as i32);
+        let (bx1, by1) = (
+            x1.ceil().min(cw as f32) as i32,
+            y1.ceil().min(ch as f32) as i32,
+        );
         if bx1 <= bx0 || by1 <= by0 || color[3] <= 0.0 {
             return;
         }
         // In device pixels.
-        let dev = crate::ui::ArcShape { cx: arc.cx * k, cy: arc.cy * k, radius: arc.radius * k, ..arc };
+        let dev = crate::ui::ArcShape {
+            cx: arc.cx * k,
+            cy: arc.cy * k,
+            radius: arc.radius * k,
+            ..arc
+        };
         let w = width * k;
         let (bw, bh) = ((bx1 - bx0) as usize, (by1 - by0) as usize);
         let mut buf = vec![0u8; bw * bh * 4];
@@ -280,7 +303,8 @@ impl Painter for OverlayPainter<'_> {
                 px[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
             }
         }
-        self.overlay.put_image_data(bx0, by0, bw as u32, bh as u32, &buf);
+        self.overlay
+            .put_image_data(bx0, by0, bw as u32, bh as u32, &buf);
     }
 
     /// Each device pixel the colour at its centre (stops mixed as encoded,
@@ -305,7 +329,10 @@ impl Painter for OverlayPainter<'_> {
             if t >= last.0 {
                 return last.1;
             }
-            let i = stops.windows(2).position(|w| t >= w[0].0 && t < w[1].0).unwrap_or(0);
+            let i = stops
+                .windows(2)
+                .position(|w| t >= w[0].0 && t < w[1].0)
+                .unwrap_or(0);
             let ((t0, c0), (t1, c1)) = (stops[i], stops[i + 1]);
             let f = if t1 > t0 { (t - t0) / (t1 - t0) } else { 0.0 };
             std::array::from_fn(|c| c0[c] + (c1[c] - c0[c]) * f)
@@ -319,7 +346,10 @@ impl Painter for OverlayPainter<'_> {
         }
         let (cw, ch) = self.overlay.size();
         let (bx0, by0) = (x0.floor().max(0.0) as i32, y0.floor().max(0.0) as i32);
-        let (bx1, by1) = (x1.ceil().min(cw as f32) as i32, y1.ceil().min(ch as f32) as i32);
+        let (bx1, by1) = (
+            x1.ceil().min(cw as f32) as i32,
+            y1.ceil().min(ch as f32) as i32,
+        );
         if bx1 <= bx0 || by1 <= by0 {
             return;
         }
@@ -354,7 +384,8 @@ impl Painter for OverlayPainter<'_> {
                 px[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
             }
         }
-        self.overlay.put_image_data(bx0, by0, bw as u32, bh as u32, &buf);
+        self.overlay
+            .put_image_data(bx0, by0, bw as u32, bh as u32, &buf);
     }
 
     fn fill_rect(&mut self, rect: Rect, color: Rgba) {
@@ -387,7 +418,14 @@ impl Painter for OverlayPainter<'_> {
             // cut by a scrolling box's edge: the part in view, its corners
             // still round (a plain rect here squared every corner of a box
             // half scrolled out)
-            o.rounded_rect_clipped(r.x, r.y, r.width, r.height, rx.min(ry) * k, [c.x, c.y, c.width, c.height]);
+            o.rounded_rect_clipped(
+                r.x,
+                r.y,
+                r.width,
+                r.height,
+                rx.min(ry) * k,
+                [c.x, c.y, c.width, c.height],
+            );
         }
     }
 
@@ -428,8 +466,8 @@ impl Painter for OverlayPainter<'_> {
         let trimmed = text.trim_start();
         if trimmed.len() < text.len() {
             let lead = &text[..text.len() - trimmed.len()];
-            let bar = o.measure_text("|").0;
-            line.x += o.measure_text(&format!("|{lead}|")).0 - 2.0 * bar;
+            let bar = o.measure_line("|").0;
+            line.x += o.measure_line(&format!("|{lead}|")).0 - 2.0 * bar;
         }
         let text = trimmed;
         // Clipped: a line whose middle is outside goes; one running past the
@@ -445,14 +483,14 @@ impl Painter for OverlayPainter<'_> {
             let chars: Vec<char> = text.chars().collect();
             let mut start = 0;
             while start < chars.len() && line.x < c.x {
-                let w = o.measure_text(&chars[start].to_string()).0;
+                let w = o.measure_line(&chars[start].to_string()).0;
                 line.x += w;
                 start += 1;
             }
             let mut end = chars.len();
             while end > start {
                 owned = chars[start..end].iter().collect::<String>();
-                if line.x + o.measure_text(&owned).0 <= c.x + c.width + 0.5 {
+                if line.x + o.measure_line(&owned).0 <= c.x + c.width + 0.5 {
                     break;
                 }
                 end -= 1;
@@ -463,12 +501,12 @@ impl Painter for OverlayPainter<'_> {
             }
             text = &owned;
         }
-        let w = o.measure_text(text).0;
+        let w = o.measure_line(text).0;
         // One line's height, not the run's: the overlay measures text as a
         // caption, wrapped at a caption's width, so a long UI line came
         // back two lines tall and was centred half a line too high, onto
         // the line above.
-        let h = o.measure_text("Hg").1;
+        let h = o.measure_line("Hg").1;
         let y = line.y + (line.height - h) / 2.0;
         o.text(line.x, y, text);
         if style.weight() >= 600 && !real_weight {
@@ -504,7 +542,13 @@ impl Painter for OverlayPainter<'_> {
             o.no_fill();
             o.stroke_alpha(linear(color), color[3]);
             o.stroke_weight(thickness);
-            o.wavy_line(x, y, x + width, thickness * WAVE_AMPLITUDE, thickness * WAVE_PERIOD);
+            o.wavy_line(
+                x,
+                y,
+                x + width,
+                thickness * WAVE_AMPLITUDE,
+                thickness * WAVE_PERIOD,
+            );
         } else {
             o.no_stroke();
             o.fill_alpha(linear(color), color[3]);
@@ -589,9 +633,17 @@ mod tests {
         let mut overlay = Overlay::new(400, 100);
         let mut p = OverlayPainter::new(&mut overlay);
         let st = threers_ui::Style::default();
-        let (a, a_sp, sp_a, sp) = (p.measure("a", &st).0, p.measure("a ", &st).0, p.measure(" a", &st).0, p.measure(" ", &st).0);
+        let (a, a_sp, sp_a, sp) = (
+            p.measure("a", &st).0,
+            p.measure("a ", &st).0,
+            p.measure(" a", &st).0,
+            p.measure(" ", &st).0,
+        );
         assert!(sp > 2.0, "a space alone is {sp} wide");
-        assert!((a_sp - a - sp).abs() < 0.5, "'a ' is {a_sp}, 'a' {a}, ' ' {sp}");
+        assert!(
+            (a_sp - a - sp).abs() < 0.5,
+            "'a ' is {a_sp}, 'a' {a}, ' ' {sp}"
+        );
         assert!((sp_a - a - sp).abs() < 0.5, "' a' is {sp_a}");
     }
 
@@ -602,10 +654,18 @@ mod tests {
         let draw = |runs: Option<Vec<usize>>| {
             let mut ui = Ui::new();
             let root = ui.root();
-            ui.set_style(root, crate::style! { background: #ffffff; color: #000000; font-size: 16px; });
+            ui.set_style(
+                root,
+                crate::style! { background: #ffffff; color: #000000; font-size: 16px; },
+            );
             let t = ui.add_text(root, "a keyword, a word and a link");
             if let Some(runs) = runs {
-                ui.set_text_runs(t, runs.into_iter().map(crate::ui::rich_text::TextRun::new).collect());
+                ui.set_text_runs(
+                    t,
+                    runs.into_iter()
+                        .map(crate::ui::rich_text::TextRun::new)
+                        .collect(),
+                );
             }
             let mut overlay = Overlay::new(300, 40);
             ui.layout(300.0, 40.0, &mut OverlayPainter::new(&mut overlay));
@@ -615,7 +675,11 @@ mod tests {
         // "a " | "keyword," | " a word" | " and a " | "link"
         let split = draw(Some(vec![2, 8, 7, 7, 4]));
         // Ink, column by column: where each column has any.
-        let ink = |img: &[u8]| (0..300).map(|x| (0..40).any(|y| img[(y * 300 + x) * 4] < 128)).collect::<Vec<bool>>();
+        let ink = |img: &[u8]| {
+            (0..300)
+                .map(|x| (0..40).any(|y| img[(y * 300 + x) * 4] < 128))
+                .collect::<Vec<bool>>()
+        };
         let (a, b) = (ink(&whole), ink(&split));
         let off = a.iter().zip(&b).filter(|(p, q)| p != q).count();
         assert!(off <= 4, "{off} columns inked differently");

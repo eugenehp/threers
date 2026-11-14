@@ -86,7 +86,8 @@ impl Ui {
 
     fn push_announcement(&mut self, message: String, assertive: bool) {
         self.announced += 1;
-        self.announcements.push((self.announced, message, assertive));
+        self.announcements
+            .push((self.announced, message, assertive));
         // A few are kept, for a mirror that looks only now and then.
         let n = self.announcements.len();
         if n > 8 {
@@ -97,7 +98,11 @@ impl Ui {
     /// The announcements after the one numbered `after` (0 for all kept):
     /// each one's number, message, and whether it interrupts.
     pub fn announcements_since(&self, after: u64) -> Vec<(u64, String, bool)> {
-        self.announcements.iter().filter(|a| a.0 > after).cloned().collect()
+        self.announcements
+            .iter()
+            .filter(|a| a.0 > after)
+            .cloned()
+            .collect()
     }
 
     /// Whether a ring is drawn round a node focused from the keyboard that
@@ -111,8 +116,13 @@ impl Ui {
         if !self.focus_ring || !self.interaction.focus_visible {
             return;
         }
-        let Some(f) = self.interaction.focused.filter(|&f| self.contains(f)) else { return };
-        let styled = self.nodes[f.0].states.as_ref().is_some_and(|s| !s.focus_visible.is_empty() || !s.focus.is_empty());
+        let Some(f) = self.interaction.focused.filter(|&f| self.contains(f)) else {
+            return;
+        };
+        let styled = self.nodes[f.0]
+            .states
+            .as_ref()
+            .is_some_and(|s| !s.focus_visible.is_empty() || !s.focus.is_empty());
         if styled || self.style(f).display == crate::Display::None {
             return;
         }
@@ -120,17 +130,34 @@ impl Ui {
         if r.width <= 0.0 || r.height <= 0.0 {
             return;
         }
-        let radius = self.style(f).border_radius.resolve(Some(r.width.min(r.height))).unwrap_or(0.0);
+        let radius = self
+            .style(f)
+            .border_radius
+            .resolve(Some(r.width.min(r.height)))
+            .unwrap_or(0.0);
         let c = self.token(Token::Focus);
         // A 2 px ring 2 px outside the box, as a browser's focus ring.
         let (gap, w) = (2.0, 2.0);
-        let outer = Rect { x: r.x - gap - w, y: r.y - gap - w, width: r.width + 2.0 * (gap + w), height: r.height + 2.0 * (gap + w) };
+        let outer = Rect {
+            x: r.x - gap - w,
+            y: r.y - gap - w,
+            width: r.width + 2.0 * (gap + w),
+            height: r.height + 2.0 * (gap + w),
+        };
         let rr = radius + gap + w;
         for side in [
             Rect { height: w, ..outer },
-            Rect { y: outer.y + outer.height - w, height: w, ..outer },
+            Rect {
+                y: outer.y + outer.height - w,
+                height: w,
+                ..outer
+            },
             Rect { width: w, ..outer },
-            Rect { x: outer.x + outer.width - w, width: w, ..outer },
+            Rect {
+                x: outer.x + outer.width - w,
+                width: w,
+                ..outer
+            },
         ] {
             painter.fill_rounded_rect(side, rr.min(w / 2.0), rr.min(w / 2.0), c);
         }
@@ -164,21 +191,43 @@ impl Ui {
             );
             let what = format!("{:?} {:?}", n.role, n.name);
             if control && n.name.trim().is_empty() {
-                out.push(AuditIssue { kind: Audit::NoName, id: n.id, detail: what.clone() });
+                out.push(AuditIssue {
+                    kind: Audit::NoName,
+                    id: n.id,
+                    detail: what.clone(),
+                });
             }
             if n.role == Role::Image && n.name.trim().is_empty() {
-                out.push(AuditIssue { kind: Audit::ImageNoName, id: n.id, detail: what.clone() });
+                out.push(AuditIssue {
+                    kind: Audit::ImageNoName,
+                    id: n.id,
+                    detail: what.clone(),
+                });
             }
-            if control && !n.disabled && n.bounds.width > 0.0 && (n.bounds.width < min || n.bounds.height < min) {
+            if control
+                && !n.disabled
+                && n.bounds.width > 0.0
+                && (n.bounds.width < min || n.bounds.height < min)
+            {
                 out.push(AuditIssue {
                     kind: Audit::SmallTarget,
                     id: n.id,
-                    detail: format!("{what}: {}×{}", n.bounds.width.round(), n.bounds.height.round()),
+                    detail: format!(
+                        "{what}: {}×{}",
+                        n.bounds.width.round(),
+                        n.bounds.height.round()
+                    ),
                 });
             }
             if let Role::Heading(level) = n.role {
-                if last_heading.is_some_and(|l| level > l + 1) || (last_heading.is_none() && level > 2) {
-                    out.push(AuditIssue { kind: Audit::HeadingSkipsLevel, id: n.id, detail: format!("h{level} {:?}", n.name) });
+                if last_heading.is_some_and(|l| level > l + 1)
+                    || (last_heading.is_none() && level > 2)
+                {
+                    out.push(AuditIssue {
+                        kind: Audit::HeadingSkipsLevel,
+                        id: n.id,
+                        detail: format!("h{level} {:?}", n.name),
+                    });
                 }
                 last_heading = Some(level);
             }
@@ -188,25 +237,52 @@ impl Ui {
         // reader says nothing.
         for i in 0..self.nodes.len() {
             let n = &self.nodes[i];
-            let Some(s) = n.semantics.as_ref().filter(|_| !n.removed) else { continue };
+            let Some(s) = n.semantics.as_ref().filter(|_| !n.removed) else {
+                continue;
+            };
             let takes_focus = !s.disabled && s.focusable.unwrap_or(s.role.focusable_by_default());
             if !takes_focus || !self.style(self.id_at(i)).pointer_events {
                 continue;
             }
             let id = self.id_at(i);
-            let shown = self.ancestors(id).all(|a| self.style(a).display != crate::Display::None);
-            let hidden = self.ancestors(id).any(|a| self.nodes[a.0].semantics.as_ref().is_some_and(|s| s.hidden));
+            let shown = self
+                .ancestors(id)
+                .all(|a| self.style(a).display != crate::Display::None);
+            let hidden = self
+                .ancestors(id)
+                .any(|a| self.nodes[a.0].semantics.as_ref().is_some_and(|s| s.hidden));
             if shown && hidden {
-                out.push(AuditIssue { kind: Audit::HiddenFocusable, id, detail: format!("{:?} {:?}", s.role, s.label) });
+                out.push(AuditIssue {
+                    kind: Audit::HiddenFocusable,
+                    id,
+                    detail: format!("{:?} {:?}", s.role, s.label),
+                });
             }
         }
-        let page = self.style(self.root()).background.unwrap_or([1.0, 1.0, 1.0, 1.0]);
+        let page = self
+            .style(self.root())
+            .background
+            .unwrap_or([1.0, 1.0, 1.0, 1.0]);
         for c in self.contrast_issues(page, false) {
-            let hex = |c: [f32; 3]| format!("#{:02x}{:02x}{:02x}", (c[0] * 255.0).round() as u8, (c[1] * 255.0).round() as u8, (c[2] * 255.0).round() as u8);
+            let hex = |c: [f32; 3]| {
+                format!(
+                    "#{:02x}{:02x}{:02x}",
+                    (c[0] * 255.0).round() as u8,
+                    (c[1] * 255.0).round() as u8,
+                    (c[2] * 255.0).round() as u8
+                )
+            };
             out.push(AuditIssue {
                 kind: Audit::LowContrast,
                 id: c.id,
-                detail: format!("{:?}: {:.2}:1, {} on {} (needs {:.1}:1)", c.text, c.ratio, hex(c.foreground), hex(c.background), c.required),
+                detail: format!(
+                    "{:?}: {:.2}:1, {} on {} (needs {:.1}:1)",
+                    c.text,
+                    c.ratio,
+                    hex(c.foreground),
+                    hex(c.background),
+                    c.required
+                ),
             });
         }
         out

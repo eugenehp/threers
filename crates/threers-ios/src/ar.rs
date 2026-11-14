@@ -37,7 +37,9 @@ const PORTRAIT: isize = 1;
 /// Whether this device can track the world (not the simulator, not the
 /// oldest devices).
 pub fn supported() -> bool {
-    let Some(class) = AnyClass::get(c"ARWorldTrackingConfiguration") else { return false };
+    let Some(class) = AnyClass::get(c"ARWorldTrackingConfiguration") else {
+        return false;
+    };
     let yes: Bool = unsafe { msg_send![class, isSupported] };
     yes.as_bool()
 }
@@ -74,7 +76,8 @@ impl ArSession {
             let _: () = msg_send![&*feed, setAutoresizingMask: FLEXIBLE_SIZE];
             let _: () = msg_send![&*feed, setAutomaticallyUpdatesLighting: false];
             let _: () = msg_send![&*host, insertSubview: &*feed, belowSubview: &*view];
-            let config: Option<Retained<AnyObject>> = msg_send![AnyClass::get(c"ARWorldTrackingConfiguration")?, new];
+            let config: Option<Retained<AnyObject>> =
+                msg_send![AnyClass::get(c"ARWorldTrackingConfiguration")?, new];
             let config = config?;
             // +Y against gravity, the origin where the session starts
             let _: () = msg_send![&*config, setWorldAlignment: 0isize];
@@ -95,14 +98,27 @@ impl ArSession {
             let camera: Retained<AnyObject> = msg_send![&*frame, camera];
             let orientation = self.orientation();
             let cam = Retained::as_ptr(&camera) as usize;
-            let view = call_int(cam, sel_bits(sel!(viewMatrixForOrientation:)), orientation as usize);
+            let view = call_int(
+                cam,
+                sel_bits(sel!(viewMatrixForOrientation:)),
+                orientation as usize,
+            );
             let projection = call_projection(
                 cam,
                 sel_bits(sel!(projectionMatrixForOrientation:viewportSize:zNear:zFar:)),
                 orientation as usize,
-                [size.0.max(1) as f64, size.1.max(1) as f64, near as f64, far as f64],
+                [
+                    size.0.max(1) as f64,
+                    size.1.max(1) as f64,
+                    near as f64,
+                    far as f64,
+                ],
             );
-            let world = threers::math::Matrix4 { elements: flat(view) }.invert().elements;
+            let world = threers::math::Matrix4 {
+                elements: flat(view),
+            }
+            .invert()
+            .elements;
             Some((world, flat(projection)))
         }
     }
@@ -111,11 +127,17 @@ impl ArSession {
     fn orientation(&self) -> isize {
         unsafe {
             let window: Option<Retained<AnyObject>> = msg_send![&*self.view, window];
-            let Some(window) = window else { return PORTRAIT };
+            let Some(window) = window else {
+                return PORTRAIT;
+            };
             let scene: Option<Retained<AnyObject>> = msg_send![&*window, windowScene];
             let Some(scene) = scene else { return PORTRAIT };
             let o: isize = msg_send![&*scene, interfaceOrientation];
-            if o == 0 { PORTRAIT } else { o }
+            if o == 0 {
+                PORTRAIT
+            } else {
+                o
+            }
         }
     }
 }
@@ -173,7 +195,8 @@ unsafe fn call_int(x0: usize, x1: usize, x2: usize) -> [[f32; 4]; 4] {
 unsafe fn call_projection(x0: usize, x1: usize, x2: usize, d: [f64; 4]) -> [[f32; 4]; 4] {
     use std::arch::aarch64::float32x4_t;
     // each double in the low lane of its vector register
-    let [mut c0, mut c1, mut c2, mut c3] = d.map(|x| unsafe { std::mem::transmute::<[f64; 2], float32x4_t>([x, 0.0]) });
+    let [mut c0, mut c1, mut c2, mut c3] =
+        d.map(|x| unsafe { std::mem::transmute::<[f64; 2], float32x4_t>([x, 0.0]) });
     // SAFETY: as `call_int`, with the four doubles in d0–d3 (the low halves
     // of v0–v3, read before the results are written back over them).
     unsafe {

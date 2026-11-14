@@ -114,7 +114,11 @@ pub fn tree_update(ui: &Ui, focus: Option<NodeId>) -> accesskit::TreeUpdate {
             n.add_action(Action::Decrement);
         }
         if let Some(c) = a.checked {
-            n.set_toggled(if c { accesskit::Toggled::True } else { accesskit::Toggled::False });
+            n.set_toggled(if c {
+                accesskit::Toggled::True
+            } else {
+                accesskit::Toggled::False
+            });
         }
         if let Some(s) = a.selected {
             n.set_selected(s);
@@ -126,7 +130,11 @@ pub fn tree_update(ui: &Ui, focus: Option<NodeId>) -> accesskit::TreeUpdate {
             n.set_disabled();
         }
         if a.live {
-            n.set_live(if a.role == Role::Alert { accesskit::Live::Assertive } else { accesskit::Live::Polite });
+            n.set_live(if a.role == Role::Alert {
+                accesskit::Live::Assertive
+            } else {
+                accesskit::Live::Polite
+            });
         }
         if let Some((pos, size)) = a.position {
             n.set_position_in_set(pos);
@@ -153,7 +161,11 @@ pub fn tree_update(ui: &Ui, focus: Option<NodeId>) -> accesskit::TreeUpdate {
             _ => {}
         }
         if let Some(up) = a.sort {
-            n.set_sort_direction(if up { accesskit::SortDirection::Ascending } else { accesskit::SortDirection::Descending });
+            n.set_sort_direction(if up {
+                accesskit::SortDirection::Ascending
+            } else {
+                accesskit::SortDirection::Descending
+            });
         }
         if a.focusable && !a.disabled {
             n.add_action(Action::Focus);
@@ -166,7 +178,12 @@ pub fn tree_update(ui: &Ui, focus: Option<NodeId>) -> accesskit::TreeUpdate {
             x1: (b.x + b.width) as f64,
             y1: (b.y + b.height) as f64,
         });
-        n.set_children(a.children.iter().map(|&i| node_id(tree[i].id)).collect::<Vec<_>>());
+        n.set_children(
+            a.children
+                .iter()
+                .map(|&i| node_id(tree[i].id))
+                .collect::<Vec<_>>(),
+        );
         nodes.push((node_id(a.id), n));
     }
     let root = node_id(ui.root());
@@ -221,12 +238,28 @@ mod tests {
         let dialog = ui.add_box(root, style! { padding: 4px; });
         ui.set_semantics(dialog, Semantics::new(Role::Dialog).label("Settings"));
         let check = ui.add_box(dialog, style! { width: 16px; height: 16px; });
-        ui.set_semantics(check, Semantics::new(Role::Checkbox).label("Shadows").checked(true));
+        ui.set_semantics(
+            check,
+            Semantics::new(Role::Checkbox)
+                .label("Shadows")
+                .checked(true),
+        );
         let slider = ui.add_box(dialog, style! { width: 100px; height: 16px; });
-        ui.set_semantics(slider, Semantics::new(Role::Slider).label("Roughness").range(0.0, 1.0, 0.25));
+        ui.set_semantics(
+            slider,
+            Semantics::new(Role::Slider)
+                .label("Roughness")
+                .range(0.0, 1.0, 0.25),
+        );
         ui.layout(300.0, 200.0, &mut FixedWidthText(7.0));
         let u = tree_update(&ui, Some(check));
-        let find = |id: NodeId| u.nodes.iter().find(|(n, _)| *n == node_id(id)).map(|(_, n)| n).unwrap();
+        let find = |id: NodeId| {
+            u.nodes
+                .iter()
+                .find(|(n, _)| *n == node_id(id))
+                .map(|(_, n)| n)
+                .unwrap()
+        };
         assert_eq!(find(dialog).role(), accesskit::Role::Dialog);
         assert_eq!(find(dialog).children(), [node_id(check), node_id(slider)]);
         assert_eq!(find(check).toggled(), Some(accesskit::Toggled::True));

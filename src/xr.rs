@@ -94,8 +94,17 @@ impl XrEye {
     /// reference space, and its framebuffer rectangle. `origin` places the
     /// reference space in the world: identity for a fixed rig, the parent's
     /// world matrix of a camera the app moves.
-    pub fn new(gl_projection: [f32; 16], origin: &Matrix4, pose: &Matrix4, viewport: [i32; 4]) -> Self {
-        XrEye { projection: depth_zero_to_one(gl_projection), world: origin.multiply(pose), viewport }
+    pub fn new(
+        gl_projection: [f32; 16],
+        origin: &Matrix4,
+        pose: &Matrix4,
+        viewport: [i32; 4],
+    ) -> Self {
+        XrEye {
+            projection: depth_zero_to_one(gl_projection),
+            world: origin.multiply(pose),
+            viewport,
+        }
     }
 
     /// The eye's vertical field of view, in radians, from its projection
@@ -110,7 +119,8 @@ impl XrEye {
     /// clipping range, at the eye's pose, through the eye's projection.
     pub fn camera(&self, lens: &PerspectiveCamera) -> PerspectiveCamera {
         let mut c = lens.clone();
-        let (position, target, up, view) = pose_from_world(&self.world, (lens.target - lens.position).length());
+        let (position, target, up, view) =
+            pose_from_world(&self.world, (lens.target - lens.position).length());
         (c.position, c.target, c.up, c.view_override) = (position, target, up, view);
         c.projection_override = Some(self.projection);
         c.fov = self.fov();
@@ -124,20 +134,36 @@ impl XrEye {
 /// The camera pose of a world matrix (looking down its -Z, up its +Y): the
 /// position, a target `distance` ahead, the up vector, and, when the matrix
 /// is not a rotation and translation (a scaled rig), the view to draw with.
-pub fn pose_from_world(m: &Matrix4, distance: f32) -> (Vector3, Vector3, Vector3, Option<ViewOverride>) {
+pub fn pose_from_world(
+    m: &Matrix4,
+    distance: f32,
+) -> (Vector3, Vector3, Vector3, Option<ViewOverride>) {
     let e = &m.elements;
     let position = Vector3::new(e[12], e[13], e[14]);
     let forward = Vector3::new(-e[8], -e[9], -e[10]).normalize();
     let up = Vector3::new(e[4], e[5], e[6]).normalize();
-    let d = if distance.is_finite() && distance > 1e-6 { distance } else { 1.0 };
+    let d = if distance.is_finite() && distance > 1e-6 {
+        distance
+    } else {
+        1.0
+    };
     let target = position + forward * d;
-    let (x, y, z) = (Vector3::new(e[0], e[1], e[2]), Vector3::new(e[4], e[5], e[6]), Vector3::new(e[8], e[9], e[10]));
+    let (x, y, z) = (
+        Vector3::new(e[0], e[1], e[2]),
+        Vector3::new(e[4], e[5], e[6]),
+        Vector3::new(e[8], e[9], e[10]),
+    );
     const EPS: f32 = 1e-5;
     let rigid = [x, y, z].iter().all(|v| (v.length() - 1.0).abs() < EPS)
         && x.dot(y).abs() < EPS
         && y.dot(z).abs() < EPS
         && z.dot(x).abs() < EPS;
-    let view = (!rigid).then(|| ViewOverride { view: m.invert(), position, target, up });
+    let view = (!rigid).then(|| ViewOverride {
+        view: m.invert(),
+        position,
+        target,
+        up,
+    });
     (position, target, up, view)
 }
 
@@ -215,7 +241,10 @@ impl<T: PartialEq> InputSlots<T> {
 
     /// The occupied slots and their sources.
     pub fn iter(&self) -> impl Iterator<Item = (usize, &T)> {
-        self.slots.iter().enumerate().filter_map(|(i, s)| s.as_ref().map(|s| (i, s)))
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.as_ref().map(|s| (i, s)))
     }
 
     pub fn clear(&mut self) {
@@ -230,10 +259,22 @@ mod tests {
 
     fn gl_frustum(l: f32, r: f32, b: f32, t: f32, n: f32, f: f32) -> [f32; 16] {
         [
-            2.0 * n / (r - l), 0.0, 0.0, 0.0,
-            0.0, 2.0 * n / (t - b), 0.0, 0.0,
-            (r + l) / (r - l), (t + b) / (t - b), -(f + n) / (f - n), -1.0,
-            0.0, 0.0, -2.0 * f * n / (f - n), 0.0,
+            2.0 * n / (r - l),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            2.0 * n / (t - b),
+            0.0,
+            0.0,
+            (r + l) / (r - l),
+            (t + b) / (t - b),
+            -(f + n) / (f - n),
+            -1.0,
+            0.0,
+            0.0,
+            -2.0 * f * n / (f - n),
+            0.0,
         ]
     }
 
@@ -254,7 +295,10 @@ mod tests {
             assert!((c[2] / c[3] - want).abs() < 1e-5, "z {z}: {}", c[2] / c[3]);
         }
         // x and y are untouched.
-        let (g, c) = (clip(&gl_frustum(-0.12, 0.08, -0.1, 0.1, n, f), [0.3, -0.2, -2.0]), clip(&p, [0.3, -0.2, -2.0]));
+        let (g, c) = (
+            clip(&gl_frustum(-0.12, 0.08, -0.1, 0.1, n, f), [0.3, -0.2, -2.0]),
+            clip(&p, [0.3, -0.2, -2.0]),
+        );
         assert_eq!((g[0], g[1], g[3]), (c[0], c[1], c[3]));
     }
 
@@ -262,10 +306,20 @@ mod tests {
     fn a_symmetric_projection_matches_the_renderers_own() {
         let (n, f) = (0.1f32, 100.0f32);
         let t = n * (30f32.to_radians()).tan();
-        let eye = XrEye::new(gl_frustum(-t, t, -t, t, n, f), &Matrix4::identity(), &Matrix4::identity(), [0, 0, 8, 8]);
+        let eye = XrEye::new(
+            gl_frustum(-t, t, -t, t, n, f),
+            &Matrix4::identity(),
+            &Matrix4::identity(),
+            [0, 0, 8, 8],
+        );
         let ours = Matrix4::perspective(60f32.to_radians(), 1.0, n, f);
         for (a, b) in eye.projection.iter().zip(ours.elements) {
-            assert!((a - b).abs() < 1e-4, "{:?} vs {:?}", eye.projection, ours.elements);
+            assert!(
+                (a - b).abs() < 1e-4,
+                "{:?} vs {:?}",
+                eye.projection,
+                ours.elements
+            );
         }
         assert!((eye.fov() - 60f32.to_radians()).abs() < 1e-5);
     }
@@ -274,7 +328,12 @@ mod tests {
     fn the_eye_sits_under_the_origin_and_keeps_the_lens() {
         let origin = Matrix4::translation(Vector3::new(10.0, 0.0, 0.0));
         let pose = Matrix4::translation(Vector3::new(0.032, 1.6, 0.5));
-        let eye = XrEye::new(gl_frustum(-0.1, 0.1, -0.1, 0.1, 0.1, 10.0), &origin, &pose, [960, 0, 960, 1080]);
+        let eye = XrEye::new(
+            gl_frustum(-0.1, 0.1, -0.1, 0.1, 0.1, 10.0),
+            &origin,
+            &pose,
+            [960, 0, 960, 1080],
+        );
         let mut lens = PerspectiveCamera::new(50.0, 1.0, 0.1, 10.0);
         lens.aperture = 0.02;
         let c = eye.camera(&lens);
@@ -291,11 +350,19 @@ mod tests {
     #[test]
     fn a_scaled_rig_views_through_its_inverse() {
         let origin = Matrix4::scale(Vector3::new(2.0, 2.0, 2.0));
-        let eye = XrEye::new(gl_frustum(-0.1, 0.1, -0.1, 0.1, 0.1, 10.0), &origin, &Matrix4::identity(), [0, 0, 8, 8]);
+        let eye = XrEye::new(
+            gl_frustum(-0.1, 0.1, -0.1, 0.1, 0.1, 10.0),
+            &origin,
+            &Matrix4::identity(),
+            [0, 0, 8, 8],
+        );
         let c = eye.camera(&PerspectiveCamera::new(50.0, 1.0, 0.1, 10.0));
         let v = c.view_matrix();
         let p = clip(&v.elements, [0.0, 0.0, -2.0]);
-        assert!((p[2] + 1.0).abs() < 1e-5, "world -2 is one unit ahead of a doubled rig: {p:?}");
+        assert!(
+            (p[2] + 1.0).abs() < 1e-5,
+            "world -2 is one unit ahead of a doubled rig: {p:?}"
+        );
     }
 
     #[test]

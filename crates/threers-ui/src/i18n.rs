@@ -50,7 +50,10 @@ pub struct Forms {
 impl Forms {
     /// The `one` form.
     pub fn new(one: impl Into<String>) -> Self {
-        Self { one: one.into(), ..Self::default() }
+        Self {
+            one: one.into(),
+            ..Self::default()
+        }
     }
     pub fn zero(mut self, s: impl Into<String>) -> Self {
         self.zero = Some(s.into());
@@ -158,7 +161,9 @@ pub fn plural(locale: &str, n: u64, forms: &Forms) -> String {
 /// Which way `locale`'s language reads.
 pub fn direction_of(locale: &str) -> LayoutDirection {
     match language(locale).as_str() {
-        "ar" | "he" | "fa" | "ur" | "ps" | "yi" | "dv" | "ku" | "sd" | "ug" => LayoutDirection::RightToLeft,
+        "ar" | "he" | "fa" | "ur" | "ps" | "yi" | "dv" | "ku" | "sd" | "ug" => {
+            LayoutDirection::RightToLeft
+        }
         _ => LayoutDirection::LeftToRight,
     }
 }
@@ -169,11 +174,44 @@ mod tests {
 
     #[test]
     fn categories_follow_each_languages_rules() {
-        assert_eq!([0, 1, 2, 5].map(|n| category("en-US", n)), [Category::Other, Category::One, Category::Other, Category::Other]);
-        assert_eq!([0, 1, 2].map(|n| category("fr", n)), [Category::One, Category::One, Category::Other]);
-        assert_eq!([1, 11, 22, 25, 111].map(|n| category("uk", n)), [Category::One, Category::Many, Category::Few, Category::Many, Category::Many]);
-        assert_eq!([1, 22, 12, 5].map(|n| category("pl", n)), [Category::One, Category::Few, Category::Many, Category::Many]);
-        assert_eq!([0, 1, 2, 3, 11, 100].map(|n| category("ar", n)), [Category::Zero, Category::One, Category::Two, Category::Few, Category::Many, Category::Other]);
+        assert_eq!(
+            [0, 1, 2, 5].map(|n| category("en-US", n)),
+            [
+                Category::Other,
+                Category::One,
+                Category::Other,
+                Category::Other
+            ]
+        );
+        assert_eq!(
+            [0, 1, 2].map(|n| category("fr", n)),
+            [Category::One, Category::One, Category::Other]
+        );
+        assert_eq!(
+            [1, 11, 22, 25, 111].map(|n| category("uk", n)),
+            [
+                Category::One,
+                Category::Many,
+                Category::Few,
+                Category::Many,
+                Category::Many
+            ]
+        );
+        assert_eq!(
+            [1, 22, 12, 5].map(|n| category("pl", n)),
+            [Category::One, Category::Few, Category::Many, Category::Many]
+        );
+        assert_eq!(
+            [0, 1, 2, 3, 11, 100].map(|n| category("ar", n)),
+            [
+                Category::Zero,
+                Category::One,
+                Category::Two,
+                Category::Few,
+                Category::Many,
+                Category::Other
+            ]
+        );
         assert_eq!(category("ja", 1), Category::Other);
         assert_eq!(direction_of("he-IL"), LayoutDirection::RightToLeft);
         assert_eq!(direction_of("en"), LayoutDirection::LeftToRight);

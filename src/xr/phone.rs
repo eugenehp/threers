@@ -32,18 +32,41 @@ pub const FOV_Y: f32 = 60.0;
 /// `gamma` side to side) and the screen's turn (`orient`, degrees), as a
 /// camera looking out of the screen's back (−z) with y up the screen.
 pub fn attitude(alpha: f32, beta: f32, gamma: f32, orient: f32) -> Quaternion {
-    let axis = |x: f32, y: f32, z: f32, deg: f32| Quaternion::from_axis_angle(Vector3::new(x, y, z), deg.to_radians());
+    let axis = |x: f32, y: f32, z: f32, deg: f32| {
+        Quaternion::from_axis_angle(Vector3::new(x, y, z), deg.to_radians())
+    };
     // The device's frame in the world's (y up): turned by alpha about y,
     // then beta about x, then −gamma about z; then the camera, looking out
     // of the screen, a quarter turn back about x; then the screen's turn.
-    axis(0.0, 1.0, 0.0, alpha) * axis(1.0, 0.0, 0.0, beta) * axis(0.0, 0.0, 1.0, -gamma) * axis(1.0, 0.0, 0.0, -90.0) * axis(0.0, 0.0, 1.0, -orient)
+    axis(0.0, 1.0, 0.0, alpha)
+        * axis(1.0, 0.0, 0.0, beta)
+        * axis(0.0, 0.0, 1.0, -gamma)
+        * axis(1.0, 0.0, 0.0, -90.0)
+        * axis(0.0, 0.0, 1.0, -orient)
 }
 
 /// A perspective projection in OpenGL's depth (as a headset gives one).
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn gl_projection(fov_y: f32, aspect: f32, near: f32, far: f32) -> [f32; 16] {
     let f = 1.0 / (fov_y.to_radians() / 2.0).tan();
-    [f / aspect, 0.0, 0.0, 0.0, 0.0, f, 0.0, 0.0, 0.0, 0.0, (far + near) / (near - far), -1.0, 0.0, 0.0, 2.0 * far * near / (near - far), 0.0]
+    [
+        f / aspect,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        f,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        (far + near) / (near - far),
+        -1.0,
+        0.0,
+        0.0,
+        2.0 * far * near / (near - far),
+        0.0,
+    ]
 }
 
 // The browser's side: the sensors, the camera, the fingers.
@@ -58,16 +81,20 @@ mod browser {
     use wasm_bindgen_futures::JsFuture;
     use web_sys::HtmlCanvasElement;
 
-    use crate::xr::{ray_pose, InputSlots, TargetRayMode, XrEvent, XrEventKind, XrEye, XrInput, XrSource};
     use super::{attitude, gl_projection, EYE_HEIGHT, FOV_Y};
     use crate::math::{Matrix4, Quaternion, Vector3};
+    use crate::xr::{
+        ray_pose, InputSlots, TargetRayMode, XrEvent, XrEventKind, XrEye, XrInput, XrSource,
+    };
 
     fn get(o: &JsValue, key: &str) -> JsValue {
         Reflect::get(o, &key.into()).unwrap_or(JsValue::UNDEFINED)
     }
 
     fn call(o: &JsValue, name: &str, args: &[JsValue]) -> Result<JsValue, JsValue> {
-        let f: Function = get(o, name).dyn_into().map_err(|_| JsValue::from_str(&format!("no {name}")))?;
+        let f: Function = get(o, name)
+            .dyn_into()
+            .map_err(|_| JsValue::from_str(&format!("no {name}")))?;
         f.apply(o, &args.iter().collect())
     }
 
@@ -120,10 +147,13 @@ mod browser {
         /// Whether this browser could show one: motion sensors and a touch
         /// screen (a desktop has neither), on a secure page.
         pub fn is_supported() -> bool {
-            let Some(w) = web_sys::window() else { return false };
+            let Some(w) = web_sys::window() else {
+                return false;
+            };
             let secure = w.is_secure_context();
             let sensors = !get(&w.clone().into(), "DeviceOrientationEvent").is_undefined();
-            let touch = !get(&w.clone().into(), "ontouchstart").is_undefined() || w.navigator().max_touch_points() > 0;
+            let touch = !get(&w.clone().into(), "ontouchstart").is_undefined()
+                || w.navigator().max_touch_points() > 0;
             secure && sensors && touch
         }
 
@@ -137,7 +167,8 @@ mod browser {
             // iOS: the user's leave for the motion sensors, asked once.
             let doe = get(&window.clone().into(), "DeviceOrientationEvent");
             if !get(&doe, "requestPermission").is_undefined() {
-                let answer = JsFuture::from(Promise::from(call(&doe, "requestPermission", &[])?)).await?;
+                let answer =
+                    JsFuture::from(Promise::from(call(&doe, "requestPermission", &[])?)).await?;
                 if answer.as_string().as_deref() != Some("granted") {
                     return Err("The motion sensors were not allowed: allow them in Settings → Safari → Motion & Orientation Access".into());
                 }
@@ -188,7 +219,18 @@ mod browser {
                 let win = window.clone();
                 let f = Closure::wrap(Box::new(move |e: web_sys::Event| {
                     let n = |k: &str| get(&e, k).as_f64().map(|v| v as f32);
-                    let orient = get(&get(&get(&win.clone().into(), "screen"), "orientation"), "angle").as_f64().map(|v| v as f32).or_else(|| get(&win.clone().into(), "orientation").as_f64().map(|v| v as f32)).unwrap_or(0.0);
+                    let orient = get(
+                        &get(&get(&win.clone().into(), "screen"), "orientation"),
+                        "angle",
+                    )
+                    .as_f64()
+                    .map(|v| v as f32)
+                    .or_else(|| {
+                        get(&win.clone().into(), "orientation")
+                            .as_f64()
+                            .map(|v| v as f32)
+                    })
+                    .unwrap_or(0.0);
                     if let (Some(a), Some(b), Some(g)) = (n("alpha"), n("beta"), n("gamma")) {
                         shared.borrow_mut().orientation = Some([a, b, g, orient]);
                     }
@@ -196,7 +238,12 @@ mod browser {
                 listeners.push((window.clone().into(), "deviceorientation", f));
             }
             // Fingers on the canvas.
-            for (name, state) in [("touchstart", TouchState::Began), ("touchmove", TouchState::Down), ("touchend", TouchState::Ended), ("touchcancel", TouchState::Ended)] {
+            for (name, state) in [
+                ("touchstart", TouchState::Began),
+                ("touchmove", TouchState::Down),
+                ("touchend", TouchState::Ended),
+                ("touchcancel", TouchState::Ended),
+            ] {
                 let (shared, area) = (shared.clone(), canvas.clone());
                 let f = Closure::wrap(Box::new(move |e: web_sys::Event| {
                     e.prevent_default();
@@ -207,8 +254,10 @@ mod browser {
                     for i in 0..n {
                         let t = call(&list, "item", &[i.into()]).unwrap_or(JsValue::UNDEFINED);
                         let id = get(&t, "identifier").as_f64().unwrap_or(0.0) as i32;
-                        let u = ((get(&t, "clientX").as_f64().unwrap_or(0.0) - r.left()) / r.width().max(1.0)) as f32;
-                        let v = ((get(&t, "clientY").as_f64().unwrap_or(0.0) - r.top()) / r.height().max(1.0)) as f32;
+                        let u = ((get(&t, "clientX").as_f64().unwrap_or(0.0) - r.left())
+                            / r.width().max(1.0)) as f32;
+                        let v = ((get(&t, "clientY").as_f64().unwrap_or(0.0) - r.top())
+                            / r.height().max(1.0)) as f32;
                         match s.touches.iter_mut().find(|t| t.0 == id) {
                             Some(t) => {
                                 (t.1, t.2) = (u, v);
@@ -216,7 +265,9 @@ mod browser {
                                     t.3 = TouchState::Ended;
                                 }
                             }
-                            None if state != TouchState::Ended => s.touches.push((id, u, v, TouchState::Began)),
+                            None if state != TouchState::Ended => {
+                                s.touches.push((id, u, v, TouchState::Began))
+                            }
                             None => {}
                         }
                     }
@@ -234,7 +285,11 @@ mod browser {
             for (target, name, f) in &listeners {
                 let opts = Object::new();
                 let _ = Reflect::set(&opts, &"passive".into(), &false.into());
-                let _ = call(target, "addEventListener", &[(*name).into(), f.as_ref().clone(), opts.into()]);
+                let _ = call(
+                    target,
+                    "addEventListener",
+                    &[(*name).into(), f.as_ref().clone(), opts.into()],
+                );
             }
             Ok(PhoneView {
                 canvas,
@@ -269,12 +324,19 @@ mod browser {
             }
             let o = self.shared.borrow().orientation;
             let turn = o.map_or(Quaternion::IDENTITY, |[a, b, g, s]| attitude(a, b, g, s));
-            let pose = Matrix4::compose(Vector3::new(0.0, EYE_HEIGHT, 0.0), turn, Vector3::new(1.0, 1.0, 1.0));
+            let pose = Matrix4::compose(
+                Vector3::new(0.0, EYE_HEIGHT, 0.0),
+                turn,
+                Vector3::new(1.0, 1.0, 1.0),
+            );
             self.head = Some(pose.elements);
             // Fingers that lifted last frame are let go.
             for id in std::mem::take(&mut self.leaving) {
                 if let Some(slot) = self.slots.disconnect(&id) {
-                    self.events.push(XrEvent { kind: XrEventKind::Disconnected, slot });
+                    self.events.push(XrEvent {
+                        kind: XrEventKind::Disconnected,
+                        slot,
+                    });
                 }
                 self.rays.retain(|r| r.0 != id);
             }
@@ -284,20 +346,33 @@ mod browser {
             let mut keep = vec![];
             for (id, u, v, state) in touches {
                 // From the eye through the point on the screen.
-                let dir_cam = Vector3::new((u * 2.0 - 1.0) * k * aspect, (1.0 - v * 2.0) * k, -1.0).normalize();
+                let dir_cam = Vector3::new((u * 2.0 - 1.0) * k * aspect, (1.0 - v * 2.0) * k, -1.0)
+                    .normalize();
                 let dir = dir_cam.apply_quaternion(turn);
                 let ray = ray_pose(Vector3::new(0.0, EYE_HEIGHT, 0.0), dir);
                 self.rays.retain(|r| r.0 != id);
                 self.rays.push((id, ray));
                 if state == TouchState::Began || self.slots.slot_of(&id).is_none() {
                     let slot = self.slots.connect(id);
-                    self.events.push(XrEvent { kind: XrEventKind::Connected, slot });
-                    self.events.push(XrEvent { kind: XrEventKind::SelectStart, slot });
+                    self.events.push(XrEvent {
+                        kind: XrEventKind::Connected,
+                        slot,
+                    });
+                    self.events.push(XrEvent {
+                        kind: XrEventKind::SelectStart,
+                        slot,
+                    });
                 }
                 if state == TouchState::Ended {
                     if let Some(slot) = self.slots.slot_of(&id) {
-                        self.events.push(XrEvent { kind: XrEventKind::SelectEnd, slot });
-                        self.events.push(XrEvent { kind: XrEventKind::Select, slot });
+                        self.events.push(XrEvent {
+                            kind: XrEventKind::SelectEnd,
+                            slot,
+                        });
+                        self.events.push(XrEvent {
+                            kind: XrEventKind::Select,
+                            slot,
+                        });
                     }
                     self.leaving.push(id);
                 } else {
@@ -318,7 +393,10 @@ mod browser {
         pub fn fit_canvas(&mut self) -> (u32, u32) {
             let dpr = web_sys::window().map_or(1.0, |w| w.device_pixel_ratio());
             let r = self.canvas.get_bounding_client_rect();
-            let (w, h) = (((r.width() * dpr).round() as u32).max(1), ((r.height() * dpr).round() as u32).max(1));
+            let (w, h) = (
+                ((r.width() * dpr).round() as u32).max(1),
+                ((r.height() * dpr).round() as u32).max(1),
+            );
             if (self.canvas.width(), self.canvas.height()) != (w, h) {
                 self.canvas.set_width(w);
                 self.canvas.set_height(h);
@@ -357,7 +435,11 @@ mod browser {
             {
                 let n = get(&tracks, "length").as_f64().unwrap_or(0.0) as u32;
                 for i in 0..n {
-                    let _ = call(&Reflect::get_u32(&tracks, i).unwrap_or(JsValue::UNDEFINED), "stop", &[]);
+                    let _ = call(
+                        &Reflect::get_u32(&tracks, i).unwrap_or(JsValue::UNDEFINED),
+                        "stop",
+                        &[],
+                    );
                 }
             }
             for e in [self.video.take(), self.exit.take()].into_iter().flatten() {
@@ -365,7 +447,11 @@ mod browser {
             }
             let _ = self.canvas.set_attribute("style", &self.style_before);
             for (target, name, f) in self.listeners.drain(..) {
-                let _ = call(&target, "removeEventListener", &[name.into(), f.as_ref().clone()]);
+                let _ = call(
+                    &target,
+                    "removeEventListener",
+                    &[name.into(), f.as_ref().clone()],
+                );
             }
             if let Some(f) = self.on_end.borrow_mut().take() {
                 f();
@@ -386,8 +472,18 @@ mod browser {
         fn eyes(&self, origin: &Matrix4) -> Vec<XrEye> {
             let Some(head) = self.head else { return vec![] };
             let (w, h) = self.size;
-            let projection = gl_projection(FOV_Y, w.max(1) as f32 / h.max(1) as f32, self.near, self.far);
-            vec![XrEye::new(projection, origin, &Matrix4 { elements: head }, [0, 0, w as i32, h as i32])]
+            let projection = gl_projection(
+                FOV_Y,
+                w.max(1) as f32 / h.max(1) as f32,
+                self.near,
+                self.far,
+            );
+            vec![XrEye::new(
+                projection,
+                origin,
+                &Matrix4 { elements: head },
+                [0, 0, w as i32, h as i32],
+            )]
         }
         fn framebuffer_size(&self) -> (u32, u32) {
             self.size
@@ -395,7 +491,12 @@ mod browser {
         fn inputs(&self) -> Vec<XrInput> {
             self.slots
                 .iter()
-                .map(|(slot, id)| XrInput { slot, target_ray_mode: TargetRayMode::Screen, ray: self.rays.iter().find(|r| r.0 == *id).map(|r| r.1), ..Default::default() })
+                .map(|(slot, id)| XrInput {
+                    slot,
+                    target_ray_mode: TargetRayMode::Screen,
+                    ray: self.rays.iter().find(|r| r.0 == *id).map(|r| r.1),
+                    ..Default::default()
+                })
                 .collect()
         }
         fn take_events(&mut self) -> Vec<XrEvent> {
@@ -423,16 +524,32 @@ mod tests {
         let up = |q: Quaternion| Vector3::new(0.0, 1.0, 0.0).apply_quaternion(q);
         let near = |a: Vector3, b: Vector3| (a - b).length() < 1e-4;
         let upright = attitude(0.0, 90.0, 0.0, 0.0);
-        assert!(near(look(upright), Vector3::new(0.0, 0.0, -1.0)), "{:?}", look(upright));
+        assert!(
+            near(look(upright), Vector3::new(0.0, 0.0, -1.0)),
+            "{:?}",
+            look(upright)
+        );
         assert!(near(up(upright), Vector3::new(0.0, 1.0, 0.0)));
         // alpha grows anticlockwise seen from above: to the left (−x).
         let left = attitude(90.0, 90.0, 0.0, 0.0);
-        assert!(near(look(left), Vector3::new(-1.0, 0.0, 0.0)), "{:?}", look(left));
+        assert!(
+            near(look(left), Vector3::new(-1.0, 0.0, 0.0)),
+            "{:?}",
+            look(left)
+        );
         let flat = attitude(0.0, 0.0, 0.0, 0.0);
-        assert!(near(look(flat), Vector3::new(0.0, -1.0, 0.0)), "{:?}", look(flat));
+        assert!(
+            near(look(flat), Vector3::new(0.0, -1.0, 0.0)),
+            "{:?}",
+            look(flat)
+        );
         // Held sideways (the screen turned 90°): the picture's up is the
         // phone's side, still the world's up.
         let landscape = attitude(0.0, 0.0, -90.0, 90.0);
-        assert!(near(up(landscape), Vector3::new(0.0, 1.0, 0.0)), "{:?}", up(landscape));
+        assert!(
+            near(up(landscape), Vector3::new(0.0, 1.0, 0.0)),
+            "{:?}",
+            up(landscape)
+        );
     }
 }

@@ -99,7 +99,13 @@ impl IntoCss for String {
 impl IntoCss for Rgba {
     fn into_css(self) -> String {
         let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        format!("#{:02x}{:02x}{:02x}{:02x}", b(self[0]), b(self[1]), b(self[2]), b(self[3]))
+        format!(
+            "#{:02x}{:02x}{:02x}{:02x}",
+            b(self[0]),
+            b(self[1]),
+            b(self[2]),
+            b(self[3])
+        )
     }
 }
 
@@ -131,7 +137,10 @@ impl Patch {
 
     /// Building on the class `name` (as defined when it is applied).
     pub fn extends(name: &str) -> Self {
-        Self { extends: vec![name.to_owned()], ..Self::default() }
+        Self {
+            extends: vec![name.to_owned()],
+            ..Self::default()
+        }
     }
 
     /// Sets the CSS property `name` to `value`.
@@ -208,8 +217,18 @@ impl Patch {
     pub fn only(&self, names: &[&str]) -> Patch {
         Patch {
             extends: vec![],
-            decls: self.decls.iter().filter(|(n, _)| names.contains(&n.as_str())).cloned().collect(),
-            tokens: self.tokens.iter().filter(|(n, _)| names.contains(&n.as_str())).cloned().collect(),
+            decls: self
+                .decls
+                .iter()
+                .filter(|(n, _)| names.contains(&n.as_str()))
+                .cloned()
+                .collect(),
+            tokens: self
+                .tokens
+                .iter()
+                .filter(|(n, _)| names.contains(&n.as_str()))
+                .cloned()
+                .collect(),
             states: vec![],
         }
     }
@@ -217,12 +236,20 @@ impl Patch {
     /// What it sets, as CSS (its own declarations; not its classes, theme
     /// colours or states).
     pub fn to_css(&self) -> String {
-        self.decls.iter().map(|(n, v)| format!("{n}: {v}")).collect::<Vec<_>>().join("; ")
+        self.decls
+            .iter()
+            .map(|(n, v)| format!("{n}: {v}"))
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 
     /// The value it sets `name` to, if it does.
     pub fn get(&self, name: &str) -> Option<&str> {
-        self.decls.iter().rev().find(|(n, _)| n == name).map(|(_, v)| v.as_str())
+        self.decls
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
     }
 
     /// Its declarations over `style`.
@@ -270,7 +297,10 @@ impl Patch {
     }
     /// A gradient from left to right through `colours`, spread evenly.
     pub fn gradient(self, colours: &[&str]) -> Self {
-        self.set("background", format!("linear-gradient(to right, {})", colours.join(", ")))
+        self.set(
+            "background",
+            format!("linear-gradient(to right, {})", colours.join(", ")),
+        )
     }
     pub fn color(self, c: impl IntoCss) -> Self {
         self.set("color", c.into_css())
@@ -280,7 +310,10 @@ impl Patch {
     }
     /// A soft shadow below, `blur` pixels across.
     pub fn shadow(self, blur: f32) -> Self {
-        self.set("box-shadow", format!("0 {}px {blur}px rgba(0,0,0,0.25)", (blur * 0.3).round()))
+        self.set(
+            "box-shadow",
+            format!("0 {}px {blur}px rgba(0,0,0,0.25)", (blur * 0.3).round()),
+        )
     }
     pub fn opacity(self, o: f32) -> Self {
         self.set("opacity", format!("{o}"))
@@ -313,7 +346,9 @@ impl Patch {
     }
     /// Its children in its middle, both ways.
     pub fn center(self) -> Self {
-        self.set("display", "flex").set("align-items", "center").set("justify-content", "center")
+        self.set("display", "flex")
+            .set("align-items", "center")
+            .set("justify-content", "center")
     }
     pub fn grow(self) -> Self {
         self.set("flex-grow", "1")
@@ -403,7 +438,12 @@ fn justify_of(a: Align) -> Justify {
 /// The four sides of a `padding` or `margin` it sets (top, right, bottom,
 /// left), from its shorthand.
 fn sides(p: &Patch, name: &str) -> [f32; 4] {
-    let v: Vec<f32> = p.get(name).unwrap_or("0").split_whitespace().filter_map(|t| t.trim_end_matches("px").parse().ok()).collect();
+    let v: Vec<f32> = p
+        .get(name)
+        .unwrap_or("0")
+        .split_whitespace()
+        .filter_map(|t| t.trim_end_matches("px").parse().ok())
+        .collect();
     match v.as_slice() {
         [a] => [*a; 4],
         [y, x] => [*y, *x, *y, *x],
@@ -513,30 +553,44 @@ impl Patch {
     }
     /// Text kept on one line, cut with an ellipsis if it does not fit.
     pub fn one_line(self) -> Self {
-        self.set("white-space", "nowrap").set("overflow", "hidden").set("text-overflow", "ellipsis")
+        self.set("white-space", "nowrap")
+            .set("overflow", "hidden")
+            .set("text-overflow", "ellipsis")
     }
     /// Its children placed across the page's width, whichever way they
     /// run: in a row that is along it (`justify-content`), in a column
     /// across it (`align-items`). A patch that sets no direction is a row.
     pub fn align_horizontal(self, a: Align) -> Self {
-        if self.is_column() { self.align(a) } else { self.justify(justify_of(a)) }
+        if self.is_column() {
+            self.align(a)
+        } else {
+            self.justify(justify_of(a))
+        }
     }
 
     /// Its children placed up and down the page, whichever way they run:
     /// in a row across it (`align-items`: a row's text and icons lined up
     /// through their middles with `Align::Center`), in a column along it.
     pub fn align_vertical(self, a: Align) -> Self {
-        if self.is_column() { self.justify(justify_of(a)) } else { self.align(a) }
+        if self.is_column() {
+            self.justify(justify_of(a))
+        } else {
+            self.align(a)
+        }
     }
 
     /// Its children in its middle, both ways (a flex box).
     pub fn center_both(self) -> Self {
         let d = if self.is_column() { "column" } else { "row" };
-        self.set("display", "flex").set("flex-direction", d).set("align-items", "center").set("justify-content", "center")
+        self.set("display", "flex")
+            .set("flex-direction", d)
+            .set("align-items", "center")
+            .set("justify-content", "center")
     }
 
     fn is_column(&self) -> bool {
-        self.get("flex-direction").is_some_and(|d| d.starts_with("column"))
+        self.get("flex-direction")
+            .is_some_and(|d| d.starts_with("column"))
     }
 
     /// A column, `gap` between its children.
@@ -615,7 +669,12 @@ impl Ui {
     /// has, in the order they were added).
     pub fn add_class(&mut self, node: NodeId, name: &str) {
         let own = self.style(node).clone();
-        let entry = self.env.classes.nodes.entry(node).or_insert_with(|| (own, vec![]));
+        let entry = self
+            .env
+            .classes
+            .nodes
+            .entry(node)
+            .or_insert_with(|| (own, vec![]));
         if !entry.1.iter().any(|c| c == name) {
             entry.1.push(name.to_owned());
         }
@@ -633,12 +692,18 @@ impl Ui {
     }
 
     pub fn has_class(&self, node: NodeId, name: &str) -> bool {
-        self.env.classes.nodes.get(&node).is_some_and(|(_, c)| c.iter().any(|c| c == name))
+        self.env
+            .classes
+            .nodes
+            .get(&node)
+            .is_some_and(|(_, c)| c.iter().any(|c| c == name))
     }
 
     /// `node`'s style: its own, with its classes over it.
     fn restyle_classes(&mut self, node: NodeId) {
-        let Some((own, names)) = self.env.classes.nodes.get(&node).cloned() else { return };
+        let Some((own, names)) = self.env.classes.nodes.get(&node).cloned() else {
+            return;
+        };
         let mut style = own;
         let mut extras = Patch::new();
         for name in &names {
@@ -660,13 +725,17 @@ impl Ui {
                 }
             }
         }
-        out + Patch { extends: vec![], ..patch.clone() }
+        out + Patch {
+            extends: vec![],
+            ..patch.clone()
+        }
     }
 
     /// A resolved patch's theme colours and state looks onto `node`.
     fn apply_extras(&mut self, node: NodeId, flat: &Patch) {
         if !flat.tokens.is_empty() {
-            let tokens: Vec<(&str, Token)> = flat.tokens.iter().map(|(n, t)| (n.as_str(), *t)).collect();
+            let tokens: Vec<(&str, Token)> =
+                flat.tokens.iter().map(|(n, t)| (n.as_str(), *t)).collect();
             self.token_style(node, &tokens);
         }
         for (state, p) in &flat.states {
@@ -703,7 +772,10 @@ mod tests {
 
     #[test]
     fn colours_in_any_form() {
-        let s: Style = Patch::new().background([1.0, 0.0, 0.0, 0.5]).color(0x00ff00).into();
+        let s: Style = Patch::new()
+            .background([1.0, 0.0, 0.0, 0.5])
+            .color(0x00ff00)
+            .into();
         assert_eq!(s.background, Some([1.0, 0.0, 0.0, 128.0 / 255.0]));
         assert_eq!(s.color, [0.0, 1.0, 0.0, 1.0]);
     }
@@ -711,7 +783,10 @@ mod tests {
     #[test]
     fn classes_build_on_classes_and_states_apply() {
         let mut ui = Ui::new();
-        ui.define_class("base", Patch::new().padding(2.0).hover(Patch::new().opacity(0.5)));
+        ui.define_class(
+            "base",
+            Patch::new().padding(2.0).hover(Patch::new().opacity(0.5)),
+        );
         ui.define_class("mid", Patch::extends("base").radius(4.0));
         ui.define_class("top", Patch::extends("mid").padding(6.0));
         // A loop is cut, not followed for ever.
@@ -727,10 +802,25 @@ mod tests {
 
     #[test]
     fn sides_compose_with_the_shorthand() {
-        let p = Patch::new().padding(8.0).padding_top(16.0).padding_x(Space::XS);
+        let p = Patch::new()
+            .padding(8.0)
+            .padding_top(16.0)
+            .padding_x(Space::XS);
         assert_eq!(p.get("padding"), Some("16px 4px 8px 4px"));
-        let s: Style = p.margin_y(Space::S).hstack(Space::M).justify(Justify::Between).into();
-        assert_eq!((s.padding.top, s.padding.right, s.padding.bottom, s.padding.left), (16.0, 4.0, 8.0, 4.0));
+        let s: Style = p
+            .margin_y(Space::S)
+            .hstack(Space::M)
+            .justify(Justify::Between)
+            .into();
+        assert_eq!(
+            (
+                s.padding.top,
+                s.padding.right,
+                s.padding.bottom,
+                s.padding.left
+            ),
+            (16.0, 4.0, 8.0, 4.0)
+        );
         assert_eq!((s.margin.top, s.margin.left), (8.0, 0.0));
         assert_eq!(s.align_items, crate::AlignItems::Center);
         assert_eq!(s.justify_content, crate::JustifyContent::SpaceBetween);
@@ -738,9 +828,23 @@ mod tests {
 
     #[test]
     fn vertical_and_horizontal_follow_the_direction() {
-        let row: Style = Patch::new().row().align_vertical(Align::End).align_horizontal(Align::Center).into();
-        assert_eq!((row.align_items, row.justify_content), (crate::AlignItems::FlexEnd, crate::JustifyContent::Center));
-        let col: Style = Patch::new().column().align_vertical(Align::End).align_horizontal(Align::Center).into();
-        assert_eq!((col.align_items, col.justify_content), (crate::AlignItems::Center, crate::JustifyContent::FlexEnd));
+        let row: Style = Patch::new()
+            .row()
+            .align_vertical(Align::End)
+            .align_horizontal(Align::Center)
+            .into();
+        assert_eq!(
+            (row.align_items, row.justify_content),
+            (crate::AlignItems::FlexEnd, crate::JustifyContent::Center)
+        );
+        let col: Style = Patch::new()
+            .column()
+            .align_vertical(Align::End)
+            .align_horizontal(Align::Center)
+            .into();
+        assert_eq!(
+            (col.align_items, col.justify_content),
+            (crate::AlignItems::Center, crate::JustifyContent::FlexEnd)
+        );
     }
 }

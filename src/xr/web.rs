@@ -21,12 +21,17 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 use js_sys::{Array, Float32Array, Function, Object, Promise, Reflect};
-use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{HtmlCanvasElement, WebGl2RenderingContext as Gl, WebGlFramebuffer, WebGlProgram, WebGlTexture};
+use web_sys::{
+    HtmlCanvasElement, WebGl2RenderingContext as Gl, WebGlFramebuffer, WebGlProgram, WebGlTexture,
+};
 
-use super::{HAND_JOINTS, Handedness, InputSlots, TargetRayMode, XrEvent, XrEventKind, XrEye, XrInput, XrSource};
+use super::{
+    Handedness, InputSlots, TargetRayMode, XrEvent, XrEventKind, XrEye, XrInput, XrSource,
+    HAND_JOINTS,
+};
 use crate::math::Matrix4;
 
 #[wasm_bindgen]
@@ -56,9 +61,18 @@ extern "C" {
     #[wasm_bindgen(method, js_class = "XRFrame", js_name = getPose)]
     fn get_pose(this: &XrFrame, space: &JsValue, base: &JsValue) -> Option<XrPose>;
     #[wasm_bindgen(method, catch, js_class = "XRFrame", js_name = fillPoses)]
-    fn fill_poses(this: &XrFrame, spaces: &Array, base: &JsValue, out: &Float32Array) -> Result<bool, JsValue>;
+    fn fill_poses(
+        this: &XrFrame,
+        spaces: &Array,
+        base: &JsValue,
+        out: &Float32Array,
+    ) -> Result<bool, JsValue>;
     #[wasm_bindgen(method, catch, js_class = "XRFrame", js_name = fillJointRadii)]
-    fn fill_joint_radii(this: &XrFrame, joints: &Array, out: &Float32Array) -> Result<bool, JsValue>;
+    fn fill_joint_radii(
+        this: &XrFrame,
+        joints: &Array,
+        out: &Float32Array,
+    ) -> Result<bool, JsValue>;
 
     /// An `XRPose` or `XRViewerPose` (which adds `views`).
     #[wasm_bindgen(js_name = XRPose)]
@@ -121,7 +135,9 @@ fn xr_system() -> Option<JsValue> {
 }
 
 fn call(o: &JsValue, name: &str, args: &[JsValue]) -> Result<JsValue, JsValue> {
-    let f: Function = get(o, name).dyn_into().map_err(|_| JsValue::from_str(&format!("no {name}")))?;
+    let f: Function = get(o, name)
+        .dyn_into()
+        .map_err(|_| JsValue::from_str(&format!("no {name}")))?;
     f.apply(o, &args.iter().collect())
 }
 
@@ -129,7 +145,9 @@ fn call(o: &JsValue, name: &str, args: &[JsValue]) -> Result<JsValue, JsValue> {
 fn sources_of(session: &XrSessionJs) -> Vec<JsValue> {
     let list = session.input_sources();
     let n = get(&list, "length").as_f64().unwrap_or(0.0) as u32;
-    (0..n).map(|i| Reflect::get_u32(&list, i).unwrap_or(JsValue::UNDEFINED)).collect()
+    (0..n)
+        .map(|i| Reflect::get_u32(&list, i).unwrap_or(JsValue::UNDEFINED))
+        .collect()
 }
 
 /// The canvas-to-layer copy: a texture the canvas is uploaded into, drawn
@@ -160,7 +178,11 @@ impl Blit {
             let s = gl.create_shader(kind).ok_or("no shader")?;
             gl.shader_source(&s, src);
             gl.compile_shader(&s);
-            if !gl.get_shader_parameter(&s, Gl::COMPILE_STATUS).as_bool().unwrap_or(false) {
+            if !gl
+                .get_shader_parameter(&s, Gl::COMPILE_STATUS)
+                .as_bool()
+                .unwrap_or(false)
+            {
                 return Err(gl.get_shader_info_log(&s).unwrap_or_default().into());
             }
             Ok(s)
@@ -169,7 +191,11 @@ impl Blit {
         gl.attach_shader(&program, &shader(Gl::VERTEX_SHADER, BLIT_VS)?);
         gl.attach_shader(&program, &shader(Gl::FRAGMENT_SHADER, BLIT_FS)?);
         gl.link_program(&program);
-        if !gl.get_program_parameter(&program, Gl::LINK_STATUS).as_bool().unwrap_or(false) {
+        if !gl
+            .get_program_parameter(&program, Gl::LINK_STATUS)
+            .as_bool()
+            .unwrap_or(false)
+        {
             return Err(gl.get_program_info_log(&program).unwrap_or_default().into());
         }
         let texture = gl.create_texture().ok_or("no texture")?;
@@ -189,7 +215,14 @@ impl Blit {
     /// `canvas` over the whole of `target`. The canvas's rows run top down
     /// and GL's bottom up, so the upload flips it; then the eye rectangles,
     /// both measured from the bottom, line up.
-    fn draw(&self, gl: &Gl, canvas: &HtmlCanvasElement, target: Option<&WebGlFramebuffer>, w: u32, h: u32) {
+    fn draw(
+        &self,
+        gl: &Gl,
+        canvas: &HtmlCanvasElement,
+        target: Option<&WebGlFramebuffer>,
+        w: u32,
+        h: u32,
+    ) {
         gl.bind_framebuffer(Gl::FRAMEBUFFER, target);
         gl.viewport(0, 0, w as i32, h as i32);
         gl.disable(Gl::SCISSOR_TEST);
@@ -260,7 +293,10 @@ struct Session {
 impl Session {
     fn request_frame(&mut self) {
         if let Some(f) = &self.frame_loop {
-            self.handle = Some(self.session.request_animation_frame(f.as_ref().unchecked_ref()));
+            self.handle = Some(
+                self.session
+                    .request_animation_frame(f.as_ref().unchecked_ref()),
+            );
         }
     }
 
@@ -272,9 +308,17 @@ impl Session {
             self.head = to16(&pose.transform().matrix());
             for v in pose.views().iter() {
                 let v: XrViewJs = v.unchecked_into();
-                let Some(vp) = self.layer.get_viewport(&v) else { continue };
-                if let (Some(projection), Some(pose)) = (to16(&v.projection_matrix()), to16(&v.transform().matrix())) {
-                    self.views.push(XrView { projection, pose, viewport: [vp.x(), vp.y(), vp.width(), vp.height()] });
+                let Some(vp) = self.layer.get_viewport(&v) else {
+                    continue;
+                };
+                if let (Some(projection), Some(pose)) =
+                    (to16(&v.projection_matrix()), to16(&v.transform().matrix()))
+                {
+                    self.views.push(XrView {
+                        projection,
+                        pose,
+                        viewport: [vp.x(), vp.y(), vp.width(), vp.height()],
+                    });
                 }
             }
         }
@@ -285,8 +329,17 @@ impl Session {
     /// After the app's callback: what it drew goes to the headset.
     fn finish(&mut self) {
         if self.drawn {
-            let (w, h) = (self.layer.framebuffer_width(), self.layer.framebuffer_height());
-            self.blit.draw(&self.gl, &self.canvas, self.layer.framebuffer().as_ref(), w, h);
+            let (w, h) = (
+                self.layer.framebuffer_width(),
+                self.layer.framebuffer_height(),
+            );
+            self.blit.draw(
+                &self.gl,
+                &self.canvas,
+                self.layer.framebuffer().as_ref(),
+                w,
+                h,
+            );
         }
         self.frame = None;
         self.drawn = false;
@@ -308,9 +361,15 @@ impl Session {
         if let Some(h) = self.handle.take() {
             self.session.cancel_animation_frame(h);
         }
-        let held = (self.frame_loop.take(), std::mem::take(&mut self.listeners), self.callback.take());
+        let held = (
+            self.frame_loop.take(),
+            std::mem::take(&mut self.listeners),
+            self.callback.take(),
+        );
         for (name, l) in &held.1 {
-            let _ = self.session.remove_event_listener_with_callback(name, l.as_ref().unchecked_ref());
+            let _ = self
+                .session
+                .remove_event_listener_with_callback(name, l.as_ref().unchecked_ref());
         }
         // Not dropped here: this may be running inside one of them.
         wasm_bindgen_futures::spawn_local(async move { drop(held) });
@@ -331,7 +390,10 @@ pub struct XrSession {
 impl std::fmt::Debug for XrSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = self.inner.borrow();
-        f.debug_struct("XrSession").field("mode", &s.mode).field("ended", &s.ended).finish()
+        f.debug_struct("XrSession")
+            .field("mode", &s.mode)
+            .field("ended", &s.ended)
+            .finish()
     }
 }
 
@@ -341,7 +403,9 @@ impl XrSession {
     /// is not secure (http other than localhost).
     pub async fn is_supported(mode: &str) -> bool {
         let Some(xr) = xr_system() else { return false };
-        let Ok(p) = call(&xr, "isSessionSupported", &[mode.into()]) else { return false };
+        let Ok(p) = call(&xr, "isSessionSupported", &[mode.into()]) else {
+            return false;
+        };
         match JsFuture::from(Promise::from(p)).await {
             Ok(v) => v.as_bool().unwrap_or(false),
             Err(_) => false,
@@ -362,14 +426,23 @@ impl XrSession {
     ) -> Result<XrSession, JsValue> {
         let xr = xr_system().ok_or("WebXR is not available here")?;
         let optional = Array::new();
-        for f in features.iter().map(String::as_str).chain([reference_space, "hand-tracking"]) {
+        for f in features
+            .iter()
+            .map(String::as_str)
+            .chain([reference_space, "hand-tracking"])
+        {
             if !optional.includes(&f.into(), 0) {
                 optional.push(&f.into());
             }
         }
         let init = Object::new();
         set(&init, "optionalFeatures", optional);
-        let session = JsFuture::from(Promise::from(call(&xr, "requestSession", &[mode.into(), init.into()])?)).await?;
+        let session = JsFuture::from(Promise::from(call(
+            &xr,
+            "requestSession",
+            &[mode.into(), init.into()],
+        )?))
+        .await?;
         Self::attach(session, canvas, reference_space, framebuffer_scale).await
     }
 
@@ -384,17 +457,37 @@ impl XrSession {
         framebuffer_scale: f32,
     ) -> Result<XrSession, JsValue> {
         let session: XrSessionJs = session.unchecked_into();
-        let mode = if session.environment_blend_mode().is_some_and(|m| m != "opaque") { "immersive-ar" } else { "immersive-vr" };
-        let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
+        let mode = if session
+            .environment_blend_mode()
+            .is_some_and(|m| m != "opaque")
+        {
+            "immersive-ar"
+        } else {
+            "immersive-vr"
+        };
+        let document = web_sys::window()
+            .and_then(|w| w.document())
+            .ok_or("no document")?;
         let layer_canvas: HtmlCanvasElement = document.create_element("canvas")?.unchecked_into();
         let attrs = Object::new();
         set(&attrs, "xrCompatible", true);
         set(&attrs, "antialias", false);
         set(&attrs, "depth", false);
         set(&attrs, "alpha", mode == "immersive-ar");
-        let gl: Gl = layer_canvas.get_context_with_context_options("webgl2", &attrs)?.ok_or("no WebGL2 for the layer")?.unchecked_into();
+        let gl: Gl = layer_canvas
+            .get_context_with_context_options("webgl2", &attrs)?
+            .ok_or("no WebGL2 for the layer")?
+            .unchecked_into();
         let init = Object::new();
-        set(&init, "framebufferScaleFactor", if framebuffer_scale > 0.0 { framebuffer_scale } else { 1.0 });
+        set(
+            &init,
+            "framebufferScaleFactor",
+            if framebuffer_scale > 0.0 {
+                framebuffer_scale
+            } else {
+                1.0
+            },
+        );
         set(&init, "antialias", false);
         set(&init, "depth", false);
         set(&init, "alpha", mode == "immersive-ar");
@@ -430,37 +523,53 @@ impl XrSession {
         }));
         let weak = Rc::downgrade(&inner);
         let mut listeners = vec![];
-        for name in ["select", "selectstart", "selectend", "squeeze", "squeezestart", "squeezeend"] {
+        for name in [
+            "select",
+            "selectstart",
+            "selectend",
+            "squeeze",
+            "squeezestart",
+            "squeezeend",
+        ] {
             let weak = weak.clone();
-            listeners.push((name, Listener::new(move |e: web_sys::Event| {
-                if let (Some(s), Some(kind)) = (weak.upgrade(), XrEventKind::parse(name)) {
-                    s.borrow_mut().event(kind, &get(&e, "inputSource"));
-                }
-            })));
+            listeners.push((
+                name,
+                Listener::new(move |e: web_sys::Event| {
+                    if let (Some(s), Some(kind)) = (weak.upgrade(), XrEventKind::parse(name)) {
+                        s.borrow_mut().event(kind, &get(&e, "inputSource"));
+                    }
+                }),
+            ));
         }
         let w = weak.clone();
-        listeners.push(("inputsourceschange", Listener::new(move |e: web_sys::Event| {
-            let Some(s) = w.upgrade() else { return };
-            let mut s = s.borrow_mut();
-            for src in Array::from(&get(&e, "removed")).iter() {
-                s.event(XrEventKind::Disconnected, &src);
-            }
-            for src in Array::from(&get(&e, "added")).iter() {
-                s.event(XrEventKind::Connected, &src);
-            }
-        })));
-        let w = weak.clone();
-        listeners.push(("end", Listener::new(move |_| {
-            let Some(s) = w.upgrade() else { return };
-            let on_end = {
+        listeners.push((
+            "inputsourceschange",
+            Listener::new(move |e: web_sys::Event| {
+                let Some(s) = w.upgrade() else { return };
                 let mut s = s.borrow_mut();
-                s.shut();
-                s.on_end.take()
-            };
-            if let Some(f) = on_end {
-                f();
-            }
-        })));
+                for src in Array::from(&get(&e, "removed")).iter() {
+                    s.event(XrEventKind::Disconnected, &src);
+                }
+                for src in Array::from(&get(&e, "added")).iter() {
+                    s.event(XrEventKind::Connected, &src);
+                }
+            }),
+        ));
+        let w = weak.clone();
+        listeners.push((
+            "end",
+            Listener::new(move |_| {
+                let Some(s) = w.upgrade() else { return };
+                let on_end = {
+                    let mut s = s.borrow_mut();
+                    s.shut();
+                    s.on_end.take()
+                };
+                if let Some(f) = on_end {
+                    f();
+                }
+            }),
+        ));
         for (name, l) in &listeners {
             session.add_event_listener_with_callback(name, l.as_ref().unchecked_ref())?;
         }
@@ -597,7 +706,17 @@ impl XrSession {
     /// `origin` in the world (identity for a fixed rig).
     pub fn eyes(&self, origin: &Matrix4) -> Vec<XrEye> {
         let s = self.inner.borrow();
-        s.views.iter().map(|v| XrEye::new(v.projection, origin, &Matrix4 { elements: v.pose }, v.viewport)).collect()
+        s.views
+            .iter()
+            .map(|v| {
+                XrEye::new(
+                    v.projection,
+                    origin,
+                    &Matrix4 { elements: v.pose },
+                    v.viewport,
+                )
+            })
+            .collect()
     }
 
     /// Controller events since the last call, each with its `XRInputSource`.
@@ -607,7 +726,12 @@ impl XrSession {
 
     /// The `XRInputSource` in `slot`, while connected.
     pub fn source(&self, slot: usize) -> Option<JsValue> {
-        self.inner.borrow().slots.iter().find(|(i, _)| *i == slot).map(|(_, s)| s.clone())
+        self.inner
+            .borrow()
+            .slots
+            .iter()
+            .find(|(i, _)| *i == slot)
+            .map(|(_, s)| s.clone())
     }
 
     /// The connected inputs this frame (empty outside a frame).
@@ -618,34 +742,57 @@ impl XrSession {
             if space.is_undefined() || space.is_null() {
                 return None;
             }
-            frame.get_pose(space, &s.space).and_then(|p| to16(&p.transform().matrix()))
+            frame
+                .get_pose(space, &s.space)
+                .and_then(|p| to16(&p.transform().matrix()))
         };
         let mut out = vec![];
         for (slot, src) in s.slots.iter() {
             let hand = get(src, "hand");
             let joints = (!hand.is_undefined() && !hand.is_null())
                 .then(|| {
-                    let joints: Array = HAND_JOINTS.iter().map(|n| call(&hand, "get", &[(*n).into()]).unwrap_or_default()).collect();
-                    let (poses, radii) = (Float32Array::new_with_length(16 * 25), Float32Array::new_with_length(25));
-                    frame.fill_poses(&joints, &s.space, &poses).unwrap_or(false).then(|| {
-                        let _ = frame.fill_joint_radii(&joints, &radii);
-                        (poses.to_vec(), radii.to_vec())
-                    })
+                    let joints: Array = HAND_JOINTS
+                        .iter()
+                        .map(|n| call(&hand, "get", &[(*n).into()]).unwrap_or_default())
+                        .collect();
+                    let (poses, radii) = (
+                        Float32Array::new_with_length(16 * 25),
+                        Float32Array::new_with_length(25),
+                    );
+                    frame
+                        .fill_poses(&joints, &s.space, &poses)
+                        .unwrap_or(false)
+                        .then(|| {
+                            let _ = frame.fill_joint_radii(&joints, &radii);
+                            (poses.to_vec(), radii.to_vec())
+                        })
                 })
                 .flatten();
             let pad = get(src, "gamepad");
             let (mut axes, mut buttons) = (vec![], vec![]);
             if !pad.is_undefined() && !pad.is_null() {
-                axes = Array::from(&get(&pad, "axes")).iter().map(|a| a.as_f64().unwrap_or(0.0) as f32).collect();
+                axes = Array::from(&get(&pad, "axes"))
+                    .iter()
+                    .map(|a| a.as_f64().unwrap_or(0.0) as f32)
+                    .collect();
                 buttons = Array::from(&get(&pad, "buttons"))
                     .iter()
-                    .map(|b| (get(&b, "pressed").as_bool().unwrap_or(false), get(&b, "value").as_f64().unwrap_or(0.0) as f32))
+                    .map(|b| {
+                        (
+                            get(&b, "pressed").as_bool().unwrap_or(false),
+                            get(&b, "value").as_f64().unwrap_or(0.0) as f32,
+                        )
+                    })
                     .collect();
             }
             out.push(XrInput {
                 slot,
-                handedness: Handedness::parse(&get(src, "handedness").as_string().unwrap_or_default()),
-                target_ray_mode: TargetRayMode::parse(&get(src, "targetRayMode").as_string().unwrap_or_default()),
+                handedness: Handedness::parse(
+                    &get(src, "handedness").as_string().unwrap_or_default(),
+                ),
+                target_ray_mode: TargetRayMode::parse(
+                    &get(src, "targetRayMode").as_string().unwrap_or_default(),
+                ),
                 ray: pose_of(&get(src, "targetRaySpace")),
                 grip: pose_of(&get(src, "gripSpace")),
                 joints,
@@ -671,7 +818,10 @@ impl XrSource for XrSession {
         XrSession::inputs(self)
     }
     fn take_events(&mut self) -> Vec<XrEvent> {
-        self.take_events_with_sources().into_iter().map(|(e, _)| e).collect()
+        self.take_events_with_sources()
+            .into_iter()
+            .map(|(e, _)| e)
+            .collect()
     }
     fn see_through(&self) -> bool {
         self.mode() == "immersive-ar"

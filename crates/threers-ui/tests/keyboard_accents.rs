@@ -13,7 +13,9 @@ fn french_has_its_accents() {
     let root = ui.root();
     let b = ui.add_box(root, style! { height: 20px; });
     ui.set_semantics(b, Semantics::new(Role::TextBox).label("Answer"));
-    input.on_key(b, |f: &mut TextField, _, key, m, _| !matches!(f.key(key, m, |_| true), threers_ui::FieldKey::Ignored));
+    input.on_key(b, |f: &mut TextField, _, key, m, _| {
+        !matches!(f.key(key, m, |_| true), threers_ui::FieldKey::Ignored)
+    });
     let kb = VirtualKeyboard::new(&mut ui, &mut input);
     kb.set_enabled(true);
     kb.set_layouts(&mut ui, vec![KeyboardLayout::french()]);
@@ -22,9 +24,17 @@ fn french_has_its_accents() {
     ui.layout(400.0, 700.0, &mut FixedWidthText(7.0));
     assert!(kb.showing(&ui));
     // The accents show as keys…
-    let keys: Vec<String> = ui.accessibility_tree().into_iter().filter(|a| a.role == Role::Button).map(|a| a.name).collect();
+    let keys: Vec<String> = ui
+        .accessibility_tree()
+        .into_iter()
+        .filter(|a| a.role == Role::Button)
+        .map(|a| a.name)
+        .collect();
     for k in ["ê", "ô", "œ", "«", "é", "ç"] {
-        assert!(keys.iter().any(|n| n == k), "{k} not on the keyboard: {keys:?}");
+        assert!(
+            keys.iter().any(|n| n == k),
+            "{k} not on the keyboard: {keys:?}"
+        );
     }
     // …and type as letters do.
     for k in ["ê", "t", "r", "e"] {

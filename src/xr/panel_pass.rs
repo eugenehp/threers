@@ -35,7 +35,12 @@ struct EyeBlock {
 impl EyeBlock {
     fn bytes(&self) -> &[u8] {
         // SAFETY: plain f32s, `repr(C)` with no padding.
-        unsafe { std::slice::from_raw_parts((self as *const Self).cast::<u8>(), std::mem::size_of::<Self>()) }
+        unsafe {
+            std::slice::from_raw_parts(
+                (self as *const Self).cast::<u8>(),
+                std::mem::size_of::<Self>(),
+            )
+        }
     }
 }
 
@@ -236,7 +241,12 @@ pub struct PanelPass {
     uniforms: wgpu::Buffer,
     sampler: wgpu::Sampler,
     /// The UI's texture, its size, and the bind group reading it.
-    texture: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32), wgpu::BindGroup)>,
+    texture: Option<(
+        wgpu::Texture,
+        wgpu::TextureView,
+        (u32, u32),
+        wgpu::BindGroup,
+    )>,
     /// Its smaller copies (each half the one before), remade from the
     /// whole after each drawing of the UI: a panel seen from afar or at a
     /// slant reads them, smooth, where one texture would shimmer.
@@ -249,7 +259,8 @@ pub struct PanelPass {
     /// its sample count, depth direction and whether it has a depth.
     module: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
-    in_scene: std::collections::HashMap<(u32, bool, bool), (wgpu::RenderPipeline, wgpu::RenderPipeline)>,
+    in_scene:
+        std::collections::HashMap<(u32, bool, bool), (wgpu::RenderPipeline, wgpu::RenderPipeline)>,
     hover: Option<HoverPass>,
 }
 
@@ -257,7 +268,10 @@ impl PanelPass {
     /// For targets (the canvas, a swap chain's image) and a UI texture of
     /// `format`.
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> PanelPass {
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("threers xr panel"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("threers xr panel"),
+            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("threers xr panel"),
             entries: &[
@@ -267,30 +281,54 @@ impl PanelPass {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<EyeBlock>() as u64),
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<EyeBlock>() as u64
+                        ),
                     },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
-        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("threers xr panel"), bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
+        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("threers xr panel"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
         let pipeline = |vs: &str, fs: &str, blend: Option<wgpu::BlendState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("threers xr panel"),
                 layout: Some(&pl),
-                vertex: wgpu::VertexState { module: &module, entry_point: Some(vs), compilation_options: Default::default(), buffers: &[] },
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some(vs),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
                     entry_point: Some(fs),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
                 }),
                 primitive: Default::default(),
                 depth_stencil: None,
@@ -300,7 +338,11 @@ impl PanelPass {
             })
         };
         let over = Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
-        let (room, panel, rays) = (pipeline("vs_room", "fs_room", None), pipeline("vs_panel", "fs_panel", over), pipeline("vs_ray", "fs_ray", over));
+        let (room, panel, rays) = (
+            pipeline("vs_room", "fs_room", None),
+            pipeline("vs_panel", "fs_panel", over),
+            pipeline("vs_ray", "fs_ray", over),
+        );
         PanelPass {
             room,
             panel,
@@ -348,17 +390,27 @@ impl PanelPass {
             let levels = mip_levels(size);
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("threers xr panel texture"),
-                size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: size.0,
+                    height: size.1,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: levels,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: self.ui_format(),
                 // (COPY_DST: a UI may also be uploaded, as pixels.)
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
             // Drawn into: the whole only.
-            let view = texture.create_view(&wgpu::TextureViewDescriptor { base_mip_level: 0, mip_level_count: Some(1), ..Default::default() });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: 0,
+                mip_level_count: Some(1),
+                ..Default::default()
+            });
             let all = texture.create_view(&Default::default());
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("threers xr panel"),
@@ -372,8 +424,14 @@ impl PanelPass {
                             size: wgpu::BufferSize::new(std::mem::size_of::<EyeBlock>() as u64),
                         }),
                     },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&all) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&all),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
                 ],
             });
             self.mips = Some(Mips::new(device, &texture, self.ui_format()));
@@ -425,7 +483,8 @@ impl PanelPass {
                 let distance = (plane.center - at).length();
                 // Pixels per unit of tangent across the eye's view.
                 let focal = eye.projection[0].abs() * eye.viewport[2] as f32 / 2.0;
-                (distance > 1e-3 && focal.is_finite()).then(|| focal * 2.0 * plane.half.0 / distance / panel.size.0.max(1.0))
+                (distance > 1e-3 && focal.is_finite())
+                    .then(|| focal * 2.0 * plane.half.0 / distance / panel.size.0.max(1.0))
             })
             .fold(None, |m: Option<f32>, v| Some(m.map_or(v, |m| m.max(v))))
     }
@@ -434,8 +493,24 @@ impl PanelPass {
     /// source's framebuffer): the room unless the world shows through, then
     /// the panel, with what was drawn into [`ui_target`](Self::ui_target),
     /// and `pointers`. Nothing before the panel is placed.
-    pub fn draw(&self, device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::TextureView, source: &(impl XrSource + ?Sized), panel: &Panel, pointers: &[Pointer]) {
-        self.draw_eyes(device, queue, target, source, panel, pointers, !source.see_through());
+    pub fn draw(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &wgpu::TextureView,
+        source: &(impl XrSource + ?Sized),
+        panel: &Panel,
+        pointers: &[Pointer],
+    ) {
+        self.draw_eyes(
+            device,
+            queue,
+            target,
+            source,
+            panel,
+            pointers,
+            !source.see_through(),
+        );
     }
 
     /// `scene` drawn by `renderer` in each of `source`'s eyes (see
@@ -468,10 +543,20 @@ impl PanelPass {
                 // stands in, through the projection the render used.
                 let mut local = *eye;
                 local.world = origin.invert().multiply(&eye.world);
-                local.projection = info.projection(&Matrix4 { elements: eye.projection }).elements;
-                queue.write_buffer(&self.uniforms, i as u64 * BLOCK, self.eye_block(&local, panel, pointers, false, info.color_format.is_srgb()).bytes());
+                local.projection = info
+                    .projection(&Matrix4 {
+                        elements: eye.projection,
+                    })
+                    .elements;
+                queue.write_buffer(
+                    &self.uniforms,
+                    i as u64 * BLOCK,
+                    self.eye_block(&local, panel, pointers, false, info.color_format.is_srgb())
+                        .bytes(),
+                );
                 self.scene_pipelines(&device, info);
-                let (panel_pipe, ray_pipe) = &self.in_scene[&(info.samples, info.reversed, info.depth)];
+                let (panel_pipe, ray_pipe) =
+                    &self.in_scene[&(info.samples, info.reversed, info.depth)];
                 let group = &self.texture.as_ref().expect("checked").3;
                 pass.set_bind_group(0, group, &[(i as u64 * BLOCK) as u32]);
                 pass.set_pipeline(panel_pipe);
@@ -491,30 +576,62 @@ impl PanelPass {
     ///
     /// The areas are drawn over everything: something standing between the
     /// eye and the panel does not hide its highlight.
-    pub fn draw_hover_regions(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, source: &(impl XrSource + ?Sized), panel: &Panel, areas: &[HoverArea]) -> usize {
-        let (Some(target), Some(_)) = (source.hover_target(), panel.plane()) else { return 0 };
+    pub fn draw_hover_regions(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source: &(impl XrSource + ?Sized),
+        panel: &Panel,
+        areas: &[HoverArea],
+    ) -> usize {
+        let (Some(target), Some(_)) = (source.hover_target(), panel.plane()) else {
+            return 0;
+        };
         // Each area's value this frame; the system knows them by id.
         let mut data: Vec<u8> = Vec::with_capacity(areas.len() * 32);
         let mut count = 0u32;
         for a in areas {
-            let Some(value) = source.declare_hover(a.id) else { continue };
-            for v in [a.rect[0], a.rect[1], a.rect[2], a.rect[3], a.radius, panel.size.0, panel.size.1] {
+            let Some(value) = source.declare_hover(a.id) else {
+                continue;
+            };
+            for v in [
+                a.rect[0],
+                a.rect[1],
+                a.rect[2],
+                a.rect[3],
+                a.radius,
+                panel.size.0,
+                panel.size.1,
+            ] {
                 data.extend_from_slice(&v.to_le_bytes());
             }
             data.extend_from_slice(&value.to_le_bytes());
             count += 1;
         }
         let eyes = source.eyes(&Matrix4::identity());
-        let blocks: Vec<EyeBlock> = eyes.iter().take(MAX_EYES).map(|eye| self.eye_block(eye, panel, &[], false, false)).collect();
+        let blocks: Vec<EyeBlock> = eyes
+            .iter()
+            .take(MAX_EYES)
+            .map(|eye| self.eye_block(eye, panel, &[], false, false))
+            .collect();
         let hover = self.hover.get_or_insert_with(|| HoverPass::new(device));
         let pipeline = hover.pipeline(device, target.format).clone();
         for (i, b) in blocks.iter().enumerate() {
             queue.write_buffer(&hover.uniforms, i as u64 * BLOCK, b.bytes());
         }
         let need = (data.len() as u64).max(32);
-        if hover.instances.as_ref().is_none_or(|(_, size)| *size < need) {
+        if hover
+            .instances
+            .as_ref()
+            .is_none_or(|(_, size)| *size < need)
+        {
             let size = need.next_power_of_two();
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("threers xr hover areas"), size, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("threers xr hover areas"),
+                size,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
             hover.instances = Some((buffer, size));
         }
         let (buffer, _) = hover.instances.as_ref().expect("made above");
@@ -524,7 +641,10 @@ impl PanelPass {
         // The eyes' viewports are in the framebuffer; the target may be
         // another size.
         let fb = source.framebuffer_size();
-        let (sx, sy) = (target.size.0 as f32 / fb.0.max(1) as f32, target.size.1 as f32 / fb.1.max(1) as f32);
+        let (sx, sy) = (
+            target.size.0 as f32 / fb.0.max(1) as f32,
+            target.size.1 as f32 / fb.1.max(1) as f32,
+        );
         let mut encoder = device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -533,7 +653,10 @@ impl PanelPass {
                     view: &target.view,
                     depth_slice: None,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -544,8 +667,15 @@ impl PanelPass {
                 pass.set_pipeline(&pipeline);
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 for (i, eye) in eyes.iter().take(MAX_EYES).enumerate() {
-                    let Some((x, top, w, h)) = top_left_viewport(eye.viewport, fb) else { continue };
-                    let (x, top, w, h) = ((x as f32 * sx) as u32, (top as f32 * sy) as u32, ((w as f32 * sx) as u32).max(1), ((h as f32 * sy) as u32).max(1));
+                    let Some((x, top, w, h)) = top_left_viewport(eye.viewport, fb) else {
+                        continue;
+                    };
+                    let (x, top, w, h) = (
+                        (x as f32 * sx) as u32,
+                        (top as f32 * sy) as u32,
+                        ((w as f32 * sx) as u32).max(1),
+                        ((h as f32 * sy) as u32).max(1),
+                    );
                     if x + w > target.size.0 || top + h > target.size.1 {
                         continue;
                     }
@@ -566,41 +696,68 @@ impl PanelPass {
         let (module, layout, format) = (&self.module, &self.pipeline_layout, info.color_format);
         let (samples, reversed, depth) = (info.samples, info.reversed, info.depth);
         let compare = info.depth_compare();
-        self.in_scene.entry((samples, reversed, depth)).or_insert_with(|| {
-            let make = |vs: &str, fs: &str, write: bool| {
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some("threers xr panel in scene"),
-                    layout: Some(layout),
-                    vertex: wgpu::VertexState { module, entry_point: Some(vs), compilation_options: Default::default(), buffers: &[] },
-                    fragment: Some(wgpu::FragmentState {
-                        module,
-                        entry_point: Some(fs),
-                        compilation_options: Default::default(),
-                        targets: &[Some(wgpu::ColorTargetState { format, blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })],
-                    }),
-                    primitive: Default::default(),
-                    depth_stencil: depth.then(|| wgpu::DepthStencilState {
-                        format: crate::renderer::OverlayInfo::DEPTH_FORMAT,
-                        depth_write_enabled: Some(write),
-                        depth_compare: Some(compare),
-                        stencil: Default::default(),
-                        bias: Default::default(),
-                    }),
-                    multisample: wgpu::MultisampleState { count: samples, ..Default::default() },
-                    multiview_mask: None,
-                    cache: None,
-                })
-            };
-            // The panel hides what is behind it; a ray only hides nothing.
-            (make("vs_panel", "fs_panel", true), make("vs_ray", "fs_ray", false))
-        });
+        self.in_scene
+            .entry((samples, reversed, depth))
+            .or_insert_with(|| {
+                let make = |vs: &str, fs: &str, write: bool| {
+                    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: Some("threers xr panel in scene"),
+                        layout: Some(layout),
+                        vertex: wgpu::VertexState {
+                            module,
+                            entry_point: Some(vs),
+                            compilation_options: Default::default(),
+                            buffers: &[],
+                        },
+                        fragment: Some(wgpu::FragmentState {
+                            module,
+                            entry_point: Some(fs),
+                            compilation_options: Default::default(),
+                            targets: &[Some(wgpu::ColorTargetState {
+                                format,
+                                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                                write_mask: wgpu::ColorWrites::ALL,
+                            })],
+                        }),
+                        primitive: Default::default(),
+                        depth_stencil: depth.then(|| wgpu::DepthStencilState {
+                            format: crate::renderer::OverlayInfo::DEPTH_FORMAT,
+                            depth_write_enabled: Some(write),
+                            depth_compare: Some(compare),
+                            stencil: Default::default(),
+                            bias: Default::default(),
+                        }),
+                        multisample: wgpu::MultisampleState {
+                            count: samples,
+                            ..Default::default()
+                        },
+                        multiview_mask: None,
+                        cache: None,
+                    })
+                };
+                // The panel hides what is behind it; a ray only hides nothing.
+                (
+                    make("vs_panel", "fs_panel", true),
+                    make("vs_ray", "fs_ray", false),
+                )
+            });
     }
 
     /// One eye's uniforms: its view and projection, the panel, the pointers.
-    fn eye_block(&self, eye: &super::XrEye, panel: &Panel, pointers: &[Pointer], room: bool, srgb: bool) -> EyeBlock {
+    fn eye_block(
+        &self,
+        eye: &super::XrEye,
+        panel: &Panel,
+        pointers: &[Pointer],
+        room: bool,
+        srgb: bool,
+    ) -> EyeBlock {
         let plane = panel.plane().expect("a placed panel");
         let v4 = |v: Vector3, w: f32| [v.x, v.y, v.z, w];
-        let view_proj = Matrix4 { elements: eye.projection }.multiply(&eye.world.invert());
+        let view_proj = Matrix4 {
+            elements: eye.projection,
+        }
+        .multiply(&eye.world.invert());
         let e = &eye.world.elements;
         let mut b = EyeBlock {
             view_proj: view_proj.elements,
@@ -623,12 +780,32 @@ impl PanelPass {
         b
     }
 
-    fn draw_eyes(&self, device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::TextureView, source: &(impl XrSource + ?Sized), panel: &Panel, pointers: &[Pointer], room: bool) {
-        let (Some((_, _, _, group)), Some(_)) = (&self.texture, panel.plane()) else { return };
+    fn draw_eyes(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &wgpu::TextureView,
+        source: &(impl XrSource + ?Sized),
+        panel: &Panel,
+        pointers: &[Pointer],
+        room: bool,
+    ) {
+        let (Some((_, _, _, group)), Some(_)) = (&self.texture, panel.plane()) else {
+            return;
+        };
         self.update_mips(device, queue);
-        let (eyes, fb, see_through) = (source.eyes(&Matrix4::identity()), source.framebuffer_size(), !room);
+        let (eyes, fb, see_through) = (
+            source.eyes(&Matrix4::identity()),
+            source.framebuffer_size(),
+            !room,
+        );
         for (i, eye) in eyes.iter().take(MAX_EYES).enumerate() {
-            queue.write_buffer(&self.uniforms, i as u64 * BLOCK, self.eye_block(eye, panel, pointers, room, self.format.is_srgb()).bytes());
+            queue.write_buffer(
+                &self.uniforms,
+                i as u64 * BLOCK,
+                self.eye_block(eye, panel, pointers, room, self.format.is_srgb())
+                    .bytes(),
+            );
         }
         let mut encoder = device.create_command_encoder(&Default::default());
         {
@@ -638,7 +815,10 @@ impl PanelPass {
                     view: target,
                     depth_slice: None,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -646,7 +826,9 @@ impl PanelPass {
                 multiview_mask: None,
             });
             for (i, eye) in eyes.iter().take(MAX_EYES).enumerate() {
-                let Some((x, top, w, h)) = top_left_viewport(eye.viewport, fb) else { continue };
+                let Some((x, top, w, h)) = top_left_viewport(eye.viewport, fb) else {
+                    continue;
+                };
                 pass.set_viewport(x as f32, top as f32, w as f32, h as f32, 0.0, 1.0);
                 pass.set_scissor_rect(x, top, w, h);
                 pass.set_bind_group(0, group, &[(i as u64 * BLOCK) as u32]);
@@ -706,16 +888,28 @@ struct Mips {
 
 impl Mips {
     fn new(device: &wgpu::Device, texture: &wgpu::Texture, format: wgpu::TextureFormat) -> Mips {
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("threers xr panel copies"), source: wgpu::ShaderSource::Wgsl(MIP_SHADER.into()) });
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("threers xr panel copies"),
+            source: wgpu::ShaderSource::Wgsl(MIP_SHADER.into()),
+        });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("threers xr panel copies"),
             layout: None,
-            vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fs"),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
             }),
             primitive: Default::default(),
             depth_stencil: None,
@@ -730,13 +924,28 @@ impl Mips {
             ..Default::default()
         });
         let layout = pipeline.get_bind_group_layout(0);
-        let level = |l: u32| texture.create_view(&wgpu::TextureViewDescriptor { base_mip_level: l, mip_level_count: Some(1), ..Default::default() });
+        let level = |l: u32| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: l,
+                mip_level_count: Some(1),
+                ..Default::default()
+            })
+        };
         let levels = (1..texture.mip_level_count())
             .map(|l| {
                 let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("threers xr panel copies"),
                     layout: &layout,
-                    entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&level(l - 1)) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) }],
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&level(l - 1)),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&sampler),
+                        },
+                    ],
                 });
                 (level(l), group)
             })
@@ -756,7 +965,10 @@ impl Mips {
                     view,
                     depth_slice: None,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -773,17 +985,28 @@ impl Mips {
 
 impl HoverPass {
     fn new(device: &wgpu::Device) -> HoverPass {
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("threers xr hover areas"), source: wgpu::ShaderSource::Wgsl(HOVER_SHADER.into()) });
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("threers xr hover areas"),
+            source: wgpu::ShaderSource::Wgsl(HOVER_SHADER.into()),
+        });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("threers xr hover areas"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<EyeBlock>() as u64) },
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<EyeBlock>() as u64),
+                },
                 count: None,
             }],
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("threers xr hover areas"), bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("threers xr hover areas"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("threers xr hover eyes"),
             size: BLOCK * MAX_EYES as u64,
@@ -795,13 +1018,28 @@ impl HoverPass {
             layout: &layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &uniforms, offset: 0, size: wgpu::BufferSize::new(std::mem::size_of::<EyeBlock>() as u64) }),
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &uniforms,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(std::mem::size_of::<EyeBlock>() as u64),
+                }),
             }],
         });
-        HoverPass { module, pipeline_layout, uniforms, group, pipelines: Default::default(), instances: None }
+        HoverPass {
+            module,
+            pipeline_layout,
+            uniforms,
+            group,
+            pipelines: Default::default(),
+            instances: None,
+        }
     }
 
-    fn pipeline(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
+    fn pipeline(
+        &mut self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+    ) -> &wgpu::RenderPipeline {
         let (module, layout) = (&self.module, &self.pipeline_layout);
         self.pipelines.entry(format).or_insert_with(|| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
