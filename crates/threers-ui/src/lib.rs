@@ -87,6 +87,7 @@ pub mod anchors;
 pub mod anim;
 pub mod animation;
 pub mod binding;
+pub mod border_beam;
 pub mod button;
 pub mod candle;
 #[cfg(target_arch = "wasm32")]

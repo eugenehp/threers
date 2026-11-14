@@ -430,12 +430,14 @@ impl Tailwind {
                             "active" => GroupState::Active,
                             "focus" => GroupState::Focus,
                             "focus-within" => GroupState::FocusWithin,
-                            _ => return refuse(
-                                class,
-                                format!(
+                            _ => {
+                                return refuse(
+                                    class,
+                                    format!(
                                     "`{v}:`: groups are hovered, active, focused or focused within"
                                 ),
-                            ),
+                                )
+                            }
                         };
                         if w.group.is_some() {
                             return refuse(class, "one group variant per class");

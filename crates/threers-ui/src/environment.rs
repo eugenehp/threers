@@ -220,6 +220,14 @@ pub(crate) struct Env {
     pub reflections: HashMap<NodeId, (f32, f32)>,
     /// Boxes drawn through custom shaders.
     pub effects: HashMap<NodeId, crate::shader::Effect>,
+    /// The beams on boxes' effects, as last put there (see
+    /// [`border_beam`](crate::border_beam)).
+    pub beams: HashMap<NodeId, crate::border_beam::BeamState>,
+    /// Reduced motion as the beams were last brought up to date with.
+    pub beams_still: bool,
+    /// A style or the tree changed since the beams were last brought up
+    /// to date with them.
+    pub beams_stale: bool,
     /// How much the effects may animate (see [`Ui::set_animation_budget`](crate::Ui::set_animation_budget)).
     pub budget: crate::shader::AnimationBudget,
     /// The animated effects' rates under it, frames a second (infinite:

@@ -306,9 +306,11 @@ fn signature(source: &str) -> Result<(String, Vec<Param>), String> {
                 ("color", 4) => ParamKind::Color,
                 ("time", 1) => ParamKind::Time,
                 ("size", 2) => ParamKind::Size,
-                ("color" | "time" | "size", _) => return Err(format!(
+                ("color" | "time" | "size", _) => {
+                    return Err(format!(
                     "`{pname}` is filled in: color is a vec4<f32>, time an f32, size a vec2<f32>"
-                )),
+                ))
+                }
                 _ => {
                     if slot as usize == MAX_ARGS {
                         return Err(format!("more than {MAX_ARGS} arguments"));
@@ -372,6 +374,10 @@ pub struct Effect {
     /// How what it makes is put over what is behind the box (from the box's
     /// `mix-blend-mode`).
     pub blend: crate::BlendMode,
+    /// An animated effect's last moment, in seconds on the UI's clock: from
+    /// then on it is drawn as it was then and asks for no frames (a fade
+    /// that has finished). `None` runs for as long as it shows.
+    pub until: Option<f32>,
 }
 
 impl Effect {
@@ -382,6 +388,7 @@ impl Effect {
             values: [[0.0; 4]; MAX_ARGS],
             overflow: 0.0,
             blend: crate::BlendMode::Normal,
+            until: None,
         }
     }
 
@@ -402,9 +409,21 @@ impl Effect {
         }
     }
 
+    /// The argument `name`, padded to four; `None` when the shader has none
+    /// by that name.
+    pub fn get(&self, name: &str) -> Option<[f32; 4]> {
+        self.shader.slot(name).map(|slot| self.values[slot])
+    }
+
     /// With room to draw `px` UI pixels past the box on every side.
     pub fn overflow(mut self, px: f32) -> Effect {
         self.overflow = px.max(0.0);
+        self
+    }
+
+    /// Held still from `seconds` on the UI's clock (see the field `until`).
+    pub fn until(mut self, seconds: f32) -> Effect {
+        self.until = Some(seconds);
         self
     }
 
@@ -495,6 +514,12 @@ impl Ui {
         self.env.repaint.set(true);
     }
 
+    /// Whether `effect` changes from frame to frame now: it takes the time
+    /// and has not been held still.
+    fn runs(&self, effect: &Effect) -> bool {
+        effect.shader.animated() && effect.until.is_none_or(|t| (self.clock as f32) < t)
+    }
+
     /// Whether a box on screen has an animated effect, so frames must keep
     /// coming.
     pub(crate) fn effects_animate(&self) -> bool {
@@ -525,7 +550,7 @@ impl Ui {
         self.env
             .effects
             .iter()
-            .filter(|(n, e)| e.shader.animated() && self.shows(**n))
+            .filter(|(n, e)| self.runs(e) && self.shows(**n))
             .filter_map(|(n, _)| {
                 let rate = self
                     .env
@@ -554,7 +579,15 @@ impl Ui {
             .copied()
             .unwrap_or(f32::INFINITY);
         let clock = self.clock as f32;
-        if rate.is_infinite() {
+        let until = self
+            .env
+            .effects
+            .get(&node)
+            .and_then(|e| e.until)
+            .unwrap_or(f32::INFINITY);
+        if clock >= until {
+            until
+        } else if rate.is_infinite() {
             clock
         } else if rate <= 0.0 {
             self.env
@@ -577,7 +610,7 @@ impl Ui {
             .env
             .effects
             .iter()
-            .filter(|(n, e)| e.shader.animated() && self.shows(**n))
+            .filter(|(n, e)| self.runs(e) && self.shows(**n))
             .map(|(&n, _)| {
                 let r = self.rect(n);
                 (n, r.width * r.height, r.width.min(r.height))

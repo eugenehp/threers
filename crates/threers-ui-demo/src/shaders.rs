@@ -5,6 +5,7 @@
 //! flag and a glitch — some following the pointer, some the time, some a
 //! slider.
 
+use threers_ui::border_beam::{BeamPalette, BeamStyle};
 use threers_ui::environment::Token;
 use threers_ui::input::Input;
 use threers_ui::pickers::slider;
@@ -47,11 +48,18 @@ pub struct Shaders {
     pixels: NodeId,
     burn: NodeId,
     last: (f32, f32, f32),
+    /// The border beam playground's card, and its settings as last put on.
+    beam: NodeId,
+    beam_last: BeamKnobs,
 }
 
 impl Shaders {
     /// The sliders' values onto the cards' effects, when they changed.
     pub fn update(&mut self, ui: &mut Ui, s: &State) {
+        if s.beam != self.beam_last {
+            self.beam_last = s.beam;
+            ui.set_border_beam(self.beam, s.beam.style());
+        }
         let now = (s.shader_split, s.shader_cell, s.shader_burn);
         if now == self.last {
             return;
@@ -61,6 +69,186 @@ impl Shaders {
         ui.set_effect_arg(self.pixels, "cell", now.1);
         ui.set_effect_arg(self.burn, "progress", now.2);
     }
+}
+
+/// The border beam playground's settings, as its sliders and buttons
+/// leave them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BeamKnobs {
+    pub speed: f32,
+    pub width: f32,
+    pub count: f32,
+    pub angle: f32,
+    pub length: f32,
+    pub glow: f32,
+    pub intensity: f32,
+    /// Of `BeamPalette::NAMED`.
+    pub palette: usize,
+    pub reverse: bool,
+}
+
+impl Default for BeamKnobs {
+    fn default() -> Self {
+        let b = BeamStyle::default();
+        Self {
+            speed: b.speed,
+            width: b.width,
+            count: 1.0,
+            angle: 0.0,
+            length: b.length,
+            glow: b.glow,
+            intensity: b.intensity,
+            palette: 0,
+            reverse: false,
+        }
+    }
+}
+
+impl BeamKnobs {
+    fn style(&self) -> BeamStyle {
+        let b = BeamStyle::default()
+            .speed(self.speed)
+            .width(self.width)
+            .count(self.count.round() as u8)
+            .angle(self.angle)
+            .length(self.length)
+            .glow(self.glow)
+            .intensity(self.intensity)
+            .palette(BeamPalette::NAMED[self.palette % BeamPalette::NAMED.len()].1);
+        if self.reverse {
+            b.reversed()
+        } else {
+            b
+        }
+    }
+}
+
+/// Beams on boxes: ones put on as styles (CSS, a hover style, Tailwind
+/// classes), and a playground whose sliders set every setting. The
+/// playground's card, to restyle when they move.
+fn beams(ui: &mut Ui, input: &mut Input<State>, state: &State, page: NodeId) -> NodeId {
+    let g = group(ui, page, "Border beams", "Light running round any box's border: a style property like any other, so it goes on with style!, a hover or focus style, or Tailwind classes, following the box's own corners. Hover the button and the outlined card.");
+    let row = ui.add_box(
+        g,
+        style! { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; },
+    );
+    let label = |ui: &mut Ui, parent: NodeId, s: &str| {
+        let t = ui.add_box(
+            parent,
+            style! { font-size: 12px; font-family: monospace; color: #e8e8ea; white-space: pre; },
+        );
+        ui.add_text(t, s);
+    };
+    // CSS.
+    let css = ui.add_box(
+        row,
+        style! {
+            width: 220px; height: 96px; padding: 14px; box-sizing: border-box;
+            border-radius: 20px; background: #1c1c1c; border: 1px solid rgba(255, 255, 255, 0.08);
+            border-beam: large;
+        },
+    );
+    label(ui, css, "border-beam: large;");
+    // Tailwind, on the whole time and faster on hover.
+    let tw = ui.add_tw(row, "w-[220px] h-[96px] p-3.5 rounded-xl bg-[#1c1c1c] border border-white/10 beam beam-spectrum beam-reverse beam-w-2 hover:beam-speed-300");
+    label(
+        ui,
+        tw,
+        "beam beam-spectrum\nbeam-reverse beam-w-2\nhover:beam-speed-300",
+    );
+    // Only while hovered: an outlined card, and a button of the toolkit's.
+    let hover = ui.add_tw(row, "w-[220px] h-[96px] p-3.5 rounded-3xl bg-[#1c1c1c] border border-white/10 hover:beam hover:beam-sunset hover:beam-count-2");
+    label(
+        ui,
+        hover,
+        "hover:beam\nhover:beam-sunset\nhover:beam-count-2",
+    );
+    let b = threers_ui::button::button(
+        ui,
+        input,
+        row,
+        "Hover me",
+        threers_ui::button::ButtonRole::Normal,
+        |_, _| {},
+    );
+    ui.hover_style(b, "border-beam: small neon; border-beam-width: 2px");
+    // A search bar's line, and a round icon.
+    let search = ui.add_tw(row, "w-[280px] h-12 px-5 flex items-center rounded-full bg-[#1c1c1c] border border-white/10 beam-line beam-neon");
+    label(ui, search, "Search      beam-line beam-neon");
+    let icon = ui.add_tw(row, "w-14 h-14 rounded-full bg-[#1c1c1c] border border-white/10 beam-sm beam-cyan-400 beam-count-3 beam-length-25");
+    ui.set_semantics(
+        icon,
+        Semantics::new(Role::Image).label("A round icon with three comets"),
+    );
+
+    // The playground: every setting on a slider.
+    let play = ui.add_box(
+        g,
+        style! { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; },
+    );
+    let card = ui.add_box(
+        play,
+        style! {
+            width: 300px; height: 180px; padding: 16px; box-sizing: border-box;
+            border-radius: 24px; background: #1c1c1c; border: 1px solid rgba(255, 255, 255, 0.08);
+        },
+    );
+    label(ui, card, "Playground");
+    ui.set_border_beam(card, state.beam.style());
+    let knobs = ui.add_box(play, style! { display: grid; grid-template-columns: 80px 260px; column-gap: 12px; row-gap: 6px; align-items: center; });
+    use threers_ui::binding;
+    for (name, value, range, step) in [
+        ("Speed", binding!(|s: State| s.beam.speed), 0.0..=4.0, 0.05),
+        ("Width", binding!(|s: State| s.beam.width), 0.0..=8.0, 0.25),
+        ("Comets", binding!(|s: State| s.beam.count), 1.0..=6.0, 1.0),
+        ("Angle", binding!(|s: State| s.beam.angle), 0.0..=360.0, 5.0),
+        (
+            "Length",
+            binding!(|s: State| s.beam.length),
+            0.05..=0.9,
+            0.01,
+        ),
+        ("Glow", binding!(|s: State| s.beam.glow), 0.0..=48.0, 1.0),
+        (
+            "Intensity",
+            binding!(|s: State| s.beam.intensity),
+            0.0..=1.0,
+            0.05,
+        ),
+    ] {
+        let l = ui.add_box(knobs, style! { font-size: 12px; });
+        ui.add_text(l, name);
+        slider(ui, input, state, knobs, name, value, range, step);
+    }
+    let l = ui.add_box(knobs, style! { font-size: 12px; });
+    ui.add_text(l, "Colours");
+    let swatches = ui.add_box(knobs, style! { display: flex; flex-wrap: wrap; gap: 6px; });
+    for (i, (name, _)) in BeamPalette::NAMED.iter().enumerate() {
+        threers_ui::button::button(
+            ui,
+            input,
+            swatches,
+            name,
+            threers_ui::button::ButtonRole::Normal,
+            move |s: &mut State, _| {
+                s.beam.palette = i;
+            },
+        );
+    }
+    let l = ui.add_box(knobs, style! { font-size: 12px; });
+    ui.add_text(l, "Direction");
+    let dir = ui.add_box(knobs, style! { display: flex; });
+    threers_ui::button::button(
+        ui,
+        input,
+        dir,
+        "Reverse",
+        threers_ui::button::ButtonRole::Normal,
+        |s: &mut State, _| {
+            s.beam.reverse = !s.beam.reverse;
+        },
+    );
+    card
 }
 
 /// The source the page shows, as it is written in this file.
@@ -430,6 +618,8 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, page: NodeId)
         slider(ui, input, state, sliders, label, value, range, step);
     }
 
+    let beam = beams(ui, input, state, page);
+
     // How one of them is written.
     let src = group(ui, page, "Writing one", "A shader is a WGSL function: the position first, then what it wants filled in (color, time, size) and its own arguments, set by name. layer(q) reads the box anywhere.");
     let code = ui.add_box(src, style! { font-family: monospace; font-size: 12px; white-space: pre; padding: 12px; border-radius: 8px; overflow: auto; line-height: 18px; });
@@ -441,5 +631,7 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, page: NodeId)
         pixels: pix,
         burn: burnt,
         last: (state.shader_split, state.shader_cell, state.shader_burn),
+        beam,
+        beam_last: state.beam,
     }
 }

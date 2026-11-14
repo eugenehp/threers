@@ -361,6 +361,7 @@ impl Ui {
     /// out, so never cleaned) and still have clean ancestors above it.
     pub(crate) fn touch(&mut self, id: NodeId) {
         self.invalidate_hits();
+        self.env.beams_stale = true;
         let mut at = Some(id.0);
         while let Some(i) = at {
             let n = &mut self.nodes[i];
@@ -380,6 +381,7 @@ impl Ui {
     /// not where they go.
     pub(crate) fn touch_paint(&mut self) {
         self.invalidate_hits();
+        self.env.beams_stale = true;
         self.env.repaint.set(true);
     }
 
@@ -883,6 +885,12 @@ impl Ui {
     /// through the tree's methods count; a [`TextMeasure`] that starts
     /// measuring differently does not — call [`Ui::invalidate_layout`].
     pub fn layout(&mut self, width: f32, height: f32, text: &mut dyn TextMeasure) {
+        // Beams follow their styles: put on, changed or fading out.
+        if self.env.beams_stale || self.env.beams_still != self.env.reduce_motion {
+            self.env.beams_stale = false;
+            self.env.beams_still = self.env.reduce_motion;
+            self.sync_beams();
+        }
         // A frame is coming: what asked for a repaint gets it.
         self.env.repaint.set(false);
         if self.pass > 0 && !self.nodes[0].dirty && self.viewport == (width, height) {

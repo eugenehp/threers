@@ -332,6 +332,54 @@ impl Placement {
 
 /// A colour as CSS, to a thousandth of a channel step: exact for colours
 /// given in hex, and close for `oklch(…)`.
+/// `beam-*` (see [`border_beam`](crate::border_beam)): the
+/// `border-beam` longhands it sets.
+fn beam(tw: &Tailwind, v: &str) -> Option<Vec<(&'static str, Val)>> {
+    let one = |name: &'static str, value: String| Some(vec![(name, Val::Text(value))]);
+    // A number with a unit, or an arbitrary value as it is.
+    let unit = |v: &str, scale: f32, unit: &str| -> Option<String> {
+        match arbitrary(v) {
+            Some(a) => Some(a),
+            None => Some(format!("{}{unit}", v.parse::<f32>().ok()? * scale)),
+        }
+    };
+    match v {
+        "" | "lg" => return one("border-beam-kind", "large".into()),
+        "sm" => return one("border-beam-kind", "small".into()),
+        "line" => return one("border-beam-kind", "line".into()),
+        "none" => return one("border-beam", "none".into()),
+        "reverse" => return one("border-beam-direction", "counter-clockwise".into()),
+        "top" | "bottom" | "left" | "right" => return one("border-beam-edge", v.into()),
+        _ => {}
+    }
+    let settings: [(&str, &'static str, f32, &str); 9] = [
+        ("speed-", "border-beam-speed", 0.01, ""),
+        ("duration-", "border-beam-duration", 1.0, "ms"),
+        ("w-", "border-beam-width", 1.0, "px"),
+        ("length-", "border-beam-length", 1.0, "%"),
+        ("glow-", "border-beam-glow", 1.0, "px"),
+        ("intensity-", "border-beam-intensity", 1.0, "%"),
+        ("angle-", "border-beam-angle", 1.0, "deg"),
+        ("count-", "border-beam-count", 1.0, ""),
+        ("fade-", "border-beam-fade", 1.0, "ms"),
+    ];
+    for (prefix, name, scale, u) in settings {
+        if let Some(rest) = v.strip_prefix(prefix) {
+            return one(name, unit(rest, scale, u)?);
+        }
+    }
+    if crate::border_beam::BeamPalette::named(v).is_some() {
+        return one("border-beam-colors", v.into());
+    }
+    if let Some(a) = arbitrary(v) {
+        return one("border-beam-colors", a);
+    }
+    Some(vec![(
+        "border-beam-colors",
+        Val::paint(&[tw.paint(v)?], |c| css_color(c[0])),
+    )])
+}
+
 pub(super) fn css_color(c: Rgba) -> String {
     let ch = |v: f32| (v.clamp(0.0, 1.0) * 255_000.0).round() / 1000.0;
     format!(
@@ -511,6 +559,7 @@ const ROOTS: &[&str] = &[
     "border-s",
     "border-e",
     "rounded",
+    "beam",
     "shadow",
     "ring",
     "ring-offset",
@@ -999,6 +1048,11 @@ pub(super) fn utility(
                     g.border_color = true;
                 } else {
                     return None;
+                }
+            }
+            "beam" => {
+                for (name, value) in beam(tw, v)? {
+                    emit(name, value);
                 }
             }
             "rounded" => {

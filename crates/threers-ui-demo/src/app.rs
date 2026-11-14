@@ -66,6 +66,8 @@ pub struct State {
     pub shader_split: f32,
     pub shader_cell: f32,
     pub shader_burn: f32,
+    /// The Shaders page's border beam playground.
+    pub beam: crate::shaders::BeamKnobs,
     /// The Progress page's slider.
     pub progress: f32,
     /// Whether the Progress page's controls are drawn solid.
@@ -346,6 +348,7 @@ impl App {
             shader_split: 14.0,
             shader_cell: 6.0,
             shader_burn: 0.35,
+            beam: Default::default(),
             progress: 0.62,
             progress_solid: true,
             toolkit_count: 41,

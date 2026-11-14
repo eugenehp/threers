@@ -898,6 +898,10 @@ name = "ui_indicators_gpu"
 required-features = ["ui"]
 
 [[test]]
+name = "ui_border_beam_gpu"
+required-features = ["ui"]
+
+[[test]]
 name = "render_patches"
 required-features = ["render"]
 

@@ -100,7 +100,7 @@ fn normalize(text: &str) -> String {
 }
 
 /// Splits a value at top-level whitespace (not inside parentheses).
-fn words(v: &str) -> Vec<&str> {
+pub(crate) fn words(v: &str) -> Vec<&str> {
     let (mut out, mut depth, mut start) = (vec![], 0, None);
     for (i, c) in v.char_indices() {
         match c {
@@ -140,7 +140,7 @@ pub fn length(v: &str) -> Option<Length> {
 }
 
 /// A CSS time, `300ms` or `1.5s`, in seconds.
-fn seconds(v: &str) -> Option<f32> {
+pub(crate) fn seconds(v: &str) -> Option<f32> {
     let v = v.trim();
     let t = if let Some(ms) = v.strip_suffix("ms") {
         ms.trim().parse::<f32>().ok()? / 1000.0
@@ -150,7 +150,7 @@ fn seconds(v: &str) -> Option<f32> {
     (t >= 0.0 && t.is_finite()).then_some(t)
 }
 
-fn px(v: &str) -> Option<f32> {
+pub(crate) fn px(v: &str) -> Option<f32> {
     match length(v)? {
         Length::Px(p) => Some(p),
         _ => None,
@@ -974,6 +974,7 @@ pub fn try_apply(s: &mut Style, name: &str, value: &str) -> bool {
                     }
                 }
             }
+            n if n.starts_with("border-beam") => crate::border_beam::css(s, n, v)?,
             _ => {
                 let (base, side) = name.rsplit_once('-')?;
                 match base {

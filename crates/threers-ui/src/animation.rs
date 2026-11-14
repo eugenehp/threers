@@ -264,6 +264,7 @@ impl Ui {
         let sprung = self.step_springs(dt.max(0.0));
         self.step_motions();
         self.step_solids();
+        self.step_beams();
         self.plan_effects();
         self.animations.iter().any(|r| !self.idles(r))
             || bars

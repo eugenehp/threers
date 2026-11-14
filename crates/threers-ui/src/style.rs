@@ -698,6 +698,9 @@ pub struct Style {
     /// `pointer-events`: `false` (`none`) and the pointer passes through the
     /// box to what is under it, though not through its children (not
     /// inherited, unlike CSS: set it on each node that should let go).
+    /// `border-beam`: light running round the border (see
+    /// [`border_beam`](crate::border_beam)).
+    pub border_beam: Option<crate::border_beam::BeamStyle>,
     pub pointer_events: bool,
     /// `user-select` (see [`UserSelect`]).
     pub user_select: UserSelect,
@@ -788,6 +791,7 @@ impl Default for Style {
             cursor: Cursor::Auto,
             object_fit: ObjectFit::Fill,
             pointer_events: true,
+            border_beam: None,
             user_select: UserSelect::Auto,
             line_clamp: None,
             scrollbar: Scrollbar::None,
@@ -825,6 +829,7 @@ impl Style {
         let mut o = other.clone();
         o.border_color = self.border_color;
         o.background = self.background;
+        o.border_beam = self.border_beam;
         o.color = self.color;
         o.color_set = self.color_set;
         o.opacity = self.opacity;
