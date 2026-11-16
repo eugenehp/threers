@@ -75,7 +75,7 @@ cargo run --release -p threers-video --example export_vp9 -- --out /tmp/cube.web
 ```
 
 ```rust
-// Cargo.toml: threers = "0.0.12", threers-video = "0.0.12"
+// Cargo.toml: threers = "0.1.0", threers-video = "0.1.0"
 use threers::HeadlessRenderer;
 use threers_video::{export_video, VideoCodec, VideoOptions};
 

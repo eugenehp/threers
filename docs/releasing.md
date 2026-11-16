@@ -5,20 +5,20 @@ PyPI (not crates.io). See also [`docs/bindings.md`](bindings.md).
 
 | Artifact | Version | Registry | On the index (2026-11-10) |
 |---|---|---|---|
-| `threers-math` | 0.0.12 | crates.io | not yet: its first publish; `threers::math`, with no dependencies |
-| `threers-captions` | 0.0.12 | crates.io | not yet: its first publish; the caption data model, with no dependencies |
-| `threers-ui` | 0.0.12 | crates.io | not yet: its first publish; `threers::ui` without the overlay painter, on `threers-math` and `threers-captions` |
-| `threers-audio` | 0.0.12 | crates.io | not yet: its first publish; `threers::audio`, on `threers-math` |
-| `threers-codec` | 0.0.12 | crates.io | 0.0.10 |
-| `threers-softbody` | 0.0.12 | crates.io | 0.0.10; the soft-body lattice and solver (`gpu` feature: WebGPU compute) |
-| `threers` | 0.0.12 | crates.io | 0.0.10 |
-| `threers-physics` | 0.0.12 | crates.io | 0.0.10 |
-| `threers-animation` | 0.0.12 | crates.io | 0.0.1 |
-| `threers-probe` | 0.0.12 | crates.io | 0.0.2 |
-| `threers-video` | 0.0.12 | crates.io | not yet: its first publish; video export, sequences and `VideoPlayer`, on top of `threers` |
-| `@threers/threers` (npm ESM) | 0.0.12 | npm / Deno | not yet; **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
-| `threers-node` | 0.0.12 | npm | not yet; per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
-| `threers` (PyPI) | 0.0.12 | PyPI | not yet; per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
+| `threers-math` | 0.1.0 | crates.io | not yet: its first publish; `threers::math`, with no dependencies |
+| `threers-captions` | 0.1.0 | crates.io | not yet: its first publish; the caption data model, with no dependencies |
+| `threers-ui` | 0.1.0 | crates.io | not yet: its first publish; `threers::ui` without the overlay painter, on `threers-math` and `threers-captions` |
+| `threers-audio` | 0.1.0 | crates.io | not yet: its first publish; `threers::audio`, on `threers-math` |
+| `threers-codec` | 0.1.0 | crates.io | 0.0.10 |
+| `threers-softbody` | 0.1.0 | crates.io | 0.0.10; the soft-body lattice and solver (`gpu` feature: WebGPU compute) |
+| `threers` | 0.1.0 | crates.io | 0.0.10 |
+| `threers-physics` | 0.1.0 | crates.io | 0.0.10 |
+| `threers-animation` | 0.1.0 | crates.io | 0.0.1 |
+| `threers-probe` | 0.1.0 | crates.io | 0.0.2 |
+| `threers-video` | 0.1.0 | crates.io | not yet: its first publish; video export, sequences and `VideoPlayer`, on top of `threers` |
+| `@threers/threers` (npm ESM) | 0.1.0 | npm / Deno | not yet; **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
+| `threers-node` | 0.1.0 | npm | not yet; per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
+| `threers` (PyPI) | 0.1.0 | PyPI | not yet; per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
 
 Everything else under `crates/` is a demo, a bench, a binding or not ready
 for the index, and says `publish = false`: `threers-ocean`,
@@ -39,7 +39,7 @@ the same way:
 
 ```toml
 # crates/threers-physics/Cargo.toml
-threers = { path = "../..", version = "0.0.12", features = ["mesh-bvh"] }
+threers = { path = "../..", version = "0.1.0", features = ["mesh-bvh"] }
 ```
 
 A path dependency is what the workspace builds against; the `version` is what the
@@ -201,7 +201,7 @@ cargo publish -p threers-physics             # only after the first is on the in
 cargo publish -p threers-probe               # likewise
 cargo publish -p threers-animation           # after threers-physics, which it depends on
 cargo publish -p threers-video               # after threers and threers-codec
-git tag -a v0.0.12 -m 'threers 0.0.12' && git push --tags
+git tag -a v0.1.0 -m 'threers 0.1.0' && git push --tags
 
 # 7. Language packages — one script locally; CI on tag push.
 ./scripts/release-versions.sh                    # versions aligned?
@@ -209,7 +209,7 @@ git tag -a v0.0.12 -m 'threers 0.0.12' && git push --tags
 PUBLISH=1 ./scripts/release-all.sh publish     # upload (or push tag → CI)
 
 # Multi-arch npm-node + PyPI: push v* tag → .github/workflows/release-language-packages.yml
-git tag -a v0.0.12 -m 'threers 0.0.12' && git push --tags
+git tag -a v0.1.0 -m 'threers 0.1.0' && git push --tags
 ```
 
 ## One command (`scripts/release-all.sh`)
@@ -249,7 +249,7 @@ without one installs on that platform and then cannot load.
 
 ```bash
 # After crates.io publish + version bump:
-git tag v0.0.12 && git push origin v0.0.12
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
 ## npm ESM (`crates/threers-js`)

@@ -12,8 +12,8 @@ beyond `threers` (without its renderer), and it runs in the browser.
 
 ```toml
 [dependencies]
-threers = "0.0.12"
-threers-fem = "0.0.12"
+threers = "0.1.0"
+threers-fem = "0.1.0"
 ```
 
 ![An L-bracket under a tip load, coloured by von Mises stress](images/fem_bracket_stress.jpg)

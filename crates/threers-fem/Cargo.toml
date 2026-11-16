@@ -25,6 +25,10 @@ default = []
 # Element assembly, BEM matrix assembly and field evaluation across threads
 # via rayon. Native only; on wasm32 it is a no-op, as in the other crates.
 parallel = ["dep:rayon"]
+# The voxel solver's iteration on a GPU through wgpu (`voxel::solve_gpu`),
+# which falls back to the CPU without an adapter. Native only: it takes
+# threers' renderer for its wgpu.
+gpu = ["threers/render", "dep:pollster"]
 # JavaScript bindings through wasm-bindgen (`threers_fem::wasm`), for the
 # browser: `build-web.sh` builds them into web/pkg-fem.
 wasm = ["dep:wasm-bindgen"]
@@ -32,10 +36,11 @@ wasm = ["dep:wasm-bindgen"]
 [dependencies]
 # Geometry in and out (`BufferGeometry`) and colour ramps for result plots.
 # Nothing here draws, so the renderer stays out of the build.
-threers = { path = "../..", version = "0.0.12", default-features = false }
+threers = { path = "../..", version = "0.1.0", default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { version = "1.10", optional = true }
+pollster = { version = "1", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { version = "0.2", optional = true }

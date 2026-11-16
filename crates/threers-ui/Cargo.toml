@@ -30,8 +30,8 @@ accesskit = ["dep:accesskit"]
 [dependencies]
 # Easing curves for `anim`, and WCAG contrast for `a11y`; neither has
 # dependencies of its own.
-threers-math = { path = "../threers-math", version = "0.0.12" }
-threers-captions = { path = "../threers-captions", version = "0.0.12" }
+threers-math = { path = "../threers-math", version = "0.1.0" }
+threers-captions = { path = "../threers-captions", version = "0.1.0" }
 serde_json = { version = "1", optional = true }
 accesskit = { version = "0.25", optional = true }
 

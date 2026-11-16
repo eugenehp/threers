@@ -48,6 +48,10 @@ use threers::BufferGeometry;
 
 use super::{per_chunk, Material};
 use crate::vec3::V3;
+
+#[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+#[path = "voxel_gpu.rs"]
+mod gpu;
 use crate::FemError;
 
 /// A grid of cubes `res` across from `origin`, `size` cubes each way.
@@ -244,6 +248,32 @@ pub struct VoxelSolution {
 /// hold it to a symmetry plane). Held too little to stop the body moving as
 /// a whole, it does not converge.
 pub fn solve(body: &VoxelBody, material: &Material, held: &[(u32, [bool; 3])], forces: &[(u32, V3)]) -> Result<VoxelSolution, FemError> {
+    solve_on(body, material, held, forces, false)
+}
+
+/// [`solve`] with the iteration on a GPU through wgpu, many times faster on
+/// a large body: the whole conjugate gradient stays on the device and only
+/// the convergence test comes back. In single precision, so to a residual a
+/// little looser than the CPU's (see `voxel_gpu.rs`). Without the `gpu`
+/// feature or an adapter, or should the device fail, it solves on the CPU,
+/// so it always answers.
+pub fn solve_gpu(body: &VoxelBody, material: &Material, held: &[(u32, [bool; 3])], forces: &[(u32, V3)]) -> Result<VoxelSolution, FemError> {
+    solve_on(body, material, held, forces, true)
+}
+
+/// Whether [`solve_gpu`] has a device to run on.
+pub fn gpu_available() -> bool {
+    #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+    {
+        gpu::device().is_some()
+    }
+    #[cfg(not(all(feature = "gpu", not(target_arch = "wasm32"))))]
+    {
+        false
+    }
+}
+
+fn solve_on(body: &VoxelBody, material: &Material, held: &[(u32, [bool; 3])], forces: &[(u32, V3)], on_gpu: bool) -> Result<VoxelSolution, FemError> {
     material.validate()?;
     if material.anisotropic.is_some() {
         return Err(FemError::InvalidInput("voxel solver needs an isotropic material"));
@@ -309,10 +339,29 @@ pub fn solve(body: &VoxelBody, material: &Material, held: &[(u32, [bool; 3])], f
         }
         y
     };
-    let dot = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
     let precondition = |r: &[f64]| -> Vec<f64> {
         r.iter().zip(&diag).enumerate().map(|(i, (v, d))| if fixed[i] || *d == 0.0 { 0.0 } else { v / d }).collect()
     };
+    // On the device, if asked and there is one; else, or should it fail,
+    // here.
+    #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+    let on_device = if on_gpu { gpu::displacements(body, el, scale, &diag, &fixed, &f) } else { None };
+    #[cfg(not(all(feature = "gpu", not(target_arch = "wasm32"))))]
+    let on_device: Option<(Vec<f64>, usize)> = {
+        let _ = on_gpu;
+        None
+    };
+    let (x, iterations) = match on_device {
+        Some(found) => found,
+        None => cg(n, &product, &precondition, &f, &fixed)?,
+    };
+    stresses(body, el, material, x, iterations)
+}
+
+/// The conjugate gradient here, in double precision: `x` with `K x = f`,
+/// the held directions kept at zero; and how many iterations it took.
+fn cg(n: usize, product: &dyn Fn(&[f64]) -> Vec<f64>, precondition: &dyn Fn(&[f64]) -> Vec<f64>, f: &[f64], fixed: &[bool]) -> Result<(Vec<f64>, usize), FemError> {
+    let dot = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
     let mut x = vec![0.0f64; n];
     let mut r: Vec<f64> = f.iter().enumerate().map(|(i, v)| if fixed[i] { 0.0 } else { *v }).collect();
     let mut z = precondition(&r);
@@ -339,6 +388,11 @@ pub fn solve(body: &VoxelBody, material: &Material, held: &[(u32, [bool; 3])], f
         }
         iterations += 1;
     }
+    Ok((x, iterations))
+}
+
+/// The von Mises stress at each node from the displacements `x`.
+fn stresses(body: &VoxelBody, el: &Element, material: &Material, x: Vec<f64>, iterations: usize) -> Result<VoxelSolution, FemError> {
     // The stress at each cube's corners, averaged where they meet. Over a
     // cube of side `res` the strain is the displacement over `res`.
     let to_stress = material.youngs / body.res as f64;

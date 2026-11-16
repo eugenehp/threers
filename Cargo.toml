@@ -46,7 +46,7 @@ wgpu-hal = { path = "vendor/wgpu-hal" }
 # crates and the version pins between crates repeat it literally, and
 # `scripts/release-versions.sh` checks that they agree.
 [workspace.package]
-version = "0.0.12"
+version = "0.1.0"
 
 [package]
 name = "threers"
@@ -325,18 +325,18 @@ wasm-full = ["captions", "openscad", "native-codec", "gif", "nurbs", "planet", "
 
 [dependencies]
 # Vectors, matrices, colours and the rest of `threers::math`; no dependencies.
-threers-math = { path = "crates/threers-math", version = "0.0.12" }
+threers-math = { path = "crates/threers-math", version = "0.1.0" }
 # Audio sources, listeners and positional audio as scene nodes (`audio`).
-threers-audio = { path = "crates/threers-audio", version = "0.0.12", optional = true }
+threers-audio = { path = "crates/threers-audio", version = "0.1.0", optional = true }
 # The caption data model (`captions`): tracks, cues, SRT/WebVTT; no dependencies.
-threers-captions = { path = "crates/threers-captions", version = "0.0.12", optional = true }
+threers-captions = { path = "crates/threers-captions", version = "0.1.0", optional = true }
 # The retained UI (`ui`), re-exported as `threers::ui`.
-threers-ui = { path = "crates/threers-ui", version = "0.0.12", optional = true }
+threers-ui = { path = "crates/threers-ui", version = "0.1.0", optional = true }
 # The codecs (`native-codec`, `native-decode`, `gif`, ...): pure Rust, no wgpu/winit.
-threers-codec = { path = "crates/threers-codec", version = "0.0.12", default-features = false, optional = true }
+threers-codec = { path = "crates/threers-codec", version = "0.1.0", default-features = false, optional = true }
 # Soft bodies that tear and regrow (`softbody`): the solver, on its own so the
 # wasm build can optimise it for speed (see `profile.release-wasm` below).
-threers-softbody = { path = "crates/threers-softbody", version = "0.0.12", features = ["gpu"], optional = true }
+threers-softbody = { path = "crates/threers-softbody", version = "0.1.0", features = ["gpu"], optional = true }
 wgpu = { version = "30", optional = true }
 bytemuck = { version = "1.16", features = ["derive"], optional = true }
 log = "0.4"

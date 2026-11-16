@@ -106,3 +106,27 @@ fn what_cannot_be_solved_says_why() {
     assert!(matches!(VoxelBody::new(&BoxGeometry::new(0.2, 0.2, 0.2), 1.0), Err(FemError::InvalidSurface(_))));
     assert!(matches!(VoxelBody::new(&BoxGeometry::new(1.0, 1.0, 1.0), 0.0), Err(FemError::InvalidInput(_))));
 }
+
+#[test]
+fn the_gpu_solves_as_the_cpu_does() {
+    // Without an adapter (or the `gpu` feature) `solve_gpu` solves on the
+    // CPU, and there is nothing to compare.
+    if !voxel::gpu_available() {
+        eprintln!("no GPU adapter: skipped");
+        return;
+    }
+    // The cantilever: 60 × 4 × 4 in 1 mm cubes, held at one end, pushed down
+    // at the other.
+    let body = VoxelBody::new(&BoxGeometry::new(60.0, 4.0, 4.0), 1.0).unwrap();
+    let (held, end) = ends(&body);
+    let push: Vec<(u32, [f64; 3])> = end.iter().map(|&n| (n, [0.0, -2.0 / end.len() as f64, 0.0])).collect();
+    let material = Material::new(1800.0, 0.3);
+    let cpu = voxel::solve(&body, &material, &clamped(held.clone()), &push).unwrap();
+    let gpu = voxel::solve_gpu(&body, &material, &clamped(held), &push).unwrap();
+    // Single precision, to a looser residual: within half a percent at the
+    // tip and in the largest stress.
+    let tip = |s: &voxel::VoxelSolution| end.iter().map(|&n| s.displacement[n as usize][1]).sum::<f64>() / end.len() as f64;
+    assert!((tip(&gpu) / tip(&cpu) - 1.0).abs() < 0.005, "tip {} against {}", tip(&gpu), tip(&cpu));
+    let most = |s: &voxel::VoxelSolution| s.stress.iter().cloned().fold(0.0, f64::max);
+    assert!((most(&gpu) / most(&cpu) - 1.0).abs() < 0.005, "stress {} against {}", most(&gpu), most(&cpu));
+}

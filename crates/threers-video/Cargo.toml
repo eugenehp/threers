@@ -34,8 +34,8 @@ learned-denoise = ["threers/learned-denoise"]
 rlx = ["threers/rlx"]
 
 [dependencies]
-threers = { path = "../..", version = "0.0.12", default-features = false, features = ["render", "audio", "captions", "native-codec", "native-decode", "gif"] }
-threers-codec = { path = "../threers-codec", version = "0.0.12", default-features = false, features = ["decode", "gif"] }
+threers = { path = "../..", version = "0.1.0", default-features = false, features = ["render", "audio", "captions", "native-codec", "native-decode", "gif"] }
+threers-codec = { path = "../threers-codec", version = "0.1.0", default-features = false, features = ["decode", "gif"] }
 log = "0.4"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

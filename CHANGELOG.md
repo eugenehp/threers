@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-11-15
+
 ### Added
 
 - **Finite and boundary elements** (new crate `threers-fem`): a
@@ -8046,7 +8048,8 @@ on, and a second crate to make things move.
 - Opt-in `mesh-bvh` and `bvh-csg` (three-mesh-bvh / three-bvh-csg parity).
 - Web shim (`THREE.*`) and parity tooling.
 
-[Unreleased]: https://github.com/eugenehp/threers/compare/v0.0.12...HEAD
+[Unreleased]: https://github.com/eugenehp/threers/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/eugenehp/threers/compare/v0.0.12...v0.1.0
 [0.0.12]: https://github.com/eugenehp/threers/compare/v0.0.10...v0.0.12
 [0.0.10]: https://github.com/eugenehp/threers/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/eugenehp/threers/compare/v0.0.8...v0.0.9
