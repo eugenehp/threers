@@ -130,3 +130,30 @@ cargo run --release --features metal --example metal_stereo   # → out/metal_st
 > which has no `RTLD_*` constants for it. It clears when the crate moves to a
 > wgpu that knows the target, or when `wgpu` becomes an optional dependency —
 > nothing in `src/metal` needs it.
+
+## RealityKit
+
+[`threers-ios`](../crates/threers-ios) hands a scene to RealityKit, entity by
+entity, on visionOS (a volume), iPhone and iPad (`ios-reality` builds, over
+the camera too) and the Mac (`mac` builds). It carries meshes, skinned and
+instanced meshes, physically based materials with their maps, the app's
+lights and its environment as an image-based light, and it writes `.usdz`
+files for AR Quick Look. See its README's
+[RealityKit](../crates/threers-ios/README.md#realitykit) section.
+
+## The fluid on Metal, and from Swift
+
+`--features metal-fluid` builds only `metal::MetalFluid`, `metal::MetalFluid3d` and what they stand on
+— no wgpu, no scene renderer — for an app that owns its `MTLDevice` and wants
+the 2D fluid on it. See [On Metal, without wgpu](fluid.md#on-metal-without-wgpu).
+
+Two static libraries with C headers carry the fluids to Swift:
+
+| crate | what | under it |
+|---|---|---|
+| [`threers-fluid2d`](../crates/threers-fluid2d) | the 2D fluid, on the app's device, into the app's command buffer if it likes | Metal only |
+| [`threers-fluid-ios`](../crates/threers-fluid-ios) | the 3D volume, drawing into a `CAMetalLayer`, with orbit, pinch and paint | Metal only |
+
+Both can be linked from a Rust static library of the app's own as `rlib`
+dependencies; their `extern "C"` symbols come through.
+

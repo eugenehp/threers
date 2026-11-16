@@ -35,7 +35,7 @@
 //! `seed` is unused because there is no `multiple_splats` here: the splats
 //! a reference needs are the ones a test chose.
 
-use super::volume::FluidConfig3d;
+use super::volume_config::FluidConfig3d;
 use super::PressureSolver;
 
 /// What can be interpolated between: the fields are scalars or vectors and

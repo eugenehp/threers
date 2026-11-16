@@ -58,7 +58,7 @@
 //! Structs and constants are global in MSL, beside whatever else the library
 //! holds: give them names of the module's own.
 
-use super::shared_shader::{parse_items, FnItem, Item};
+use super::shared_shader::{dsl_source, parse_items, FnItem, Item};
 
 /// Functions written once for both backends — what
 /// [`shader_functions!`](crate::shader_functions) returns: the source's
@@ -75,9 +75,10 @@ pub struct ShaderFunctions {
 /// [`ShaderFunctions`].
 #[macro_export]
 macro_rules! shader_functions {
-    ($($body:tt)*) => {
+    ($($body:tt)*) => {{
+        const _: () = $crate::materials::shared_shader::check_tokens(stringify!($($body)*), false);
         $crate::materials::shared_passes::ShaderFunctions::new(stringify!($($body)*))
-    };
+    }};
 }
 
 impl ShaderFunctions {
@@ -89,10 +90,8 @@ impl ShaderFunctions {
     }
 
     fn items(&self) -> Result<Vec<Item>, String> {
-        let items =
-            parse_items(&self.source).map_err(|e| e.replace("shader!", "shader_functions!"))?;
-        check_names(&items, "shader_functions!")?;
-        Ok(items)
+        let src = dsl_source(&self.source, "shader_functions!")?;
+        parse_items(&src).map_err(|e| e.replace("shader!", "shader_functions!"))
     }
 
     /// The items as WGSL, in source order.
@@ -125,9 +124,10 @@ pub struct PassShader {
 /// [`shared_passes`](crate::materials::shared_passes).
 #[macro_export]
 macro_rules! passes {
-    ($($body:tt)*) => {
+    ($($body:tt)*) => {{
+        const _: () = $crate::materials::shared_shader::check_tokens(stringify!($($body)*), false);
         $crate::materials::shared_passes::PassShader::new(stringify!($($body)*))
-    };
+    }};
 }
 
 impl PassShader {
@@ -329,8 +329,8 @@ vertex {vertex} {prefix}vs_blur(uint vid [[vertex_id]]{vertex_u}) {{
     /// The items, and the passes among them; `uniforms`, when given, must be
     /// one of the structs.
     fn parsed(&self, uniforms: Option<&str>) -> Result<(Vec<Item>, Vec<FnItem>), String> {
-        let items = parse_items(&self.source).map_err(|e| e.replace("shader!", "passes!"))?;
-        check_names(&items, "passes!")?;
+        let src = dsl_source(&self.source, "passes!")?;
+        let items = parse_items(&src).map_err(|e| e.replace("shader!", "passes!"))?;
         if let Some(name) = uniforms
             && !items
                 .iter()
@@ -352,91 +352,6 @@ vertex {vertex} {prefix}vs_blur(uint vid [[vertex_id]]{vertex_u}) {{
     }
 }
 
-/// Names Rust takes but WGSL or MSL reserves, which would otherwise fail
-/// only when the other backend compiles the shader: `restrict` is a WGSL
-/// keyword, `kernel` an MSL one.
-const RESERVED: &[&str] = &[
-    "auto",
-    "case",
-    "centroid",
-    "char",
-    "class",
-    "constant",
-    "default",
-    "delete",
-    "device",
-    "do",
-    "double",
-    "enum",
-    "explicit",
-    "extern",
-    "flat",
-    "fragment",
-    "friend",
-    "goto",
-    "half",
-    "inline",
-    "kernel",
-    "long",
-    "namespace",
-    "new",
-    "operator",
-    "packed",
-    "private",
-    "protected",
-    "public",
-    "register",
-    "restrict",
-    "sample",
-    "sampler",
-    "short",
-    "signed",
-    "sizeof",
-    "smooth",
-    "static",
-    "switch",
-    "template",
-    "texture",
-    "this",
-    "thread",
-    "threadgroup",
-    "typedef",
-    "typename",
-    "uniform",
-    "union",
-    "unsigned",
-    "vertex",
-    "virtual",
-    "volatile",
-];
-
-/// Every function, parameter and local name, against [`RESERVED`].
-fn check_names(items: &[Item], macro_name: &str) -> Result<(), String> {
-    let bad = |name: &str, what: &str| {
-        Err(format!(
-            "{macro_name}: `{name}` ({what}) is reserved in WGSL or MSL; rename it"
-        ))
-    };
-    for it in items {
-        let Item::Fn(f) = it else { continue };
-        if RESERVED.contains(&f.name.as_str()) {
-            return bad(&f.name, "a function");
-        }
-        for (p, _) in &f.params {
-            if RESERVED.contains(&p.as_str()) {
-                return bad(p, "a parameter");
-            }
-        }
-        for w in f.body.windows(2) {
-            if (w[0].is("let") || w[0].is("var"))
-                && let Some(name) = RESERVED.iter().find(|r| w[1].is(r))
-            {
-                return bad(name, "a local");
-            }
-        }
-    }
-    Ok(())
-}
 
 /// Whether the uniform block has a `texel_size`, for the vertex stages.
 fn has_texel_size(items: &[Item], uniforms: &str) -> bool {
@@ -605,16 +520,38 @@ mod tests {
     }
 
     #[test]
-    fn a_reserved_name_is_an_error() {
+    fn reserved_locals_are_renamed_and_functions_refused() {
+        // A local, a parameter and a field: renamed everywhere, consistently.
         let f = crate::shader_functions! {
-            fn widen(x: f32) -> f32 { let kernel = x * 2.0; return kernel; }
+            fn widen(half: f32) -> f32 { let kernel = half * 2.0; return kernel; }
         };
-        assert!(f.msl().unwrap_err().contains("`kernel`"));
+        let (wgsl, msl) = (f.wgsl().unwrap(), f.msl().unwrap());
+        assert!(wgsl.contains("kernel_") && wgsl.contains("half_"), "{wgsl}");
+        assert!(msl.contains("kernel_") && !msl.contains(" kernel "), "{msl}");
+        let p = crate::passes! {
+            struct P { sample: f32, a: f32, b: f32, c: f32, }
+            fn gain(i: Frag) -> vec4f { let uniform = u.sample; return tex_a(i.uv) * uniform; }
+        };
+        let w = p.wgsl("P").unwrap();
+        assert!(w.contains("sample_") && w.contains("uniform_") && !w.contains("u.sample "), "{w}");
+        // A function's name is an interface: refused, not renamed.
         let p = crate::passes! {
             struct P { gain: f32, a: f32, b: f32, c: f32, }
             fn restrict(i: Frag) -> vec4f { return tex_a(i.uv); }
         };
         assert!(p.wgsl("P").unwrap_err().contains("`restrict`"));
+    }
+
+    /// `++` and `--`, which WGSL has as statements, survive translation.
+    #[test]
+    fn increments_translate() {
+        let f = crate::shader_functions! {
+            fn count(n: u32) -> u32 { var k = 0u32; for (var i = 0u32; i < n; i++) { k++; } k--; return k; }
+        };
+        let (wgsl, msl) = (f.wgsl().unwrap(), f.msl().unwrap());
+        for src in [&wgsl, &msl] {
+            assert!(src.contains("++") && src.contains("--") && !src.contains("+ +"), "{src}");
+        }
     }
 
     /// Without a `texel_size` the vertex stages do not read the uniforms, so

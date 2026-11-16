@@ -117,9 +117,14 @@ pub(crate) static FLUID: std::sync::LazyLock<PassShader> = std::sync::LazyLock::
         // (colour, _), `value` of them. The same pass seeds both fields: into
         // velocity the colour is the pointer's motion, into dye it is a hue.
         // Summing here accumulates in f32 and rounds once, where a pass each
-        // rounded to half float in between.
+        // rounded to half float in between. A colour's alpha of one makes the
+        // splat an eraser: it takes its colour away from the dye, down to
+        // nothing and no further. Zero, which every splat but an eraser's is,
+        // leaves the sum as it was — `min(out, 0)` is the floor only when
+        // nothing was subtracted, so a velocity keeps its sign.
         fn splat(i: Frag) -> vec4f {
             var acc = vec3f(0.0);
+            var sub = vec3f(0.0);
             let n = u32(u.value);
             for (var k = 0u32; k < n; k += 1u32) {
                 let a = batch(k * 2u32);
@@ -130,11 +135,13 @@ pub(crate) static FLUID: std::sync::LazyLock<PassShader> = std::sync::LazyLock::
                 // Outside about three and a half sigma the Gaussian is under
                 // 6e-6 of its peak, below what a half-float dye can hold.
                 if (d < a.z * 12.0) {
-                    acc = acc + exp(-d / a.z) * b.rgb;
+                    let g = exp(-d / a.z);
+                    acc = acc + g * b.rgb * (1.0 - b.a);
+                    sub = sub + g * abs(b.rgb) * b.a;
                 }
             }
-            let base = tex_a(i.uv).rgb;
-            return vec4f(base + acc, 1.0);
+            let out = tex_a(i.uv).rgb + acc;
+            return vec4f(max(out - sub, min(out, vec3f(0.0))), 1.0);
         }
 
         // ------------------------------------------------------- the solver
@@ -421,6 +428,7 @@ pub(crate) static FLUID: std::sync::LazyLock<PassShader> = std::sync::LazyLock::
     }
 });
 
+#[cfg(feature = "fluid")]
 /// The frame-rate read-out, over the finished picture: WGSL's own, beside
 /// the generated module. `value` is the number; the glyphs are in
 /// `super::read_out`, shared with the volume's shader.
@@ -442,6 +450,7 @@ fn fs_overlay(i : VsOut) -> @location(0) vec4<f32> {
 "#
 );
 
+#[cfg(feature = "fluid")]
 /// The whole wgpu module: the read-out's glyphs, the passes and the overlay.
 pub(crate) fn wgsl() -> String {
     let passes = FLUID.wgsl(UNIFORMS).expect("the fluid's passes translate");

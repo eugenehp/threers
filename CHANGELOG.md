@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **RealityKit on every Apple device** (`threers-ios`). The RealityKit read-out
+  and shell (`app/Reality.swift`, `RealityScene`) are shared by the visionOS
+  volume, a new `ios-reality` build (a `RealityView` on iPhone and iPad, over
+  the camera on a device with `Request::Ar`) and a new `mac` build (a
+  RealityKit window on macOS 15), from the same `threers_ios::app!` crate.
+  The app's UI sits over the view as `Place::Screen`, and a tap is cast into
+  the scene as a ray.
+- **Higher-fidelity RealityKit scenes.** Standard and physical materials
+  carry their colour, normal, roughness, metalness, emissive, occlusion and
+  alpha maps, the alpha test, clearcoat and sheen (three.js's packed channels
+  unpacked, the UV transform applied, tangents computed in Rust). Skinned and
+  morphed meshes are posed in Rust and rewritten in place. Instanced meshes
+  use `MeshInstancesComponent` (26 on; copies before). Directional, point and
+  spot lights become RealityKit's in lux and lumens, scaled with the scene's
+  shown size. The environment map and ambient and hemisphere lights become
+  an image-based light. `App::reality_lighting` picks the room's light, the
+  app's or both, and `App::volume_drawing` lets a volume be drawn as entities
+  in depth rather than as threers' flat picture.
+- `threers_ios::write_usdz` and `threers_ios::quick_look`: the scene as a
+  `.usdz` RealityKit opens (checked against its package rules), shown in AR
+  Quick Look, a shared-space window or Preview. `tests/realitykit_usdz.rs`
+  opens it with RealityKit itself.
+
+- `math::ellipse::Ellipse`: a rotated ellipse or arc of one, with points by
+  parameter, an exact bounding box, and `flatten`, a polyline whose chords
+  stay within a given error (a uniform step, bounded through the circle of
+  the major radius).
+- `math::convex_hull_i64`: the convex hull of integer points with the
+  orientation test in `i128`, exact however far from the origin.
+- `math::geom2`, planar geometry in `f64`:
+  - `segment::Segment`: nearest points, distances, sides, crossings
+    (point or overlap).
+  - `arc::Arc`: arcs through three points or about a centre, with bounds,
+    distances and polylines within a chord error; `circumcenter`.
+  - `bezier::{Cubic, Quadratic}`: splitting, exact bounds and polylines
+    within a chord error (halved until the control points are within the
+    error of the chord).
+  - `polyline`: length, signed area, centroid, even-odd containment, points
+    at a distance, nearest points, resampling, Ramer–Douglas–Peucker
+    simplification.
+  - `outline`: circles, regular polygons, rounded and chamfered rectangles,
+    stadiums, and polylines thickened with mitred joins.
+  - `hatch::{hatch_lines, cross_hatch_lines}`: parallel lines across
+    polygons with holes, on a grid through the origin.
+  - `rtree::RTree`: a static sort-tile-recursive R-tree for overlap and
+    nearest queries.
+  - `angle`: normalising and sweep tests.
+
+- **The 2D fluid on Metal alone**: a `metal-fluid` feature that builds
+  `metal::MetalFluid` with no wgpu and no scene renderer, for an app that owns
+  its `MTLDevice`. `MetalDevice::adopt_with_shader_source` puts it on that
+  device.
+- **`threers-fluid2d`**, the 2D fluid as a C ABI static library on
+  `metal-fluid`, with a hand-written header held to the exports by a test.
+- `fluid::FluidSplat`, with `FluidSim::splat_batch` and
+  `MetalFluid::splat_batch`: splats with their own radius, and erasers — a
+  splat that takes its colour out of the dye, down to zero. One splat pass
+  serves both backends.
+- `MetalFluid::{splat_batch_on, step_on, clear_on, render_on}`: everything
+  encoded into the caller's command buffer, committing and waiting on
+  nothing. `clear` and `dye_texture` for an app that composites the dye.
+- `MetalFluid::with_formats` and `MetalFieldFormats::Narrow`: velocity in two
+  channels and the scalar fields in one, as the wgpu module stores them.
+- **The 3D fluid on Metal**: `metal::MetalFluid3d`, behind `metal-fluid`
+  with no wgpu. The wgpu module's WGSL is the only copy of the shaders — naga
+  translates it to MSL with wgpu's own bounds checks — and
+  `metal_fluid3d_matches_wgpu` finds the two pictures identical to the byte
+  under both pressure solvers and with temporal accumulation. Splats,
+  screen impulses, bursts, buoyancy, the V-cycle, empty-space skipping, the
+  read-out, `step_on`/`render_on` into a caller's command buffer, and the
+  step's GPU time from the command buffer's clock.
+- `fluid::volume_config`: the 3D configuration, quality levels, atlas,
+  memory arithmetic, impulse geometry and random bursts, shared by both
+  backends.
+- `threers-fluid-ios`: `THREERS_FLUID_PAINT` (dye into the volume under a
+  point, a tap or a stroke), `THREERS_FLUID_PAINT_COLOR` and
+  `THREERS_FLUID_AMBIENT` (the self-feeding plume, on by default).
+
+### Changed
+
+- `threers-fluid-ios` runs on `MetalFluid3d` instead of wgpu: the same C
+  ABI and header, and an app linking it no longer carries wgpu.
+- The Metal fluid's frame-rate read-out uploads its row with a blit on the
+  frame's own command buffer; `show_fps` no longer waits for every frame to
+  finish on the GPU.
+- The fullscreen-pass and texture helpers the fluid uses moved to
+  `metal::pass`, outside the scene renderer.
+- No more warnings on a plain build: the redundant `homepage` fields are gone
+  from the crates' manifests, and the renderer-only `ShaderMaterial` helpers
+  no longer warn when `render` is off.
+
 ## [0.1.0] — 2026-11-15
 
 ### Added

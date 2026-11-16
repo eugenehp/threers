@@ -1,0 +1,15 @@
+[package]
+name = "threers-font"
+version.workspace = true
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+authors = ["Eugene Hauptmann"]
+repository = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-font"
+description = "TrueType fonts as FreeType and HarfBuzz render and shape them: sfnt tables, scaled and hinted glyph outlines (a TrueType bytecode interpreter), text shaping and font matching, with no dependencies"
+keywords = ["font", "truetype", "hinting", "shaping", "glyph"]
+categories = ["text-processing", "graphics"]
+
+[lib]
+bench = false

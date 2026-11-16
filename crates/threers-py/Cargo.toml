@@ -6,7 +6,6 @@ authors = ["Eugene Hauptmann"]
 description = "Python bindings for threers — headless render, math, animation, and physics (PyO3 / maturin)"
 license = "MIT"
 repository = "https://github.com/eugenehp/threers"
-homepage = "https://github.com/eugenehp/threers"
 documentation = "https://github.com/eugenehp/threers/tree/main/crates/threers-py"
 readme = "README.md"
 keywords = ["three-js", "python", "pyo3", "wgpu", "graphics"]

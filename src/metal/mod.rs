@@ -146,40 +146,64 @@
 pub mod objc;
 
 pub mod enums;
+#[cfg(metal_backend)]
 pub mod resources;
 
 #[cfg(feature = "visionos")]
 pub mod visionos;
 
-mod composer;
+// Built with `metal-fluid` alone as well as with `metal`: the device, the
+// Objective-C glue, textures and fullscreen passes. Everything else here is
+// the scene renderer, and needs `metal` (and so wgpu's half of the crate).
 mod device;
+mod pass;
+
+#[cfg(metal_backend)]
+mod composer;
+#[cfg(metal_backend)]
 mod headless;
+#[cfg(metal_backend)]
 mod overlay;
+#[cfg(metal_backend)]
 mod pool;
+#[cfg(metal_backend)]
 mod postfx;
+#[cfg(metal_backend)]
 mod renderer;
+#[cfg(metal_backend)]
 mod surface;
+#[cfg(metal_backend)]
 mod target;
-#[cfg(feature = "ui")]
+#[cfg(all(metal_backend, feature = "ui"))]
 mod ui;
+#[cfg(metal_backend)]
 mod video;
+#[cfg(metal_backend)]
 pub mod viewport;
 
+#[cfg(metal_backend)]
 pub use composer::{MetalPostBackend, MetalPostFx};
 pub use device::{MetalDevice, MetalError};
+#[cfg(metal_backend)]
 pub(crate) use device::compile_library;
+#[cfg(metal_backend)]
 pub use headless::{MetalHeadlessBuilder, MetalHeadlessConfig, MetalHeadlessRenderer};
+#[cfg(metal_backend)]
 pub use pool::{
     MetalJob, MetalJobError, MetalRenderPool, MetalRenderPoolConfig, MetalWorker, MetalWorkerQos,
 };
+#[cfg(metal_backend)]
 pub use renderer::{
     MetalRenderStats, MetalRenderer, PassAttachments, RenderView, DEFAULT_CACHE_RETENTION,
     MAX_VIEWS,
 };
+#[cfg(metal_backend)]
 pub use postfx::{MetalBloom, MetalDownsampler, MetalSsao, MetalUpscaler, PostFxChain, SsaoSettings};
+#[cfg(metal_backend)]
 pub use surface::{MetalSurface, SurfaceFrame};
+#[cfg(metal_backend)]
 pub use target::MetalRenderTarget;
-#[cfg(feature = "ui")]
+#[cfg(all(metal_backend, feature = "ui"))]
 pub use ui::MetalUi;
 
 // Moving a renderer to another thread.
@@ -196,19 +220,32 @@ pub use ui::MetalUi;
 // `Send` and not `Sync`: a renderer's caches are `&mut` state, and two threads
 // encoding into one target would race on the GPU however Rust saw it. The
 // device is the exception, and is `Sync` too — see `device.rs`.
+#[cfg(metal_backend)]
 unsafe impl Send for MetalRenderer {}
+#[cfg(metal_backend)]
 unsafe impl Send for MetalRenderTarget {}
+#[cfg(metal_backend)]
 unsafe impl Send for MetalHeadlessRenderer {}
+#[cfg(metal_backend)]
 unsafe impl Send for MetalSurface {}
+#[cfg(metal_backend)]
 unsafe impl Send for MetalSsao {}
+#[cfg(metal_backend)]
 unsafe impl Send for MetalBloom {}
+#[cfg(metal_backend)]
 unsafe impl Send for MetalDownsampler {}
+#[cfg(metal_backend)]
 unsafe impl Send for MetalUpscaler {}
+#[cfg(metal_backend)]
 unsafe impl Send for PostFxChain {}
+#[cfg(metal_backend)]
 unsafe impl Send for postfx::PostFxPipelines {}
-#[cfg(feature = "fluid")]
+#[cfg(any(feature = "fluid", feature = "metal-fluid"))]
 unsafe impl Send for MetalFluid {}
+#[cfg(feature = "metal-fluid")]
+unsafe impl Send for MetalFluid3d {}
 
+#[cfg(metal_backend)]
 /// The hand-written part of the default library: meshes, surfaces and the
 /// post passes not generated. [`shader_source`] is the whole library,
 /// compiled by [`MetalDevice::new`].
@@ -224,6 +261,7 @@ pub const SHADER_SOURCE: &str = concat!(
 /// the post passes written once with [`passes!`](crate::passes) for both
 /// backends — bloom's threshold and blur — and the shared functions in
 /// place of their marker.
+#[cfg(metal_backend)]
 pub fn shader_source() -> &'static str {
     static SOURCE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
         let bloom = crate::renderer::bloom::BLOOM.msl("BloomParams", "bloom_").expect("bloom translates");
@@ -235,11 +273,19 @@ pub fn shader_source() -> &'static str {
     &SOURCE
 }
 
+/// With `metal-fluid` alone there is no scene renderer, and the default
+/// library is only what every Metal source starts with. The fluid's is
+/// [`fluid_shader_source`].
+#[cfg(not(metal_backend))]
+pub fn shader_source() -> &'static str {
+    "#include <metal_stdlib>\nusing namespace metal;\n"
+}
+
 /// The fluid's frame-rate read-out in MSL — the one part of the fluid's
 /// shaders written by hand. The passes are generated from the `passes!`
 /// source the wgpu module also runs; [`fluid_shader_source`] has the whole
 /// thing.
-#[cfg(feature = "fluid")]
+#[cfg(any(feature = "fluid", feature = "metal-fluid"))]
 pub const FLUID_SHADER_SOURCE: &str = include_str!("fluid.metal");
 
 /// The default library plus the fluid's, for a device that wants both.
@@ -255,7 +301,7 @@ pub const FLUID_SHADER_SOURCE: &str = include_str!("fluid.metal");
 /// Kept out of the default library because most Metal work is a scene and a
 /// post chain, and a library is compiled once per device: a caller who will
 /// never run a fluid should not pay for its twenty fragment functions.
-#[cfg(feature = "fluid")]
+#[cfg(any(feature = "fluid", feature = "metal-fluid"))]
 pub fn fluid_shader_source() -> String {
     let passes = crate::fluid::shader::FLUID
         .msl(crate::fluid::shader::UNIFORMS, "fluid_")
@@ -263,12 +309,16 @@ pub fn fluid_shader_source() -> String {
     format!("{}\n{passes}\n{FLUID_SHADER_SOURCE}", shader_source())
 }
 
-#[cfg(feature = "fluid")]
+#[cfg(any(feature = "fluid", feature = "metal-fluid"))]
 pub mod fluid;
-#[cfg(feature = "fluid")]
-pub use fluid::MetalFluid;
+#[cfg(any(feature = "fluid", feature = "metal-fluid"))]
+pub use fluid::{FluidSplat, MetalFieldFormats, MetalFluid};
+#[cfg(feature = "metal-fluid")]
+pub mod fluid3d;
+#[cfg(feature = "metal-fluid")]
+pub use fluid3d::{fluid3d_shader_source, pixel_format_rgba8, MetalFluid3d};
 
-#[cfg(test)]
+#[cfg(all(test, metal_backend))]
 mod tests {
     #[test]
     fn renderers_can_move_between_threads() {

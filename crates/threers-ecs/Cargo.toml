@@ -11,7 +11,6 @@ description = "Entities, components and systems over the threers scene graph —
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/eugenehp/threers"
-homepage = "https://github.com/eugenehp/threers"
 documentation = "https://docs.rs/threers-ecs"
 keywords = ["ecs", "game", "gamedev", "scene-graph", "three-js"]
 categories = ["game-development", "data-structures", "wasm"]

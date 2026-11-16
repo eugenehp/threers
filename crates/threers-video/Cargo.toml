@@ -6,7 +6,6 @@ rust-version = "1.99"
 license = "MIT"
 authors = ["Eugene Hauptmann"]
 repository = "https://github.com/eugenehp/threers"
-homepage = "https://github.com/eugenehp/threers"
 documentation = "https://docs.rs/threers-video"
 readme = "README.md"
 description = "Video for threers: export rendered frames to MP4, WebM, MOV, GIF and APNG with captions, render image sequences, and play video on meshes with sound, decoded in pure Rust, in hardware or by the browser"

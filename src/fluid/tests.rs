@@ -209,6 +209,31 @@ fn a_splat_lands_where_it_was_asked_for() {
     assert!((y - 0.25).abs() < 0.05, "y {y}");
 }
 
+/// The wgpu module's erasers and sized splats: the same pass the Metal backend
+/// runs, so an eraser takes the paint back out and stops at zero, and a
+/// bigger radius covers more of the canvas.
+#[test]
+fn sized_splats_and_erasers_on_wgpu() {
+    let config = FluidConfig { bloom: false, sunrays: false, shading: false, ..FluidConfig::default() };
+    let Some(mut sim) = sim(256, 256, config) else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let lit = |rgba: &[u8]| rgba.chunks(4).filter(|p| p[0] > 16).count();
+    let paint = FluidSplat { x: 0.5, y: 0.5, color: [0.6, 0.6, 0.6], radius: 0.0005, ..Default::default() };
+    sim.splat_batch(&[paint]);
+    let small = lit(&sim.capture_rgba(256, 256));
+    assert!(small > 0, "the paint did not land");
+
+    sim.splat_batch(&[FluidSplat { color: [4.0, 4.0, 4.0], erase: true, ..paint }]);
+    let (_, _, after) = brightest(&sim.capture_rgba(256, 256), 256, 256);
+    assert!(after < 8, "the eraser left the dye (brightest {after})");
+
+    sim.splat_batch(&[FluidSplat { radius: 0.005, ..paint }]);
+    let big = lit(&sim.capture_rgba(256, 256));
+    assert!(big > small * 4, "a ten-times radius covered {big} texels against {small}");
+}
+
 /// How much of a splat's divergence the projection removes, both as shipped
 /// and with the solve run closer to convergence.
 ///

@@ -3823,10 +3823,19 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-core-foundation",
  "objc2-quartz-core 0.3.2",
- "pollster 1.0.1",
  "threers",
- "wgpu",
 ]
+
+[[package]]
+name = "threers-fluid2d"
+version = "0.1.0"
+dependencies = [
+ "threers",
+]
+
+[[package]]
+name = "threers-font"
+version = "0.1.0"
 
 [[package]]
 name = "threers-hop"

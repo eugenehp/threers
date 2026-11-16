@@ -57,6 +57,14 @@ typedef enum {
   THREERS_FLUID_ACCUMULATE = 5,
   /// Draw the frame rate over the picture; a non-zero for on.
   THREERS_FLUID_SHOW_FPS = 6,
+  /// Paint into the volume under a point: a, b in uv of the view (0-1, origin
+  /// top left). c = 0 starts a stroke (a tap is a stroke of one), non-zero
+  /// continues it, pushing the dye the way the finger moved.
+  THREERS_FLUID_PAINT = 7,
+  /// The paint's colour, a, b, c linear RGB; all zero walks the hue wheel.
+  THREERS_FLUID_PAINT_COLOR = 8,
+  /// The plume that feeds itself; a non-zero for on (the default).
+  THREERS_FLUID_AMBIENT = 9,
 } ThreersFluidKey;
 
 /// Create a fluid drawing into `layer`, a `CAMetalLayer`. Null on failure.

@@ -86,28 +86,41 @@
 // `pub(crate)` so the Metal backend can share the uniform block: the two
 // implementations of this solver have to agree on it byte for byte, and the
 // way to make sure of that is for there to be one of it.
+//
+// With `metal-fluid` alone (no `fluid`) only the configuration, the pointers,
+// the uniform block and the pass sources build — what `metal::MetalFluid`
+// needs — and nothing of wgpu.
+#[cfg(feature = "fluid")]
 mod cpu;
 pub(crate) mod passes;
 pub(crate) mod read_out;
 pub(crate) mod shader;
+#[cfg(feature = "fluid")]
 mod volume;
-mod volume_shader;
-#[cfg(all(target_arch = "wasm32", not(threers_no_js_bindings)))]
+pub(crate) mod volume_config;
+pub(crate) mod volume_shader;
+#[cfg(all(feature = "fluid", target_arch = "wasm32", not(threers_no_js_bindings)))]
 mod web;
 
+#[cfg(feature = "fluid")]
 use std::sync::Arc;
 
+#[cfg(feature = "fluid")]
 use crate::renderer::fullscreen::{self, draw, DoubleFbo, Fbo, Load};
+#[cfg(feature = "fluid")]
 use passes::{
     batch_ubo, bind, ubo, Params, Pipelines, FLAG_BLOOM, FLAG_ENCODE, FLAG_SHADING, FLAG_SUNRAYS,
     MAX_BATCH,
 };
 
+#[cfg(feature = "fluid")]
 pub use cpu::CpuFluid3d;
+#[cfg(feature = "fluid")]
 pub use passes::FluidFormats;
-pub use volume::{
-    memory_for, quality3d, quality3d_names, within_memory, Atlas, FluidConfig3d, FluidQuality3d,
-    FluidSim3d, QUALITY_LEVELS_3D, STAGE_NAMES,
+#[cfg(feature = "fluid")]
+pub use volume::{memory_for, within_memory, FluidSim3d, STAGE_NAMES};
+pub use volume_config::{
+    quality3d, quality3d_names, Atlas, FluidConfig3d, FluidQuality3d, QUALITY_LEVELS_3D,
 };
 
 /// Every knob the simulation has, with the original's defaults.
@@ -451,6 +464,24 @@ struct Pointer {
     color: [f32; 3],
 }
 
+/// One splat with its own size, for `splat_batch` on either backend
+/// ([`FluidSim::splat_batch`], `metal::MetalFluid::splat_batch`): `x`, `y` in
+/// uv with the origin at the top left, `dx`, `dy` the push it gives the
+/// velocity, `radius` the Gaussian's variance in canvas fractions — already
+/// widened for the aspect, as the configuration's `splat_radius / 100` is —
+/// and `erase` to take `color` away from the dye, down to zero, instead of
+/// adding it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FluidSplat {
+    pub x: f32,
+    pub y: f32,
+    pub dx: f32,
+    pub dy: f32,
+    pub color: [f32; 3],
+    pub radius: f32,
+    pub erase: bool,
+}
+
 /// The mouse and every finger, between frames: the input both backends'
 /// `pointer_down`, `pointer_move` and `pointer_up` keep, in uv.
 #[derive(Clone, Debug, Default)]
@@ -522,14 +553,14 @@ impl Pointers {
 
 /// xorshift64*, so splat positions and hues are reproducible from the seed.
 /// Nothing here needs a good generator; it needs the same numbers twice.
-struct Rng(u64);
+pub(crate) struct Rng(u64);
 
 impl Rng {
-    fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         Self(seed | 1)
     }
 
-    fn next_f32(&mut self) -> f32 {
+    pub(crate) fn next_f32(&mut self) -> f32 {
         let mut x = self.0;
         x ^= x >> 12;
         x ^= x << 25;
@@ -543,7 +574,7 @@ impl Rng {
 /// [`hsv_to_rgb`], for the Metal backend — which needs the *same* sequence of
 /// colours from the same seed, or a parity test is comparing two pictures of
 /// different fluids.
-#[cfg(metal_backend)]
+#[cfg(metal_core)]
 pub(crate) fn hsv_to_rgb_for_backends(h: f32, s: f32, v: f32) -> [f32; 3] {
     hsv_to_rgb(h, s, v)
 }
@@ -565,6 +596,7 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     }
 }
 
+#[cfg(feature = "fluid")]
 /// [`grid_size`], then shrunk to fit what the device will allocate.
 ///
 /// Both axes are scaled by the same factor, because the point of `grid_size`
@@ -585,6 +617,7 @@ fn grid_size_limited(resolution: u32, width: u32, height: u32, max: u32) -> (u32
     )
 }
 
+#[cfg(feature = "fluid")]
 /// The shortest side of a grid is `resolution`; the longer one follows the
 /// canvas's aspect, so the simulation's texels stay square. A non-square texel
 /// would make a vortex elliptical.
@@ -601,6 +634,7 @@ fn grid_size(resolution: u32, width: u32, height: u32) -> (u32, u32) {
     }
 }
 
+#[cfg(feature = "fluid")]
 /// One coarse level of the multigrid pyramid.
 ///
 /// Level 0 is not here: it is the simulation's own `pressure` and `divergence`
@@ -656,6 +690,7 @@ pub(crate) const MG_COARSEST: u32 = 4;
 /// is right again.
 pub(crate) const MG_WEIGHT: f32 = 1.0;
 
+#[cfg(feature = "fluid")]
 fn mg_levels(
     device: &wgpu::Device,
     width: u32,
@@ -680,6 +715,7 @@ fn mg_levels(
     levels
 }
 
+#[cfg(feature = "fluid")]
 /// The uniform buffers, one per pass that runs in a single submit.
 struct Ubos {
     copy: wgpu::Buffer,
@@ -714,6 +750,7 @@ struct Ubos {
     read_out: wgpu::Buffer,
 }
 
+#[cfg(feature = "fluid")]
 impl Ubos {
     fn new(device: &wgpu::Device, chain: usize) -> Self {
         Self {
@@ -749,6 +786,7 @@ impl Ubos {
     }
 }
 
+#[cfg(feature = "fluid")]
 /// A fluid simulation and the textures it lives in.
 ///
 /// Owns its own wgpu resources and touches nothing else — it has no `Scene`, no
@@ -803,6 +841,7 @@ pub struct FluidSim {
     paused: bool,
 }
 
+#[cfg(feature = "fluid")]
 /// A queued splat, in the order it was asked for.
 #[derive(Clone, Copy)]
 struct Splat {
@@ -813,6 +852,7 @@ struct Splat {
     color: [f32; 3],
 }
 
+#[cfg(feature = "fluid")]
 impl FluidSim {
     /// Build a simulation sized for a `width` × `height` canvas, using the
     /// float formats WebGPU guarantees. Use [`FluidSim::with_formats`] and
@@ -1244,15 +1284,6 @@ impl FluidSim {
     /// thirty-two is past any plausible number of fingers or of blobs in a
     /// burst.
     fn record_splats(&mut self, splats: &[Splat]) {
-        for chunk in splats.chunks(MAX_BATCH) {
-            self.record_splat_batch(chunk);
-        }
-    }
-
-    fn record_splat_batch(&mut self, splats: &[Splat]) {
-        if splats.is_empty() {
-            return;
-        }
         let aspect = self.width as f32 / self.height as f32;
         // The radius is in canvas fractions, and widening it with the aspect
         // keeps a splat the same physical size on a wide canvas.
@@ -1260,6 +1291,35 @@ impl FluidSim {
         if aspect > 1.0 {
             radius *= aspect;
         }
+        let sized: Vec<FluidSplat> = splats
+            .iter()
+            .map(|s| FluidSplat {
+                x: s.x,
+                y: s.y,
+                dx: s.dx,
+                dy: s.dy,
+                color: s.color,
+                radius,
+                erase: false,
+            })
+            .collect();
+        self.splat_batch(&sized);
+    }
+
+    /// Splats an application sizes itself — a brush whose width is not the
+    /// configuration's, or an eraser — applied at once, in as few passes as
+    /// [`splat`](Self::splat) takes for one.
+    pub fn splat_batch(&mut self, splats: &[FluidSplat]) {
+        for chunk in splats.chunks(MAX_BATCH) {
+            self.record_splat_batch(chunk);
+        }
+    }
+
+    fn record_splat_batch(&mut self, splats: &[FluidSplat]) {
+        if splats.is_empty() {
+            return;
+        }
+        let aspect = self.width as f32 / self.height as f32;
 
         // Two `vec4`s per splat: (point, radius, _) and (colour, _).
         let mut velocity_batch = [0.0f32; MAX_BATCH * 8];
@@ -1269,13 +1329,15 @@ impl FluidSim {
             for batch in [&mut velocity_batch, &mut dye_batch] {
                 batch[at] = s.x;
                 batch[at + 1] = s.y;
-                batch[at + 2] = radius;
+                batch[at + 2] = s.radius;
             }
             velocity_batch[at + 4] = s.dx;
             velocity_batch[at + 5] = s.dy;
             dye_batch[at + 4] = s.color[0];
             dye_batch[at + 5] = s.color[1];
             dye_batch[at + 6] = s.color[2];
+            // An eraser: the splat pass subtracts this one, floored at zero.
+            dye_batch[at + 7] = if s.erase { 1.0 } else { 0.0 };
         }
         self.queue.write_buffer(
             &self.ubos.batch_velocity,
@@ -2251,6 +2313,7 @@ impl FluidSim {
     }
 }
 
+#[cfg(feature = "fluid")]
 fn bloom_chain(
     device: &wgpu::Device,
     width: u32,
@@ -2272,9 +2335,10 @@ fn bloom_chain(
     chain
 }
 
+#[cfg(feature = "fluid")]
 fn write(queue: &wgpu::Queue, buffer: &wgpu::Buffer, params: Params) {
     queue.write_buffer(buffer, 0, bytemuck::bytes_of(&params));
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "fluid"))]
 mod tests;

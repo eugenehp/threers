@@ -85,7 +85,7 @@ self-contained subsystem, behind a Cargo feature where it says so.
 | [Deploying](docs/deploying.md) | A static site for Vercel, GitHub Pages, Netlify or Cloudflare: hashed wasm, preloading, caching headers, sizes |
 | [Web](docs/web.md) · [WebGL2](docs/webgl.md) (`webgl`) | WebAssembly on WebGPU, or WebGL2 where WebGPU is missing |
 | [Path tracing](docs/path-tracing.md) (`raytrace`) | Global illumination, refraction and depth of field, on CPU and GPU, with denoising |
-| [Fluid](docs/fluid.md) (`fluid`) | 2D and 3D fluids as render passes, so they run on WebGL2 too |
+| [Fluid](docs/fluid.md) (`fluid`, `metal-fluid`) | 2D and 3D fluids as render passes, so they run on WebGL2 too; both on Metal alone too, without wgpu |
 | [Planets](docs/planets.md) (`planet`) | Atmospheres, starfields, Earth from NASA imagery |
 | [Mesh BVH and CSG](docs/mesh-bvh-csg.md) (`mesh-bvh`, `bvh-csg`) | Accelerated raycasts, and booleans with three-bvh-csg parity |
 | [OpenSCAD](docs/openscad.md) (`openscad`) | `.scad` front end, `Solid` DSL, watertight exact-CSG kernel |

@@ -4,16 +4,23 @@
 // On visionOS: a volume, where RealityKit draws the app's meshes in the
 // shared space (the Metal window instead with `-D THREERS_WINDOW`), and the
 // immersive space, opened and closed when the app asks
-// (`threers_ios::request`). Nothing here is particular to an app; the app is
-// the Rust crate (`threers_ios::app!`). Built by app/build.sh with swiftc.
+// (`threers_ios::request`). On iOS with `-D THREERS_REALITY`, RealityKit
+// draws the scene instead (Reality.swift's `RealityStage`), on the screen or
+// over the camera. Nothing here is particular to an app; the app is the Rust
+// crate (`threers_ios::app!`). Built by app/build.sh with swiftc, with
+// Reality.swift beside it.
 
 import SwiftUI
 import UIKit
 import AVFoundation
-#if os(visionOS)
-import CompositorServices
+import UniformTypeIdentifiers
+import QuickLook
 import RealityKit
 import Metal
+#if os(visionOS)
+import CompositorServices
+#else
+import ARKit
 #endif
 
 @_silgen_name("threers_view_create")
@@ -29,6 +36,22 @@ func threers_ios_take_request() -> UInt32
 @_silgen_name("threers_ios_take_url")
 func threers_ios_take_url(_ out: UnsafeMutablePointer<UInt8>, _ cap: Int) -> Int
 
+@_silgen_name("threers_ios_rec_peek")
+func threers_ios_rec_peek(_ w: UnsafeMutablePointer<UInt32>, _ h: UnsafeMutablePointer<UInt32>, _ index: UnsafeMutablePointer<UInt32>, _ fps: UnsafeMutablePointer<UInt32>, _ last: UnsafeMutablePointer<Bool>) -> Bool
+@_silgen_name("threers_ios_rec_take")
+func threers_ios_rec_take(_ out: UnsafeMutableRawPointer, _ cap: Int) -> Bool
+
+@_silgen_name("threers_ios_take_pick")
+func threers_ios_take_pick() -> Bool
+@_silgen_name("threers_ios_picked")
+func threers_ios_picked(_ path: UnsafePointer<UInt8>, _ len: Int)
+
+@_silgen_name("threers_ios_take_copy")
+func threers_ios_take_copy(_ out: UnsafeMutablePointer<UInt8>, _ cap: Int) -> Int
+
+@_silgen_name("threers_ios_take_share")
+func threers_ios_take_share(_ out: UnsafeMutablePointer<UInt8>, _ cap: Int) -> Int
+
 @_silgen_name("threers_ios_take_audio")
 func threers_ios_take_audio(_ out: UnsafeMutablePointer<UInt8>, _ cap: Int) -> Int
 @_silgen_name("threers_ios_audio_time")
@@ -43,7 +66,182 @@ func threers_ios_audio_time(_ t: Double, _ playing: Bool)
         guard n > 0, let s = String(bytes: buf[0..<n], encoding: .utf8), let url = URL(string: s) else { break }
         UIApplication.shared.open(url)
     }
+    pollShares()
+    pollCopy()
+    pollPick()
+    pollRecording()
     pollAudio()
+    pollQuickLook()
+}
+
+/// A `.usdz` the app asked to show (`threers_ios::quick_look`): AR Quick
+/// Look on iOS (RealityKit drawing it, placed in the room), its own window
+/// in the shared space on visionOS.
+@MainActor private func pollQuickLook() {
+    guard let url = takeQuickLook() else { return }
+    #if os(visionOS)
+    _ = PreviewApplication.open(urls: [url])
+    #else
+    let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive }
+    guard var top = scene?.windows.first(where: \.isKeyWindow)?.rootViewController ?? scene?.windows.first?.rootViewController else { return }
+    while let p = top.presentedViewController { top = p }
+    QuickLookSource.shared.url = url
+    let preview = QLPreviewController()
+    preview.dataSource = QuickLookSource.shared
+    top.present(preview, animated: true)
+    #endif
+}
+
+#if !os(visionOS)
+/// The one file AR Quick Look shows.
+@MainActor private final class QuickLookSource: NSObject, QLPreviewControllerDataSource {
+    static let shared = QuickLookSource()
+    var url: URL?
+    nonisolated func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+    nonisolated func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> any QLPreviewItem {
+        MainActor.assumeIsolated {
+            let item = ARQuickLookPreviewItem(fileAt: url ?? URL(fileURLWithPath: "/"))
+            item.allowsContentScaling = true
+            return item
+        }
+    }
+}
+#endif
+
+/// The document picker the app asked for (`threers_ios::pick_file`): a
+/// file or a folder, read where it is (its access kept while the app runs).
+@MainActor private final class Picker: NSObject, UIDocumentPickerDelegate {
+    static let shared = Picker()
+    private var held: [URL] = []
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        for url in urls {
+            if url.startAccessingSecurityScopedResource() { held.append(url) }
+            let path = Array(url.path.utf8)
+            path.withUnsafeBufferPointer { threers_ios_picked($0.baseAddress!, path.count) }
+        }
+    }
+}
+
+@MainActor private func pollPick() {
+    guard threers_ios_take_pick() else { return }
+    let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive }
+    guard var top = scene?.windows.first(where: \.isKeyWindow)?.rootViewController ?? scene?.windows.first?.rootViewController else { return }
+    while let p = top.presentedViewController { top = p }
+    let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data, .folder, .zip], asCopy: false)
+    picker.delegate = Picker.shared
+    picker.allowsMultipleSelection = false
+    top.present(picker, animated: true)
+}
+
+/// A turn of the view being written as an MP4 (`threers_ios::record_turn`):
+/// each frame the app drew taken (BGRA) and appended at its index / rate;
+/// after the last, the file finished and offered to share.
+@MainActor private final class TurnRecorder {
+    static var current: TurnRecorder?
+    let writer: AVAssetWriter
+    let input: AVAssetWriterInput
+    let adaptor: AVAssetWriterInputPixelBufferAdaptor
+    let url: URL
+
+    init?(width: Int, height: Int) {
+        url = FileManager.default.temporaryDirectory.appendingPathComponent("brain-turn-\(Int(Date().timeIntervalSince1970)).mp4")
+        guard let w = try? AVAssetWriter(outputURL: url, fileType: .mp4) else { return nil }
+        writer = w
+        input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height,
+        ])
+        input.expectsMediaDataInRealTime = false
+        adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: width,
+            kCVPixelBufferHeightKey as String: height,
+        ])
+        guard writer.canAdd(input) else { return nil }
+        writer.add(input)
+        guard writer.startWriting() else { return nil }
+        writer.startSession(atSourceTime: .zero)
+    }
+}
+
+@MainActor private func pollRecording() {
+    var w: UInt32 = 0, h: UInt32 = 0, index: UInt32 = 0, fps: UInt32 = 30
+    var last = false
+    guard threers_ios_rec_peek(&w, &h, &index, &fps, &last) else { return }
+    if TurnRecorder.current == nil {
+        TurnRecorder.current = TurnRecorder(width: Int(w), height: Int(h))
+    }
+    guard let rec = TurnRecorder.current else {
+        // no writer: the frame let go, so the recording ends
+        var sink = [UInt8](repeating: 0, count: Int(w * h * 4))
+        _ = threers_ios_rec_take(&sink, sink.count)
+        return
+    }
+    guard rec.input.isReadyForMoreMediaData, let pool = rec.adaptor.pixelBufferPool else { return }
+    var made: CVPixelBuffer?
+    CVPixelBufferPoolCreatePixelBuffer(nil, pool, &made)
+    guard let pb = made else { return }
+    CVPixelBufferLockBaseAddress(pb, [])
+    let rowBytes = CVPixelBufferGetBytesPerRow(pb)
+    let width = Int(w) * 4
+    if let base = CVPixelBufferGetBaseAddress(pb) {
+        if rowBytes == width {
+            _ = threers_ios_rec_take(base, rowBytes * Int(h))
+        } else {
+            var tight = [UInt8](repeating: 0, count: width * Int(h))
+            _ = threers_ios_rec_take(&tight, tight.count)
+            tight.withUnsafeBytes { src in
+                for y in 0..<Int(h) {
+                    memcpy(base.advanced(by: y * rowBytes), src.baseAddress!.advanced(by: y * width), width)
+                }
+            }
+        }
+    }
+    CVPixelBufferUnlockBaseAddress(pb, [])
+    rec.adaptor.append(pb, withPresentationTime: CMTime(value: Int64(index), timescale: Int32(fps)))
+    if last {
+        TurnRecorder.current = nil
+        rec.input.markAsFinished()
+        let url = rec.url
+        rec.writer.finishWriting {
+            DispatchQueue.main.async { presentShare(url.path) }
+        }
+    }
+}
+
+/// Text the app copied (`threers_ios::copy_text`), on the clipboard.
+@MainActor private func pollCopy() {
+    var buf = [UInt8](repeating: 0, count: 16384)
+    let n = threers_ios_take_copy(&buf, buf.count)
+    if n > 0, let s = String(bytes: buf[0..<n], encoding: .utf8) {
+        UIPasteboard.general.string = s
+    }
+}
+
+/// Each file the app offered (`threers_ios::share`), in the system's share
+/// sheet over the front window.
+@MainActor private func pollShares() {
+    var buf = [UInt8](repeating: 0, count: 4096)
+    let n = threers_ios_take_share(&buf, buf.count)
+    guard n > 0, let path = String(bytes: buf[0..<n], encoding: .utf8) else { return }
+    presentShare(path)
+}
+
+/// The share sheet for the file at `path`, over the front window.
+@MainActor private func presentShare(_ path: String) {
+    let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive }
+    guard var top = scene?.windows.first(where: \.isKeyWindow)?.rootViewController ?? scene?.windows.first?.rootViewController else { return }
+    while let p = top.presentedViewController { top = p }
+    let sheet = UIActivityViewController(activityItems: [URL(fileURLWithPath: path)], applicationActivities: nil)
+    // an iPad's (and visionOS's) sheet is a popover: from the window's middle
+    if let pop = sheet.popoverPresentationController {
+        pop.sourceView = top.view
+        pop.sourceRect = CGRect(x: top.view.bounds.midX, y: top.view.bounds.midY, width: 1, height: 1)
+        pop.permittedArrowDirections = []
+    }
+    top.present(sheet, animated: true)
 }
 
 /// The sound the app plays (`threers_ios::audio`), and what it was loaded from.
@@ -85,16 +283,6 @@ func threers_view_controls(_ view: UnsafeMutableRawPointer?, _ len: UnsafeMutabl
 func threersPressControl(_ key: UInt64)
 @_silgen_name("threers_ios_set_dark")
 func threers_ios_set_dark(_ dark: Bool)
-
-/// One of the window UI's controls (`threers_ui::native`), in its points.
-struct UiControl: Decodable {
-    let key: String
-    let role: String
-    let label: String
-    let x, y, w, h: CGFloat
-    let on, toggle, disabled: Bool
-    let value: String?
-}
 
 /// An element assistive technology finds over a control of the UI the
 /// layer draws (VoiceOver, Voice Control, Switch Control): its name, what
@@ -192,6 +380,39 @@ final class Host: UIView {
             l.add(to: .main, forMode: .common)
             link = l
         }
+        // a hardware keyboard's keys come here (a text field's, to it)
+        becomeFirstResponder()
+    }
+
+    override var canBecomeFirstResponder: Bool { true }
+
+    /// A hardware keyboard's key: its character (the special keys as the
+    /// function-key code points, Escape as 27) and Shift, to the app.
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        var took = false
+        for p in presses {
+            guard let key = p.key else { continue }
+            let s = key.charactersIgnoringModifiers
+            let code: UInt32
+            switch s {
+            case UIKeyCommand.inputEscape: code = 27
+            case UIKeyCommand.inputUpArrow: code = 0xF700
+            case UIKeyCommand.inputDownArrow: code = 0xF701
+            case UIKeyCommand.inputLeftArrow: code = 0xF702
+            case UIKeyCommand.inputRightArrow: code = 0xF703
+            case UIKeyCommand.inputPageUp: code = 0xF72C
+            case UIKeyCommand.inputPageDown: code = 0xF72D
+            case UIKeyCommand.inputHome: code = 0xF729
+            case UIKeyCommand.inputEnd: code = 0xF72B
+            default:
+                // the character as typed (Shift's: `?`, `+`, `]`), not as unshifted
+                guard let c = (key.characters.isEmpty ? s : key.characters).unicodeScalars.first else { continue }
+                code = c.value
+            }
+            threers_view_set(view, 6, Float(code), key.modifierFlags.contains(.shift) ? 1 : 0, 0)
+            took = true
+        }
+        if !took { super.pressesBegan(presses, with: event) }
     }
 
     override func layoutSubviews() {
@@ -352,23 +573,8 @@ struct Backdrop: View {
 
 // --- the volume: RealityKit draws the app's meshes in the shared space -------
 
-@_silgen_name("threers_vol_create") func threers_vol_create() -> UnsafeMutableRawPointer?
-@_silgen_name("threers_vol_frame") func threers_vol_frame(_ v: UnsafeMutableRawPointer?) -> UInt32
-@_silgen_name("threers_vol_object") func threers_vol_object(_ v: UnsafeMutableRawPointer?, _ i: UInt32, _ keys: UnsafeMutablePointer<UInt64>, _ floats: UnsafeMutablePointer<Float>) -> Bool
-@_silgen_name("threers_vol_geometry") func threers_vol_geometry(_ v: UnsafeMutableRawPointer?, _ i: UInt32, _ ptrs: UnsafeMutablePointer<UnsafeRawPointer?>, _ counts: UnsafeMutablePointer<UInt32>) -> Bool
-@_silgen_name("threers_vol_texture") func threers_vol_texture(_ v: UnsafeMutableRawPointer?, _ i: UInt32, _ w: UnsafeMutablePointer<UInt32>, _ h: UnsafeMutablePointer<UInt32>, _ len: UnsafeMutablePointer<Int>) -> UnsafePointer<UInt8>?
-@_silgen_name("threers_vol_uvs") func threers_vol_uvs(_ v: UnsafeMutableRawPointer?, _ i: UInt32, _ len: UnsafeMutablePointer<Int>) -> UnsafePointer<Float>?
-@_silgen_name("threers_vol_root") func threers_vol_root(_ v: UnsafeMutableRawPointer?, _ out: UnsafeMutablePointer<Float>)
-@_silgen_name("threers_vol_turn") func threers_vol_turn(_ v: UnsafeMutableRawPointer?, _ radians: Float)
-@_silgen_name("threers_vol_tap") func threers_vol_tap(_ v: UnsafeMutableRawPointer?, _ u: Float, _ v2: Float)
-@_silgen_name("threers_vol_draw") func threers_vol_draw(_ v: UnsafeMutableRawPointer?, _ qx: Float, _ qy: Float, _ qz: Float, _ qw: Float, _ size: UInt32, _ texture: UnsafeMutableRawPointer, _ commandBuffer: UnsafeMutableRawPointer) -> Bool
-@_silgen_name("threers_vol_ui") func threers_vol_ui(_ v: UnsafeMutableRawPointer?, _ which: UInt32, _ w: UInt32, _ h: UInt32, _ scale: Float, _ len: UnsafeMutablePointer<Int>) -> UnsafePointer<UInt8>?
-@_silgen_name("threers_ios_tap") func threers_ios_tap(_ x: Float, _ y: Float)
+// (the volume's C functions: Reality.swift)
 @_silgen_name("threers_ios_immersive_open") func threers_ios_immersive_open() -> Bool
-@_silgen_name("threers_vol_controls") func threers_vol_controls(_ v: UnsafeMutableRawPointer?, _ which: UInt32, _ len: UnsafeMutablePointer<Int>) -> UnsafePointer<UInt8>?
-@_silgen_name("threers_ios_press") func threers_ios_press(_ key: UInt64)
-@_silgen_name("threers_ios_text") func threers_ios_text(_ key: UInt64, _ text: UnsafePointer<UInt8>?, _ len: Int)
-@_silgen_name("threers_ios_touch") func threers_ios_touch(_ which: UInt32, _ phase: UInt32, _ x: Float, _ y: Float)
 @_silgen_name("threers_ios_volume_shown") func threers_ios_volume_shown(_ shown: Bool)
 
 /// One of the UI's controls (`threers_ui::native`), in the image's points:
@@ -423,9 +629,6 @@ let uiScales: [Float] = [2.8, 2.8]
 /// Each press and drag on the UI surfaces, to the console (`THREERS_UI_LOG=1`).
 let uiLog = ProcessInfo.processInfo.environment["THREERS_UI_LOG"] != nil
 
-private func matrix(_ f: [Float]) -> simd_float4x4 {
-    simd_float4x4(SIMD4(f[0], f[1], f[2], f[3]), SIMD4(f[4], f[5], f[6], f[7]), SIMD4(f[8], f[9], f[10], f[11]), SIMD4(f[12], f[13], f[14], f[15]))
-}
 
 /// The app's meshes as entities, kept in step with its scene each frame:
 /// a mesh rebuilt when its geometry changes, a material when its material does.
@@ -454,9 +657,8 @@ private func matrix(_ f: [Float]) -> simd_float4x4 {
     /// halved and washed out by the mipmaps; a bigger volume, more.
     private var quadPixels = 1024
     private static func pixels(for side: Float) -> Int { side > 0.8 ? 2048 : 1024 }
-    private var entities: [UInt64: ModelEntity] = [:]
-    private var built: [UInt64: (UInt64, UInt64)] = [:]
-    private var vertexColor: ShaderGraphMaterial?
+    /// The app's meshes, lights and environment as entities (Reality.swift).
+    private(set) lazy var scene = RealityScene(vol: vol, model: model)
     /// What each text control's native field holds, by key.
     @Published var texts: [String: String] = [:]
     /// Each surface's image (nil: not shown) and its controls.
@@ -495,8 +697,10 @@ private func matrix(_ f: [Float]) -> simd_float4x4 {
     }
 
     func load() async {
-        vertexColor = try? await ShaderGraphMaterial(named: "/Root/VertexColor", from: "VertexColor.usda", in: .main)
-        await makeQuad(Self.pixels(for: side))
+        await scene.load()
+        // threers' picture on a quad, unless the app asks for entities
+        // (`VolumeDrawing::Entities`): RealityKit then draws each mesh
+        if threers_vol_drawing(vol) == 0 { await makeQuad(Self.pixels(for: side)) }
     }
 
     /// The quad, its picture `n` pixels square.
@@ -587,7 +791,7 @@ private func matrix(_ f: [Float]) -> simd_float4x4 {
         let n = threers_vol_frame(vol)
         var r = [Float](repeating: 0, count: 17)
         threers_vol_root(vol, &r)
-        model.transform = Transform(matrix: matrix(r))
+        r.withUnsafeBufferPointer { model.transform = Transform(matrix: rkMatrix($0.baseAddress!)) }
         root.scale = SIMD3(repeating: side * 0.45 / max(r[16], 1e-4))
         // drawn whole by threers: no meshes of RealityKit's to keep in step
         if drawQuad() {
@@ -596,48 +800,9 @@ private func matrix(_ f: [Float]) -> simd_float4x4 {
             uiAndRequests()
             return
         }
-        var seen = Set<UInt64>()
-        var keys = [UInt64](repeating: 0, count: 3)
-        var f = [Float](repeating: 0, count: 32)
-        for i in 0..<n {
-            guard threers_vol_object(vol, i, &keys, &f) else { continue }
-            let key = keys[0]
-            seen.insert(key)
-            let e = entities[key] ?? {
-                let e = ModelEntity()
-                model.addChild(e)
-                entities[key] = e
-                return e
-            }()
-            let flags = UInt32(f[22])
-            e.isEnabled = flags & 1 != 0
-            e.transform = Transform(matrix: matrix(f))
-            let was = built[key]
-            if was?.0 != keys[1], let mesh = mesh(i, lines: flags & 16 != 0, points: flags & 64 != 0) {
-                e.model = ModelComponent(mesh: mesh, materials: [])
-            }
-            if was?.0 != keys[1] || was?.1 != keys[2] {
-                e.model?.materials = [flags & (32 | 128) != 0 ? spriteMaterial(i, f, twoSided: flags & 8 != 0, cut: flags & 128 != 0, depth: flags & 256 == 0) ?? material(f, flags) : material(f, flags)]
-                // a sprite (a label) keeps facing whoever looks at it
-                if flags & 32 != 0 {
-                    e.components.set(BillboardComponent())
-                }
-                // see-through: depth first, then colour, so only the nearest
-                // surface blends (single-layer glass; blended alone, a folded
-                // cortex drew its folds and triangles through each other)
-                if flags & 4 != 0 && flags & 256 == 0 {
-                    e.components.set(ModelSortGroupComponent(group: ModelSortGroup(depthPass: .prePass), order: 0))
-                } else {
-                    e.components.remove(ModelSortGroupComponent.self)
-                }
-            }
-            built[key] = (keys[1], keys[2])
-        }
-        for (key, e) in entities where !seen.contains(key) {
-            e.removeFromParent()
-            entities[key] = nil
-            built[key] = nil
-        }
+        // the model at the volume's scale: a light's reach and power with it
+        scene.metres = root.scale.x
+        scene.sync(n)
         // the room shows the model while it is open: one brain, not two
         model.isEnabled = !threers_ios_immersive_open()
         uiAndRequests()
@@ -664,133 +829,11 @@ private func matrix(_ f: [Float]) -> simd_float4x4 {
         openRequestedURLs()
     }
 
-    /// Sprite `i`'s texture on an unlit, see-through quad.
-    private func spriteMaterial(_ i: UInt32, _ f: [Float], twoSided: Bool = false, cut: Bool = false, depth: Bool = true) -> RealityKit.Material? {
-        var w: UInt32 = 0, h: UInt32 = 0, len = 0
-        guard let p = threers_vol_texture(vol, i, &w, &h, &len), len == Int(w * h * 4),
-              let provider = CGDataProvider(data: Data(bytes: p, count: len) as CFData),
-              let image = CGImage(width: Int(w), height: Int(h), bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: Int(w) * 4,
-                                  space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
-                                  provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent),
-              let texture = try? TextureResource(image: image, options: .init(semantic: .color))
-        else { return nil }
-        var m = UnlitMaterial()
-        m.color = .init(tint: .white, texture: .init(texture))
-        m.blending = .transparent(opacity: .init(floatLiteral: f[19]))
-        // a slice is seen from both sides
-        if twoSided { m.faceCulling = .none }
-        // a textured mesh (a volume's slice) is cut where it is clear, as
-        // its shader discards there: in the depth prepass too, or its clear
-        // pixels hide what is behind them (the other slices)
-        if cut { m.opacityThreshold = 0.02 }
-        // a volume's rays: blended over the brain, hiding none of it
-        if !depth { m.writesDepth = false }
-        return m
-    }
-
-    private func material(_ f: [Float], _ flags: UInt32) -> RealityKit.Material {
-        let blended = flags & 4 != 0
-        // a line set: unlit, in its colour (in its vertices' colours, the
-        // vertex-colour material's)
-        if flags & (16 | 64) != 0 && flags & 2 == 0 {
-            var m = UnlitMaterial(color: UIColor(red: CGFloat(f[16]), green: CGFloat(f[17]), blue: CGFloat(f[18]), alpha: 1))
-            if blended { m.blending = .transparent(opacity: .init(floatLiteral: f[19])) }
-            return m
-        }
-        let cull: MaterialParameterTypes.FaceCulling = flags & 8 != 0 ? .none : .back
-        if flags & 2 != 0, var m = vertexColor {
-            try? m.setParameter(name: "Opacity", value: .float(blended ? f[19] : 1))
-            try? m.setParameter(name: "Roughness", value: .float(f[20]))
-            try? m.setParameter(name: "Metallic", value: .float(f[21]))
-            m.faceCulling = cull
-            return m
-        }
-        var m = PhysicallyBasedMaterial()
-        m.baseColor = .init(tint: UIColor(red: CGFloat(f[16]), green: CGFloat(f[17]), blue: CGFloat(f[18]), alpha: 1))
-        m.roughness = .init(floatLiteral: f[20])
-        m.metallic = .init(floatLiteral: f[21])
-        // its glow (an electrode's), as the window draws it
-        if f[26] > 0 {
-            m.emissiveColor = .init(color: UIColor(red: CGFloat(f[23]), green: CGFloat(f[24]), blue: CGFloat(f[25]), alpha: 1))
-            m.emissiveIntensity = f[26]
-        }
-        if blended { m.blending = .transparent(opacity: .init(floatLiteral: f[19])) }
-        m.faceCulling = cull
-        return m
-    }
-
-    /// Mesh `i` as a RealityKit low-level mesh: positions, normals and, when
-    /// it has them, vertex colours, interleaved.
-    private func mesh(_ i: UInt32, lines: Bool = false, points: Bool = false) -> MeshResource? {
-        var ptrs = [UnsafeRawPointer?](repeating: nil, count: 4)
-        var counts = [UInt32](repeating: 0, count: 3)
-        guard threers_vol_geometry(vol, i, &ptrs, &counts), let pp = ptrs[0], let np = ptrs[1], let ip = ptrs[3] else { return nil }
-        let (n, cs, m) = (Int(counts[0]), Int(counts[1]), Int(counts[2]))
-        guard n > 0, m > 0 else { return nil }
-        let pos = pp.assumingMemoryBound(to: Float.self)
-        let nor = np.assumingMemoryBound(to: Float.self)
-        let col = ptrs[2]?.assumingMemoryBound(to: Float.self)
-        // texture coordinates (a textured mesh: a volume's slice)
-        var uvLen = 0
-        let uvp = threers_vol_uvs(vol, i, &uvLen)
-        let uv = uvLen == n * 2 ? uvp : nil
-        let stride = (col != nil ? 40 : 24) + (uv != nil ? 8 : 0)
-        let uvOffset = col != nil ? 40 : 24
-        var attributes: [LowLevelMesh.Attribute] = [
-            .init(semantic: .position, format: .float3, offset: 0),
-            .init(semantic: .normal, format: .float3, offset: 12),
-        ]
-        if col != nil { attributes.append(.init(semantic: .color, format: .float4, offset: 24)) }
-        if uv != nil { attributes.append(.init(semantic: .uv0, format: .float2, offset: uvOffset)) }
-        let descriptor = LowLevelMesh.Descriptor(
-            vertexCapacity: n, vertexAttributes: attributes,
-            vertexLayouts: [.init(bufferIndex: 0, bufferStride: stride)],
-            indexCapacity: m, indexType: .uint32)
-        guard let mesh = try? LowLevelMesh(descriptor: descriptor) else { return nil }
-        var lo = SIMD3<Float>(repeating: .infinity), hi = SIMD3<Float>(repeating: -.infinity)
-        mesh.withUnsafeMutableBytes(bufferIndex: 0) { raw in
-            let out = raw.baseAddress!.assumingMemoryBound(to: Float.self)
-            let per = stride / 4
-            for v in 0..<n {
-                let o = out + v * per
-                let p = SIMD3(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2])
-                lo = simd_min(lo, p)
-                hi = simd_max(hi, p)
-                o[0] = p.x; o[1] = p.y; o[2] = p.z
-                o[3] = nor[v * 3]; o[4] = nor[v * 3 + 1]; o[5] = nor[v * 3 + 2]
-                if let c = col {
-                    o[6] = c[v * cs]; o[7] = c[v * cs + 1]; o[8] = c[v * cs + 2]
-                    o[9] = cs == 4 ? c[v * cs + 3] : 1
-                }
-                if let t = uv {
-                    // RealityKit's v runs up the image; the slice's rows down
-                    o[uvOffset / 4] = t[v * 2]; o[uvOffset / 4 + 1] = 1 - t[v * 2 + 1]
-                }
-            }
-        }
-        mesh.withUnsafeMutableIndices { raw in
-            raw.baseAddress!.copyMemory(from: ip, byteCount: m * 4)
-        }
-        // a line set: its segments as lines (RealityKit's line topology)
-        mesh.parts.replaceAll([LowLevelMesh.Part(indexCount: m, topology: points ? .point : lines ? .line : .triangle, bounds: BoundingBox(min: lo, max: hi))])
-        return try? MeshResource(from: mesh)
-    }
-
     /// Surface `i`'s new image: nil when unchanged, .some(nil) when it is
     /// not shown now.
     private func uiImage(_ i: Int) -> UIImage?? {
         let size = uiSizes[i]
-        var len = 0
-        guard let p = threers_vol_ui(vol, UInt32(i), UInt32(size.w), UInt32(size.h), uiScales[i], &len) else { return nil }
-        if len == 0 { return .some(nil) }
-        guard len == size.w * size.h * 4 else { return nil }
-        let data = Data(bytes: p, count: len)
-        guard let provider = CGDataProvider(data: data as CFData),
-              let image = CGImage(width: size.w, height: size.h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: size.w * 4,
-                                  space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
-                                  provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
-        else { return nil }
-        return .some(UIImage(cgImage: image))
+        return scene.uiImage(UInt32(i), size.w, size.h, uiScales[i]).map { $0.map { UIImage(cgImage: $0) } }
     }
 }
 
@@ -1016,7 +1059,80 @@ struct ThreersApp: App {
 @main
 struct ThreersApp: App {
     var body: some SwiftUI.Scene {
+        #if THREERS_REALITY
+        WindowGroup { RealityStage() }
+        #else
         WindowGroup { HostView().ignoresSafeArea() }
+        #endif
+    }
+}
+
+/// What a RealityKit stage asks of the shell each frame (Reality.swift).
+@MainActor func pollShell() {
+    // nothing to enter or leave on iOS: the request is dropped
+    _ = threers_ios_take_request()
+    openRequestedURLs()
+}
+
+/// The app's UI over RealityKit's view (`Place::Screen`): its picture, the
+/// fingers that land on it (the rest pass through to the scene: the orbit
+/// camera, a tap), and its controls for assistive technology.
+@available(iOS 18.0, *)
+final class OverlayView: UIView {
+    var model: StageModel?
+    private var finger: UITouch?
+    private var elements: [UIAccessibilityElement] = []
+    override var accessibilityElements: [Any]? {
+        get { elements }
+        set {}
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isOpaque = false
+        layer.contentsGravity = .resize
+    }
+
+    required init?(coder: NSCoder) { fatalError("made in code") }
+
+    func show(_ image: CGImage?, _ controls: [UiControl]) {
+        layer.contents = image
+        elements = controls.map { UiControlElement(container: self, control: $0) }
+    }
+
+    /// Only where the UI has something: the rest is the scene's.
+    override func point(inside p: CGPoint, with event: UIEvent?) -> Bool {
+        model?.onUi(p) ?? false
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard finger == nil, let t = touches.first else { return }
+        finger = t
+        model?.touch(0, t.location(in: self))
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let f = finger, touches.contains(f) { model?.touch(1, f.location(in: self)) }
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let f = finger, touches.contains(f) { model?.touch(2, f.location(in: self)); finger = nil }
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let f = finger, touches.contains(f) { model?.touch(3, f.location(in: self)); finger = nil }
+    }
+}
+
+@available(iOS 18.0, *)
+struct ScreenOverlay: UIViewRepresentable {
+    @ObservedObject var model: StageModel
+    func makeUIView(context: Context) -> OverlayView {
+        let v = OverlayView(frame: .zero)
+        v.model = model
+        return v
+    }
+    func updateUIView(_ v: OverlayView, context: Context) {
+        v.model = model
+        v.show(model.ui, model.controls)
     }
 }
 #endif

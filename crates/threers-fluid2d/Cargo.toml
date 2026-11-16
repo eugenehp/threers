@@ -1,0 +1,23 @@
+[package]
+name = "threers-fluid2d"
+version.workspace = true
+edition = "2024"
+authors = ["Eugene Hauptmann"]
+description = "The threers 2D fluid on Metal as a C ABI static library: no wgpu, on the app's own MTLDevice"
+license = "MIT"
+repository = "https://github.com/eugenehp/threers"
+readme = "README.md"
+keywords = ["fluid", "ios", "metal", "graphics"]
+categories = ["graphics", "api-bindings"]
+# Linked into an app bundle, not published.
+publish = false
+
+[lib]
+name = "threers_fluid2d"
+# `staticlib` is what Xcode links; `rlib` lets another Rust static library
+# (an app's own bridge) depend on it and carry the symbols through.
+crate-type = ["staticlib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+threers = { path = "../..", default-features = false, features = ["metal-fluid"] }

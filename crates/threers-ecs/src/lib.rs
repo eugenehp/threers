@@ -67,6 +67,7 @@
 //! | Rigid bodies, characters, collisions | `physics` module (`physics` feature) |
 //! | Drive a car | `car` module (`physics` feature) |
 //! | Follow something with the camera | [`camera`] |
+//! | A camera's picture on a monitor in the scene | [`offscreen`] |
 //! | Spawn and set up a node in one go | [`World::mesh`] |
 //! | Open a window | `window` module (`window` feature) |
 //! | Run in a browser | `web` module (`web` feature) |
@@ -110,6 +111,7 @@ pub mod gizmos;
 pub mod hot;
 pub mod hud;
 mod input;
+pub mod offscreen;
 pub mod params;
 #[cfg(feature = "physics")]
 // Its own `World` and `Easing` hide the physics prelude's, on purpose.
@@ -141,6 +143,7 @@ pub use app::{App, Exit, MainCamera, Plugin, Time};
 pub use commands::Commands;
 pub use events::EVENT_FRAMES;
 pub use input::{
+    TOUCH_STICKS,
     Button, Input, Key, MouseButton, PadAxis, PadButton, PadEvent, PadTracker, Rumble, Touch,
 };
 pub use query::{

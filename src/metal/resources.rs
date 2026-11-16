@@ -297,55 +297,7 @@ pub fn new_texture_3d(
     }
 }
 
-pub fn new_texture_2d(
-    device: &MetalDevice,
-    width: u32,
-    height: u32,
-    pixel_format: NSUInteger,
-    usage: NSUInteger,
-    storage: NSUInteger,
-    sample_count: u32,
-    mip_levels: u32,
-) -> Result<Owned, MetalError> {
-    let _pool = AutoreleasePool::new();
-    unsafe {
-        let desc = Owned::from_retained(alloc_init(class!("MTLTextureDescriptor")))
-            .ok_or_else(|| MetalError::Allocation("MTLTextureDescriptor".into()))?;
-        let ty = if sample_count > 1 {
-            texture_type::TYPE_2D_MULTISAMPLE
-        } else {
-            texture_type::TYPE_2D
-        };
-        let _: () = msg1(desc.id(), sel!("setTextureType:"), ty);
-        let _: () = msg1(desc.id(), sel!("setPixelFormat:"), pixel_format);
-        let _: () = msg1(desc.id(), sel!("setWidth:"), width.max(1) as NSUInteger);
-        let _: () = msg1(desc.id(), sel!("setHeight:"), height.max(1) as NSUInteger);
-        let _: () = msg1(desc.id(), sel!("setDepth:"), 1usize);
-        let _: () = msg1(
-            desc.id(),
-            sel!("setMipmapLevelCount:"),
-            mip_levels.max(1) as NSUInteger,
-        );
-        let _: () = msg1(
-            desc.id(),
-            sel!("setSampleCount:"),
-            sample_count.max(1) as NSUInteger,
-        );
-        let _: () = msg1(desc.id(), sel!("setUsage:"), usage);
-        let _: () = msg1(desc.id(), sel!("setStorageMode:"), storage);
-
-        let tex: Id = msg1(
-            device.device_id(),
-            sel!("newTextureWithDescriptor:"),
-            desc.id(),
-        );
-        Owned::from_retained(tex).ok_or_else(|| {
-            MetalError::Allocation(format!(
-                "{width}x{height} texture, format {pixel_format}, {sample_count}x MSAA"
-            ))
-        })
-    }
-}
+pub use super::pass::new_texture_2d;
 
 /// Allocate a 2D texture array — the attachment shape stereo rendering draws
 /// into, a slice per eye.
@@ -687,21 +639,6 @@ fn upload_level(
     Ok(())
 }
 
-/// Overwrite level 0 of an uncompressed 2D texture from CPU memory.
-///
-/// The texture has to be `SHARED` or `MANAGED` — `replaceRegion` is a memcpy
-/// into the resource, and a `PRIVATE` one has no CPU-visible storage to copy
-/// into.
-#[cfg(feature = "fluid")]
-pub(crate) fn upload_texture_2d(
-    tex: &Owned,
-    width: u32,
-    height: u32,
-    bytes_per_pixel: usize,
-    bytes: &[u8],
-) -> Result<(), MetalError> {
-    upload_level(tex, 0, width, height, (1, 1), bytes_per_pixel, bytes)
-}
 
 /// Fill levels 1..N on the GPU. Best effort: a device that declines the blit
 /// leaves the texture with only level 0, which samples fine, just without

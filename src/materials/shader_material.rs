@@ -349,14 +349,20 @@ impl std::fmt::Debug for ShaderLive {
 }
 
 impl ShaderLive {
+    // Read by the renderers only, so unused when `render` is off.
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
     /// This material value's identity.
     pub(crate) fn id(&self) -> u64 {
         self.id
     }
+    // Read by the renderers only, so unused when `render` is off.
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
     /// Identity of the state shared between clones.
     pub(crate) fn shared_id(&self) -> u64 {
         self.shared.id
     }
+    // Read by the renderers only, so unused when `render` is off.
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
     pub(crate) fn field_rev(&self, slot: usize) -> u64 {
         self.field_rev[slot]
     }
@@ -704,6 +710,8 @@ impl ShaderMaterial {
         (slot < 3).then_some(slot)
     }
 
+    // Read by the renderers only, so unused when `render` is off.
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
     /// One number per storage slot that changes whenever what the renderer
     /// would upload for it changes: the live version for a slot set through
     /// the setters, else the field's allocation, length and edit count — the

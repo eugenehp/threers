@@ -606,7 +606,7 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, page: NodeId)
         ui.add_text(b, m.name());
         ui.set_semantics(
             b,
-            Semantics::new(Role::Image).label(&format!("A box that moves: {}", m.name())),
+            Semantics::new(Role::Image).label(format!("A box that moves: {}", m.name())),
         );
         ui.set_motion(b, MotionSpec::new(m).amount(0.8));
     }

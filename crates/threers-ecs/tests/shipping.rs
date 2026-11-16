@@ -89,6 +89,39 @@ fn a_gamepad_host_cannot_wipe_the_stick() {
 }
 
 #[test]
+fn twin_sticks_take_a_thumb_each_and_record_both() {
+    let mut g = TestGame::new(|app| {
+        app.resource(Hud::new(640, 360));
+        app.plugin(
+            TouchControls::new()
+                .stick_in("move_x", "move_y", 0.0, 0.5)
+                .stick_in("look_x", "look_y", 0.5, 1.0),
+        );
+    });
+    g.world().start_recording();
+    g.input().touch_start(1, at(100.0, 200.0));
+    g.input().touch_start(2, at(500.0, 200.0));
+    g.frames(1);
+    g.input().touch_move(1, at(170.0, 200.0));
+    g.input().touch_move(2, at(500.0, 130.0));
+    g.frames(1);
+    assert_eq!(g.input().axis("move_x"), 1.0);
+    assert_eq!(g.input().axis("move_y"), 0.0);
+    assert_eq!(g.input().axis("look_x"), 0.0);
+    assert_eq!(g.input().axis("look_y"), 1.0, "the right thumb pushed up");
+    // Each lets go on its own.
+    g.input().touch_end(1);
+    g.frames(1);
+    assert_eq!(g.input().axis("move_x"), 0.0);
+    assert_eq!(g.input().axis("look_y"), 1.0);
+    // The second stick is in the recording, and reads back.
+    let text = g.world().stop_recording().unwrap().to_text();
+    assert!(text.contains("stick:1="), "{text}");
+    let back = threers_ecs::replay::Recording::from_text(&text).unwrap();
+    assert_eq!(back.to_text(), text);
+}
+
+#[test]
 fn nothing_is_drawn_until_someone_touches_the_screen() {
     let painted = |g: &TestGame| {
         let hud = g.resource::<Hud>();

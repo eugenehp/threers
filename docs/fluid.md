@@ -330,6 +330,57 @@ fluid.splats(15);
 JSON.parse(fluid.info());   // {"dye":[3641,2048],"sim":[455,256],…}
 ```
 
+## On Metal, without wgpu
+
+`metal::MetalFluid` is the same solver on Metal directly, and with the
+`metal-fluid` feature it is all that builds: no wgpu, no scene renderer.
+`metal_fluid_matches_wgpu` holds the two backends to one picture.
+
+```toml
+threers = { version = "0.1", default-features = false, features = ["metal-fluid"] }
+```
+
+```rust
+use threers::metal::{fluid_shader_source, FluidSplat, MetalDevice, MetalFieldFormats, MetalFluid};
+
+// On the app's own device, so the dye is a texture its passes can sample.
+let device = unsafe { MetalDevice::adopt_with_shader_source(app_device, &fluid_shader_source())? };
+let mut fluid = MetalFluid::with_formats(&device, w, h, config, MetalFieldFormats::Narrow)?;
+
+// One command buffer a frame, the app's: nothing is committed, nothing waits.
+fluid.splat_batch_on(cmd, &[FluidSplat { x, y, dx, dy, color, radius, erase: false }])?;
+fluid.step_on(cmd, dt)?;
+let dye = fluid.dye_texture(); // rgba16Float, origin top left
+```
+
+A `FluidSplat` carries its own radius, and with `erase` set takes its colour
+*out* of the dye, down to zero and no further. `Narrow` stores velocity in two
+channels and pressure, divergence and curl in one; it is not the default
+because the parity tests compare like with like.
+
+From Swift or C, [`threers-fluid2d`](../crates/threers-fluid2d) is the same
+thing as a static library with a C header.
+
+The volume is on Metal too, as `metal::MetalFluid3d`, also under
+`metal-fluid`. Its shaders are not written twice: the wgpu module's WGSL goes
+through naga into MSL at construction, every pass pinned to the same slots,
+with the sampler inlined and wgpu's own bounds checks — and
+`metal_fluid3d_matches_wgpu` finds the two backends' pictures identical to the
+byte, under both pressure solvers and with accumulation.
+
+```rust
+use threers::metal::{MetalDevice, MetalFluid3d};
+
+let (solver, dye) = MetalFluid3d::within_memory(192 << 20, 2); // what fits
+let mut volume = MetalFluid3d::new(&device, FluidConfig3d { resolution: solver, dye_resolution: dye, ..Default::default() })?;
+volume.impulse_at_screen(&device, &camera, uv, drag, 6.0, colour)?;
+volume.update(&device, dt)?;
+volume.render_on(&device, cmd, &camera, drawable_texture, format, size)?;
+```
+
+[`threers-fluid-ios`](../crates/threers-fluid-ios) is the volume as a C
+library on top of it.
+
 ## Three dimensions
 
 A volume, as a separate type — the 2D fluid is unchanged and is still what

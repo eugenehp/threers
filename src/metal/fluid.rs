@@ -50,8 +50,10 @@
 use super::device::{MetalDevice, MetalError};
 use super::enums::*;
 use super::objc::{msg0, msg1, msg2, msg3, sel, AutoreleasePool, Id, Owned};
-use super::postfx::{encode_fullscreen, fullscreen_pipeline_blend, fullscreen_pipeline_with};
-use super::resources::{new_texture_2d, upload_texture_2d};
+use super::pass::{
+    encode_fullscreen, fullscreen_pipeline_blend, fullscreen_pipeline_with, new_texture_2d, render_pass_descriptor,
+};
+#[cfg(metal_backend)]
 use super::target::{blit_texture_to_buffer_on_cmd, finish_texture_readback_into};
 
 use crate::fluid::passes::{Params, FLAG_BLOOM, FLAG_ENCODE, FLAG_SHADING, FLAG_SUNRAYS};
@@ -68,6 +70,42 @@ use crate::fluid::{Advection, FluidConfig, PressureSolver};
 /// memory nobody reads.
 const FORMAT: NSUInteger = pixel_format::RGBA16_FLOAT;
 
+/// How the fields are stored: what [`MetalFluid::with_formats`] takes.
+///
+/// [`Uniform`](Self::Uniform), every field four channels of half float, is
+/// the default and what the parity tests hold to the wgpu picture — see
+/// [`FORMAT`]. [`Narrow`](Self::Narrow) stores what each field actually uses,
+/// as the wgpu module does: velocity in two channels, pressure, divergence,
+/// curl and the rays in one. The solver grids shrink to a half and a quarter;
+/// the dye, which is most of the memory, keeps its four.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MetalFieldFormats {
+    #[default]
+    Uniform,
+    Narrow,
+}
+
+/// The pixel formats a [`MetalFieldFormats`] stands for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Formats {
+    dye: NSUInteger,
+    velocity: NSUInteger,
+    scalar: NSUInteger,
+}
+
+impl From<MetalFieldFormats> for Formats {
+    fn from(f: MetalFieldFormats) -> Self {
+        match f {
+            MetalFieldFormats::Uniform => Self { dye: FORMAT, velocity: FORMAT, scalar: FORMAT },
+            MetalFieldFormats::Narrow => Self {
+                dye: FORMAT,
+                velocity: pixel_format::RG16_FLOAT,
+                scalar: pixel_format::R16_FLOAT,
+            },
+        }
+    }
+}
+
 /// A field that is read and written in the same pass, so it needs two copies.
 struct Pair {
     read: Owned,
@@ -75,10 +113,10 @@ struct Pair {
 }
 
 impl Pair {
-    fn new(device: &MetalDevice, w: u32, h: u32) -> Result<Self, MetalError> {
+    fn new(device: &MetalDevice, w: u32, h: u32, format: NSUInteger) -> Result<Self, MetalError> {
         Ok(Self {
-            read: field(device, w, h)?,
-            write: field(device, w, h)?,
+            read: field(device, w, h, format)?,
+            write: field(device, w, h, format)?,
         })
     }
 
@@ -121,7 +159,7 @@ struct Grids {
 }
 
 impl Grids {
-    fn new(device: &MetalDevice, c: &FluidConfig, width: u32, height: u32) -> Result<Self, MetalError> {
+    fn new(device: &MetalDevice, c: &FluidConfig, f: Formats, width: u32, height: u32) -> Result<Self, MetalError> {
         let sim = grid(c.sim_resolution, width, height);
         let dye_size = grid(c.dye_resolution, width, height);
         let bloom = grid(c.bloom_resolution, width, height);
@@ -133,9 +171,9 @@ impl Grids {
             w /= 2;
             h /= 2;
             mg.push(Level {
-                pressure: Pair::new(device, w, h)?,
-                rhs: field(device, w, h)?,
-                residual: field(device, w, h)?,
+                pressure: Pair::new(device, w, h, f.scalar)?,
+                rhs: field(device, w, h, f.scalar)?,
+                residual: field(device, w, h, f.scalar)?,
                 size: (w, h),
             });
         }
@@ -145,24 +183,24 @@ impl Grids {
             if w < 2 || h < 2 {
                 break;
             }
-            bloom_chain.push((field(device, w, h)?, (w, h)));
+            bloom_chain.push((field(device, w, h, f.dye)?, (w, h)));
         }
         Ok(Self {
             sim,
             dye_size,
-            velocity: Pair::new(device, sim.0, sim.1)?,
-            dye: Pair::new(device, dye_size.0, dye_size.1)?,
-            pressure: Pair::new(device, sim.0, sim.1)?,
-            divergence: field(device, sim.0, sim.1)?,
-            curl: field(device, sim.0, sim.1)?,
-            scratch_velocity: field(device, sim.0, sim.1)?,
-            scratch_dye: field(device, dye_size.0, dye_size.1)?,
-            residual: field(device, sim.0, sim.1)?,
+            velocity: Pair::new(device, sim.0, sim.1, f.velocity)?,
+            dye: Pair::new(device, dye_size.0, dye_size.1, f.dye)?,
+            pressure: Pair::new(device, sim.0, sim.1, f.scalar)?,
+            divergence: field(device, sim.0, sim.1, f.scalar)?,
+            curl: field(device, sim.0, sim.1, f.scalar)?,
+            scratch_velocity: field(device, sim.0, sim.1, f.velocity)?,
+            scratch_dye: field(device, dye_size.0, dye_size.1, f.dye)?,
+            residual: field(device, sim.0, sim.1, f.scalar)?,
             mg,
-            bloom: (field(device, bloom.0, bloom.1)?, bloom),
+            bloom: (field(device, bloom.0, bloom.1, f.dye)?, bloom),
             bloom_chain,
-            sunrays: (field(device, rays.0, rays.1)?, rays),
-            sunrays_temp: field(device, rays.0, rays.1)?,
+            sunrays: (field(device, rays.0, rays.1, f.scalar)?, rays),
+            sunrays_temp: field(device, rays.0, rays.1, f.scalar)?,
         })
     }
 
@@ -197,12 +235,12 @@ fn texel_of(size: (u32, u32)) -> [f32; 2] {
     [1.0 / size.0 as f32, 1.0 / size.1 as f32]
 }
 
-fn field(device: &MetalDevice, w: u32, h: u32) -> Result<Owned, MetalError> {
+fn field(device: &MetalDevice, w: u32, h: u32, format: NSUInteger) -> Result<Owned, MetalError> {
     new_texture_2d(
         device,
         w,
         h,
-        FORMAT,
+        format,
         texture_usage::SHADER_READ | texture_usage::RENDER_TARGET,
         storage_mode::PRIVATE,
         1,
@@ -210,13 +248,21 @@ fn field(device: &MetalDevice, w: u32, h: u32) -> Result<Owned, MetalError> {
     )
 }
 
-/// The pipelines, one per fragment function. Every field is the same format,
-/// so unlike the wgpu side there is no pipeline-per-format cache — except for
-/// the display, whose target belongs to the caller.
+/// The pipelines, one per fragment function and target format. A pass that
+/// writes more than one kind of field (`clear`, `splat`, the advections) has
+/// one per format it writes — the same pipeline twice with
+/// [`MetalFieldFormats::Uniform`] — and the display is cached per caller's
+/// format, since that target belongs to the caller.
 struct Pipelines {
+    /// Into the dye; `_v` into velocity, `_s` into a one-channel field.
     clear: Owned,
+    clear_v: Owned,
+    clear_s: Owned,
     splat: Owned,
+    splat_v: Owned,
     advection: Owned,
+    advection_v: Owned,
+    advect_correct_v: Owned,
     divergence: Owned,
     curl: Owned,
     vorticity: Owned,
@@ -246,6 +292,8 @@ struct Pipelines {
 }
 
 /// A 2D fluid simulation running on Metal.
+pub use crate::fluid::FluidSplat;
+
 pub struct MetalFluid {
     config: FluidConfig,
     width: u32,
@@ -262,9 +310,11 @@ pub struct MetalFluid {
 
     /// The read-out's state. `rate` is the same counter and the same ring
     /// the wgpu module keeps; `history` is this backend's own 64x1 texture
-    /// for it, uploaded with `replaceRegion` rather than a queue write.
+    /// for it, filled by a blit on the frame's own command buffer — so the
+    /// next frame's row cannot land under this one's read, and nothing waits.
     rate: Rate,
     history: Owned,
+    formats: Formats,
 }
 
 impl MetalFluid {
@@ -278,6 +328,20 @@ impl MetalFluid {
         height: u32,
         config: FluidConfig,
     ) -> Result<Self, MetalError> {
+        Self::with_formats(device, width, height, config, MetalFieldFormats::Uniform)
+    }
+
+    /// As [`new`](Self::new), storing the fields as `formats` says —
+    /// [`MetalFieldFormats::Narrow`] for the solver's grids at a half and a
+    /// quarter of the memory, where nothing needs the parity with wgpu.
+    pub fn with_formats(
+        device: &MetalDevice,
+        width: u32,
+        height: u32,
+        config: FluidConfig,
+        formats: MetalFieldFormats,
+    ) -> Result<Self, MetalError> {
+        let f = Formats::from(formats);
         if config.pressure_iterations == 0 {
             return Err(MetalError::Unsupported(
                 "fluid: pressure_iterations must be at least 1".into(),
@@ -285,27 +349,33 @@ impl MetalFluid {
         }
         let (width, height) = (width.max(1), height.max(1));
 
-        let p = |name: &str| fullscreen_pipeline_with(device, "fluid_vs", name, FORMAT);
+        let p = |name: &str, format| fullscreen_pipeline_with(device, "fluid_vs", name, format);
         let pipes = Pipelines {
-            clear: p("fluid_fs_clear")?,
-            splat: p("fluid_fs_splat")?,
-            advection: p("fluid_fs_advection")?,
-            divergence: p("fluid_fs_divergence")?,
-            curl: p("fluid_fs_curl")?,
-            vorticity: p("fluid_fs_vorticity")?,
-            pressure: p("fluid_fs_pressure")?,
-            gradient: p("fluid_fs_gradient")?,
-            advect_correct: p("fluid_fs_advect_correct")?,
-            residual: p("fluid_fs_residual")?,
-            restrict: p("fluid_fs_restriction")?,
-            prolong: p("fluid_fs_prolong")?,
-            bloom_prefilter: p("fluid_fs_bloom_prefilter")?,
-            bloom_blur: p("fluid_fs_bloom_blur")?,
-            bloom_blur_add: fullscreen_pipeline_blend(device, "fluid_vs", "fluid_fs_bloom_blur", FORMAT, true)?,
-            bloom_final: p("fluid_fs_bloom_final")?,
-            sunrays_mask: p("fluid_fs_sunrays_mask")?,
-            sunrays: p("fluid_fs_sunrays")?,
-            blur: fullscreen_pipeline_with(device, "fluid_vs_blur", "fluid_fs_blur", FORMAT)?,
+            clear: p("fluid_fs_clear", f.dye)?,
+            clear_v: p("fluid_fs_clear", f.velocity)?,
+            clear_s: p("fluid_fs_clear", f.scalar)?,
+            splat: p("fluid_fs_splat", f.dye)?,
+            splat_v: p("fluid_fs_splat", f.velocity)?,
+            advection: p("fluid_fs_advection", f.dye)?,
+            advection_v: p("fluid_fs_advection", f.velocity)?,
+            divergence: p("fluid_fs_divergence", f.scalar)?,
+            curl: p("fluid_fs_curl", f.scalar)?,
+            vorticity: p("fluid_fs_vorticity", f.velocity)?,
+            pressure: p("fluid_fs_pressure", f.scalar)?,
+            gradient: p("fluid_fs_gradient", f.velocity)?,
+            advect_correct: p("fluid_fs_advect_correct", f.dye)?,
+            advect_correct_v: p("fluid_fs_advect_correct", f.velocity)?,
+            residual: p("fluid_fs_residual", f.scalar)?,
+            restrict: p("fluid_fs_restriction", f.scalar)?,
+            prolong: p("fluid_fs_prolong", f.scalar)?,
+            bloom_prefilter: p("fluid_fs_bloom_prefilter", f.dye)?,
+            bloom_blur: p("fluid_fs_bloom_blur", f.dye)?,
+            bloom_blur_add: fullscreen_pipeline_blend(device, "fluid_vs", "fluid_fs_bloom_blur", f.dye, true)?,
+            bloom_final: p("fluid_fs_bloom_final", f.dye)?,
+            // Into the dye's spare buffer; see `sunrays`.
+            sunrays_mask: p("fluid_fs_sunrays_mask", f.dye)?,
+            sunrays: p("fluid_fs_sunrays", f.scalar)?,
+            blur: fullscreen_pipeline_with(device, "fluid_vs_blur", "fluid_fs_blur", f.scalar)?,
             display: Vec::new(),
             display_over: Vec::new(),
             color: Vec::new(),
@@ -313,7 +383,7 @@ impl MetalFluid {
         };
 
         let fluid = Self {
-            grids: Grids::new(device, &config, width, height)?,
+            grids: Grids::new(device, &config, f, width, height)?,
             config,
             width,
             height,
@@ -329,10 +399,11 @@ impl MetalFluid {
                 1,
                 pixel_format::RGBA8_UNORM,
                 texture_usage::SHADER_READ,
-                storage_mode::SHARED,
+                storage_mode::PRIVATE,
                 1,
                 1,
             )?,
+            formats: f,
         };
         fluid.zero_fields(device)?;
         Ok(fluid)
@@ -350,15 +421,46 @@ impl MetalFluid {
     fn zero_fields(&self, device: &MetalDevice) -> Result<(), MetalError> {
         let _pool = AutoreleasePool::new();
         let cmd = self.command_buffer(device);
+        self.zero_fields_on(cmd)?;
+        commit(cmd);
+        Ok(())
+    }
+
+    fn zero_fields_on(&self, cmd: Id) -> Result<(), MetalError> {
         for t in self.grids.all() {
             clear_to_zero(cmd, t)?;
         }
-        commit(cmd);
         Ok(())
     }
 
     pub fn config(&self) -> &FluidConfig {
         &self.config
+    }
+
+    /// Empty the canvas: every field back to zero, the grids kept.
+    pub fn clear(&mut self, device: &MetalDevice) -> Result<(), MetalError> {
+        self.zero_fields(device)
+    }
+
+    /// [`clear`](Self::clear), encoded into `cmd` — an uncommitted
+    /// `MTLCommandBuffer` on this fluid's device — for the caller to commit.
+    ///
+    /// The `_on` methods are for an application with a command queue and a
+    /// frame of its own: everything the fluid does goes into the caller's
+    /// buffer, in call order, and the fluid commits nothing and waits on
+    /// nothing. The methods without the suffix make a buffer on the
+    /// [`MetalDevice`]'s queue and commit it.
+    pub fn clear_on(&mut self, cmd: Id) -> Result<(), MetalError> {
+        self.zero_fields_on(cmd)
+    }
+
+    /// The dye as it stands — an `rgba16Float` `MTLTexture`, borrowed — for
+    /// an application that composites the picture itself. Which texture this
+    /// is changes with every pass that writes the dye, so ask again after
+    /// each [`step`](Self::step) or splat; work encoded on
+    /// [`MetalDevice::queue_id`] after those orders after them.
+    pub fn dye_texture(&self) -> Id {
+        self.grids.dye.read.id()
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -405,17 +507,17 @@ impl MetalFluid {
     /// dye and the velocity resampled into theirs, bilinearly, as the wgpu
     /// module's `resample`, so a resize does not wipe the picture.
     fn reallocate(&mut self, device: &MetalDevice) -> Result<(), MetalError> {
-        let old = std::mem::replace(&mut self.grids, Grids::new(device, &self.config, self.width, self.height)?);
+        let old = std::mem::replace(&mut self.grids, Grids::new(device, &self.config, self.formats, self.width, self.height)?);
         self.zero_fields(device)?;
         let _pool = AutoreleasePool::new();
         let cmd = self.command_buffer(device);
         // The clear pass at a value of one is a copy at the target's uv.
         let u = Params { value: 1.0, ..Default::default() };
-        for (src, dst) in [
-            (old.dye.read.id(), self.grids.dye.read.id()),
-            (old.velocity.read.id(), self.grids.velocity.read.id()),
+        for (src, dst, pipe) in [
+            (old.dye.read.id(), self.grids.dye.read.id(), &self.pipes.clear),
+            (old.velocity.read.id(), self.grids.velocity.read.id(), &self.pipes.clear_v),
         ] {
-            encode(cmd, &self.pipes.clear, dst, |enc| bind(enc, u, &[src]))?;
+            encode(cmd, pipe, dst, |enc| bind(enc, u, &[src]))?;
         }
         commit(cmd);
         Ok(())
@@ -497,7 +599,6 @@ impl MetalFluid {
     /// two passes and one submit a batch, as `record_splat_batch` on the
     /// wgpu side: the pass sums them, `value` of them.
     fn splats(&mut self, device: &MetalDevice, list: &[(f32, f32, f32, f32, [f32; 3])]) -> Result<(), MetalError> {
-        use crate::fluid::passes::MAX_BATCH;
         let aspect = self.width as f32 / self.height as f32;
         // In canvas fractions, widened with the aspect so a splat keeps its
         // physical size on a wide canvas.
@@ -505,31 +606,58 @@ impl MetalFluid {
         if aspect > 1.0 {
             radius *= aspect;
         }
+        let list: Vec<FluidSplat> = list
+            .iter()
+            .map(|&(x, y, dx, dy, color)| FluidSplat { x, y, dx, dy, color, radius, erase: false })
+            .collect();
+        self.splat_batch(device, &list)
+    }
+
+    /// Splats an application sizes itself — a brush whose width is not the
+    /// configuration's, or an eraser — in as few passes as [`splat`](Self::splat)
+    /// takes for one.
+    pub fn splat_batch(&mut self, device: &MetalDevice, list: &[FluidSplat]) -> Result<(), MetalError> {
+        if list.is_empty() {
+            return Ok(());
+        }
+        let _pool = AutoreleasePool::new();
+        let cmd = self.command_buffer(device);
+        self.splat_batch_on(cmd, list)?;
+        commit(cmd);
+        Ok(())
+    }
+
+    /// [`splat_batch`](Self::splat_batch), encoded into `cmd`; see
+    /// [`clear_on`](Self::clear_on).
+    pub fn splat_batch_on(&mut self, cmd: Id, list: &[FluidSplat]) -> Result<(), MetalError> {
+        use crate::fluid::passes::MAX_BATCH;
+        let aspect = self.width as f32 / self.height as f32;
         for chunk in list.chunks(MAX_BATCH) {
             let _pool = AutoreleasePool::new();
             // Two `vec4`s a splat: (point, radius, _) and (colour, _).
             let mut velocity = vec![0.0f32; chunk.len() * 8];
             let mut dye = vec![0.0f32; chunk.len() * 8];
-            for (k, &(x, y, dx, dy, c)) in chunk.iter().enumerate() {
+            for (k, s) in chunk.iter().enumerate() {
                 for batch in [&mut velocity, &mut dye] {
-                    batch[k * 8..k * 8 + 3].copy_from_slice(&[x, y, radius]);
+                    batch[k * 8..k * 8 + 3].copy_from_slice(&[s.x, s.y, s.radius]);
                 }
-                velocity[k * 8 + 4..k * 8 + 6].copy_from_slice(&[dx, dy]);
-                dye[k * 8 + 4..k * 8 + 7].copy_from_slice(&c);
+                velocity[k * 8 + 4..k * 8 + 6].copy_from_slice(&[s.dx, s.dy]);
+                dye[k * 8 + 4..k * 8 + 8].copy_from_slice(&[s.color[0], s.color[1], s.color[2], if s.erase { 1.0 } else { 0.0 }]);
             }
             let u = Params {
                 aspect_ratio: aspect,
                 value: chunk.len() as f32,
                 ..Default::default()
             };
-            let cmd = self.command_buffer(device);
-            for (field, batch) in [(&self.grids.velocity, &velocity), (&self.grids.dye, &dye)] {
-                encode(cmd, &self.pipes.splat, field.write.id(), |enc| {
+            for (field, batch, pipe) in [
+                (&self.grids.velocity, &velocity, &self.pipes.splat_v),
+                (&self.grids.dye, &dye, &self.pipes.splat),
+            ] {
+                encode(cmd, pipe, field.write.id(), |enc| {
                     bind(enc, u, &[field.read.id()]);
                     bind_batch(enc, batch);
                 })?;
             }
-            commit(cmd);
             self.grids.velocity.swap();
             self.grids.dye.swap();
         }
@@ -573,9 +701,17 @@ impl MetalFluid {
     /// One step of the solver: the same eight passes, in the same order.
     pub fn step(&mut self, device: &MetalDevice, dt: f32) -> Result<(), MetalError> {
         let _pool = AutoreleasePool::new();
+        let cmd = self.command_buffer(device);
+        self.step_on(cmd, dt)?;
+        commit(cmd);
+        Ok(())
+    }
+
+    /// [`step`](Self::step), encoded into `cmd`; see [`clear_on`](Self::clear_on).
+    pub fn step_on(&mut self, cmd: Id, dt: f32) -> Result<(), MetalError> {
+        let _pool = AutoreleasePool::new();
         let c = self.config;
         let texel = [1.0 / self.grids.sim.0 as f32, 1.0 / self.grids.sim.1 as f32];
-        let cmd = self.command_buffer(device);
 
         // 1. Curl.
         let plain = Params {
@@ -615,7 +751,7 @@ impl MetalFluid {
             value: c.pressure,
             ..Default::default()
         };
-        encode(cmd, &self.pipes.clear, self.grids.pressure.write.id(), |enc| {
+        encode(cmd, &self.pipes.clear_s, self.grids.pressure.write.id(), |enc| {
             bind(enc, u, &[self.grids.pressure.read.id()]);
         })?;
         self.grids.pressure.swap();
@@ -642,8 +778,6 @@ impl MetalFluid {
         // same number at any dye size.
         self.advect(cmd, dt, texel, true)?;
         self.advect(cmd, dt, texel, false)?;
-
-        commit(cmd);
         Ok(())
     }
 
@@ -669,10 +803,15 @@ impl MetalFluid {
             ..Default::default()
         };
         let u = params;
-        encode(cmd, &self.pipes.advection, fwd, |enc| bind(enc, u, &[velocity, src]))?;
+        let (advection, correct) = if velocity_field {
+            (&self.pipes.advection_v, &self.pipes.advect_correct_v)
+        } else {
+            (&self.pipes.advection, &self.pipes.advect_correct)
+        };
+        encode(cmd, advection, fwd, |enc| bind(enc, u, &[velocity, src]))?;
         if maccormack {
             let u = Params { dissipation, ..params };
-            encode(cmd, &self.pipes.advect_correct, scratch, |enc| bind(enc, u, &[velocity, fwd, src]))?;
+            encode(cmd, correct, scratch, |enc| bind(enc, u, &[velocity, fwd, src]))?;
         }
         let g = &mut self.grids;
         match (velocity_field, maccormack) {
@@ -776,10 +915,28 @@ impl MetalFluid {
         self.composite(device, target, format, size, std::ptr::null_mut())
     }
 
+    /// [`render`](Self::render), encoded into `cmd`; see
+    /// [`clear_on`](Self::clear_on). `device` is for the output pipelines,
+    /// compiled the first time a target format is seen.
+    pub fn render_on(
+        &mut self,
+        device: &MetalDevice,
+        cmd: Id,
+        target: Id,
+        format: NSUInteger,
+        size: (u32, u32),
+    ) -> Result<(), MetalError> {
+        let _pool = AutoreleasePool::new();
+        self.composite_on(device, cmd, target, format, size)?;
+        self.rate.tick();
+        Ok(())
+    }
+
     /// Composite the dye into a window's drawable — `frame`, from
     /// [`MetalSurface::next_frame`](crate::metal::MetalSurface::next_frame)
     /// — and present it. The surface's sample count does not matter: the
     /// picture goes to the drawable itself.
+    #[cfg(metal_backend)]
     pub fn present(&mut self, device: &MetalDevice, frame: &crate::metal::SurfaceFrame) -> Result<(), MetalError> {
         let a = frame.attachments();
         let target = if a.resolve.is_null() { a.color } else { a.resolve };
@@ -797,9 +954,29 @@ impl MetalFluid {
         drawable: Id,
     ) -> Result<(), MetalError> {
         let _pool = AutoreleasePool::new();
-        self.ensure_output_pipelines(device, format)?;
         let cmd = self.command_buffer(device);
+        self.composite_on(device, cmd, target, format, size)?;
+        if !drawable.is_null() {
+            unsafe {
+                let _: () = msg1(cmd, sel!("presentDrawable:"), drawable);
+            }
+        }
+        commit(cmd);
+        self.rate.tick();
+        Ok(())
+    }
 
+    /// The display into `target`, on `cmd`: bloom, sunrays, the background,
+    /// the dye and the read-out. Commits nothing.
+    fn composite_on(
+        &mut self,
+        device: &MetalDevice,
+        cmd: Id,
+        target: Id,
+        format: NSUInteger,
+        size: (u32, u32),
+    ) -> Result<(), MetalError> {
+        self.ensure_output_pipelines(device, format)?;
         let c = self.config;
         if c.bloom {
             self.bloom(cmd)?;
@@ -860,13 +1037,11 @@ impl MetalFluid {
             // A third pass over the finished picture. The wgpu module gets
             // this as a third draw inside the display pass; here every pass
             // is its own encoder, so it is a pass that loads.
-            upload_texture_2d(
-                &self.history,
-                Frames::LEN as u32,
-                1,
-                4,
-                &self.rate.frames().row(),
-            )?;
+            // A blit from a fresh buffer, on this frame's buffer: ordered
+            // after the last frame's read by the GPU, where a `replaceRegion`
+            // from the CPU would have to wait for that read to finish.
+            let row = device.new_buffer(&self.rate.frames().row())?;
+            blit_row_to_texture(cmd, &row, &self.history, Frames::LEN as u32)?;
             let u = Params {
                 value: self.rate.fps(),
                 radius: self.rate.scale_ms(),
@@ -879,20 +1054,6 @@ impl MetalFluid {
             })?;
         }
 
-        if !drawable.is_null() {
-            unsafe {
-                let _: () = msg1(cmd, sel!("presentDrawable:"), drawable);
-            }
-        }
-        commit(cmd);
-        if c.show_fps {
-            // The next frame rewrites the history texture from the CPU
-            // (`replaceRegion`), which must not land under this one's read.
-            unsafe {
-                let _: () = msg0(cmd, sel!("waitUntilCompleted"));
-            }
-        }
-        self.rate.tick();
         Ok(())
     }
 
@@ -955,6 +1116,9 @@ impl MetalFluid {
     }
 
     /// Render into a fresh texture and read it back as tightly packed RGBA.
+    /// Needs the full backend (`metal`): the read-back goes through its
+    /// render target.
+    #[cfg(metal_backend)]
     pub fn capture_rgba(&mut self, device: &MetalDevice) -> Result<Vec<u8>, MetalError> {
         // The blit's command buffer is autoreleased: drain it here, not at the
         // thread's exit.
@@ -1080,7 +1244,7 @@ fn encode_over(
     }
     let _pool = AutoreleasePool::new();
     unsafe {
-        let desc = super::postfx::render_pass_descriptor(dst);
+        let desc = render_pass_descriptor(dst);
         let attachments: Id = msg0(desc, sel!("colorAttachments"));
         let color: Id = msg1(attachments, sel!("objectAtIndexedSubscript:"), 0usize);
         let _: () = msg1(color, sel!("setLoadAction:"), load_action::LOAD);
@@ -1109,10 +1273,10 @@ fn encode_over(
 /// `render_pass_descriptor` clears to opaque black, which is right for a
 /// picture and wrong for a field: an alpha of one in the dye is a texel that
 /// is fully covered, and in the velocity it is a component the solver reads.
-fn clear_to_zero(cmd: Id, dst: Id) -> Result<(), MetalError> {
+pub(super) fn clear_to_zero(cmd: Id, dst: Id) -> Result<(), MetalError> {
     let _pool = AutoreleasePool::new();
     unsafe {
-        let desc = super::postfx::render_pass_descriptor(dst);
+        let desc = render_pass_descriptor(dst);
         let attachments: Id = msg0(desc, sel!("colorAttachments"));
         let color: Id = msg1(attachments, sel!("objectAtIndexedSubscript:"), 0usize);
         let _: () = msg1(
@@ -1136,7 +1300,34 @@ fn clear_to_zero(cmd: Id, dst: Id) -> Result<(), MetalError> {
 
 /// Submit without waiting: one queue runs its command buffers in order, and
 /// each owns its uniforms (see [`bind`]) and retains its textures.
-fn commit(cmd: Id) {
+/// Copy one row of RGBA8 from `buffer` into `texture`, `width` texels wide.
+pub(super) fn blit_row_to_texture(cmd: Id, buffer: &Owned, texture: &Owned, width: u32) -> Result<(), MetalError> {
+    unsafe {
+        let blit: Id = msg0(cmd, sel!("blitCommandEncoder"));
+        if blit.is_null() {
+            return Err(MetalError::Unsupported("fluid: no blit encoder for the read-out".into()));
+        }
+        let _: () = super::objc::msg9(
+            blit,
+            sel!(
+                "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:"
+            ),
+            buffer.id(),
+            0usize,
+            (width * 4) as NSUInteger,
+            (width * 4) as NSUInteger,
+            MTLSize { width: width as NSUInteger, height: 1, depth: 1 },
+            texture.id(),
+            0usize,
+            0usize,
+            MTLOrigin::default(),
+        );
+        let _: () = msg0(blit, sel!("endEncoding"));
+    }
+    Ok(())
+}
+
+pub(super) fn commit(cmd: Id) {
     unsafe {
         let _: () = msg0(cmd, sel!("commit"));
     }
@@ -1466,6 +1657,82 @@ mod gpu_tests {
             "ten steps erased the dye (brightest {})",
             brightest(&dye)
         );
+    }
+
+    /// Narrow formats are the same solver in less memory: a splat survives
+    /// ten steps, and the picture stays close to the uniform one.
+    #[test]
+    fn narrow_formats_keep_the_dye_and_the_picture() {
+        let Some(device) = device() else { return };
+        let config = FluidConfig { bloom: false, sunrays: false, colorful: false, ..FluidConfig::default() };
+        let run = |formats| {
+            let mut fluid = MetalFluid::with_formats(&device, 256, 256, config, formats).unwrap();
+            fluid.splat(&device, 0.5, 0.5, 300.0, -200.0, [1.0, 0.5, 0.25]).unwrap();
+            for _ in 0..10 {
+                fluid.update(&device, 1.0 / 60.0);
+            }
+            fluid.capture_rgba(&device).unwrap()
+        };
+        let (wide, narrow) = (run(MetalFieldFormats::Uniform), run(MetalFieldFormats::Narrow));
+        assert!(brightest(&narrow) > 100, "narrow formats lost the dye (brightest {})", brightest(&narrow));
+        let mean = wide.iter().zip(&narrow).map(|(a, b)| (*a as i32 - *b as i32).abs() as f64).sum::<f64>()
+            / wide.len() as f64;
+        assert!(mean < 1.0, "narrow formats drew a different fluid (mean |diff| {mean:.3}/255)");
+    }
+
+    /// Everything encoded into one caller's buffer gives the picture the
+    /// committing methods give, buffer by buffer.
+    #[test]
+    fn the_on_methods_draw_what_the_committing_ones_draw() {
+        let Some(device) = device() else { return };
+        let config = FluidConfig { bloom: false, sunrays: false, colorful: false, ..FluidConfig::default() };
+        let splats = [
+            FluidSplat { x: 0.3, y: 0.4, dx: 400.0, dy: 0.0, color: [1.0, 0.2, 0.1], radius: 0.003, erase: false },
+            FluidSplat { x: 0.6, y: 0.6, dx: 0.0, dy: -300.0, color: [0.1, 0.4, 1.0], radius: 0.003, erase: false },
+        ];
+        let mut a = MetalFluid::new(&device, 256, 256, config).unwrap();
+        let mut b = MetalFluid::new(&device, 256, 256, config).unwrap();
+        for _ in 0..5 {
+            a.splat_batch(&device, &splats).unwrap();
+            a.step(&device, 1.0 / 60.0).unwrap();
+
+            let cmd = device.command_buffer();
+            b.splat_batch_on(cmd, &splats).unwrap();
+            b.step_on(cmd, 1.0 / 60.0).unwrap();
+            commit(cmd);
+        }
+        let (ra, rb) = (a.capture_rgba(&device).unwrap(), b.capture_rgba(&device).unwrap());
+        assert!(brightest(&ra) > 50);
+        assert_eq!(ra, rb, "one buffer and many drew different fluids");
+
+        let cmd = device.command_buffer();
+        b.clear_on(cmd).unwrap();
+        commit(cmd);
+        assert_eq!(brightest(&b.capture_rgba(&device).unwrap()), 0, "clear_on left dye behind");
+    }
+
+    /// An eraser splat takes its colour back out of the dye, and stops at
+    /// zero rather than going negative; `clear` empties the lot.
+    #[test]
+    fn an_eraser_takes_dye_away_and_clear_empties_it() {
+        let Some(device) = device() else { return };
+        let mut fluid = MetalFluid::new(&device, 256, 256, FluidConfig::default()).unwrap();
+        let paint = FluidSplat { x: 0.5, y: 0.5, color: [1.0, 0.5, 0.25], radius: 0.0025, ..Default::default() };
+        fluid.splat_batch(&device, &[paint]).unwrap();
+        let src = fluid.dye_texture();
+        let before = brightest(&dump(&mut fluid, &device, src));
+        assert!(before > 100, "the paint did not land (brightest {before})");
+
+        let erase = FluidSplat { color: [4.0, 4.0, 4.0], erase: true, ..paint };
+        fluid.splat_batch(&device, &[erase]).unwrap();
+        let src = fluid.dye_texture();
+        let after = brightest(&dump(&mut fluid, &device, src));
+        assert!(after < before / 4, "the eraser left the dye ({before} → {after})");
+
+        fluid.splat_batch(&device, &[paint]).unwrap();
+        fluid.clear(&device).unwrap();
+        let src = fluid.dye_texture();
+        assert_eq!(brightest(&dump(&mut fluid, &device, src)), 0, "clear left dye behind");
     }
 
     /// The two backends are the same simulation: the solver and the display,

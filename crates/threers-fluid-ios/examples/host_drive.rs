@@ -2,8 +2,7 @@
 //!
 //!     cargo run --release -p threers-fluid-ios --example host_drive
 //!
-//! The same `CAMetalLayer`, the same wgpu surface and the same Metal
-//! drawables an iPad uses — everything between the C ABI and the screen,
+//! The same `CAMetalLayer` and the same Metal drawables an iPad uses — everything between the C ABI and the screen,
 //! short of the screen. What it cannot tell you is how fast an A-series GPU
 //! is: this is an M-series Mac and it will flatter every number below.
 //!

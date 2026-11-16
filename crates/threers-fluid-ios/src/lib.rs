@@ -39,9 +39,8 @@
 //! [`threers_fluid_suggested_budget_mb`] is a starting point, not an answer —
 //! only the app knows what else is resident.
 
-// A `CAMetalLayer` exists only on Apple's platforms, and so does
-// `GpuContext::from_metal_layer`. Elsewhere the crate is empty, so the
-// workspace still builds there.
+// A `CAMetalLayer` exists only on Apple's platforms, and so does Metal.
+// Elsewhere the crate is empty, so the workspace still builds there.
 #![cfg(any(
     target_os = "macos",
     target_os = "ios",
@@ -52,21 +51,43 @@
 use std::ffi::c_void;
 
 use threers::controls::{OrbitControls, PointerEvent};
-use threers::fluid::{within_memory, FluidConfig3d, FluidSim3d};
-use threers::gpu::GpuContext;
+use threers::fluid::FluidConfig3d;
+use threers::metal::objc::{get_sel, msg0, msg1, AutoreleasePool, Id, Owned};
+use threers::metal::{MetalDevice, MetalFluid3d};
 use threers::{PerspectiveCamera, Vector3};
+
+/// `MTLPixelFormatBGRA8Unorm`, what the layer is set to: what a
+/// `CAMetalLayer` is by default, and unsigned rather than sRGB: the march
+/// writes display values.
+const LAYER_FORMAT: u64 = 80;
+
+/// `CGSize`, by value, for `setDrawableSize:`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CGSize {
+    width: f64,
+    height: f64,
+}
 
 /// Everything one view needs. Opaque to the caller.
 pub struct Fluid {
-    gpu: GpuContext,
-    surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
-    sim: FluidSim3d,
+    device: MetalDevice,
+    /// The view's `CAMetalLayer`, retained for as long as the handle lives.
+    layer: Owned,
+    size: (u32, u32),
+    sim: MetalFluid3d,
     camera: PerspectiveCamera,
     controls: OrbitControls,
     elapsed: f32,
     /// Smoothed whole-frame time, present included.
     frame_ms: f32,
+    /// Where the stroke being painted was last, in uv; `None` between strokes.
+    last_paint: Option<[f32; 2]>,
+    /// The paint's colour, or `None` to walk the hue wheel stroke by stroke.
+    paint_colour: Option<[f32; 3]>,
+    pushes: u32,
+    /// The plume that feeds itself, so there is something to watch untouched.
+    ambient: bool,
 }
 
 /// What the fluid came out as, for a debug overlay.
@@ -90,7 +111,8 @@ pub struct FluidInfo {
     /// reports the same number for a volume of 56³ and one of 144³, and for
     /// a speed of zero.
     ///
-    /// The ray march is not included; see `FluidSim3d::stage_ms`.
+    /// The ray march is not included: the step is a command buffer of its
+    /// own, and this is that buffer's time on the GPU.
     pub solver_ms: f32,
 }
 
@@ -124,49 +146,36 @@ pub unsafe extern "C" fn threers_fluid_create(
         return std::ptr::null_mut();
     }
     let (width, height) = (width.max(1), height.max(1));
-    let Ok((gpu, surface)) = pollster::block_on(unsafe { GpuContext::from_metal_layer(layer) })
-    else {
+    let _pool = AutoreleasePool::new();
+    let Ok(device) = MetalDevice::new() else {
         return std::ptr::null_mut();
     };
-
-    let caps = surface.get_capabilities(&gpu.adapter);
-    let format = caps
-        .formats
-        .iter()
-        .copied()
-        .find(|f| !f.is_srgb())
-        .unwrap_or(caps.formats[0]);
-    let config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format,
-        width,
-        height,
-        // Fifo everywhere: a phone's display link is the clock, and a fluid
-        // that races it only heats the device.
-        present_mode: wgpu::PresentMode::Fifo,
-        alpha_mode: caps.alpha_modes[0],
-        view_formats: vec![],
-        desired_maximum_frame_latency: 2,
-        color_space: wgpu::SurfaceColorSpace::Srgb,
+    let Some(layer) = (unsafe { Owned::retain(layer.cast()) }) else {
+        return std::ptr::null_mut();
     };
-    surface.configure(&gpu.device, &config);
+    unsafe {
+        let _: () = msg1(layer.id(), get_sel("setDevice:\0"), device.device_id());
+        let _: () = msg1(layer.id(), get_sel("setPixelFormat:\0"), LAYER_FORMAT);
+        // The march writes the drawable and nothing samples it.
+        let _: () = msg1(layer.id(), get_sel("setFramebufferOnly:\0"), true);
+        let _: () = msg1(
+            layer.id(),
+            get_sel("setDrawableSize:\0"),
+            CGSize {
+                width: width as f64,
+                height: height as f64,
+            },
+        );
+    }
 
-    // Resolved against the configuration this is about to build, not against
-    // what the adapter would allow: the packed dye is off by default, and
-    // predicting with it on halves the estimate for the biggest field.
-    let base = FluidConfig3d::default();
-    let formats = threers::fluid::FluidFormats::for_adapter(&gpu.adapter)
-        .unwrap_or_default()
-        .resolve(base.compact_dye);
     let budget_mb = if budget_mb == 0 {
         SUGGESTED_BUDGET_MB
     } else {
         budget_mb.max(4)
     };
-    let (solver, dye) = within_memory((budget_mb as u64) << 20, 2, formats);
-    let sim = match FluidSim3d::with_formats(
-        gpu.device.clone(),
-        gpu.queue.clone(),
+    let (solver, dye) = MetalFluid3d::within_memory((budget_mb as u64) << 20, 2);
+    let sim = match MetalFluid3d::new(
+        &device,
         FluidConfig3d {
             resolution: solver,
             dye_resolution: dye,
@@ -176,18 +185,12 @@ pub unsafe extern "C" fn threers_fluid_create(
             // A phone marches fewer samples than a desktop and the empty
             // space skip is what makes that affordable.
             march_steps: 64,
-            ..base
+            ..FluidConfig3d::default()
         },
-        formats,
     ) {
         Ok(sim) => sim,
         Err(_) => return std::ptr::null_mut(),
     };
-
-    // Ask for the GPU's own clock. It is the only way to see what the fluid
-    // costs behind a vsync, and it is free where the device has it.
-    let mut sim = sim;
-    sim.profile();
 
     let mut camera = PerspectiveCamera::new(40.0, width as f32 / height as f32, 0.05, 20.0);
     camera.position = Vector3::new(1.1, 0.18, 1.24);
@@ -197,14 +200,18 @@ pub unsafe extern "C" fn threers_fluid_create(
     controls.max_distance = 6.0;
 
     Box::into_raw(Box::new(Fluid {
-        gpu,
-        surface,
-        config,
+        device,
+        layer,
+        size: (width, height),
         sim,
         camera,
         controls,
         elapsed: 0.0,
         frame_ms: 16.0,
+        last_paint: None,
+        paint_colour: None,
+        pushes: 0,
+        ambient: true,
     }))
 }
 
@@ -238,6 +245,18 @@ pub enum Key {
     /// Draw the frame rate over the picture, `a` non-zero for on. Drawn in
     /// the shader, so it needs no view of its own and no font.
     ShowFps = 6,
+    /// Paint into the volume under a point: `a`, `b` in uv of the view (0 to
+    /// 1, origin top left). `c` zero starts a stroke — a tap is a stroke of
+    /// one — and non-zero continues it, pushing the dye the way the finger
+    /// moved since the last call. The dye lands on the plane through the
+    /// volume's centre facing the camera, so it stays under the finger
+    /// however the camera has orbited.
+    Paint = 7,
+    /// The paint's colour, `a`, `b`, `c` linear RGB. All three zero walks the
+    /// hue wheel instead, a new hue a stroke.
+    PaintColor = 8,
+    /// The plume that feeds itself, `a` non-zero for on (the default).
+    Ambient = 9,
 }
 
 /// Set one thing. See [`Key`] for what `a`, `b` and `c` mean.
@@ -254,13 +273,18 @@ pub unsafe extern "C" fn threers_fluid_set(handle: *mut Fluid, key: u32, a: f32,
     let Some(f) = (unsafe { handle.as_mut() }) else {
         return;
     };
-    let size = (f.config.width as f32, f.config.height as f32);
+    let size = (f.size.0 as f32, f.size.1 as f32);
     match key {
         k if k == Key::Resize as u32 => {
-            f.config.width = (a as u32).max(1);
-            f.config.height = (b as u32).max(1);
-            f.surface.configure(&f.gpu.device, &f.config);
-            f.camera.aspect = f.config.width as f32 / f.config.height as f32;
+            f.size = ((a as u32).max(1), (b as u32).max(1));
+            let drawable = CGSize {
+                width: f.size.0 as f64,
+                height: f.size.1 as f64,
+            };
+            unsafe {
+                let _: () = msg1(f.layer.id(), get_sel("setDrawableSize:\0"), drawable);
+            }
+            f.camera.aspect = f.size.0 as f32 / f.size.1 as f32;
         }
         k if k == Key::Touch as u32 => f.controls.update(
             PointerEvent {
@@ -288,21 +312,50 @@ pub unsafe extern "C" fn threers_fluid_set(handle: *mut Fluid, key: u32, a: f32,
             &mut f.camera,
             size,
         ),
-        k if k == Key::Splat as u32 => f.sim.multiple_splats((a.max(0.0) as u32).min(32)),
+        k if k == Key::Splat as u32 => {
+            let _ = f
+                .sim
+                .multiple_splats(&f.device, (a.max(0.0) as u32).min(32));
+        }
         k if k == Key::Speed as u32 => {
             let mut cfg = *f.sim.config();
             cfg.time_scale = a.clamp(0.0, 8.0);
-            f.sim.set_config(cfg);
+            let _ = f.sim.set_config(&f.device, cfg);
         }
         k if k == Key::ShowFps as u32 => {
             let mut cfg = *f.sim.config();
             cfg.show_fps = a != 0.0;
-            f.sim.set_config(cfg);
+            let _ = f.sim.set_config(&f.device, cfg);
         }
+        k if k == Key::Paint as u32 => {
+            let at = [a.clamp(0.0, 1.0), b.clamp(0.0, 1.0)];
+            let previous = if c != 0.0 { f.last_paint } else { None };
+            if previous.is_none() {
+                f.pushes = f.pushes.wrapping_add(1);
+            }
+            let drag = previous.map_or([0.0, 0.0], |p| [at[0] - p[0], at[1] - p[1]]);
+            f.last_paint = Some(at);
+            let colour = f.paint_colour.unwrap_or_else(|| {
+                let c = hsv_to_rgb((f.pushes as f32 * 0.137).fract());
+                [c[0] * 1.2, c[1] * 1.2, c[2] * 1.2]
+            });
+            let force = f.sim.config().splat_force;
+            let _ = f
+                .sim
+                .impulse_at_screen(&f.device, &f.camera, at, drag, force, colour);
+        }
+        k if k == Key::PaintColor as u32 => {
+            f.paint_colour = if a == 0.0 && b == 0.0 && c == 0.0 {
+                None
+            } else {
+                Some([a, b, c])
+            };
+        }
+        k if k == Key::Ambient as u32 => f.ambient = a != 0.0,
         k if k == Key::Accumulate as u32 => {
             let mut cfg = *f.sim.config();
             cfg.temporal_samples = (a.max(1.0) as u32).clamp(1, 32);
-            f.sim.set_config(cfg);
+            let _ = f.sim.set_config(&f.device, cfg);
         }
         _ => {}
     }
@@ -329,35 +382,50 @@ pub unsafe extern "C" fn threers_fluid_frame(handle: *mut Fluid, dt: f32) -> boo
     let dt = dt.clamp(1.0 / 240.0, 1.0 / 20.0);
     f.elapsed += dt;
 
+    let _pool = AutoreleasePool::new();
     // A plume that keeps feeding itself, so there is something to look at
     // without touching the screen.
-    if f.elapsed > 0.08 {
+    if f.ambient && f.elapsed > 0.08 {
         f.elapsed = 0.0;
         let a = started.elapsed().as_secs_f32() + f.frame_ms;
-        f.sim.splat(
+        let _ = f.sim.splat(
+            &f.device,
             [0.5 + 0.05 * a.cos(), 0.12, 0.5 + 0.05 * a.sin()],
             [0.0, 300.0, 0.0],
             [1.0, 0.45, 0.3],
         );
     }
-    // `update`, not `step`: the speed knob is applied there.
-    f.sim.update(dt);
+    // `update`, not `step`: the speed knob is applied there. Its own command
+    // buffer, so its GPU time is the solver's alone (`solver_ms`).
+    if f.sim.update(&f.device, dt).is_err() {
+        return false;
+    }
 
-    // Suboptimal is still presentable — it means the drawable no longer
-    // matches the layer, which is the frame in the middle of a rotation.
-    let frame = match f.surface.get_current_texture() {
-        wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-        _ => {
-            f.surface.configure(&f.gpu.device, &f.config);
-            return false;
-        }
-    };
-    let view = frame.texture.create_view(&Default::default());
-    let size = (f.config.width, f.config.height);
-    f.sim
-        .render_to_view(&f.camera, &view, f.config.format, size);
-
-    f.gpu.queue.present(frame);
+    // Blocks until the display has a drawable free: with the layer's three,
+    // that is the frame pacing. Null means the view is off screen.
+    let drawable: Id = unsafe { msg0(f.layer.id(), get_sel("nextDrawable\0")) };
+    if drawable.is_null() {
+        return false;
+    }
+    let texture: Id = unsafe { msg0(drawable, get_sel("texture\0")) };
+    let cmd = f.device.command_buffer();
+    if f.sim
+        .render_on(
+            &f.device,
+            cmd,
+            &f.camera,
+            texture,
+            LAYER_FORMAT as _,
+            f.size,
+        )
+        .is_err()
+    {
+        return false;
+    }
+    unsafe {
+        let _: () = msg1(cmd, get_sel("presentDrawable:\0"), drawable);
+        let _: () = msg0(cmd, get_sel("commit\0"));
+    }
 
     let ms = started.elapsed().as_secs_f32() * 1000.0;
     f.frame_ms += (ms - f.frame_ms) * 0.1;
@@ -371,7 +439,7 @@ pub unsafe extern "C" fn threers_fluid_frame(handle: *mut Fluid, dt: f32) -> boo
 /// As [`threers_fluid_resize`]; `out` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn threers_fluid_info(handle: *mut Fluid, out: *mut FluidInfo) {
-    let (Some(f), false) = (unsafe { handle.as_ref() }, out.is_null()) else {
+    let (Some(f), false) = (unsafe { handle.as_mut() }, out.is_null()) else {
         return;
     };
     let (solver, dye) = f.sim.grids();
@@ -381,7 +449,7 @@ pub unsafe extern "C" fn threers_fluid_info(handle: *mut Fluid, out: *mut FluidI
             dye,
             megabytes: (f.sim.memory_bytes() >> 20) as u32,
             fps: 1000.0 / f.frame_ms.max(0.01),
-            solver_ms: f.sim.stage_ms().iter().sum(),
+            solver_ms: f.sim.solver_ms(),
         };
     }
 }
@@ -399,6 +467,21 @@ pub unsafe extern "C" fn threers_fluid_destroy(handle: *mut Fluid) {
     }
 }
 
+/// A fully saturated colour at hue `h` (0 to 1).
+fn hsv_to_rgb(h: f32) -> [f32; 3] {
+    let i = (h * 6.0).floor();
+    let f = h * 6.0 - i;
+    let (q, t) = (1.0 - f, f);
+    match (i as i32).rem_euclid(6) {
+        0 => [1.0, t, 0.0],
+        1 => [q, 1.0, 0.0],
+        2 => [0.0, 1.0, t],
+        3 => [0.0, q, 1.0],
+        4 => [t, 0.0, 1.0],
+        _ => [1.0, 0.0, q],
+    }
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
@@ -411,7 +494,7 @@ mod tests {
     #[test]
     fn null_handles_do_nothing() {
         unsafe {
-            for key in 0..6 {
+            for key in 0..10 {
                 threers_fluid_set(std::ptr::null_mut(), key, 1.0, 1.0, 1.0);
             }
             assert!(!threers_fluid_frame(std::ptr::null_mut(), 1.0 / 60.0));
@@ -426,7 +509,7 @@ mod tests {
 
     /// The whole path, on a real `CAMetalLayer`.
     ///
-    /// Not a device, but the same class, the same wgpu surface and the same
+    /// Not a device, but the same class and the same
     /// Metal drawables — which is everything between the C ABI and the
     /// screen. What this cannot tell you is how fast an A-series GPU is; what
     /// it can tell you is whether the thing an app links will come up, draw,
@@ -475,6 +558,12 @@ mod tests {
             threers_fluid_set(fluid, Key::Splat as u32, 4.0, 0.0, 0.0);
             threers_fluid_set(fluid, Key::Touch as u32, 12.0, 4.0, 1.0);
             threers_fluid_set(fluid, Key::Pinch as u32, 1.2, 0.0, 0.0);
+            // A tap, then a stroke in a colour of its own, with the plume off.
+            threers_fluid_set(fluid, Key::Ambient as u32, 0.0, 0.0, 0.0);
+            threers_fluid_set(fluid, Key::Paint as u32, 0.5, 0.5, 0.0);
+            threers_fluid_set(fluid, Key::PaintColor as u32, 0.2, 0.8, 1.0);
+            threers_fluid_set(fluid, Key::Paint as u32, 0.4, 0.5, 0.0);
+            threers_fluid_set(fluid, Key::Paint as u32, 0.45, 0.48, 1.0);
             // An unknown key is a no-op, not a crash.
             threers_fluid_set(fluid, 999, 1.0, 1.0, 1.0);
             let mut drawn = 0;

@@ -422,9 +422,8 @@ impl IkChain {
                     continue;
                 }
                 let rotation = Quaternion::from_axis_angle(axis, angle);
-                for j in i + 1..n {
-                    self.joints[j].position =
-                        pivot + (self.joints[j].position - pivot).apply_quaternion(rotation);
+                for joint in &mut self.joints[i + 1..n] {
+                    joint.position = pivot + (joint.position - pivot).apply_quaternion(rotation);
                 }
                 // Re-apply this joint's limit after the swing.
                 if let (Some(constraint), Some(previous)) =
@@ -484,9 +483,8 @@ impl IkChain {
         let (u, v) = orthonormal_basis(direction);
         let axis = if seed.is_multiple_of(2) { u } else { v };
         let rotation = Quaternion::from_axis_angle(axis, std::f32::consts::FRAC_PI_2);
-        for j in k + 1..n {
-            self.joints[j].position =
-                pivot + (self.joints[j].position - pivot).apply_quaternion(rotation);
+        for joint in &mut self.joints[k + 1..n] {
+            joint.position = pivot + (joint.position - pivot).apply_quaternion(rotation);
         }
     }
 
@@ -506,8 +504,8 @@ impl IkChain {
         let old = self.joints[i + 1].position;
         let new = self.joints[i].position + direction * self.joints[i].length;
         let delta = new - old;
-        for j in i + 1..n {
-            self.joints[j].position = self.joints[j].position + delta;
+        for joint in &mut self.joints[i + 1..n] {
+            joint.position = joint.position + delta;
         }
     }
 

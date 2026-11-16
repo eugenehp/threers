@@ -6,7 +6,6 @@ authors = ["Eugene Hauptmann"]
 description = "Native Node.js bindings for threers via napi-rs (headless render, math, animation, physics)"
 license = "MIT"
 repository = "https://github.com/eugenehp/threers"
-homepage = "https://github.com/eugenehp/threers"
 documentation = "https://github.com/eugenehp/threers/tree/main/crates/threers-node"
 readme = "README.md"
 keywords = ["three-js", "nodejs", "napi", "wgpu", "graphics"]

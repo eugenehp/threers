@@ -344,6 +344,7 @@ impl Runner {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let format = self.config.format;
         let renderer = &mut self.renderer;
+        crate::offscreen::Offscreen::run(&mut self.app.world, renderer);
         self.app.world.with_resource::<MainCamera, _>(|w, camera| {
             renderer.render(&mut w.scene, &camera.0, &view, false);
             if let Some(hud) = w.get_resource_mut::<Hud>() {

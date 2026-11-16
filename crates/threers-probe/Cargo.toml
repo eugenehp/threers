@@ -9,7 +9,6 @@ description = "Screen-space neural GI from G-buffer + lighting probes — train 
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/eugenehp/threers"
-homepage = "https://github.com/eugenehp/threers"
 documentation = "https://docs.rs/threers-probe"
 keywords = ["path-tracing", "denoising", "neural-rendering", "rlx", "three-js"]
 categories = ["graphics", "rendering", "science"]

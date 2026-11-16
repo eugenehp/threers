@@ -3,10 +3,9 @@ name = "threers-fluid-ios"
 version.workspace = true
 edition = "2024"
 authors = ["Eugene Hauptmann"]
-description = "The threers volumetric fluid as a C ABI static library, for iOS and iPadOS"
+description = "The threers volumetric fluid on Metal as a C ABI static library, for iOS and iPadOS"
 license = "MIT"
 repository = "https://github.com/eugenehp/threers"
-homepage = "https://github.com/eugenehp/threers"
 readme = "README.md"
 keywords = ["fluid", "ios", "metal", "wgpu", "graphics"]
 categories = ["graphics", "api-bindings"]
@@ -21,9 +20,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 path = "src/lib.rs"
 
 [dependencies]
-threers = { path = "../..", default-features = false, features = ["fluid"] }
-pollster = "1"
-wgpu = "30"
+# The volume on Metal alone — `MetalFluid3d`, the wgpu module's WGSL through
+# naga — so an app linking this carries no wgpu.
+threers = { path = "../..", default-features = false, features = ["metal-fluid"] }
 
 # macOS only, and only for the tests: `CAMetalLayer` is the same class on both
 # platforms, so the iOS entry points can be driven for real on a development

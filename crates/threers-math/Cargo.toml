@@ -6,7 +6,6 @@ rust-version = "1.99"
 license = "MIT"
 authors = ["Eugene Hauptmann"]
 repository = "https://github.com/eugenehp/threers"
-homepage = "https://github.com/eugenehp/threers"
 documentation = "https://docs.rs/threers-math"
 readme = "README.md"
 description = "The math under threers: vectors, matrices, quaternions, colours and colour scales, bounds, rays, Delaunay and Voronoi, polygon booleans and offsets, geographic coordinates and tone mapping, with three.js's semantics and no dependencies"

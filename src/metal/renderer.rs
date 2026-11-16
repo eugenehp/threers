@@ -1199,6 +1199,16 @@ impl MetalRenderer {
         self.overlay.composite(&self.device, rgba, width, height, None, pass)
     }
 
+    /// Draw `texture` — a frame the size of `pass`, on this renderer's
+    /// device (an offscreen renderer [`build_on`](super::MetalHeadlessBuilder::build_on)
+    /// it, its [`render_to_texture`](super::MetalHeadlessRenderer::render_to_texture):
+    /// the scene with SSAO and bloom) — over the frame, opaque, then
+    /// present the drawable if `pass` has one. A window shows a
+    /// post-processed scene so, with its overlay drawn after.
+    pub fn draw_texture(&mut self, texture: Id, pass: &PassAttachments) -> Result<(), MetalError> {
+        self.overlay.draw_texture(&self.device, texture, pass)
+    }
+
     /// How many renders so far drew the shadow maps.
     pub fn shadow_map_updates(&self) -> u64 {
         self.shadow_updates

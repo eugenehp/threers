@@ -178,6 +178,30 @@ pub trait App: Sized + 'static {
         false
     }
 
+    /// A hardware keyboard's key (`key` named as the web's
+    /// `KeyboardEvent.key`: `Escape`, `ArrowUp`, `?`, `[`), `shift` held,
+    /// while no text field has it. Whether the app used it.
+    fn key(&mut self, _key: &str, _shift: bool) -> bool {
+        false
+    }
+
+    /// The window's view drawn for a picture ([`crate::snapshot`]):
+    /// `width` × `height` RGBA, the scene alone (no UI over it).
+    fn snapshot(&mut self, _width: u32, _height: u32, _rgba: Vec<u8>) {}
+
+    /// How RealityKit lights the scene where RealityKit draws it (a volume,
+    /// RealityKit on an iPhone's, an iPad's or a Mac's screen): by the
+    /// room's light, the app's own lights, or both.
+    fn reality_lighting(&self) -> crate::RealityLighting {
+        crate::RealityLighting::Auto
+    }
+
+    /// What draws the scene in a visionOS volume: threers, as a picture
+    /// facing you (the default), or RealityKit, as entities in depth.
+    fn volume_drawing(&self) -> crate::VolumeDrawing {
+        crate::VolumeDrawing::Picture
+    }
+
     /// The panel in the room.
     fn panel(&self) -> PanelSpec {
         PanelSpec::default()

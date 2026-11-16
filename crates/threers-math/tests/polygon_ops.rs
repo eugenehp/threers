@@ -45,7 +45,6 @@ fn print_tree(out: &mut impl Write, node: &PolyPath64, depth: usize) {
 }
 
 #[allow(dead_code)]
-
 /// Every case of `input`, its result to `out`.
 pub fn run(input: impl BufRead, out: &mut impl Write) {
     for line in input.lines() {

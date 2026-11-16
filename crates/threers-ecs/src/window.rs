@@ -241,6 +241,9 @@ pub fn run(mut app: App, options: WindowOptions) {
                     let aspect = view.aspect();
                     let world = &mut app.world;
                     world.resource_mut::<MainCamera>().0.aspect = aspect;
+                    if let Some(renderer) = view.renderer() {
+                        crate::offscreen::Offscreen::run(world, renderer);
+                    }
                     world.with_resource::<MainCamera, _>(|w, camera| {
                         w.with_resource::<Hud, _>(|w, hud| {
                             view.render_frame(&mut w.scene, &camera.0, None, Some(&mut hud.0));

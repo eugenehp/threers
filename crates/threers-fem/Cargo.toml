@@ -9,7 +9,6 @@ description = "Finite and boundary element analysis for threers — a tetrahedra
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/eugenehp/threers"
-homepage = "https://github.com/eugenehp/threers"
 documentation = "https://docs.rs/threers-fem"
 keywords = ["fem", "bem", "finite-element", "simulation", "acoustics"]
 categories = ["science", "simulation", "mathematics", "wasm"]

@@ -1,5 +1,6 @@
-//! An [`App`] in a visionOS **volume**: RealityKit draws it, in the shared
-//! space beside other apps — no immersive space, no CompositorServices.
+//! An [`App`] where RealityKit draws it: a visionOS **volume**, in the
+//! shared space beside other apps (no immersive space, no
+//! CompositorServices), or a `RealityView` on an iPhone, an iPad or a Mac.
 //!
 //! RealityKit has no C API, so the shell builds the entities
 //! (`app/Harness.swift`) and this tells it what to build: the app runs here
@@ -25,7 +26,7 @@ use std::ffi::c_void;
 use std::sync::Arc;
 use std::time::Instant;
 
-use threers::core::{LineSegments as ObjectLines, ObjectId, ObjectKind, Points as ObjectPoints};
+use threers::core::{ObjectId, ObjectKind};
 use threers::materials::Material;
 use threers::math::{Matrix4, Vector3};
 use threers::scene::Scene;
@@ -33,17 +34,30 @@ use threers::ui::input::{Event, PointerButton, TouchPhase};
 use threers::ui::native::{self, Control};
 use threers::xr::Frame;
 
+use crate::reality;
 use crate::surface_ui::SurfaceUi;
 use crate::{App, Place, Surface};
 
-/// One mesh, as the shell reads it: 32 floats.
+/// One mesh, as the shell reads it: 48 floats.
 ///
 /// `[0..16]` the world matrix (column-major, the volume's frame: see
 /// [`Volume::root`]), `[16..20]` the colour (sRGB, straight alpha),
 /// `[20]` roughness, `[21]` metalness, `[22]` flags: 1 visible, 2 vertex
 /// colours, 4 blended, 8 double-sided, 16 lines, 32 a sprite, 64 points,
-/// 128 textured, 256 no depth write; the rest zero.
-pub const OBJECT_FLOATS: usize = 32;
+/// 128 textured, 256 no depth write, 512 casts a shadow, 1024 instanced
+/// ([`Volume::instances`]), 2048 posed (skinned or morphed: its vertices
+/// move, its counts stay), 4096 tangents with its geometry; `[23..27]` the
+/// emissive colour (sRGB) and its intensity; `[27]` clearcoat, `[28]` its
+/// roughness; `[29]` the maps it has (a bit per
+/// [`Volume::map`] slot), `[30]` the normal map's scale, `[31]` the
+/// occlusion map's intensity, `[32..35]` the sheen's colour (sRGB, black
+/// for none), `[35]` the alpha test (0 none), `[36]` the instances, `[37]`
+/// 1 when its maps repeat; the rest zero.
+pub const OBJECT_FLOATS: usize = 48;
+
+/// The keys [`Volume::object`] hands over with each mesh: its own, its
+/// geometry's, its material's, and its instances' or pose's.
+pub const OBJECT_KEYS: usize = 4;
 
 /// A geometry's identity for the shell: which one, and its version — an
 /// edit in place (`Arc::make_mut`: another surface, repainted colours)
@@ -74,7 +88,15 @@ struct Geometry {
     texture: Vec<u8>,
     /// texture coordinates (2 a vertex), for [`Volume::uvs`]
     uvs: Vec<f32>,
+    /// tangents (4 a vertex: the bitangent's sign last), or none
+    tangents: Vec<f32>,
+    /// instance matrices (16 floats each), for [`Volume::instances`]
+    instances: Vec<f32>,
 }
+
+/// A mesh's arrays as [`Volume::geometry`] hands them over: positions,
+/// normals, colours, floats a colour, triangle corners, tangents.
+pub type MeshArrays<'a> = (&'a [f32], &'a [f32], &'a [f32], u32, &'a [u32], &'a [f32]);
 
 pub struct Volume<A: App> {
     scene: Scene,
@@ -86,8 +108,9 @@ pub struct Volume<A: App> {
     /// Turned about the vertical by the shell's drags, radians.
     yaw: f32,
     /// The app's UI beside the volume ([`Place::Image`], the card) and
-    /// under it ([`Place::Toolbar`]): [`SURFACES`] in order.
-    surfaces: [Strip; 2],
+    /// under it ([`Place::Toolbar`]), or over the screen ([`Place::Screen`]):
+    /// [`SURFACES`] in order.
+    surfaces: [Strip; 3],
     start: Instant,
     last: f64,
     /// Shader materials RealityKit cannot run, drawn by threers for it
@@ -101,11 +124,20 @@ pub struct Volume<A: App> {
     /// the last frame (rays in the scene)
     quad_q: [f32; 4],
     taps: Vec<(Vector3, Vector3)>,
+    /// The scene's lights as last read ([`reality::LIGHT_FLOATS`] each).
+    lights: Vec<f32>,
+    /// The screen's safe area, points: top, bottom, left, right.
+    insets: [f32; 4],
+    /// The environment's key as last handed over, and its image.
+    environment: Option<u64>,
+    equirect: Vec<f32>,
 }
 
 /// Where the volume's UI surfaces are shown, by the index the shell
 /// names them with: the card beside the volume, the toolbar under it.
-pub const SURFACES: [Place; 2] = [Place::Image, Place::Toolbar];
+/// The third, the screen ([`Place::Screen`]), is the UI over RealityKit's
+/// view on an iPhone, an iPad or a Mac.
+pub const SURFACES: [Place; 3] = [Place::Image, Place::Toolbar, Place::Screen];
 
 /// One of the volume's UI surfaces, as last handed to the shell.
 struct Strip {
@@ -153,7 +185,7 @@ impl<A: App> Volume<A> {
             next_key: 1,
             geometry: Geometry::default(),
             yaw: 0.0,
-            surfaces: [Strip::default(), Strip::default()],
+            surfaces: Default::default(),
             start: Instant::now(),
             last: 0.0,
             baker: Default::default(),
@@ -161,6 +193,10 @@ impl<A: App> Volume<A> {
             quad: None,
             quad_q: [0.0, 0.0, 0.0, 1.0],
             taps: vec![],
+            lights: vec![],
+            insets: [0.0; 4],
+            environment: None,
+            equirect: vec![],
         }
     }
 
@@ -226,10 +262,13 @@ impl<A: App> Volume<A> {
         self.scene.update_world();
         self.items.clear();
         for (id, o) in self.scene.arena.nodes.iter() {
-            // meshes; line sets (as thin tubes) and sprites (as billboards)
+            // meshes (skinned and instanced too); line sets, points and
+            // sprites (as billboards)
             if !matches!(
                 o.kind,
                 ObjectKind::Mesh(_)
+                    | ObjectKind::SkinnedMesh(_)
+                    | ObjectKind::InstancedMesh(_)
                     | ObjectKind::LineSegments(_)
                     | ObjectKind::Sprite(_)
                     | ObjectKind::Points(_)
@@ -247,7 +286,115 @@ impl<A: App> Volume<A> {
         // the bakes of meshes gone
         let scene = &self.scene;
         self.baked.retain(|id, _| scene.get(*id).is_some());
+        self.lights = reality::lights(&self.scene, |id| self.visible(id));
         self.items.len()
+    }
+
+    /// The scene's directional, point and spot lights as of the last
+    /// [`frame`](Self::frame), [`reality::LIGHT_FLOATS`] each, in the
+    /// scene's frame (the meshes').
+    pub fn lights(&self) -> &[f32] {
+        &self.lights
+    }
+
+    /// How the app asks RealityKit to light it.
+    pub fn lighting(&self) -> reality::RealityLighting {
+        self.app.reality_lighting()
+    }
+
+    /// The scene's background, linear RGB and its alpha: what RealityKit
+    /// shows behind it on a screen (nothing in a volume or AR).
+    pub fn background(&self) -> [f32; 4] {
+        let c = self.scene.background;
+        [c.r, c.g, c.b, self.scene.background_alpha]
+    }
+
+    /// The light round the scene (its environment map, its ambient and hemisphere lights: `width` ×
+    /// `width / 2` linear RGBA floats) when it changed since the last call;
+    /// empty when the scene has none (RealityKit's own light then).
+    pub fn environment(&mut self, width: u32) -> Option<&[f32]> {
+        let key = reality::environment_key(&self.scene);
+        if self.environment == Some(key) {
+            return None;
+        }
+        self.environment = Some(key);
+        self.equirect = if reality::has_environment(&self.scene) {
+            reality::equirect(&self.scene, width)
+        } else {
+            vec![]
+        };
+        Some(&self.equirect)
+    }
+
+    /// Instanced mesh `i`'s instances, 16 floats each (column-major, under
+    /// its own matrix); held until the next call. Empty for anything else.
+    pub fn instances(&mut self, i: usize) -> &[f32] {
+        self.geometry.instances.clear();
+        if let Some(item) = self.items.get(i)
+            && let Some(o) = self.scene.get(item.id)
+            && let ObjectKind::InstancedMesh(m) = &o.kind
+        {
+            self.geometry.instances.extend(m.transforms.iter().flat_map(|t| t.elements));
+        }
+        &self.geometry.instances
+    }
+
+    /// Lit mesh `i`'s map in `slot` ([`reality::MAP_SLOTS`]): RGBA8, its
+    /// size; held until the next call.
+    pub fn map(&mut self, i: usize, slot: usize) -> Option<(&[u8], u32, u32)> {
+        let item = self.items.get(i)?;
+        let o = self.scene.get(item.id)?;
+        let (px, w, h) = reality::map_pixels(material_of(&o.kind)?, slot)?;
+        self.geometry.texture = px;
+        Some((&self.geometry.texture, w, h))
+    }
+
+    /// The UI surface at `place`, `width × height` pixels at `scale` (1
+    /// when that is not a scale): see-through, the screen's within its safe
+    /// area.
+    fn surface(&self, place: Place, width: u32, height: u32, scale: f32) -> Surface {
+        let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+        Surface {
+            place,
+            width: width.max(1) as f32 / scale,
+            height: height.max(1) as f32 / scale,
+            scale,
+            insets: if place == Place::Screen { self.insets } else { [0.0; 4] },
+            see_through: true,
+        }
+    }
+
+    /// The screen's safe area (its UI's points: top, bottom, left, right),
+    /// for [`Place::Screen`].
+    pub fn set_insets(&mut self, insets: [f32; 4]) {
+        self.insets = insets.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 });
+    }
+
+    /// Whether the screen's UI ([`Place::Screen`], surface 2) has something
+    /// at `(x, y)` (its image's pixels at `scale`): a finger there is the
+    /// UI's, elsewhere RealityKit's (the camera, a tap on the scene).
+    pub fn ui_hit(&mut self, which: usize, x: f32, y: f32, scale: f32) -> bool {
+        let Some(&place) = SURFACES.get(which) else { return false };
+        let strip = &self.surfaces[which];
+        if !strip.ui.shown {
+            return false;
+        }
+        let (w, h) = strip.ui.pixels.size();
+        let surface = self.surface(place, w, h, scale);
+        let scale = surface.scale;
+        self.app.ui(&surface).is_some_and(|ui| {
+            let root = ui.root();
+            ui.hit_test(x / scale, y / scale).is_some_and(|n| n != root)
+        })
+    }
+
+    /// A ray through the scene (its frame: the meshes'), as the shell casts
+    /// it through a tap on the screen: a select along it, for the app's next
+    /// frame.
+    pub fn ray(&mut self, origin: Vector3, direction: Vector3) {
+        if origin.x.is_finite() && direction.length() > 0.0 {
+            self.taps.push((origin, direction));
+        }
     }
 
     /// The model's frame in the volume, column-major: the app's
@@ -266,17 +413,35 @@ impl<A: App> Volume<A> {
     /// Mesh `i`: its key, its geometry's and material's identities (they
     /// change when the shell should rebuild them), and its 32 floats
     /// ([`OBJECT_FLOATS`]).
-    pub fn object(&mut self, i: usize) -> Option<([u64; 3], [f32; OBJECT_FLOATS])> {
+    pub fn object(&mut self, i: usize) -> Option<([u64; OBJECT_KEYS], [f32; OBJECT_FLOATS])> {
         let item = self.items.get(i)?;
         let o = self.scene.get(item.id)?;
         // flags beyond the mesh's: 16 a line set (segments, unlit), 64 a
         // point cloud (points, unlit),
-        // 32 a sprite (a quad facing the viewer, its texture `texture`)
-        let (geometry, material, kind) = match &o.kind {
-            ObjectKind::Mesh(m) => (geometry_key(&m.geometry), &m.material, 0u32),
-            ObjectKind::LineSegments(l) => (geometry_key(&l.geometry), &l.material, 16),
-            ObjectKind::Sprite(s) => (0, &s.material, 32),
-            ObjectKind::Points(p) => (geometry_key(&p.geometry), &p.material, 64),
+        // 32 a sprite (a quad facing the viewer, its texture `texture`),
+        // 1024 instanced, 2048 posed; and the key of the pose or instances
+        let (geometry, material, kind, motion) = match &o.kind {
+            ObjectKind::Mesh(m) if morphed(m) => (
+                geometry_key(&m.geometry),
+                &m.material,
+                2048,
+                reality::pose_key(None, &m.morph_influences),
+            ),
+            ObjectKind::Mesh(m) => (geometry_key(&m.geometry), &m.material, 0u32, 0),
+            ObjectKind::SkinnedMesh(m) => {
+                let palette = m.skinning_palette(&self.scene.arena, &o.matrix_world);
+                let pose = reality::pose_key(palette.as_deref(), &m.morph_influences);
+                (geometry_key(&m.geometry), &m.material, 2048, pose)
+            }
+            ObjectKind::InstancedMesh(m) => (
+                geometry_key(&m.geometry),
+                &m.material,
+                1024,
+                reality::instances_key(&m.transforms, m.instance_version),
+            ),
+            ObjectKind::LineSegments(l) => (geometry_key(&l.geometry), &l.material, 16, 0),
+            ObjectKind::Sprite(s) => (0, &s.material, 32, 0),
+            ObjectKind::Points(p) => (geometry_key(&p.geometry), &p.material, 64, 0),
             _ => return None,
         };
         let mut out = [0.0f32; OBJECT_FLOATS];
@@ -366,12 +531,7 @@ impl<A: App> Volume<A> {
             _ => false,
         };
         let visible = self.visible(item.id) && !unbaked;
-        let colors = match &o.kind {
-            ObjectKind::Mesh(m) => m.geometry.get_attribute("color").is_some(),
-            ObjectKind::LineSegments(l) => l.geometry.get_attribute("color").is_some(),
-            ObjectKind::Points(p) => p.geometry.get_attribute("color").is_some(),
-            _ => false,
-        };
+        let colors = geometry_of(&o.kind).is_some_and(|g| g.get_attribute("color").is_some());
         // 128: a mesh with a texture (a volume's slice): its pixels from
         // `texture`, its corners' uvs from `geometry`
         // (or a shader material, baked: see `crate::bake`)
@@ -385,21 +545,52 @@ impl<A: App> Volume<A> {
         // behind and in front alike)
         let no_depth = matches!(&**material, Material::Shader(sm) if sm.render_state.depth_write == Some(false))
             as u32;
+        // a lit material's maps, and the tangents a normal map needs
+        let maps = reality::maps(material);
+        let tangents = maps & reality::NORMAL_MAP != 0
+            && geometry_of(&o.kind).is_some_and(|g| g.get_attribute("uv").is_some());
         out[22] = (visible as u32
             | (colors as u32) << 1
             | (blended as u32) << 2
             | ((side == 2) as u32) << 3
             | kind
             | textured << 7
-            | no_depth << 8) as f32;
+            | no_depth << 8
+            | (o.cast_shadow as u32) << 9
+            | (tangents as u32) << 12) as f32;
         if let Some((e, k)) = emissive {
             out[23..27].copy_from_slice(&[srgb(e.r), srgb(e.g), srgb(e.b), k]);
         }
+        match &**material {
+            Material::Physical(p) => {
+                out[27] = p.clearcoat;
+                out[28] = p.clearcoat_roughness;
+                if p.sheen > 0.0 {
+                    let c = p.sheen_color;
+                    let k = p.sheen.min(1.0);
+                    out[32..35].copy_from_slice(&[srgb(c.r * k), srgb(c.g * k), srgb(c.b * k)]);
+                }
+                out[30] = p.normal_scale.x;
+                out[31] = p.ao_intensity;
+                out[35] = p.alpha_test;
+            }
+            Material::Standard(s) => {
+                out[30] = s.normal_scale.x;
+                out[31] = s.ao_intensity;
+                out[35] = s.alpha_test;
+            }
+            _ => {}
+        }
+        out[29] = maps as f32;
+        out[37] = reality::maps_repeat(material) as u32 as f32;
+        if let ObjectKind::InstancedMesh(m) = &o.kind {
+            out[36] = m.transforms.len() as f32;
+        }
         // a shader material is what it draws; the geometry with it, as the
         // uvs are the bake's
-        let m = shader.unwrap_or(Arc::as_ptr(material) as u64);
+        let m = shader.unwrap_or(Arc::as_ptr(material) as u64 ^ reality::maps_key(material));
         let geometry = shader.map_or(geometry, |k| geometry ^ k.rotate_left(17));
-        Some(([item.key, geometry, m], out))
+        Some(([item.key, geometry, m, motion], out))
     }
 
     /// Mesh `i`'s texture coordinates, 2 floats a vertex (empty without);
@@ -413,10 +604,24 @@ impl<A: App> Volume<A> {
         }
         if let Some(item) = self.items.get(i)
             && let Some(o) = self.scene.get(item.id)
-            && let ObjectKind::Mesh(m) = &o.kind
-            && let Some(a) = m.geometry.get_attribute("uv")
+            && !matches!(o.kind, ObjectKind::LineSegments(_) | ObjectKind::Points(_))
+            && let Some(g) = geometry_of(&o.kind)
         {
-            self.geometry.uvs.clone_from(&a.array);
+            // the set and the transform of its maps' (one for all of them)
+            let map = material_of(&o.kind).and_then(reality::uv_map);
+            let set = if map.is_some_and(|t| t.channel == 1) { "uv1" } else { "uv" };
+            if let Some(a) = g.get_attribute(set).or_else(|| g.get_attribute("uv")) {
+                self.geometry.uvs.clone_from(&a.array);
+            }
+            if let Some(t) = map {
+                let [r0, r1] = t.uv_transform_rows();
+                if [r0, r1] != [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
+                    for uv in self.geometry.uvs.as_chunks_mut::<2>().0 {
+                        let [u, v] = *uv;
+                        *uv = [r0[0] * u + r0[1] * v + r0[2], r1[0] * u + r1[1] * v + r1[2]];
+                    }
+                }
+            }
         }
         &self.geometry.uvs
     }
@@ -444,16 +649,10 @@ impl<A: App> Volume<A> {
             },
             _ => return None,
         };
-        let (w, h) = (t.width, t.height);
-        let row = w as usize * 4;
-        let data = t.data.get(..row * h as usize)?;
-        // as drawn: a flipped texture's rows run bottom up
-        self.geometry.texture = if t.flip_y {
-            data.chunks_exact(row).rev().flatten().copied().collect()
-        } else {
-            data.to_vec()
-        };
-        Some((&self.geometry.texture, w, h))
+        // as drawn: a flipped texture's rows run bottom up (one channel
+        // or floats as RGBA8)
+        self.geometry.texture = reality::realitykit_rows(t)?;
+        Some((&self.geometry.texture, t.width, t.height))
     }
 
     /// Mesh `i`'s shader material as baked, baking it when its key moved
@@ -495,8 +694,17 @@ impl<A: App> Volume<A> {
         command_buffer: *mut c_void,
     ) -> bool {
         // SAFETY: the caller's live texture and command buffer.
-        self.draw_quad(q, size)
-            .is_some_and(|r| unsafe { r.copy_into(texture as _, command_buffer as _) }.is_ok())
+        let Some(r) = self.draw_quad(q, size) else { return false };
+        let copied = unsafe { r.copy_into(texture as _, command_buffer as _) }.is_ok();
+        // a picture asked for ([`crate::snapshot`]): this frame, read back
+        // (clear round the model, as the volume shows it)
+        if crate::take_snapshot() {
+            match r.read_rgba_processed() {
+                Ok(rgba) => self.app.snapshot(size, size, rgba),
+                Err(e) => eprintln!("threers-ios: the volume's snapshot: {e:?}"),
+            }
+        }
+        copied
     }
 
     /// What [`draw_into`](Self::draw_into) draws, read back: `size`
@@ -678,55 +886,58 @@ impl<A: App> Volume<A> {
     /// Mesh `i`'s geometry, held until the next call: positions and normals
     /// (3 floats a vertex), colours (`color_size` floats a vertex, or none),
     /// triangle corners. Unindexed geometry gets indices 0, 1, 2, …
-    pub fn geometry(&mut self, i: usize) -> Option<(&[f32], &[f32], &[f32], u32, &[u32])> {
+    pub fn geometry(&mut self, i: usize) -> Option<MeshArrays<'_>> {
         let item = self.items.get(i)?;
         let o = self.scene.get(item.id)?;
         let geometry = &mut self.geometry;
-        match &o.kind {
-            ObjectKind::Mesh(mesh) => {
-                let g = &mesh.geometry;
-                let positions = g.get_attribute("position")?;
-                let n = positions.count();
-                geometry.positions.clone_from(&positions.array);
-                geometry.normals = match g.get_attribute("normal") {
-                    Some(a) if a.count() == n => a.array.clone(),
-                    _ => vec![0.0, 1.0, 0.0].repeat(n),
-                };
-                (geometry.colors, geometry.color_size) = match g.get_attribute("color") {
-                    Some(a) if a.count() == n && (a.item_size == 3 || a.item_size == 4) => {
-                        (a.array.clone(), a.item_size as u32)
-                    }
-                    _ => (vec![], 0),
-                };
-                geometry.indices = g.index.clone().unwrap_or_else(|| (0..n as u32).collect());
+        geometry.tangents.clear();
+        // as drawn now: morphed, skinned
+        let posed = match &o.kind {
+            ObjectKind::Mesh(m) if morphed(m) => Some(m.posed_geometry()),
+            ObjectKind::SkinnedMesh(m) => Some(m.posed_geometry(&o.matrix_world)),
+            _ => None,
+        };
+        if let ObjectKind::Sprite(_) = o.kind {
+            // a unit quad facing +z; the shell turns it to the viewer
+            geometry.positions = vec![-0.5, -0.5, 0.0, 0.5, -0.5, 0.0, 0.5, 0.5, 0.0, -0.5, 0.5, 0.0];
+            geometry.normals = [0.0, 0.0, 1.0].repeat(4);
+            (geometry.colors, geometry.color_size) = (vec![], 0);
+            geometry.indices = vec![0, 1, 2, 0, 2, 3];
+        } else {
+            let g = posed.as_deref().or(geometry_of(&o.kind).map(|g| &**g))?;
+            // line sets and points: the segments (a pair of vertices each) or
+            // the points as they are, which the shell draws with RealityKit's
+            // line or point topology, unlit
+            let unlit = matches!(o.kind, ObjectKind::LineSegments(_) | ObjectKind::Points(_));
+            let positions = g.get_attribute("position")?;
+            let n = positions.count();
+            geometry.positions.clone_from(&positions.array);
+            geometry.normals = match g.get_attribute("normal") {
+                Some(a) if a.count() == n && !unlit => a.array.clone(),
+                _ => [0.0, 1.0, 0.0].repeat(n),
+            };
+            (geometry.colors, geometry.color_size) = match g.get_attribute("color") {
+                Some(a) if a.count() == n && (a.item_size == 3 || a.item_size == 4) => {
+                    (a.array.clone(), a.item_size as u32)
+                }
+                _ => (vec![], 0),
+            };
+            geometry.indices = g.index.clone().unwrap_or_else(|| (0..n as u32).collect());
+            // a normal map's tangents, where it has the uvs for them
+            let maps = material_of(&o.kind).map_or(0, reality::maps);
+            if !unlit && maps & reality::NORMAL_MAP != 0 && g.get_attribute("uv").is_some() {
+                let mut t = g.clone();
+                if t.get_attribute("normal").is_none() {
+                    threers::utils::compute_vertex_normals(&mut t);
+                }
+                threers::utils::compute_tangents(&mut t);
+                if let Some(a) = t.get_attribute("tangent") {
+                    geometry.tangents.clone_from(&a.array);
+                }
             }
-            ObjectKind::LineSegments(ObjectLines { geometry: g, .. })
-            | ObjectKind::Points(ObjectPoints { geometry: g, .. }) => {
-                // the segments (a pair of vertices each) or the points as
-                // they are: the shell draws them with RealityKit's line or
-                // point topology, in their vertex colours if they have them
-                let positions = g.get_attribute("position")?;
-                let n = positions.count();
-                geometry.positions.clone_from(&positions.array);
-                geometry.normals = [0.0, 1.0, 0.0].repeat(n);
-                (geometry.colors, geometry.color_size) = match g.get_attribute("color") {
-                    Some(a) if a.count() == n && (a.item_size == 3 || a.item_size == 4) => {
-                        (a.array.clone(), a.item_size as u32)
-                    }
-                    _ => (vec![], 0),
-                };
-                geometry.indices = g.index.clone().unwrap_or_else(|| (0..n as u32).collect());
-            }
-            ObjectKind::Sprite(_) => {
-                // a unit quad facing +z; the shell turns it to the viewer
-                geometry.positions = vec![
-                    -0.5, -0.5, 0.0, 0.5, -0.5, 0.0, 0.5, 0.5, 0.0, -0.5, 0.5, 0.0,
-                ];
-                geometry.normals = [0.0, 0.0, 1.0].repeat(4);
-                (geometry.colors, geometry.color_size) = (vec![], 0);
-                geometry.indices = vec![0, 1, 2, 0, 2, 3];
-            }
-            _ => return None,
+        }
+        if geometry.tangents.len() != geometry.positions.len() / 3 * 4 {
+            geometry.tangents.clear();
         }
         Some((
             &geometry.positions,
@@ -734,6 +945,7 @@ impl<A: App> Volume<A> {
             &geometry.colors,
             geometry.color_size,
             &geometry.indices,
+            &geometry.tangents,
         ))
     }
 
@@ -748,19 +960,8 @@ impl<A: App> Volume<A> {
     /// first.
     pub fn ui(&mut self, which: usize, width: u32, height: u32, scale: f32) -> Option<&[u8]> {
         let place = *SURFACES.get(which)?;
-        let scale = if scale.is_finite() && scale > 0.0 {
-            scale
-        } else {
-            1.0
-        };
-        let surface = Surface {
-            place,
-            width: width.max(1) as f32 / scale,
-            height: height.max(1) as f32 / scale,
-            scale,
-            insets: [0.0; 4],
-            see_through: true,
-        };
+        let surface = self.surface(place, width, height, scale);
+        let scale = surface.scale;
         let strip = &mut self.surfaces[which];
         // lay it out first: the input lands on what is shown (and what
         // changed by itself — the room opening, the data arriving — counts)
@@ -862,6 +1063,36 @@ impl<A: App> Volume<A> {
     }
 }
 
+/// Whether a mesh's morph targets move it now.
+fn morphed(m: &threers::core::Mesh) -> bool {
+    m.morph_influences.iter().any(|&w| w != 0.0)
+}
+
+/// The geometry an object draws (a sprite's is the shell's quad).
+fn geometry_of(kind: &ObjectKind) -> Option<&Arc<threers::core::BufferGeometry>> {
+    match kind {
+        ObjectKind::Mesh(m) => Some(&m.geometry),
+        ObjectKind::SkinnedMesh(m) => Some(&m.geometry),
+        ObjectKind::InstancedMesh(m) => Some(&m.geometry),
+        ObjectKind::LineSegments(l) => Some(&l.geometry),
+        ObjectKind::Points(p) => Some(&p.geometry),
+        _ => None,
+    }
+}
+
+/// The material an object draws with.
+fn material_of(kind: &ObjectKind) -> Option<&Material> {
+    match kind {
+        ObjectKind::Mesh(m) => Some(&m.material),
+        ObjectKind::SkinnedMesh(m) => Some(&m.material),
+        ObjectKind::InstancedMesh(m) => Some(&m.material),
+        ObjectKind::LineSegments(l) => Some(&l.material),
+        ObjectKind::Points(p) => Some(&p.material),
+        ObjectKind::Sprite(s) => Some(&s.material),
+        _ => None,
+    }
+}
+
 // --- the C side, for `app!` -------------------------------------------------
 
 #[doc(hidden)]
@@ -905,7 +1136,8 @@ pub unsafe fn frame<A: App>(v: *mut c_void) -> u32 {
 }
 
 /// # Safety
-/// As [`get`]; `keys` 3 writable u64s, `floats` [`OBJECT_FLOATS`] f32s.
+/// As [`get`]; `keys` [`OBJECT_KEYS`] writable u64s, `floats`
+/// [`OBJECT_FLOATS`] f32s.
 #[doc(hidden)]
 pub unsafe fn object<A: App>(v: *mut c_void, i: u32, keys: *mut u64, floats: *mut f32) -> bool {
     let Some((k, f)) = unsafe { get::<A>(v) }.and_then(|v| v.object(i as usize)) else {
@@ -915,16 +1147,17 @@ pub unsafe fn object<A: App>(v: *mut c_void, i: u32, keys: *mut u64, floats: *mu
         return false;
     }
     unsafe {
-        std::ptr::copy_nonoverlapping(k.as_ptr(), keys, 3);
+        std::ptr::copy_nonoverlapping(k.as_ptr(), keys, OBJECT_KEYS);
         std::ptr::copy_nonoverlapping(f.as_ptr(), floats, OBJECT_FLOATS);
     }
     true
 }
 
 /// # Safety
-/// As [`get`]; `ptrs` 4 writable pointers (positions, normals, colours,
-/// indices), `counts` 3 u32s (vertices, floats a colour, indices). The
-/// pointers hold until the next call.
+/// As [`get`]; `ptrs` 5 writable pointers (positions, normals, colours,
+/// indices, tangents: 4 floats a vertex, or null), `counts` 3 u32s
+/// (vertices, floats a colour, indices). The pointers hold until the next
+/// call.
 #[doc(hidden)]
 pub unsafe fn geometry<A: App>(
     v: *mut c_void,
@@ -932,7 +1165,7 @@ pub unsafe fn geometry<A: App>(
     ptrs: *mut *const c_void,
     counts: *mut u32,
 ) -> bool {
-    let Some((p, n, c, cs, ix)) = unsafe { get::<A>(v) }.and_then(|v| v.geometry(i as usize))
+    let Some((p, n, c, cs, ix, t)) = unsafe { get::<A>(v) }.and_then(|v| v.geometry(i as usize))
     else {
         return false;
     };
@@ -948,6 +1181,11 @@ pub unsafe fn geometry<A: App>(
             c.as_ptr().cast()
         };
         *ptrs.add(3) = ix.as_ptr().cast();
+        *ptrs.add(4) = if t.is_empty() {
+            std::ptr::null()
+        } else {
+            t.as_ptr().cast()
+        };
         *counts = (p.len() / 3) as u32;
         *counts.add(1) = cs;
         *counts.add(2) = ix.len() as u32;
@@ -1057,5 +1295,240 @@ pub unsafe fn draw<A: App>(
 pub unsafe fn tap<A: App>(v: *mut c_void, u: f32, vv: f32) {
     if let Some(v) = unsafe { get::<A>(v) } {
         v.tap(u, vv);
+    }
+}
+
+/// # Safety
+/// As [`get`]; `len` writable. The floats hold until the next frame.
+#[doc(hidden)]
+pub unsafe fn lights<A: App>(v: *mut c_void, len: *mut usize) -> *const f32 {
+    let (Some(v), false) = (unsafe { get::<A>(v) }, len.is_null()) else {
+        return std::ptr::null();
+    };
+    let l = v.lights();
+    unsafe { *len = l.len() };
+    l.as_ptr()
+}
+
+/// # Safety
+/// As [`get`].
+#[doc(hidden)]
+pub unsafe fn lighting<A: App>(v: *mut c_void) -> u32 {
+    unsafe { get::<A>(v) }.map_or(0, |v| v.lighting() as u32)
+}
+
+/// # Safety
+/// As [`get`].
+#[doc(hidden)]
+pub unsafe fn drawing<A: App>(v: *mut c_void) -> u32 {
+    unsafe { get::<A>(v) }.map_or(0, |v| v.app.volume_drawing() as u32)
+}
+
+/// # Safety
+/// As [`get`]; `out` 4 writable floats.
+#[doc(hidden)]
+pub unsafe fn background<A: App>(v: *mut c_void, out: *mut f32) {
+    if let (Some(v), false) = (unsafe { get::<A>(v) }, out.is_null()) {
+        unsafe { std::ptr::copy_nonoverlapping(v.background().as_ptr(), out, 4) };
+    }
+}
+
+/// # Safety
+/// As [`get`]; `len` writable. Null while unchanged; `len` 0 for none. The
+/// floats hold until the next call.
+#[doc(hidden)]
+pub unsafe fn environment<A: App>(v: *mut c_void, width: u32, len: *mut usize) -> *const f32 {
+    let (Some(v), false) = (unsafe { get::<A>(v) }, len.is_null()) else {
+        return std::ptr::null();
+    };
+    let Some(e) = v.environment(width) else {
+        return std::ptr::null();
+    };
+    unsafe { *len = e.len() };
+    e.as_ptr()
+}
+
+/// # Safety
+/// As [`get`]; `len` writable. The floats hold until the next call.
+#[doc(hidden)]
+pub unsafe fn instances<A: App>(v: *mut c_void, i: u32, len: *mut usize) -> *const f32 {
+    let (Some(v), false) = (unsafe { get::<A>(v) }, len.is_null()) else {
+        return std::ptr::null();
+    };
+    let m = v.instances(i as usize);
+    unsafe { *len = m.len() };
+    m.as_ptr()
+}
+
+/// # Safety
+/// As [`get`]; `w`, `h`, `len` writable. The bytes hold until the next call.
+#[doc(hidden)]
+pub unsafe fn map<A: App>(
+    v: *mut c_void,
+    i: u32,
+    slot: u32,
+    w: *mut u32,
+    h: *mut u32,
+    len: *mut usize,
+) -> *const u8 {
+    if w.is_null() || h.is_null() || len.is_null() {
+        return std::ptr::null();
+    }
+    let Some((bytes, tw, th)) = unsafe { get::<A>(v) }.and_then(|v| v.map(i as usize, slot as usize)) else {
+        return std::ptr::null();
+    };
+    unsafe { (*w, *h, *len) = (tw, th, bytes.len()) };
+    bytes.as_ptr()
+}
+
+/// # Safety
+/// As [`get`].
+#[doc(hidden)]
+pub unsafe fn ui_hit<A: App>(v: *mut c_void, which: u32, x: f32, y: f32, scale: f32) -> bool {
+    unsafe { get::<A>(v) }.is_some_and(|v| v.ui_hit(which as usize, x, y, scale))
+}
+
+/// # Safety
+/// As [`get`]; `ray` 6 readable floats: the origin, then the direction.
+#[doc(hidden)]
+pub unsafe fn ray<A: App>(v: *mut c_void, ray: *const f32) {
+    if let (Some(v), false) = (unsafe { get::<A>(v) }, ray.is_null()) {
+        let r = unsafe { std::slice::from_raw_parts(ray, 6) };
+        v.ray(Vector3::new(r[0], r[1], r[2]), Vector3::new(r[3], r[4], r[5]));
+    }
+}
+
+/// # Safety
+/// As [`get`].
+#[doc(hidden)]
+pub unsafe fn insets<A: App>(v: *mut c_void, top: f32, bottom: f32, left: f32, right: f32) {
+    if let Some(v) = unsafe { get::<A>(v) } {
+        v.set_insets([top, bottom, left, right]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use threers::core::{Bone, InstancedMesh, Mesh, Object3D, Skeleton, SkinnedMesh};
+    use threers::geometries::BoxGeometry;
+    use threers::lights::{DirectionalLight, HemisphereLight};
+    use threers::materials::{PhysicalMaterial, StandardMaterial};
+    use threers::math::Color;
+    use threers::textures::{Texture, TextureFormat};
+
+    /// A box with a normal map, an instanced box, a box skinned to one bone
+    /// that the app moves each frame, a light and a sky.
+    struct Shapes {
+        bone: ObjectId,
+        t: f32,
+    }
+
+    impl App for Shapes {
+        fn setup(scene: &mut Scene) -> Self {
+            let normal = Texture::new(2, 2, TextureFormat::Rgba8Unorm, [128, 128, 255, 255].repeat(4));
+            let lit = StandardMaterial {
+                normal_map: Some(Arc::new(normal)),
+                normal_scale: threers::math::Vector2::new(0.5, 0.5),
+                ..Default::default()
+            };
+            scene.add(Object3D::mesh(Mesh::new(BoxGeometry::new(1.0, 1.0, 1.0), Material::Standard(lit))));
+            let coat = PhysicalMaterial {
+                clearcoat: 0.75,
+                sheen: 1.0,
+                sheen_color: Color::new(1.0, 0.0, 0.0),
+                ..Default::default()
+            };
+            let mut many = InstancedMesh::new(BoxGeometry::new(0.1, 0.1, 0.1), Material::Physical(coat), 3);
+            for (k, t) in many.transforms.iter_mut().enumerate() {
+                *t = Matrix4::translation(Vector3::new(k as f32, 0.0, 0.0));
+            }
+            scene.add(Object3D::instanced_mesh(many));
+            let bone = scene.add(Object3D::group());
+            let skin = SkinnedMesh::from_unweighted(
+                BoxGeometry::new(1.0, 1.0, 1.0),
+                Material::Standard(StandardMaterial::default()),
+                Skeleton::new(vec![Bone { node: bone, inverse_bind: Matrix4::identity() }]),
+            );
+            let mut o = Object3D::skinned_mesh(skin);
+            o.cast_shadow = true;
+            scene.add(o);
+            scene.add_light(DirectionalLight::new(Color::new(1.0, 1.0, 1.0), 1.0));
+            scene.add_light(HemisphereLight::new(Color::new(0.5, 0.5, 1.0), Color::new(0.2, 0.1, 0.0), 1.0));
+            Shapes { bone, t: 0.0 }
+        }
+
+        fn update(&mut self, scene: &mut Scene, _frame: &Frame) {
+            self.t += 1.0;
+            scene.get_mut(self.bone).unwrap().position = Vector3::new(0.0, self.t, 0.0);
+        }
+    }
+
+    fn by_kind(v: &mut Volume<Shapes>, flag: u32) -> usize {
+        (0..v.items.len())
+            .find(|&i| v.object(i).is_some_and(|(_, f)| f[22] as u32 & flag != 0))
+            .expect("an object with that flag")
+    }
+
+    #[test]
+    fn a_normal_map_brings_its_tangents_and_its_pixels() {
+        let mut v = Volume::<Shapes>::new();
+        assert_eq!(v.frame(), 3);
+        let i = by_kind(&mut v, 4096);
+        let (_, f) = v.object(i).unwrap();
+        assert_eq!(f[29] as u32, 2, "a normal map, nothing else");
+        assert_eq!(f[30], 0.5);
+        let (p, _, _, _, _, t) = v.geometry(i).unwrap();
+        assert_eq!(t.len(), p.len() / 3 * 4, "a tangent a vertex");
+        // a unit vector and the bitangent's sign
+        assert!((t[0] * t[0] + t[1] * t[1] + t[2] * t[2] - 1.0).abs() < 1e-3 && t[3].abs() == 1.0);
+        let (px, w, h) = v.map(i, 1).unwrap();
+        assert_eq!((px.len(), w, h), (16, 2, 2));
+        assert!(v.map(i, 0).is_none());
+    }
+
+    #[test]
+    fn instances_come_out_with_their_matrices_and_a_coat() {
+        let mut v = Volume::<Shapes>::new();
+        v.frame();
+        let i = by_kind(&mut v, 1024);
+        let (k, f) = v.object(i).unwrap();
+        assert_eq!(f[36], 3.0);
+        assert_eq!((f[27], f[28]), (0.75, 0.0));
+        assert!((f[32] - 1.0).abs() < 1e-5 && f[33] == 0.0 && f[34] == 0.0, "the sheen, sRGB: {:?}", &f[32..35]);
+        let m = v.instances(i).to_vec();
+        assert_eq!(m.len(), 48);
+        assert_eq!(m[16 + 12], 1.0, "the second one along x");
+        // the same next frame: the same key
+        v.frame();
+        assert_eq!(v.object(i).unwrap().0[3], k[3]);
+    }
+
+    #[test]
+    fn a_skinned_mesh_moves_its_vertices_and_its_pose_key() {
+        let mut v = Volume::<Shapes>::new();
+        v.frame();
+        let i = by_kind(&mut v, 2048);
+        let (k0, f) = v.object(i).unwrap();
+        assert_ne!(f[22] as u32 & 512, 0, "it casts a shadow");
+        let y0 = v.geometry(i).unwrap().0[1];
+        v.frame();
+        let (k1, _) = v.object(i).unwrap();
+        assert_eq!(k0[1], k1[1], "its geometry is the same");
+        assert_ne!(k0[3], k1[3], "its pose is not");
+        let y1 = v.geometry(i).unwrap().0[1];
+        assert!((y1 - y0 - 1.0).abs() < 1e-4, "the bone rose one: {y0} → {y1}");
+    }
+
+    #[test]
+    fn lights_and_the_sky_are_read_once() {
+        let mut v = Volume::<Shapes>::new();
+        v.frame();
+        assert_eq!(v.lights().len(), reality::LIGHT_FLOATS);
+        assert_eq!(v.lighting(), reality::RealityLighting::Auto);
+        let sky = v.environment(32).unwrap();
+        assert_eq!(sky.len(), 32 * 16 * 4);
+        assert!(sky[2] > sky[0], "blue above");
+        assert!(v.environment(32).is_none(), "unchanged: nothing");
     }
 }

@@ -365,9 +365,9 @@ impl Solver {
         self.bodies.clear();
         self.bodies
             .resize(bodies.slot_count(), SolverBody::default());
-        for i in 0..bodies.slot_count() {
+        for (i, slot) in self.bodies.iter_mut().enumerate() {
             if let Some(b) = bodies.by_index(i) {
-                self.bodies[i] = SolverBody::from_body(b);
+                *slot = SolverBody::from_body(b);
             }
         }
 
@@ -432,8 +432,7 @@ impl Solver {
             }
         }
 
-        for i in 0..self.bodies.len() {
-            let state = self.bodies[i];
+        for (i, &state) in self.bodies.iter().enumerate() {
             if !state.movable {
                 continue;
             }

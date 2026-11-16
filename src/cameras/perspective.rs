@@ -28,7 +28,11 @@ pub struct PerspectiveCamera {
     pub position: Vector3,
     pub target: Vector3,
     pub up: Vector3,
-    pub fov: f32, // radians
+    /// The vertical field of view, in **radians** (where [`new`](Self::new)
+    /// takes degrees): read and set it in degrees with
+    /// [`fov_degrees`](Self::fov_degrees) and
+    /// [`set_fov_degrees`](Self::set_fov_degrees).
+    pub fov: f32,
     pub aspect: f32,
     pub near: f32,
     pub far: f32,

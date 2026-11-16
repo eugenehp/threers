@@ -135,7 +135,7 @@ impl Baker {
         let mut rgba = renderer.read_rgba().ok()?;
         // blended over nothing, the colour came back times its alpha
         if blended {
-            for px in rgba.chunks_exact_mut(4) {
+            for px in rgba.as_chunks_mut::<4>().0 {
                 let a = px[3] as f32 / 255.0;
                 if a > 0.0 && a < 1.0 {
                     for c in &mut px[..3] {

@@ -104,9 +104,68 @@ pub struct SharedShader {
 /// MSL, when the material is built.
 #[macro_export]
 macro_rules! shader {
-    ($($body:tt)*) => {
+    ($($body:tt)*) => {{
+        // What can be told from the tokens alone fails the build, here.
+        const _: () = $crate::materials::shared_shader::check_tokens(stringify!($($body)*), true);
         $crate::materials::SharedShader::new(stringify!($($body)*))
-    };
+    }};
+}
+
+/// The shared syntax's checks that need nothing but the tokens, run at
+/// compile time by [`shader!`](crate::shader), [`passes!`](crate::passes)
+/// and [`shader_functions!`](crate::shader_functions): Rust that is not the
+/// shared syntax (`let mut`, `as`), and, for `shader!`, a missing `shade`.
+/// Everything else — types, accessors, arity — is checked when the material
+/// is built, because it needs the translator.
+///
+/// A `const fn` so the macros can call it in a `const` item: a mistake fails
+/// the build at the macro rather than drawing a fallback colour at the first
+/// frame.
+#[doc(hidden)]
+pub const fn check_tokens(src: &str, needs_shade: bool) {
+    const fn word(c: u8) -> bool {
+        c.is_ascii_alphanumeric() || c == b'_'
+    }
+    const fn same(b: &[u8], start: usize, end: usize, w: &[u8]) -> bool {
+        if end - start != w.len() {
+            return false;
+        }
+        let mut k = 0;
+        while k < w.len() {
+            if b[start + k] != w[k] {
+                return false;
+            }
+            k += 1;
+        }
+        true
+    }
+    let b = src.as_bytes();
+    let mut i = 0;
+    let mut previous_fn = false;
+    let mut has_shade = false;
+    while i < b.len() {
+        if word(b[i]) && (i == 0 || !word(b[i - 1])) {
+            let start = i;
+            while i < b.len() && word(b[i]) {
+                i += 1;
+            }
+            if same(b, start, i, b"mut") {
+                panic!("shared shader syntax: `let mut` is Rust; a mutable local is `var x = ...;`");
+            }
+            if same(b, start, i, b"as") {
+                panic!("shared shader syntax: `as` is Rust; convert with the type's constructor, `f32(x)`");
+            }
+            if previous_fn && same(b, start, i, b"shade") {
+                has_shade = true;
+            }
+            previous_fn = same(b, start, i, b"fn");
+        } else {
+            i += 1;
+        }
+    }
+    if needs_shade && !has_shade {
+        panic!("shader!: no `fn shade(s: Shading) -> vec4f` entry point");
+    }
 }
 
 impl SharedShader {
@@ -249,9 +308,11 @@ impl Tok {
 fn tokenize(src: &str) -> Result<Vec<Tok>, String> {
     // `>>` is a shift, so a nested template type has to close as `> >`;
     // the shorthand types (`vec4f`) seldom need one.
-    const MULTI: [&str; 18] = [
+    // `++` and `--` are WGSL's increment and decrement statements; split,
+    // `i++` would reach MSL as `i + +`.
+    const MULTI: [&str; 20] = [
         "->", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
-        "::", "<<", ">>",
+        "::", "<<", ">>", "++", "--",
     ];
     let chars: Vec<char> = src.chars().collect();
     let mut toks = Vec::new();
@@ -361,7 +422,8 @@ pub(super) struct FnItem {
 }
 
 fn parse(src: &str) -> Result<Vec<Item>, String> {
-    let items = parse_items(src)?;
+    let src = dsl_source(src, "shader!")?;
+    let items = parse_items(&src)?;
     if !items
         .iter()
         .any(|it| matches!(it, Item::Fn(f) if f.name == "shade"))
@@ -1030,6 +1092,106 @@ impl Item {
 /// vertex entry that builds that input from Metal's buffers — the instance
 /// matrix, tint and two custom columns included — and hands every `VsOut`
 /// field to the fragment.
+/// Names a WGSL shader may use that are types or keywords in MSL — `half`
+/// most of all, a natural name for a half-extent. Left alone, `let half =`
+/// becomes `auto half =`, Metal rejects the library, and the material draws
+/// its fallback colour with nothing on screen to say why.
+///
+/// Not here: what WGSL itself reserves or spells the same (`private` in
+/// `var<private>`, `sampler`, `bool`, `default`), which the source cannot
+/// use as a name anyway.
+const MSL_ONLY_RESERVED: &[&str] = &[
+    "half", "half2", "half3", "half4", "float", "float2", "float3", "float4", "int", "int2", "int3",
+    "int4", "uint", "uint2", "uint3", "uint4", "char", "short", "long", "double", "signed",
+    "unsigned", "auto", "register", "static", "constant", "device", "thread", "threadgroup",
+    "kernel", "vertex", "fragment", "namespace", "template", "typename", "class", "union",
+    "using", "this", "new", "delete", "operator", "public", "protected", "virtual", "friend",
+    "inline", "goto", "volatile", "extern", "sizeof", "typedef", "metal", "texture",
+];
+
+/// Names Rust allows that WGSL or MSL reserves — what the shared syntax
+/// ([`shader!`](crate::shader), [`passes!`](crate::passes),
+/// [`shader_functions!`](crate::shader_functions)) renames before translating,
+/// so a local called `half` or `sample` is not an error two backends away.
+/// [`MSL_ONLY_RESERVED`] and WGSL's own keywords that Rust does not reserve.
+pub(super) const DSL_RESERVED: &[&[&str]] = &[
+    MSL_ONLY_RESERVED,
+    &[
+        "case", "centroid", "default", "do", "enum", "explicit", "flat", "packed", "private",
+        "restrict", "sample", "sampler", "smooth", "switch", "uniform",
+    ],
+];
+
+/// Whether `name` is in one of `lists`.
+pub(super) fn is_reserved(name: &str, lists: &[&[&str]]) -> bool {
+    lists.iter().any(|l| l.contains(&name))
+}
+
+/// The first function in `items` whose name is reserved. A function's name
+/// is how other shaders and the renderer find it — a pass's is its entry
+/// point — so it is not renamed behind the caller's back; it is an error.
+pub(super) fn reserved_function(items: &[Item]) -> Option<String> {
+    items.iter().find_map(|it| match it {
+        Item::Fn(f) if is_reserved(&f.name, DSL_RESERVED) => Some(f.name.clone()),
+        _ => None,
+    })
+}
+
+/// [`rename_reserved`] with the shared syntax's list, after refusing a
+/// reserved function name — for `macro_name`'s error.
+pub(super) fn dsl_source<'a>(src: &'a str, macro_name: &str) -> Result<std::borrow::Cow<'a, str>, String> {
+    let items = parse_items(src).map_err(|e| e.replace("shader!", macro_name))?;
+    if let Some(name) = reserved_function(&items) {
+        return Err(format!(
+            "{macro_name}: `{name}` is a function's name and is reserved in WGSL or MSL; rename it"
+        ));
+    }
+    Ok(rename_reserved(src, DSL_RESERVED))
+}
+
+/// `src` for the Metal backend, every identifier in [`MSL_ONLY_RESERVED`]
+/// renamed.
+#[cfg_attr(not(feature = "render"), allow(dead_code))]
+fn msl_safe_identifiers(src: &str) -> std::borrow::Cow<'_, str> {
+    rename_reserved(src, &[MSL_ONLY_RESERVED])
+}
+
+/// `src` with every identifier in `lists` given a trailing underscore —
+/// everywhere it is a name, so declarations and uses agree, and nowhere it
+/// is an attribute (`@fragment`).
+pub(super) fn rename_reserved<'a>(src: &'a str, lists: &[&[&str]]) -> std::borrow::Cow<'a, str> {
+    let bytes = src.as_bytes();
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut out: Option<String> = None;
+    let mut last = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if word(bytes[i]) && (i == 0 || !word(bytes[i - 1])) {
+            let start = i;
+            while i < bytes.len() && word(bytes[i]) {
+                i += 1;
+            }
+            let ident = &src[start..i];
+            let before = src[..start].trim_end().as_bytes().last().copied();
+            if is_reserved(ident, lists) && before != Some(b'@') {
+                let o = out.get_or_insert_with(|| String::with_capacity(src.len() + 16));
+                o.push_str(&src[last..i]);
+                o.push('_');
+                last = i;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    match out {
+        Some(mut o) => {
+            o.push_str(&src[last..]);
+            std::borrow::Cow::Owned(o)
+        }
+        None => std::borrow::Cow::Borrowed(src),
+    }
+}
+
 // Only the native Metal backend calls this; other targets still build it.
 #[allow(dead_code)]
 #[cfg(feature = "render")]
@@ -1038,7 +1200,8 @@ pub(crate) fn wgsl_material_to_msl(fragment: &str, vertex: Option<&str>) -> Resu
         Some(v) => format!("{v}\n{fragment}"),
         None => fragment.to_string(),
     };
-    let fragment = module.as_str();
+    let module = msl_safe_identifiers(&module);
+    let fragment: &str = &module;
     if fragment.contains("ThreersFragOut") {
         return Err("its WGSL writes a sample mask, which the Metal backend cannot bind".into());
     }
@@ -1877,6 +2040,21 @@ fn with_encoded_variants(entry: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// A WGSL name that is a type in MSL is renamed, consistently, and an
+    /// attribute spelled the same is not.
+    #[test]
+    fn msl_reserved_names_are_renamed() {
+        let src = "@fragment\nfn fs_main(in: VsOut) -> @location(0) vec4<f32> {\n    let half = vec3<f32>(0.5);\n    let constant = half * 2.0;\n    return vec4<f32>(constant, 1.0);\n}\n";
+        let out = msl_safe_identifiers(src);
+        assert!(out.contains("let half_ = "), "{out}");
+        assert!(out.contains("let constant_ = half_ * 2.0"), "{out}");
+        assert!(out.contains("vec4<f32>(constant_, 1.0)"), "{out}");
+        assert!(out.starts_with("@fragment"), "{out}");
+        assert!(!out.contains("halfway"), "only whole names");
+        assert!(matches!(msl_safe_identifiers("let halfway = 1.0;"), std::borrow::Cow::Borrowed(_)));
+    }
+
     use super::*;
 
     fn rim() -> SharedShader {

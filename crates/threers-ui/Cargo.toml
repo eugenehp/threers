@@ -6,7 +6,6 @@ rust-version = "1.99"
 license = "MIT"
 authors = ["Eugene Hauptmann"]
 repository = "https://github.com/eugenehp/threers"
-homepage = "https://github.com/eugenehp/threers"
 documentation = "https://docs.rs/threers-ui"
 readme = "README.md"
 description = "A small retained UI: CSS-subset styles, flexbox layout, controls, painting through any 2D painter (a browser canvas included), hit-testing and an accessibility tree with WCAG contrast checks"

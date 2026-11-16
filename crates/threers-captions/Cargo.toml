@@ -6,7 +6,6 @@ rust-version = "1.99"
 license = "MIT"
 authors = ["Eugene Hauptmann"]
 repository = "https://github.com/eugenehp/threers"
-homepage = "https://github.com/eugenehp/threers"
 documentation = "https://docs.rs/threers-captions"
 readme = "README.md"
 description = "Timed-text tracks and cues with their style, SubRip and WebVTT parsing and writing, and WCAG caption legibility checks; no dependencies"

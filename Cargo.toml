@@ -2,6 +2,7 @@
 members = [
     ".",
     "crates/threers-math",
+    "crates/threers-font",
     "crates/threers-audio",
     "crates/threers-video",
     "crates/threers-captions",
@@ -26,6 +27,7 @@ members = [
     "crates/threers-py",
     "crates/threers-node",
     "crates/threers-fluid-ios",
+    "crates/threers-fluid2d",
     "crates/threers-ios",
 ]
 # vendor/: local copies of upstream crates, patched in below
@@ -61,7 +63,6 @@ description = "Drop-in three.js replacement for Rust and WebAssembly (wgpu) — 
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/eugenehp/threers"
-homepage = "https://github.com/eugenehp/threers"
 documentation = "https://docs.rs/threers"
 keywords = ["three-js", "wgpu", "webgpu", "graphics", "wasm"]
 categories = ["graphics", "rendering", "wasm", "game-development"]
@@ -246,6 +247,11 @@ xr = [
 ]
 # Second renderer on Metal via the Objective-C runtime (macOS/iOS).
 metal = ["render"]
+# The fluids on Metal alone (`metal::MetalFluid`, `metal::MetalFluid3d`): no
+# wgpu, no scene renderer — for an app that owns its MTLDevice and wants only
+# the fluid.
+# With `metal` and `fluid` on as well, the same type is there with the rest.
+metal-fluid = ["dep:bytemuck", "dep:naga"]
 # CompositorServices + ARKit (implies metal).
 visionos = ["metal"]
 # A native visionOS immersive space as an `xr::XrSource` (`xr::visionos`),
@@ -339,6 +345,10 @@ threers-codec = { path = "crates/threers-codec", version = "0.1.0", default-feat
 threers-softbody = { path = "crates/threers-softbody", version = "0.1.0", features = ["gpu"], optional = true }
 wgpu = { version = "30", optional = true }
 bytemuck = { version = "1.16", features = ["derive"], optional = true }
+# The 3D fluid's WGSL, translated to MSL for the Metal backend (`metal-fluid`):
+# one shader source for both, as the 2D fluid's `passes!` gives it. naga alone,
+# not wgpu.
+naga = { version = "30.0.0", features = ["wgsl-in", "msl-out"], optional = true }
 log = "0.4"
 slotmap = "1.0"
 web-time = "1"
@@ -979,7 +989,7 @@ required-features = ["openscad"]
 # `metal` feature on an Apple OS) and `winit_window` (the `sketch` feature where
 # winit builds). Declared here so rustc's check-cfg knows them.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(threers_no_js_bindings)', 'cfg(threers_no_rect_area_light)', 'cfg(metal_backend)', 'cfg(winit_window)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(threers_no_js_bindings)', 'cfg(threers_no_rect_area_light)', 'cfg(metal_backend)', 'cfg(metal_core)', 'cfg(winit_window)'] }
 
 [[test]]
 name = "glass_bounces"

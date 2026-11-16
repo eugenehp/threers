@@ -96,6 +96,15 @@ impl MetalHeadlessBuilder {
     pub fn build(self) -> Result<MetalHeadlessRenderer, MetalError> {
         MetalHeadlessRenderer::new(self.config)
     }
+
+    /// As [`build`](Self::build), on `device` (a clone: the same GPU and
+    /// command queue), so what it draws can be sampled by another renderer
+    /// on that device and is drawn before that renderer's later work — a
+    /// window drawing this renderer's post-processed frame
+    /// ([`MetalRenderer::draw_texture`](super::MetalRenderer::draw_texture)).
+    pub fn build_on(self, device: &MetalDevice) -> Result<MetalHeadlessRenderer, MetalError> {
+        MetalHeadlessRenderer::new_on(device.clone(), self.config)
+    }
 }
 
 /// Renders a [`Scene`] to a pixel buffer with Metal, no window involved.
@@ -141,7 +150,11 @@ impl MetalHeadlessRenderer {
 
     /// Construct from a config, acquiring the GPU.
     pub fn new(config: MetalHeadlessConfig) -> Result<Self, MetalError> {
-        let device = MetalDevice::new()?;
+        Self::new_on(MetalDevice::new()?, config)
+    }
+
+    /// Construct from a config, on `device`.
+    pub fn new_on(device: MetalDevice, config: MetalHeadlessConfig) -> Result<Self, MetalError> {
         let postfx = PostFxChain::new(&device).ok();
         let mut renderer = MetalRenderer::with_device(device.clone())?;
         let (export_w, export_h) = (config.width.max(1), config.height.max(1));
@@ -635,6 +648,42 @@ impl MetalHeadlessRenderer {
         self.run_postfx_and_readback(out)
     }
 
+    /// Draw one frame and its post-processing (SSAO, bloom, a resolve —
+    /// whatever is on), leaving the result on the GPU: the texture to
+    /// sample, this renderer's, good until the next frame. Nothing is read
+    /// back. Committed on this renderer's queue: a renderer on the same
+    /// device ([`build_on`](MetalHeadlessBuilder::build_on)) sees it done.
+    pub fn render_to_texture(
+        &mut self,
+        scene: &mut Scene,
+        camera: &dyn Camera,
+    ) -> Result<super::objc::Id, MetalError> {
+        let _pool = AutoreleasePool::new();
+        self.last_stats = self
+            .renderer
+            .render(scene, camera, &self.target.attachments())?;
+        let mut source = self.target.color_texture();
+        if self.needs_postfx() {
+            self.prepare_postfx()?;
+            let (rw, rh) = self.target.size();
+            let format = self.config.color_format;
+            let depth = self.target.resolved_depth_texture();
+            let cmd = self.device.command_buffer();
+            if cmd.is_null() {
+                return Err(MetalError::NoCommandQueue);
+            }
+            if let Some(postfx) = self.postfx.as_mut()
+                && let Some(out) = postfx.encode_on(&self.device, cmd, source, depth, rw, rh, format)?
+            {
+                source = out;
+            }
+            unsafe {
+                let _: () = msg0(cmd, sel!("commit"));
+            }
+        }
+        Ok(source)
+    }
+
     /// Draw one frame, leaving the result on the GPU. Pair with
     /// [`target`](Self::target) to read it back or sample it.
     pub fn render(
@@ -789,5 +838,38 @@ mod tests {
             MetalHeadlessBuilder::default().msaa(0).config.sample_count,
             1
         );
+    }
+}
+
+#[cfg(test)]
+mod draw_texture_tests {
+    use super::*;
+    use crate::cameras::PerspectiveCamera;
+    use crate::math::Color;
+
+    /// A frame drawn and post-processed offscreen on one device
+    /// ([`MetalHeadlessBuilder::build_on`], `render_to_texture`) and drawn
+    /// over another renderer's frame on that device (`draw_texture`)
+    /// replaces it whole: the window's path for a scene with SSAO.
+    #[test]
+    fn a_frame_drawn_offscreen_is_shown_by_a_renderer_on_the_same_device() {
+        let Ok(device) = MetalDevice::new() else { return };
+        let camera = PerspectiveCamera::new(50.0, 1.0, 0.1, 100.0);
+        let mut red = Scene::new();
+        red.background = Color::new(1.0, 0.0, 0.0);
+        let mut blue = Scene::new();
+        blue.background = Color::new(0.0, 0.0, 1.0);
+        let mut offscreen = MetalHeadlessRenderer::builder().size(32, 32).msaa(4).build_on(&device).unwrap();
+        let mut window = MetalHeadlessRenderer::builder().size(32, 32).msaa(1).build_on(&device).unwrap();
+        // an SSAO pass on, so the post-processed texture is the one shown
+        offscreen.set_ssao(Some(SsaoSettings { strength: 1.0, radius: 0.5, near: 0.1, far: 100.0, tan_half_fov: 0.47, aspect: 1.0 }));
+        let texture = offscreen.render_to_texture(&mut red, &camera).unwrap();
+        window.render(&mut blue, &camera).unwrap();
+        let pass = window.target().attachments();
+        window.renderer_mut().draw_texture(texture, &pass).unwrap();
+        let px = window.read_rgba().unwrap();
+        for p in px.chunks_exact(4).step_by(37) {
+            assert!(p[0] > 200 && p[2] < 40, "red over blue: {p:?}");
+        }
     }
 }

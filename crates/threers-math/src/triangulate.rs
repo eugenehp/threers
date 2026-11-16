@@ -274,6 +274,54 @@ pub fn convex_hull(points: &[Vector2]) -> Vec<u32> {
     hull
 }
 
+/// [`convex_hull`] of integer points, decided exactly: the orientation
+/// test in `i128`, so no rounding can keep or drop a corner. Indices in
+/// counter-clockwise order (y up), collinear points on an edge dropped.
+pub fn convex_hull_i64(points: &[[i64; 2]]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..points.len()).collect();
+    order.sort_by_key(|&i| points[i]);
+    order.dedup_by_key(|i| points[*i]);
+
+    if order.len() < 3 {
+        return order;
+    }
+
+    let cross = |o: usize, a: usize, b: usize| {
+        let (o, a, b) = (points[o], points[a], points[b]);
+        let d = |p: [i64; 2]| {
+            [
+                i128::from(p[0]) - i128::from(o[0]),
+                i128::from(p[1]) - i128::from(o[1]),
+            ]
+        };
+        let (da, db) = (d(a), d(b));
+        da[0] * db[1] - da[1] * db[0]
+    };
+
+    let mut hull: Vec<usize> = Vec::with_capacity(order.len() + 1);
+
+    for &i in &order {
+        while hull.len() >= 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], i) <= 0 {
+            hull.pop();
+        }
+
+        hull.push(i);
+    }
+
+    let lower = hull.len() + 1;
+
+    for &i in order.iter().rev() {
+        while hull.len() >= lower && cross(hull[hull.len() - 2], hull[hull.len() - 1], i) <= 0 {
+            hull.pop();
+        }
+
+        hull.push(i);
+    }
+
+    hull.pop();
+    hull
+}
+
 /// Voronoi cells for `sites`, each clipped to `bounds`, as a polygon per site
 /// in input order.
 ///
@@ -463,6 +511,36 @@ pub fn open_ring(ring: &[[f64; 2]]) -> &[[f64; 2]] {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn integer_hull_exact() {
+        // a square with points on its edges and inside, and one a unit off an edge
+        let pts = [
+            [0, 0],
+            [10, 0],
+            [10, 10],
+            [0, 10],
+            [5, 0],
+            [5, 5],
+            [10, 5],
+            [3, 11],
+        ];
+        let hull = convex_hull_i64(&pts);
+        let corners: Vec<[i64; 2]> = hull.iter().map(|&i| pts[i]).collect();
+        assert_eq!(corners, vec![[0, 0], [10, 0], [10, 10], [3, 11], [0, 10]]);
+
+        // far from the origin, where f64 cross products lose the unit
+        let big = 1i64 << 52;
+        let far = [
+            [big, big],
+            [big + 2, big],
+            [big + 1, big + 1],
+            [big + 1, big + 3],
+        ];
+        let hull = convex_hull_i64(&far);
+        assert_eq!(hull.len(), 3);
+    }
+
     use super::*;
 
     /// A jittered grid. Jittered because an exact grid is four-points-on-a-

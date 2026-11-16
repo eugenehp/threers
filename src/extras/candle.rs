@@ -455,3 +455,16 @@ mod tests {
         assert!(f.first().unwrap().x.abs() < 1e-6 && f.last().unwrap().x.abs() < 1e-6);
     }
 }
+
+#[cfg(all(test, feature = "render"))]
+mod msl_dump {
+    #[test]
+    #[ignore]
+    fn dump_realistic_flame_msl() {
+        let src = format!("{}{}", threers_math::flicker::FLAME_WGSL, super::REALISTIC_FLAME);
+        let msl = crate::materials::shared_shader::wgsl_material_to_msl(&src, None).unwrap();
+        #[cfg(metal_backend)]
+        let msl = format!("{}\n{msl}", crate::metal::shader_source());
+        std::fs::write("/tmp/rf.metal", msl).unwrap();
+    }
+}

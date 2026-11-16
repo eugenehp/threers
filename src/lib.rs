@@ -315,9 +315,10 @@ pub mod wasm_denoise;
 ))]
 pub mod wasm_pathtrace;
 
-cfg_metal! {
-    pub mod metal;
-}
+// `metal_core`: the whole backend with `metal`, only the fluid and what it
+// stands on with `metal-fluid`; `metal/mod.rs` gates the rest.
+#[cfg(metal_core)]
+pub mod metal;
 
 /// NVENC and NVDEC on NVIDIA GPUs; see [`codec::nvidia`](threers_codec::nvidia).
 #[cfg(all(
@@ -360,7 +361,7 @@ pub mod planet;
 // No outer doc comment on purpose: `fluid/mod.rs` carries `//!` docs, and an
 // outer `///` here would make the intra-doc links inside them resolve in this
 // scope instead of the module's.
-#[cfg(feature = "fluid")]
+#[cfg(any(feature = "fluid", feature = "metal-fluid"))]
 pub mod fluid;
 
 #[cfg(feature = "nurbs")]
@@ -530,7 +531,7 @@ pub use textures::{
     pack_rgba16f, AstcBlock, Compression, CubeTexture, DataTexture, DepthTexture, Texture,
     TextureFilter, TextureFormat, TextureWrap,
 };
-pub use utils::png::{decode_png, encode_png, PngImage};
+pub use utils::png::{decode_png, encode_png, encode_png_with_dpi, PngImage};
 #[cfg(feature = "render")]
 pub use volume::Data3DTexture;
 

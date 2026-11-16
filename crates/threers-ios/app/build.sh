@@ -9,8 +9,12 @@
 #   app/build.sh path/to/crate vision          Apple Vision Pro simulator: a volume
 #                                              (RealityKit) and the immersive space
 #   app/build.sh path/to/crate vision-window   the same with a flat Metal window
+#   app/build.sh path/to/crate ios-reality     iPhone simulator, RealityKit drawing the
+#                                              scene (iOS 18; AR over the camera on a device)
+#   app/build.sh path/to/crate mac             the Mac, RealityKit drawing it in a window
 #   app/build.sh path/to/crate ios-device      } SIGN_IDENTITY="Apple Development: …"
-#   app/build.sh path/to/crate vision-device   } and PROFILE=path/to.mobileprovision
+#   app/build.sh path/to/crate ios-reality-device } and PROFILE=path/to.mobileprovision
+#   app/build.sh path/to/crate vision-device   }
 #
 # Environment: APP_NAME (under the icon; default the package name),
 # BUNDLE_ID (default com.example.<lib>), SIM (a simulator's UDID; default
@@ -24,7 +28,7 @@
 # dependencies need, e.g. "-framework Accelerate" for BLAS).
 set -eu
 here=${0:A:h}
-crate=${1:?usage: app/build.sh path/to/crate [ios|ios-device|vision|vision-device]}
+crate=${1:?usage: app/build.sh path/to/crate [ios|ios-device|ios-reality|ios-reality-device|vision|vision-device|vision-window|mac]}
 crate=${crate:A}
 kind=${2:-ios}
 package=$(sed -n 's/^name *= *"\(.*\)"/\1/p' "$crate/Cargo.toml" | head -1)
@@ -38,19 +42,29 @@ case $kind in
   ios)           rust_target=aarch64-apple-ios-sim      min_os=17.0 swift_target=arm64-apple-ios17.0-simulator  sdk=iphonesimulator platform=iPhoneSimulator ;;
   ios-device)    rust_target=aarch64-apple-ios          min_os=17.0 swift_target=arm64-apple-ios17.0            sdk=iphoneos        platform=iPhoneOS ;;
   vision|vision-window) rust_target=aarch64-apple-visionos-sim min_os=26.0 swift_target=arm64-apple-xros26.0-simulator sdk=xrsimulator     platform=XRSimulator ;;
+  ios-reality)   rust_target=aarch64-apple-ios-sim      min_os=18.0 swift_target=arm64-apple-ios18.0-simulator  sdk=iphonesimulator platform=iPhoneSimulator ;;
+  ios-reality-device) rust_target=aarch64-apple-ios     min_os=18.0 swift_target=arm64-apple-ios18.0            sdk=iphoneos        platform=iPhoneOS ;;
   vision-device) rust_target=aarch64-apple-visionos     min_os=26.0 swift_target=arm64-apple-xros26.0           sdk=xros            platform=XROS ;;
-  *) echo "usage: app/build.sh path/to/crate [ios|ios-device|vision|vision-window|vision-device]"; exit 1 ;;
+  mac)           rust_target=aarch64-apple-darwin       min_os=15.0 swift_target=arm64-apple-macos15.0          sdk=macosx          platform=MacOSX ;;
+  *) echo "usage: app/build.sh path/to/crate [ios|ios-device|ios-reality|ios-reality-device|vision|vision-window|vision-device|mac]"; exit 1 ;;
 esac
 if [[ $kind == ios* ]]; then
-  frameworks=(-framework ARKit -framework SceneKit) families='[1,2]'
+  frameworks=(-framework ARKit -framework SceneKit -framework RealityKit -framework QuickLook -framework UIKit) families='[1,2]'
+elif [[ $kind == mac ]]; then
+  frameworks=(-framework RealityKit -framework AppKit)
 else
-  frameworks=(-framework CompositorServices -framework ARKit -framework RealityKit) families='[7]'
+  frameworks=(-framework CompositorServices -framework ARKit -framework RealityKit -framework QuickLook -framework UIKit) families='[7]'
 fi
 
 echo "==> $package for $rust_target"
 # only this platform's deployment target: clang refuses C (cc-rs builds:
 # zlib, blosc) with both an iOS and a visionOS one in the environment
-if [[ $kind == ios* ]]; then export IPHONEOS_DEPLOYMENT_TARGET=17.0; unset XROS_DEPLOYMENT_TARGET; else export XROS_DEPLOYMENT_TARGET=26.0; unset IPHONEOS_DEPLOYMENT_TARGET; fi
+unset IPHONEOS_DEPLOYMENT_TARGET XROS_DEPLOYMENT_TARGET MACOSX_DEPLOYMENT_TARGET
+case $kind in
+  ios*) export IPHONEOS_DEPLOYMENT_TARGET=$min_os ;;
+  mac) export MACOSX_DEPLOYMENT_TARGET=$min_os ;;
+  *) export XROS_DEPLOYMENT_TARGET=$min_os ;;
+esac
 CARGO_TARGET_DIR=$target_dir \
   cargo rustc --manifest-path "$crate/Cargo.toml" --lib --crate-type staticlib --target $rust_target --release \
   ${FEATURES:+--features=$FEATURES} ${NO_DEFAULT_FEATURES:+--no-default-features}
@@ -58,16 +72,25 @@ CARGO_TARGET_DIR=$target_dir \
 app=$target_dir/threers-ios/$kind/$lib.app
 rm -rf "$app"
 mkdir -p "$app"
+# a Mac app keeps its parts under Contents/
+if [[ $kind == mac ]]; then
+  bin=$app/Contents/MacOS resources=$app/Contents/Resources plist=$app/Contents/Info.plist
+  mkdir -p "$bin" "$resources"
+  shell=("$here/MacHarness.swift" "$here/Reality.swift")
+else
+  bin=$app resources=$app plist=$app/Info.plist
+  shell=("$here/Harness.swift" "$here/Reality.swift")
+fi
 flags=()
 [[ $kind == vision-window ]] && flags=(-D THREERS_WINDOW)
+[[ $kind == ios-reality* ]] && flags=(-D THREERS_REALITY)
 xcrun --sdk $sdk swiftc -O -parse-as-library -target $swift_target $flags \
-  "$here/Harness.swift" "$target_dir/$rust_target/release/lib$lib.a" \
-  $frameworks -framework UIKit -framework SwiftUI -framework Metal -framework QuartzCore \
+  $shell "$target_dir/$rust_target/release/lib$lib.a" \
+  $frameworks -framework SwiftUI -framework Metal -framework QuartzCore \
   -framework CoreGraphics -framework CoreFoundation -framework Foundation -framework Security \
-  -lobjc -liconv -lc++ ${=APP_LINK:-} -Xlinker -dead_strip -o "$app/$lib"
+  -lobjc -liconv -lc++ ${=APP_LINK:-} -Xlinker -dead_strip -o "$bin/$lib"
 # the symbols are for the debugger, not the device
-[[ ${STRIP:-1} == 1 ]] && strip "$app/$lib"
-plist=$app/Info.plist
+[[ ${STRIP:-1} == 1 ]] && strip "$bin/$lib"
 cp "$here/Info.plist" "$plist"
 plutil -replace CFBundleExecutable -string "$lib" "$plist"
 plutil -replace CFBundleName -string "$lib" "$plist"
@@ -76,7 +99,14 @@ plutil -replace CFBundleIdentifier -string "$bundle_id" "$plist"
 plutil -replace CFBundleShortVersionString -string "$version" "$plist"
 plutil -replace MinimumOSVersion -string "$min_os" "$plist"
 plutil -replace CFBundleSupportedPlatforms -json "[\"$platform\"]" "$plist"
-plutil -replace UIDeviceFamily -json "$families" "$plist"
+if [[ $kind == mac ]]; then
+  # the Mac's keys, not iOS's
+  plutil -remove MinimumOSVersion "$plist"
+  plutil -replace LSMinimumSystemVersion -string "$min_os" "$plist"
+  for k in LSRequiresIPhoneOS UILaunchScreen UISupportedInterfaceOrientations UIApplicationSceneManifest; do plutil -remove $k "$plist"; done
+else
+  plutil -replace UIDeviceFamily -json "$families" "$plist"
+fi
 # a volume opens first: say so, or visionOS hands the app a window scene it has no window for
 [[ $kind == vision || $kind == vision-device ]] && \
   plutil -replace UIApplicationSceneManifest.UIApplicationPreferredDefaultSceneSessionRole -string UIWindowSceneSessionRoleVolumetricApplication "$plist"
@@ -84,14 +114,15 @@ plutil -replace UIDeviceFamily -json "$families" "$plist"
 # (`AppIcon`: an .appiconset for iOS, a layered .solidimagestack for
 # visionOS), compiled for this platform, its keys merged into the plist
 if [[ -d "$crate/app/Assets.xcassets" ]]; then
-  if [[ $kind == ios* ]]; then devices=(--target-device iphone --target-device ipad); else devices=(--target-device vision); fi
+  if [[ $kind == ios* ]]; then devices=(--target-device iphone --target-device ipad); elif [[ $kind == mac ]]; then devices=(--target-device mac); else devices=(--target-device vision); fi
   partial=$target_dir/threers-ios/$kind/assets.plist
-  xcrun actool "$crate/app/Assets.xcassets" --compile "$app" --platform $sdk --minimum-deployment-target $min_os \
+  xcrun actool "$crate/app/Assets.xcassets" --compile "$resources" --platform $sdk --minimum-deployment-target $min_os \
     --app-icon AppIcon $devices --output-partial-info-plist "$partial" --errors --notices > /dev/null
   /usr/libexec/PlistBuddy -c "Merge $partial" "$plist" > /dev/null
 fi
-printf 'APPL????' > "$app/PkgInfo"
-[[ $kind == vision* ]] && cp "$here/VertexColor.usda" "$app/"
+printf 'APPL????' > "${plist:h}/PkgInfo"
+# the vertex-colour material RealityKit draws with
+cp "$here/VertexColor.usda" "$resources/"
 if [[ $kind == *-device ]]; then
   [[ -n ${PROFILE:-} ]] && cp "$PROFILE" "$app/embedded.mobileprovision"
   codesign --force --sign "${SIGN_IDENTITY:?set SIGN_IDENTITY to your signing identity}" "$app"
@@ -101,7 +132,13 @@ fi
 echo "==> built $app"
 
 [[ $kind == *-device || ${RUN:-1} != 1 ]] && exit 0
-if [[ $kind == ios ]]; then pattern='iPhone'; else pattern='Apple Vision Pro'; fi
+if [[ $kind == mac ]]; then
+  for v in ${(k)parameters[(I)APP_ENV_*]}; do export "${v#APP_ENV_}=${(P)v}"; done
+  if [[ -n ${CONSOLE:-} ]]; then "$bin/$lib" > "$CONSOLE" 2>&1 & else open "$app"; fi
+  echo "==> running $app"
+  exit 0
+fi
+if [[ $kind == ios* ]]; then pattern='iPhone'; else pattern='Apple Vision Pro'; fi
 sim=${SIM:-$(xcrun simctl list devices available | grep -i "$pattern" | head -1 | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')}
 [[ -z $sim ]] && { echo "no $pattern simulator: Xcode → Settings → Components"; exit 1; }
 xcrun simctl boot "$sim" 2>/dev/null || true

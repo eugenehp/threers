@@ -42,6 +42,38 @@ jobs:
       - run: cargo check -p threers-ui --target wasm32-unknown-unknown --tests
       - run: cargo check -p threers-video --all-targets
 
+  # The Metal side, which no Linux job compiles: the scene backend, the fluid
+  # without wgpu (`metal-fluid` must never start needing it), and the two C
+  # libraries apps link, for the Mac and for the device. Their header tests
+  # run here; the GPU tests skip themselves where the runner has no device.
+  apple:
+    name: apple targets
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p threers --no-default-features --features metal-fluid
+      - run: cargo check -p threers --no-default-features --features metal,fluid
+      - run: cargo check -p threers-fluid2d -p threers-fluid-ios --target aarch64-apple-ios
+      - run: cargo test -p threers-fluid2d -p threers-fluid-ios
+      # The volume's WGSL through naga into MSL, which needs no GPU, and the
+      # parity with wgpu where there is one (the drawing tests skip without).
+      # With `render` on because the crate's other unit tests assume it.
+      - run: cargo test -p threers --lib --no-default-features --features metal,fluid,metal-fluid -- metal::fluid3d metal::fluid::
+      # Nothing the 2D fluid needs may pull wgpu back in.
+      - name: metal-fluid (and the C libraries) build without wgpu
+        run: |
+          if cargo tree -p threers --no-default-features --features metal-fluid -e normal | grep -q '^.*wgpu'; then
+            echo "metal-fluid depends on wgpu:"; cargo tree -p threers --no-default-features --features metal-fluid -e normal -i wgpu
+            exit 1
+          fi
+          if cargo tree -p threers-fluid2d -p threers-fluid-ios -e normal | grep -q 'wgpu'; then
+            echo "a C library depends on wgpu"; exit 1
+          fi
+
   # Conformance streams through the skip gate: a suite that loses its inputs
   # fails here rather than reporting ok.
   codec:

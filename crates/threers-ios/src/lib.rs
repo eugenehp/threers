@@ -1,18 +1,23 @@
-//! threers apps on iPhone, iPad and Apple Vision Pro, written in Rust and
-//! drawn with Metal: one [`App`] in five places, with a Swift shell that
-//! is the same for every app (`app/Harness.swift`) and a build script that
+//! threers apps on iPhone, iPad, Apple Vision Pro and the Mac, written in
+//! Rust and drawn with Metal or RealityKit: one [`App`] in eight places, with
+//! a Swift shell that is the same for every app (`app/Harness.swift`,
+//! `app/Reality.swift`, `app/MacHarness.swift`) and a build script that
 //! needs no Xcode project (`app/build.sh`).
 //!
 //! - iOS, **3D** — a window with an orbit camera ([`View`], [`Mode::Window`]);
 //! - iOS, **AR** — over the camera, ARKit run from Rust (`ar`, [`Mode::Ar`]);
+//! - iOS, **RealityKit** — a `RealityView`, on the screen or over the camera
+//!   (`ios-reality` builds);
 //! - visionOS, **window** — the orbit view in a window;
-//! - visionOS, **volume** — RealityKit draws the scene in the shared space,
-//!   beside other apps, no immersion ([`volume`]);
-//! - visionOS, **immersive** — both eyes in the room (`immersive`).
+//! - visionOS, **volume** — in the shared space, beside other apps, no
+//!   immersion ([`volume`]): threers' picture or RealityKit's entities;
+//! - visionOS, **immersive** — both eyes in the room (`immersive`);
+//! - macOS — a RealityKit window (`mac` builds).
 //!
-//! Every mode draws the scene with threers' own Metal renderer
+//! The Metal modes draw the scene with threers' own Metal renderer
 //! ([`MetalRenderer`](threers::metal::MetalRenderer)): no wgpu, no shader
-//! translation at run time. The app's UI is threers-ui ([`App::ui`]),
+//! translation at run time. The RealityKit ones hand it over entity by
+//! entity ([`volume`], [`reality`]). The app's UI is threers-ui ([`App::ui`]),
 //! painted on the CPU where it changed and blended over the frame, put on a
 //! panel in the room, or handed to the shell as an image beside a volume.
 //!
@@ -51,11 +56,13 @@ pub mod ar;
 pub mod bake;
 #[cfg(target_os = "visionos")]
 pub mod immersive;
+pub mod reality;
 mod surface_ui;
 pub mod view;
 pub mod volume;
 
 pub use app::{App, PanelSpec, Place, Surface};
+pub use reality::{RealityLighting, VolumeDrawing};
 pub use view::{Key, Mode, View};
 
 /// What an app can ask for while it runs.
@@ -100,7 +107,9 @@ static SPINNING: AtomicBool = AtomicBool::new(false);
 static CAMERA: Mutex<Vec<CameraRequest>> = Mutex::new(Vec::new());
 static TAPS: Mutex<Vec<(f32, f32)>> = Mutex::new(Vec::new());
 static PRESSES: Mutex<Vec<u64>> = Mutex::new(Vec::new());
-static TOUCHES: Mutex<Vec<(u32, u32, f32, f32, std::time::Instant)>> = Mutex::new(Vec::new());
+/// A finger on a volume's UI surface: the surface, its phase, where, when.
+type Touch = (u32, u32, f32, f32, std::time::Instant);
+static TOUCHES: Mutex<Vec<Touch>> = Mutex::new(Vec::new());
 static VOLUME_SHOWN: AtomicBool = AtomicBool::new(false);
 static TEXTS: Mutex<Vec<(u64, String)>> = Mutex::new(Vec::new());
 
@@ -361,16 +370,249 @@ pub fn open_url(url: &str) {
 /// `out` must be writable for `cap` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn threers_ios_take_url(out: *mut u8, cap: usize) -> usize {
-    let Ok(mut u) = URLS.lock() else { return 0 };
-    if u.is_empty() || out.is_null() {
+    unsafe { hand_over(URLS.lock().ok().and_then(|mut u| (!u.is_empty()).then(|| u.remove(0))), out, cap) }
+}
+
+/// What the app hands the shell through a poll (a URL, a path, text):
+/// `text` written to `out` (up to `cap` bytes, UTF-8); its length, 0 when
+/// there is none, or it does not fit (when it is dropped).
+///
+/// # Safety
+/// `out` must be writable for `cap` bytes.
+unsafe fn hand_over(text: Option<String>, out: *mut u8, cap: usize) -> usize {
+    let Some(text) = text else { return 0 };
+    if out.is_null() || text.len() > cap {
         return 0;
     }
-    let url = u.remove(0);
-    if url.len() > cap {
+    unsafe { std::ptr::copy_nonoverlapping(text.as_ptr(), out, text.len()) };
+    text.len()
+}
+
+/// A file asked for ([`pick_file`]), and those picked, not yet taken.
+static PICK: AtomicBool = AtomicBool::new(false);
+static PICKED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Ask the person for a file or a folder of theirs: the shell shows the
+/// system's document picker, and what they choose arrives by
+/// [`take_picked`] as a path the app may read (a folder's, while the app runs).
+pub fn pick_file() {
+    PICK.store(true, Ordering::Relaxed);
+}
+
+/// The paths picked since the last call, oldest first.
+pub fn take_picked() -> Vec<String> {
+    PICKED.lock().map(|mut p| std::mem::take(&mut *p)).unwrap_or_default()
+}
+
+/// The shell's poll for [`pick_file`]: whether to show the picker now.
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_take_pick() -> bool {
+    PICK.swap(false, Ordering::Relaxed)
+}
+
+/// The shell: the person picked `path` (`len` bytes, UTF-8).
+///
+/// # Safety
+/// `path` must be readable for `len` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn threers_ios_picked(path: *const u8, len: usize) {
+    if path.is_null() {
+        return;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(path, len) };
+    if let (Ok(s), Ok(mut p)) = (std::str::from_utf8(bytes), PICKED.lock()) {
+        p.push(s.to_owned());
+    }
+}
+
+/// Text the app put on the clipboard since the shell last looked.
+static COPIED: Mutex<Option<String>> = Mutex::new(None);
+
+/// Put `text` on the system's clipboard (the shell does, at its next poll).
+pub fn copy_text(text: &str) {
+    if let Ok(mut c) = COPIED.lock() {
+        *c = Some(text.to_owned());
+    }
+}
+
+/// The shell's poll for [`copy_text`]: the text, written to `out` (up to
+/// `cap` bytes, UTF-8); its length, 0 when there is none (or it does not
+/// fit, when it is dropped).
+///
+/// # Safety
+/// `out` must be writable for `cap` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn threers_ios_take_copy(out: *mut u8, cap: usize) -> usize {
+    unsafe { hand_over(COPIED.lock().ok().and_then(|mut c| c.take()), out, cap) }
+}
+
+/// A turn being recorded ([`record_turn`]): frames to make, made, the rate;
+/// and the frame waiting for the shell (BGRA, its size, its index, whether
+/// it is the last).
+pub(crate) struct Recording {
+    pub frames: u32,
+    pub made: u32,
+    pub fps: u32,
+}
+pub(crate) static RECORDING: Mutex<Option<Recording>> = Mutex::new(None);
+/// A recorded frame: BGRA, width, height, index, whether the last.
+pub(crate) type RecFrame = (Vec<u8>, u32, u32, u32, bool);
+pub(crate) static FRAME: Mutex<Option<RecFrame>> = Mutex::new(None);
+
+/// Record a full turn of the window's view about its centre, `seconds`
+/// long at `fps`, as a video: each frame drawn offscreen (the scene, no UI)
+/// and handed to the shell, which writes an MP4 and offers it to share.
+/// Nothing in AR, the room or a volume.
+pub fn record_turn(seconds: f32, fps: u32) {
+    let fps = fps.clamp(1, 60);
+    if let Ok(mut r) = RECORDING.lock() {
+        *r = Some(Recording { frames: ((seconds * fps as f32).round() as u32).max(2), made: 0, fps });
+    }
+}
+
+/// Whether a turn is being recorded.
+pub fn recording() -> bool {
+    RECORDING.lock().is_ok_and(|r| r.is_some())
+}
+
+/// The shell's poll for a recorded frame: whether one waits, and its
+/// width, height, index, rate and whether it is the last.
+///
+/// # Safety
+/// The pointers must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn threers_ios_rec_peek(w: *mut u32, h: *mut u32, index: *mut u32, fps: *mut u32, last: *mut bool) -> bool {
+    let Ok(f) = FRAME.lock() else { return false };
+    let Some((_, fw, fh, i, l)) = f.as_ref() else { return false };
+    let rate = RECORDING.lock().ok().and_then(|r| r.as_ref().map(|r| r.fps)).unwrap_or(30);
+    unsafe {
+        *w = *fw;
+        *h = *fh;
+        *index = *i;
+        *fps = rate;
+        *last = *l;
+    }
+    true
+}
+
+/// The shell takes the waiting frame: its BGRA bytes into `out` (`cap`
+/// bytes); whether they fitted. The slot is free for the next one then.
+///
+/// # Safety
+/// `out` must be writable for `cap` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn threers_ios_rec_take(out: *mut u8, cap: usize) -> bool {
+    let Ok(mut f) = FRAME.lock() else { return false };
+    let Some((bytes, _, _, _, last)) = f.take() else { return false };
+    if last && let Ok(mut r) = RECORDING.lock() {
+        *r = None;
+    }
+    if out.is_null() || bytes.len() > cap {
+        return false;
+    }
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
+    true
+}
+
+/// A picture of the window's view asked for ([`snapshot`]).
+static SNAPSHOT: AtomicBool = AtomicBool::new(false);
+
+/// Ask for a picture of the view as it is: at the next frame the window's
+/// is drawn once more, offscreen, at its size — or a volume's frame read
+/// back, square, clear round the model — and handed to [`App::snapshot`].
+/// Nothing in AR or the room.
+pub fn snapshot() {
+    SNAPSHOT.store(true, Ordering::Relaxed);
+}
+
+pub(crate) fn take_snapshot() -> bool {
+    SNAPSHOT.swap(false, Ordering::Relaxed)
+}
+
+/// Files the app made for the person to keep or send (a figure, a table),
+/// for the shell's share sheet, oldest first.
+static SHARES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Offer the file at `path` (one the app wrote, under
+/// [`std::env::temp_dir`] say) through the system's share sheet: saved to
+/// Files or Photos, sent, or opened in another app.
+pub fn share(path: &str) {
+    if let Ok(mut s) = SHARES.lock() {
+        s.push(path.to_owned());
+    }
+}
+
+/// The shell's poll for [`share`]: the oldest path asked for, written to
+/// `out` (up to `cap` bytes, UTF-8); its length, 0 when there is none (or
+/// it does not fit, when it is dropped).
+///
+/// # Safety
+/// `out` must be writable for `cap` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn threers_ios_take_share(out: *mut u8, cap: usize) -> usize {
+    unsafe { hand_over(SHARES.lock().ok().and_then(|mut s| (!s.is_empty()).then(|| s.remove(0))), out, cap) }
+}
+
+/// The view request ([`Request::Window`], [`Request::Ar`]) for a shell that
+/// draws with RealityKit rather than [`View`]: 0 none, else the request.
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_take_view_request() -> u32 {
+    take_view_request().map_or(0, |r| r as u32)
+}
+
+/// The RealityKit shell switched to AR over the camera (`ar`) or back to
+/// its own camera: [`current_mode`] says so.
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_reality_mode(ar: bool) {
+    set_current_mode(if ar { Mode::Ar } else { Mode::Window });
+}
+
+/// Files the app asked to show in AR Quick Look, oldest first.
+static QUICK_LOOKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Show the `.usdz` at `path` in the system's AR Quick Look (iOS, iPadOS),
+/// in its own window in the shared space (visionOS) or in Preview (the
+/// Mac): RealityKit drawing it, placed in the room, scaled with the
+/// fingers. [`write_usdz`] writes a scene for it.
+pub fn quick_look(path: &str) {
+    if let Ok(mut q) = QUICK_LOOKS.lock() {
+        q.push(path.to_owned());
+    }
+}
+
+/// `scene` as a `.usdz` RealityKit opens (its meshes, materials and maps,
+/// packed), written to `path`: what [`quick_look`] shows, or a file to
+/// share. The package is checked against what RealityKit will open in one
+/// ([`arkit_issues`](threers::loaders::usd::arkit_issues)); a
+/// problem with it is an error.
+pub fn write_usdz(scene: &mut threers::scene::Scene, path: &std::path::Path) -> std::io::Result<()> {
+    scene.update_world();
+    let bytes = threers::loaders::usd::UsdExport::scene(&scene.arena, &[scene.root]).usdz();
+    let issues = threers::loaders::usd::arkit_issues(&bytes);
+    if let Some(issue) = issues.first() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, issue.to_string()));
+    }
+    std::fs::write(path, bytes)
+}
+
+/// The shell's poll for [`quick_look`]: the oldest path, written to `out`
+/// (up to `cap` bytes, UTF-8); its length, 0 when there is none (or it does
+/// not fit, when it is dropped).
+///
+/// # Safety
+/// `out` must be writable for `cap` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn threers_ios_take_quick_look(out: *mut u8, cap: usize) -> usize {
+    let Ok(mut q) = QUICK_LOOKS.lock() else { return 0 };
+    if q.is_empty() || out.is_null() {
         return 0;
     }
-    unsafe { std::ptr::copy_nonoverlapping(url.as_ptr(), out, url.len()) };
-    url.len()
+    let path = q.remove(0);
+    if path.len() > cap {
+        return 0;
+    }
+    unsafe { std::ptr::copy_nonoverlapping(path.as_ptr(), out, path.len()) };
+    path.len()
 }
 
 /// What the app asked the shell's player to do since it last looked:
@@ -473,18 +715,28 @@ pub extern "C" fn threers_ios_immersive_open() -> bool {
 /// void  threers_view_destroy(void *view);
 /// const uint8_t *threers_view_controls(void *view, size_t *len);                      // its UI's controls, JSON; NULL: unchanged
 ///
-/// // a RealityKit volume (visionOS): see `volume`
+/// // RealityKit: a volume (visionOS), a view on an iPhone, an iPad or a Mac: see `volume`
 /// void *threers_vol_create(void);
 /// uint32_t threers_vol_frame(void *vol);                                              // meshes now
-/// bool  threers_vol_object(void *vol, uint32_t i, uint64_t keys[3], float floats[32]);
-/// bool  threers_vol_geometry(void *vol, uint32_t i, const void *ptrs[4], uint32_t counts[3]);
+/// bool  threers_vol_object(void *vol, uint32_t i, uint64_t keys[4], float floats[48]);
+/// bool  threers_vol_geometry(void *vol, uint32_t i, const void *ptrs[5], uint32_t counts[3]);
+/// const uint8_t *threers_vol_map(void *vol, uint32_t i, uint32_t slot, uint32_t *w, uint32_t *h, size_t *len); // a lit mesh's map, RGBA8
+/// const float *threers_vol_instances(void *vol, uint32_t i, size_t *len);           // an instanced mesh's matrices
+/// const float *threers_vol_lights(void *vol, size_t *len);                          // 16 floats a light
+/// uint32_t threers_vol_lighting(void *vol);                                          // `RealityLighting`
+/// uint32_t threers_vol_drawing(void *vol);                                           // `VolumeDrawing`
+/// void  threers_vol_background(void *vol, float out[4]);                             // linear RGB, alpha
+/// const float *threers_vol_environment(void *vol, uint32_t width, size_t *len);     // equirect RGBA floats; NULL: unchanged, len 0: none
+/// bool  threers_vol_ui_hit(void *vol, uint32_t which, float x, float y, float scale); // the UI is under (x, y)
+/// void  threers_vol_ray(void *vol, const float ray[6]);                              // a select along a ray in the scene
+/// void  threers_vol_insets(void *vol, float top, float bottom, float left, float right); // the screen's safe area, points
 /// const float *threers_vol_uvs(void *vol, uint32_t i, size_t *len);                 // a mesh's texture coordinates
 /// const uint8_t *threers_vol_texture(void *vol, uint32_t i, uint32_t *w, uint32_t *h, size_t *len); // a sprite's RGBA8, rows from the top
 /// void  threers_vol_root(void *vol, float out[17]);
 /// void  threers_vol_turn(void *vol, float radians);
 /// void  threers_vol_tap(void *vol, float u, float v);                                // a tap on the quad (0..1, from its foot up)
 /// bool  threers_vol_draw(void *vol, float qx, float qy, float qz, float qw, uint32_t size, void *mtl_texture, void *mtl_command_buffer); // the whole scene, drawn by threers, into a quad's texture
-/// const uint8_t *threers_vol_ui(void *vol, uint32_t which, uint32_t w, uint32_t h, float scale, size_t *len); // 0 card, 1 toolbar; NULL: unchanged, len 0: hidden
+/// const uint8_t *threers_vol_ui(void *vol, uint32_t which, uint32_t w, uint32_t h, float scale, size_t *len); // 0 card, 1 toolbar, 2 screen; NULL: unchanged, len 0: hidden
 /// const uint8_t *threers_vol_controls(void *vol, uint32_t which, size_t *len); // its controls, JSON; NULL: unchanged
 /// void  threers_vol_destroy(void *vol);
 ///
@@ -581,7 +833,7 @@ macro_rules! app {
             unsafe { $crate::volume::frame::<$app>(vol) }
         }
         /// # Safety
-        /// As `threers_vol_frame`; 3 keys, 32 floats writable.
+        /// As `threers_vol_frame`; 4 keys, 48 floats writable.
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn threers_vol_object(
             vol: *mut ::core::ffi::c_void,
@@ -592,7 +844,7 @@ macro_rules! app {
             unsafe { $crate::volume::object::<$app>(vol, i, keys, floats) }
         }
         /// # Safety
-        /// As `threers_vol_frame`; 4 pointers, 3 counts writable.
+        /// As `threers_vol_frame`; 5 pointers, 3 counts writable.
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn threers_vol_geometry(
             vol: *mut ::core::ffi::c_void,
@@ -683,6 +935,96 @@ macro_rules! app {
             len: *mut usize,
         ) -> *const u8 {
             unsafe { $crate::volume::controls::<$app>(vol, which, len) }
+        }
+        /// # Safety
+        /// As `threers_vol_frame`; `w`, `h`, `len` writable.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn threers_vol_map(
+            vol: *mut ::core::ffi::c_void,
+            i: u32,
+            slot: u32,
+            w: *mut u32,
+            h: *mut u32,
+            len: *mut usize,
+        ) -> *const u8 {
+            unsafe { $crate::volume::map::<$app>(vol, i, slot, w, h, len) }
+        }
+        /// # Safety
+        /// As `threers_vol_frame`; `len` writable.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn threers_vol_instances(
+            vol: *mut ::core::ffi::c_void,
+            i: u32,
+            len: *mut usize,
+        ) -> *const f32 {
+            unsafe { $crate::volume::instances::<$app>(vol, i, len) }
+        }
+        /// # Safety
+        /// As `threers_vol_frame`; `len` writable.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn threers_vol_lights(
+            vol: *mut ::core::ffi::c_void,
+            len: *mut usize,
+        ) -> *const f32 {
+            unsafe { $crate::volume::lights::<$app>(vol, len) }
+        }
+        /// # Safety
+        /// As `threers_vol_frame`.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn threers_vol_lighting(vol: *mut ::core::ffi::c_void) -> u32 {
+            unsafe { $crate::volume::lighting::<$app>(vol) }
+        }
+        /// # Safety
+        /// As `threers_vol_frame`.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn threers_vol_drawing(vol: *mut ::core::ffi::c_void) -> u32 {
+            unsafe { $crate::volume::drawing::<$app>(vol) }
+        }
+        /// # Safety
+        /// As `threers_vol_frame`; 4 floats writable.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn threers_vol_background(vol: *mut ::core::ffi::c_void, out: *mut f32) {
+            unsafe { $crate::volume::background::<$app>(vol, out) }
+        }
+        /// # Safety
+        /// As `threers_vol_frame`; `len` writable.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn threers_vol_environment(
+            vol: *mut ::core::ffi::c_void,
+            width: u32,
+            len: *mut usize,
+        ) -> *const f32 {
+            unsafe { $crate::volume::environment::<$app>(vol, width, len) }
+        }
+        /// # Safety
+        /// As `threers_vol_frame`.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn threers_vol_ui_hit(
+            vol: *mut ::core::ffi::c_void,
+            which: u32,
+            x: f32,
+            y: f32,
+            scale: f32,
+        ) -> bool {
+            unsafe { $crate::volume::ui_hit::<$app>(vol, which, x, y, scale) }
+        }
+        /// # Safety
+        /// As `threers_vol_frame`.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn threers_vol_insets(
+            vol: *mut ::core::ffi::c_void,
+            top: f32,
+            bottom: f32,
+            left: f32,
+            right: f32,
+        ) {
+            unsafe { $crate::volume::insets::<$app>(vol, top, bottom, left, right) }
+        }
+        /// # Safety
+        /// As `threers_vol_frame`; 6 floats readable.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn threers_vol_ray(vol: *mut ::core::ffi::c_void, ray: *const f32) {
+            unsafe { $crate::volume::ray::<$app>(vol, ray) }
         }
 
         /// The immersive space: run on the shell's render thread until it

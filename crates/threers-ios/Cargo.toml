@@ -3,10 +3,9 @@ name = "threers-ios"
 version.workspace = true
 edition = "2024"
 authors = ["Eugene Hauptmann"]
-description = "threers apps on iPhone, iPad and Apple Vision Pro in Rust, drawn with Metal: a window, AR over the camera (ARKit from Rust), a RealityKit volume and an immersive space, behind one generic Swift shell"
+description = "threers apps on iPhone, iPad, Apple Vision Pro and the Mac in Rust, drawn with Metal or RealityKit: a window, AR over the camera (ARKit from Rust), RealityKit views and volumes, and an immersive space, behind one generic Swift shell"
 license = "MIT"
 repository = "https://github.com/eugenehp/threers"
-homepage = "https://github.com/eugenehp/threers"
 readme = "README.md"
 keywords = ["ios", "visionos", "arkit", "metal", "xr"]
 categories = ["graphics", "api-bindings"]
@@ -18,12 +17,12 @@ crate-type = ["rlib"]
 [dependencies]
 # the Metal renderer and the UI; `xr` for the frame an app sees (the head,
 # pointers, the room's panel), which is plain data
-threers = { path = "../..", version = "0.1.0", default-features = false, features = ["metal", "ui", "xr"] }
+threers = { path = "../..", version = "0.1.0", default-features = false, features = ["metal", "ui", "xr", "usd"] }
 objc2 = "0.6"
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes", "objc2"] }
 
 [target.'cfg(target_os = "visionos")'.dependencies]
-threers = { path = "../..", version = "0.1.0", default-features = false, features = ["metal", "ui", "xr", "visionos"] }
+threers = { path = "../..", version = "0.1.0", default-features = false, features = ["metal", "ui", "xr", "usd", "visionos"] }
 
 # The view driven for real on a Mac: CAMetalLayer is the same class there.
 [target.'cfg(target_os = "macos")'.dev-dependencies]

@@ -123,10 +123,67 @@ fn the_gpu_solves_as_the_cpu_does() {
     let material = Material::new(1800.0, 0.3);
     let cpu = voxel::solve(&body, &material, &clamped(held.clone()), &push).unwrap();
     let gpu = voxel::solve_gpu(&body, &material, &clamped(held), &push).unwrap();
+    assert!(gpu.gpu && !cpu.gpu, "the GPU solved it, not the CPU falling back");
     // Single precision, to a looser residual: within half a percent at the
     // tip and in the largest stress.
     let tip = |s: &voxel::VoxelSolution| end.iter().map(|&n| s.displacement[n as usize][1]).sum::<f64>() / end.len() as f64;
     assert!((tip(&gpu) / tip(&cpu) - 1.0).abs() < 0.005, "tip {} against {}", tip(&gpu), tip(&cpu));
     let most = |s: &voxel::VoxelSolution| s.stress.iter().cloned().fold(0.0, f64::max);
     assert!((most(&gpu) / most(&cpu) - 1.0).abs() < 0.005, "stress {} against {}", most(&gpu), most(&cpu));
+}
+
+#[test]
+fn a_slender_bar_solves_in_few_iterations() {
+    // A temple's proportions, 120 × 8 × 4, held at one end and pushed
+    // sideways at the other: thousands of iterations with a diagonal
+    // preconditioner, few with multigrid, and the same answer.
+    let (l, h, t, f, e) = (120.0f64, 8.0f64, 4.0f64, 1.0f64, 1800.0f64);
+    let body = VoxelBody::new(&BoxGeometry::new(l as f32, h as f32, t as f32), 1.0).unwrap();
+    let (held, end) = ends(&body);
+    let push: Vec<(u32, [f64; 3])> = end.iter().map(|&n| (n, [0.0, 0.0, f / end.len() as f64])).collect();
+    let s = voxel::solve(&body, &Material::new(e, 0.38), &clamped(held), &push).unwrap();
+    let tip = end.iter().map(|&n| s.displacement[n as usize][2]).sum::<f64>() / end.len() as f64;
+    let beam = f * l.powi(3) / (3.0 * e * h * t.powi(3) / 12.0);
+    assert!((tip / beam - 1.0).abs() < 0.05, "tip {tip} against the beam's {beam}");
+    assert!(s.iterations < 300, "{} iterations", s.iterations);
+}
+
+#[test]
+fn a_softer_core_bends_more_as_a_composite_beam_does() {
+    // A 120 × 8 × 8 bar, its core inside a 2 mm skin a tenth as stiff:
+    // bending stiffness E (I_outer − 0.9 I_core).
+    let body = VoxelBody::new(&BoxGeometry::new(120.0, 8.0, 8.0), 1.0).unwrap();
+    let (held, end) = ends(&body);
+    let push: Vec<(u32, [f64; 3])> = end.iter().map(|&n| (n, [0.0, 0.0, 1.0 / end.len() as f64])).collect();
+    let core: Vec<f64> = body.centres().iter().map(|c| if c[1].abs() < 2.0 && c[2].abs() < 2.0 { 0.1 } else { 1.0 }).collect();
+    let material = Material::new(1800.0, 0.38);
+    let solid = voxel::solve(&body, &material, &clamped(held.clone()), &push).unwrap();
+    let graded = voxel::solve_graded(&body, &material, &core, &clamped(held), &push).unwrap();
+    let tip = |s: &voxel::VoxelSolution| end.iter().map(|&n| s.displacement[n as usize][2]).sum::<f64>() / end.len() as f64;
+    let (outer, inner) = (8f64.powi(4) / 12.0, 4f64.powi(4) / 12.0);
+    let expected = outer / (outer - 0.9 * inner);
+    assert!((tip(&graded) / tip(&solid) / expected - 1.0).abs() < 0.03, "{} against {expected}", tip(&graded) / tip(&solid));
+    assert_eq!(body.centres().len(), body.elements());
+    assert!(matches!(voxel::solve_graded(&body, &material, &[1.0], &[], &[]), Err(FemError::InvalidInput(_))));
+}
+
+#[test]
+fn the_fastest_solve_agrees_with_the_cpu_and_checks_its_input() {
+    use threers_fem::fem::voxel;
+    // A small body: on the CPU, the same answer as `solve`.
+    let g = threers::BoxGeometry::new(40.0, 4.0, 4.0);
+    let body = voxel::VoxelBody::new(&g, 1.0).unwrap();
+    let xs: Vec<f64> = body.nodes.iter().map(|q| q[0]).collect();
+    let held: Vec<(u32, [bool; 3])> = (0..xs.len()).filter(|&n| xs[n] < -19.9).map(|n| (n as u32, [true; 3])).collect();
+    let push: Vec<(u32, [f64; 3])> = (0..xs.len()).filter(|&n| xs[n] > 19.9).map(|n| (n as u32, [0.0, 0.1, 0.0])).collect();
+    let m = threers_fem::fem::Material::new(2000.0, 0.35);
+    let a = voxel::solve(&body, &m, &held, &push).unwrap();
+    let b = voxel::solve_fastest(&body, &m, None, &held, &push).unwrap();
+    assert!(!b.gpu && a.displacement == b.displacement);
+    // Graded: as `solve_graded`; and a stiffness short or not positive is refused.
+    let k = vec![0.5; body.elements()];
+    let c = voxel::solve_fastest(&body, &m, Some(&k), &held, &push).unwrap();
+    assert_eq!(c.displacement, voxel::solve_graded(&body, &m, &k, &held, &push).unwrap().displacement);
+    assert!(voxel::solve_fastest(&body, &m, Some(&k[1..]), &held, &push).is_err());
+    assert!(voxel::solve_fastest(&body, &m, Some(&vec![0.0; k.len()]), &held, &push).is_err());
 }

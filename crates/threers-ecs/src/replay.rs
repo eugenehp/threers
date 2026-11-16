@@ -46,8 +46,10 @@ pub enum InputEvent {
     ReleaseAll,
     /// A stick or trigger moved.
     Analog(PadAxis, f32),
-    /// The on-screen stick moved.
+    /// The first on-screen stick moved.
     TouchStick(f32, f32),
+    /// Another on-screen stick moved: which, from 1, and where.
+    TouchStickAt(u8, f32, f32),
     /// A touch came down, by id, at a point in pixels.
     TouchStart(u64, Vector2),
     /// A touch moved.
@@ -207,6 +209,7 @@ fn apply(input: &mut Input, event: &InputEvent) {
         InputEvent::ReleaseAll => input.release_all(),
         InputEvent::Analog(axis, value) => input.set_analog(axis, value),
         InputEvent::TouchStick(x, y) => input.set_touch_stick(x, y),
+        InputEvent::TouchStickAt(stick, x, y) => input.set_touch_stick_at(stick as usize, x, y),
         InputEvent::TouchStart(id, at) => input.touch_start(id, at),
         InputEvent::TouchMove(id, at) => input.touch_move(id, at),
         InputEvent::TouchEnd(id) => input.touch_end(id),
@@ -250,6 +253,7 @@ fn event_text(event: &InputEvent) -> String {
         InputEvent::ReleaseAll => "release-all".into(),
         InputEvent::Analog(axis, v) => format!("axis:{axis:?}={v:?}"),
         InputEvent::TouchStick(x, y) => format!("stick={x:?},{y:?}"),
+        InputEvent::TouchStickAt(n, x, y) => format!("stick:{n}={x:?},{y:?}"),
         InputEvent::TouchStart(id, at) => format!("touch-start:{id}={:?},{:?}", at.x, at.y),
         InputEvent::TouchMove(id, at) => format!("touch-move:{id}={:?},{:?}", at.x, at.y),
         InputEvent::TouchEnd(id) => format!("touch-end={id}"),
@@ -313,7 +317,10 @@ fn parse_event(word: &str) -> Option<InputEvent> {
         }
         "stick" => {
             let (x, y) = pair(value)?;
-            InputEvent::TouchStick(x, y)
+            match arg {
+                "" => InputEvent::TouchStick(x, y),
+                n => InputEvent::TouchStickAt(n.parse().ok()?, x, y),
+            }
         }
         "touch-start" => {
             let (x, y) = pair(value)?;

@@ -19,6 +19,7 @@ mod color_scale;
 mod color_schemes;
 mod color_space;
 mod cylindrical;
+pub mod ellipse;
 pub mod easing;
 mod euler;
 /// A flame's flicker and sway, shared by everything near a flame.
@@ -26,6 +27,9 @@ pub mod flicker;
 pub mod float;
 mod frustum;
 pub mod geo;
+/// Planar geometry in `f64`: segments, arcs, Bézier curves, polylines,
+/// outlines of rounded shapes, hatching and a static spatial index.
+pub mod geom2;
 mod line3;
 mod matrix3;
 mod matrix4;
@@ -75,7 +79,7 @@ pub use tone_mapping::ToneMapping;
 pub use triangle::Triangle;
 #[doc(hidden)]
 pub use triangulate::open_ring;
-pub use triangulate::{convex_hull, delaunay, polygon_points, voronoi_cells};
+pub use triangulate::{convex_hull, convex_hull_i64, delaunay, polygon_points, voronoi_cells};
 pub use vector2::Vector2;
 pub use vector3::Vector3;
 pub use vector4::Vector4;

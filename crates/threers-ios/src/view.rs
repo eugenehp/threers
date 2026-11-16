@@ -68,6 +68,27 @@ pub enum Key {
     Scale = 4,
     /// The safe area's insets, pixels: `a` top, `b` bottom, `c` either side.
     Insets = 5,
+    /// A hardware keyboard's key: `a` its code point (the function keys as
+    /// Apple's, Escape 27), `b` 1 with Shift held. To [`App::key`].
+    Keyboard = 6,
+}
+
+/// A key's name as the web's `KeyboardEvent.key` gives it: `Escape`,
+/// `ArrowUp`, …, else the character.
+pub fn key_name(code: u32) -> Option<String> {
+    Some(match code {
+        27 => "Escape".into(),
+        13 | 3 => "Enter".into(),
+        0xF700 => "ArrowUp".into(),
+        0xF701 => "ArrowDown".into(),
+        0xF702 => "ArrowLeft".into(),
+        0xF703 => "ArrowRight".into(),
+        0xF729 => "Home".into(),
+        0xF72B => "End".into(),
+        0xF72C => "PageUp".into(),
+        0xF72D => "PageDown".into(),
+        c => char::from_u32(c)?.to_string(),
+    })
 }
 
 /// A finger moving less than this, in pixels, from where it went down is
@@ -101,6 +122,12 @@ struct ArEye {
 /// [`app!`](crate::app) exports.
 pub struct View<A: App> {
     renderer: MetalRenderer,
+    /// The scene drawn offscreen, on the window's device: the window's
+    /// frame when the app asks for ambient occlusion (its SSAO), a
+    /// snapshot, a recorded turn's frames. Made once, resized as needed.
+    offscreen: Option<threers::metal::MetalHeadlessRenderer>,
+    /// A recorded turn's own (its size the video's, not the window's).
+    recorder: Option<threers::metal::MetalHeadlessRenderer>,
     surface: MetalSurface,
     scene: Scene,
     app: A,
@@ -194,6 +221,8 @@ impl<A: App> View<A> {
         controls.screen_space_panning = true;
         let mut view = View {
             renderer,
+            offscreen: None,
+            recorder: None,
             surface,
             scene,
             app,
@@ -288,7 +317,90 @@ impl<A: App> View<A> {
             k if k == Key::Insets as u32 => {
                 self.insets = [a, c, b, c].map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 })
             }
+            k if k == Key::Keyboard as u32 && a.is_finite() && a >= 0.0 => {
+                if let Some(name) = key_name(a as u32) {
+                    self.app.key(&name, b > 0.5);
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// The offscreen renderer, on the window's device, at `w` × `h`, set
+    /// up as the app asks — its tone mapping, and its ambient occlusion
+    /// for `camera` — for a frame from it.
+    fn draw_offscreen<T>(
+        &mut self,
+        record: bool,
+        w: u32,
+        h: u32,
+        camera: &threers::cameras::PerspectiveCamera,
+        draw: impl FnOnce(&mut threers::metal::MetalHeadlessRenderer, &mut Scene) -> Result<T, threers::metal::MetalError>,
+    ) -> Result<T, String> {
+        let ao = self.app.ambient_occlusion();
+        let (tone, exposure) = self.app.tone_mapping();
+        let device = self.renderer.device().clone();
+        let slot = if record { &mut self.recorder } else { &mut self.offscreen };
+        let r = match slot {
+            Some(r) => r,
+            slot => slot.insert(threers::metal::MetalHeadlessRenderer::builder().size(w, h).msaa(SAMPLES).build_on(&device).map_err(|e| format!("{e:?}"))?),
+        };
+        r.resize(w, h).map_err(|e| format!("{e:?}"))?;
+        r.renderer_mut().set_tone_mapping(tone, exposure);
+        r.set_ssao(ao.map(|(radius, strength)| threers::metal::SsaoSettings {
+            strength,
+            radius,
+            near: camera.near,
+            far: camera.far,
+            tan_half_fov: (camera.fov * 0.5).tan(),
+            aspect: w as f32 / h.max(1) as f32,
+        }));
+        draw(r, &mut self.scene).map_err(|e| format!("{e:?}"))
+    }
+
+    /// The next frame of a turn being recorded ([`crate::record_turn`]):
+    /// the camera turned about its target, `made / frames` of a whole turn,
+    /// drawn offscreen at the window's size (at most 1920 wide, even), as
+    /// BGRA for the shell's video writer.
+    fn record_frame(&mut self, w: u32, h: u32) {
+        let Ok(mut rec) = crate::RECORDING.lock() else { return };
+        let Some(r) = rec.as_mut() else { return };
+        if crate::FRAME.lock().map_or(true, |f| f.is_some()) || r.made >= r.frames {
+            return;
+        }
+        let k = (1920.0 / w as f32).min(1.0);
+        let (vw, vh) = (((w as f32 * k) as u32) & !1, ((h as f32 * k) as u32) & !1);
+        let angle = std::f32::consts::TAU * r.made as f32 / r.frames as f32;
+        // Rodrigues: the camera's offset from its target turned about its up
+        let mut cam = self.camera.clone();
+        cam.aspect = vw as f32 / vh as f32;
+        cam.view_offset = None;
+        let (t, axis) = (cam.target, cam.up.normalize());
+        let v = cam.position - t;
+        let (s, c) = angle.sin_cos();
+        let turned = v * c + axis.cross(v) * s + axis * (axis.dot(v) * (1.0 - c));
+        cam.position = t + turned;
+        drop(rec);
+        let shot = self.draw_offscreen(true, vw, vh, &cam, |rr, scene| rr.render_to_rgba(scene, &cam));
+        let Ok(mut rec) = crate::RECORDING.lock() else { return };
+        let Some(r) = rec.as_mut() else { return };
+        match shot {
+            Ok(mut px) => {
+                for p in px.as_chunks_mut::<4>().0 {
+                    p.swap(0, 2);
+                }
+                let last = r.made + 1 == r.frames;
+                if let Ok(mut f) = crate::FRAME.lock() {
+                    *f = Some((px, vw, vh, r.made, last));
+                }
+                r.made += 1;
+            }
+            Err(e) => {
+                eprintln!("threers: recording: {e:?}");
+                *rec = None;
+                drop(rec);
+                self.recorder = None;
+            }
         }
     }
 
@@ -562,10 +674,46 @@ impl<A: App> View<A> {
         };
         let (tone, exposure) = self.app.tone_mapping();
         self.renderer.set_tone_mapping(tone, exposure);
+        // a turn being recorded: its next frame, once the shell has the last
+        if self.mode == Mode::Window {
+            self.record_frame(w, h);
+        }
+        // a picture asked for: the view once more, offscreen
+        if crate::take_snapshot() && self.mode == Mode::Window {
+            let camera = self.camera.clone();
+            match self.draw_offscreen(false, w, h, &camera, |r, scene| r.render_to_rgba(scene, &camera)) {
+                Ok(rgba) => self.app.snapshot(w, h, rgba),
+                Err(e) => eprintln!("threers: snapshot: {e}"),
+            }
+        }
         let Some(next) = self.surface.next_frame() else {
             return false;
         };
         let pass = next.attachments();
+        // the app's ambient occlusion: the scene drawn offscreen with its
+        // SSAO, on this device, then shown, the UI over it
+        if self.mode == Mode::Window && self.app.ambient_occlusion().is_some() {
+            let camera = self.camera.clone();
+            let texture = self
+                .draw_offscreen(false, w, h, &camera, |r, scene| r.render_to_texture(scene, &camera));
+            match texture {
+                Ok(t) => {
+                    let drawn = if shown {
+                        self.renderer
+                            .draw_texture(t, &pass.without_drawable())
+                            .and_then(|_| self.ui.pixels.draw(&mut self.renderer, &pass))
+                    } else {
+                        self.renderer.draw_texture(t, &pass)
+                    };
+                    if let Err(e) = drawn {
+                        eprintln!("threers: frame: {e}");
+                        return false;
+                    }
+                    return true;
+                }
+                Err(e) => eprintln!("threers: the frame offscreen: {e}"),
+            }
+        }
         let drawn = if shown {
             self.renderer
                 .render_views(&mut self.scene, &[view], &pass.without_drawable())

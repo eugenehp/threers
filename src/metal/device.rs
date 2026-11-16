@@ -4,9 +4,12 @@ use std::ffi::c_void;
 
 use super::enums::*;
 use super::objc::{
-    alloc_init, class, error_message, msg0, msg1, msg2, msg3, nsstring, nsstring_to_string, sel,
-    AutoreleasePool, Bool, Id, Owned, NIL, YES,
+    error_message, msg0, msg1, msg2, msg3, nsstring, nsstring_to_string, sel, AutoreleasePool, Bool,
+    Id, Owned, NIL,
 };
+// For `depth_stencil_state`, which only the scene renderer uses.
+#[cfg(metal_backend)]
+use super::objc::{alloc_init, class, YES};
 
 #[link(name = "Metal", kind = "framework")]
 unsafe extern "C" {
@@ -110,6 +113,19 @@ impl MetalDevice {
         let _pool = AutoreleasePool::new();
         let device = unsafe { Owned::retain(device) }.ok_or(MetalError::NoDevice)?;
         unsafe { Self::build(device, super::shader_source()) }
+    }
+
+    /// As [`adopt`](Self::adopt), compiling `source` instead of the built-in
+    /// library — [`fluid_shader_source`](crate::metal::fluid_shader_source)
+    /// for an app that owns its `MTLDevice` and wants the fluid on it.
+    ///
+    /// # Safety
+    /// `device` must be a live `MTLDevice`. It is retained for as long as this
+    /// value lives.
+    pub unsafe fn adopt_with_shader_source(device: Id, source: &str) -> Result<Self, MetalError> {
+        let _pool = AutoreleasePool::new();
+        let device = unsafe { Owned::retain(device) }.ok_or(MetalError::NoDevice)?;
+        unsafe { Self::build(device, source) }
     }
 
     /// Command queue + shader library on an owned device.
@@ -243,9 +259,11 @@ impl std::fmt::Debug for MetalDevice {
     }
 }
 
+#[cfg(metal_backend)]
 /// `MTLCommandBufferStatusError`.
 const COMMAND_BUFFER_STATUS_ERROR: NSUInteger = 5;
 
+#[cfg(metal_backend)]
 /// `[cmd waitUntilCompleted]`, then whether the GPU actually ran it.
 ///
 /// A command buffer can complete without executing — iOS fails every one an
@@ -294,6 +312,7 @@ pub(crate) unsafe fn compile_library(device: Id, source: &str) -> Result<Owned, 
     }
 }
 
+#[cfg(metal_backend)]
 /// A `MTLDepthStencilState`: `depthCompareFunction` plus write enable.
 pub fn depth_stencil_state(
     device: &MetalDevice,

@@ -2,6 +2,10 @@
 
 The threers volumetric fluid as a C ABI static library, for iOS and iPadOS.
 
+It runs on Metal directly — `threers::metal::MetalFluid3d`, the wgpu
+module's shaders translated by naga, drawing the same picture to the byte
+(`metal_fluid3d_matches_wgpu`) — so an app that links it carries no wgpu.
+
 ```sh
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim
 cargo build --release --target aarch64-apple-ios -p threers-fluid-ios
@@ -54,7 +58,15 @@ threers_fluid_set(fluid, THREERS_FLUID_TOUCH.rawValue, dx, dy, 1)  // orbit
 threers_fluid_set(fluid, THREERS_FLUID_PINCH.rawValue, scale, 0, 0)
 threers_fluid_set(fluid, THREERS_FLUID_SPLAT.rawValue, 8, 0, 0)    // a tap
 threers_fluid_set(fluid, THREERS_FLUID_SPEED.rawValue, 2.5, 0, 0)
+threers_fluid_set(fluid, THREERS_FLUID_PAINT.rawValue, u, v, 0)    // a tap, or a stroke's start
+threers_fluid_set(fluid, THREERS_FLUID_PAINT.rawValue, u, v, 1)    // …and its next point
+threers_fluid_set(fluid, THREERS_FLUID_PAINT_COLOR.rawValue, r, g, b)
+threers_fluid_set(fluid, THREERS_FLUID_AMBIENT.rawValue, 0, 0, 0)  // stop the self-feeding plume
 ```
+
+`PAINT` puts dye in the volume under a point (uv of the view, origin top
+left), on the plane through the volume's centre that faces the camera, so a
+stroke stays under the finger however the camera has orbited.
 
 **Five functions**: create, set, frame, info, destroy. It was ten, one per
 thing you could change, and those were ten calling conventions to get wrong
@@ -86,7 +98,7 @@ only the app knows what else is resident.
 ## What is verified, and what is not
 
 `a_layer_comes_up_and_draws` runs these entry points against a real
-`CAMetalLayer` — on macOS, where the class, the wgpu surface and the Metal
+`CAMetalLayer` — on macOS, where the class and the Metal
 drawables are the same ones iOS uses. It creates, splats, touches, pinches,
 draws, resizes and destroys, and checks that an unknown key is a no-op. What it cannot tell you is how fast an A-series
 GPU is: the resolutions above come from a budget, not from a frame rate, and

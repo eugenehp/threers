@@ -10,7 +10,6 @@ description = "Tendon-driven continuum robots for threers-physics: a flexible ro
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/eugenehp/threers"
-homepage = "https://github.com/eugenehp/threers"
 documentation = "https://docs.rs/threers-continuum"
 keywords = ["robotics", "continuum", "soft-robotics", "tendon", "physics"]
 categories = ["science::robotics", "simulation", "wasm"]

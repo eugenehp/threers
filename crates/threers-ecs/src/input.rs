@@ -115,6 +115,10 @@ keys!(
     Slash,
 );
 
+/// How many on-screen sticks [`Input`] keeps: a twin-stick game's two,
+/// with room for more.
+pub const TOUCH_STICKS: usize = 4;
+
 /// Mouse buttons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MouseButton {
@@ -412,7 +416,8 @@ pub struct Input {
     pub captured: bool,
     /// Text typed this frame, as the keyboard layout produced it.
     typed: String,
-    touch_stick: [f32; 2],
+    /// The on-screen sticks, x then y of each: [`TOUCH_STICKS`] of them.
+    touch_stick: [f32; 2 * TOUCH_STICKS],
     rumble: Option<Rumble>,
     down: HashSet<Button>,
     analog: HashMap<PadAxis, f32>,
@@ -435,7 +440,7 @@ impl Default for Input {
             touches: Vec::new(),
             lock_pointer: false,
             pointer_locked: false,
-            touch_stick: [0.0; 2],
+            touch_stick: [0.0; 2 * TOUCH_STICKS],
             rumble: None,
             down: HashSet::new(),
             analog: HashMap::new(),
@@ -487,7 +492,8 @@ impl Input {
         self
     }
 
-    /// Make the on-screen stick drive `axis`: 0 for its x, 1 for its y.
+    /// Make an on-screen stick drive `axis`: 0 for the first stick's x, 1 for
+    /// its y, 2 and 3 for the second's, and so on.
     pub fn bind_touch_stick(&mut self, axis: &str, stick_axis: usize) -> &mut Self {
         self.axes
             .entry(axis.to_owned())
@@ -583,7 +589,7 @@ impl Input {
                 let travel = (v.abs() - self.deadzone) / (1.0 - self.deadzone);
                 travel.clamp(0.0, 1.0) * v.signum()
             }
-            AxisSource::TouchStick(axis) => self.touch_stick[axis.min(1)],
+            AxisSource::TouchStick(axis) => self.touch_stick[axis.min(2 * TOUCH_STICKS - 1)],
         }
     }
 
@@ -665,7 +671,7 @@ impl Input {
         }
         self.analog.clear();
         self.touches.clear();
-        self.touch_stick = [0.0; 2];
+        self.touch_stick = [0.0; 2 * TOUCH_STICKS];
     }
 
     /// A stick or trigger moved, to a value from -1 to 1.
@@ -674,10 +680,25 @@ impl Input {
         self.analog.insert(axis, value.clamp(-1.0, 1.0));
     }
 
-    /// Set the on-screen stick, each axis from -1 to 1.
+    /// Set the first on-screen stick, each axis from -1 to 1.
     pub fn set_touch_stick(&mut self, x: f32, y: f32) {
         self.note(|| crate::replay::InputEvent::TouchStick(x, y));
-        self.touch_stick = [x.clamp(-1.0, 1.0), y.clamp(-1.0, 1.0)];
+        self.touch_stick[0] = x.clamp(-1.0, 1.0);
+        self.touch_stick[1] = y.clamp(-1.0, 1.0);
+    }
+
+    /// Set on-screen stick `stick` (from 0; under [`TOUCH_STICKS`]), each
+    /// axis from -1 to 1.
+    pub fn set_touch_stick_at(&mut self, stick: usize, x: f32, y: f32) {
+        if stick == 0 {
+            return self.set_touch_stick(x, y);
+        }
+        let Some(pair) = self.touch_stick.get_mut(2 * stick..2 * stick + 2) else {
+            return;
+        };
+        pair[0] = x.clamp(-1.0, 1.0);
+        pair[1] = y.clamp(-1.0, 1.0);
+        self.note(|| crate::replay::InputEvent::TouchStickAt(stick as u8, x, y));
     }
 
     /// A finger came down.

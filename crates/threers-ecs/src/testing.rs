@@ -191,6 +191,7 @@ mod pixels {
                 .backend(backend)
                 .build()
                 .expect("a GPU to render with");
+            crate::offscreen::Offscreen::run(&mut self.app.world, renderer.renderer());
             let mut rgba = self.app.world.with_resource::<MainCamera, _>(|w, camera| {
                 renderer.render_to_rgba(&mut w.scene, &camera.0)
             });

@@ -190,12 +190,14 @@ impl Rate {
 /// A texture rather than more uniform: the plane's uniform block is shared
 /// with the Metal backend byte for byte, and sixty-four floats is not a
 /// thing to put in it for a read-out. One `write_texture` a frame.
+#[cfg(feature = "fluid")]
 #[derive(Default)]
 pub(crate) struct History {
     texture: Option<wgpu::Texture>,
     view: Option<wgpu::TextureView>,
 }
 
+#[cfg(feature = "fluid")]
 impl History {
     /// The texture to bind, uploaded from `frames` as it is handed over.
     pub(crate) fn view(

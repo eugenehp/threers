@@ -87,8 +87,7 @@ impl BroadPhase {
         for i in 0..self.entries.len() {
             let a = self.entries[i];
             let a_max = coord(a.max);
-            for j in i + 1..self.entries.len() {
-                let b = self.entries[j];
+            for &b in &self.entries[i + 1..] {
                 // Sorted by min: once a box starts past this one's end, so does
                 // every box after it.
                 if coord(b.min) > a_max {

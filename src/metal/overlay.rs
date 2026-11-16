@@ -21,6 +21,8 @@ use super::resources::{cpu_writable_storage, new_texture_2d};
 pub(crate) struct MetalOverlay {
     texture: Option<(Owned, u32, u32)>,
     pipelines: HashMap<NSUInteger, Owned>,
+    /// the opaque copy's pipelines ([`draw_texture`](Self::draw_texture))
+    copies: HashMap<NSUInteger, Owned>,
 }
 
 impl MetalOverlay {
@@ -126,6 +128,47 @@ impl MetalOverlay {
                 0usize,
                 3usize,
             );
+            let _: () = msg0(enc, sel!("endEncoding"));
+            if !pass.drawable.is_null() {
+                let _: () = msg1(cmd, sel!("presentDrawable:"), pass.drawable);
+            }
+            let _: () = msg0(cmd, sel!("commit"));
+        }
+        Ok(())
+    }
+
+    /// Draw `texture` (a frame the size of the pass, on this device) over
+    /// the frame in `pass`, opaque — a scene drawn and post-processed
+    /// offscreen, shown in a window — then present the drawable if `pass`
+    /// has one.
+    pub(crate) fn draw_texture(&mut self, device: &MetalDevice, texture: Id, pass: &PassAttachments) -> Result<(), MetalError> {
+        let _pool = AutoreleasePool::new();
+        let dst = if pass.resolve.is_null() { pass.color } else { pass.resolve };
+        let pipeline = match self.copies.get(&pass.color_format) {
+            Some(p) => p.id(),
+            None => {
+                let p = fullscreen_pipeline_blend(device, "vs_fullscreen", "fs_overlay", pass.color_format, false)?;
+                let id = p.id();
+                self.copies.insert(pass.color_format, p);
+                id
+            }
+        };
+        unsafe {
+            let cmd = device.command_buffer();
+            if cmd.is_null() {
+                return Err(MetalError::NoCommandQueue);
+            }
+            let desc = render_pass_descriptor(dst);
+            let attachments: Id = msg0(desc, sel!("colorAttachments"));
+            let color: Id = msg1(attachments, sel!("objectAtIndexedSubscript:"), 0usize);
+            let _: () = msg1(color, sel!("setLoadAction:"), load_action::DONT_CARE);
+            let enc: Id = msg1(cmd, sel!("renderCommandEncoderWithDescriptor:"), desc);
+            if enc.is_null() {
+                return Err(MetalError::Unsupported("texture render encoder failed".into()));
+            }
+            let _: () = msg1(enc, sel!("setRenderPipelineState:"), pipeline);
+            let _: () = msg2(enc, sel!("setFragmentTexture:atIndex:"), texture, 0usize);
+            let _: () = msg3(enc, sel!("drawPrimitives:vertexStart:vertexCount:"), primitive::TRIANGLE, 0usize, 3usize);
             let _: () = msg0(enc, sel!("endEncoding"));
             if !pass.drawable.is_null() {
                 let _: () = msg1(cmd, sel!("presentDrawable:"), pass.drawable);

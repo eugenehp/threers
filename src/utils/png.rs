@@ -669,6 +669,19 @@ fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
 ///
 /// Panics if `rgba.len() != width * height * 4`.
 pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+    encode(width, height, rgba, None)
+}
+
+/// Encode 8-bit RGBA pixels as a PNG that says its resolution: `dpi` dots
+/// an inch (a `pHYs` chunk, in pixels a metre), as print and figure
+/// workflows read it.
+///
+/// Panics if `rgba.len() != width * height * 4`.
+pub fn encode_png_with_dpi(width: u32, height: u32, rgba: &[u8], dpi: f64) -> Vec<u8> {
+    encode(width, height, rgba, Some((dpi / 0.0254).round().max(1.0) as u32))
+}
+
+fn encode(width: u32, height: u32, rgba: &[u8], pixels_per_metre: Option<u32>) -> Vec<u8> {
     assert_eq!(
         rgba.len(),
         (width as usize) * (height as usize) * 4,
@@ -706,6 +719,13 @@ pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
     ihdr.extend_from_slice(&height.to_be_bytes());
     ihdr.extend_from_slice(&[8, 6, 0, 0, 0]); // 8-bit RGBA, deflate, adaptive filter, no interlace
     chunk(&mut png, b"IHDR", &ihdr);
+    if let Some(ppm) = pixels_per_metre {
+        let mut phys = Vec::with_capacity(9);
+        phys.extend_from_slice(&ppm.to_be_bytes());
+        phys.extend_from_slice(&ppm.to_be_bytes());
+        phys.push(1); // the unit: the metre
+        chunk(&mut png, b"pHYs", &phys);
+    }
     chunk(&mut png, b"IDAT", &zlib(&raw));
     chunk(&mut png, b"IEND", &[]);
     png
@@ -890,6 +910,18 @@ pub fn decode_png(bytes: &[u8]) -> Result<PngImage, String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_png_says_its_dpi() {
+        let png = encode_png_with_dpi(2, 1, &[255, 0, 0, 255, 0, 0, 255, 255], 300.0);
+        let at = png.windows(4).position(|w| w == b"pHYs").expect("a pHYs chunk");
+        let ppm = u32::from_be_bytes(png[at + 4..at + 8].try_into().unwrap());
+        assert_eq!(ppm, (300.0f64 / 0.0254).round() as u32);
+        assert_eq!(png[at + 12], 1, "per metre");
+        let back = decode_png(&png).unwrap();
+        assert_eq!((back.width, back.height, &back.rgba[..4]), (2, 1, &[255, 0, 0, 255][..]));
+    }
+
     use super::*;
 
     /// A palette image packed `depth` bits a pixel, as OpenStreetMap serves

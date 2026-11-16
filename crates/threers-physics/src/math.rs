@@ -573,9 +573,9 @@ mod tests {
             m: [4.0, 1.0, 0.5, 1.0, 3.0, 0.25, 0.5, 0.25, 2.0],
         };
         let id = m.mul(&m.inverse());
-        for i in 0..9 {
+        for (i, &got) in id.m.iter().enumerate() {
             let want = if i % 4 == 0 { 1.0 } else { 0.0 };
-            assert!((id.m[i] - want).abs() < 1e-4, "i={i} got {}", id.m[i]);
+            assert!((got - want).abs() < 1e-4, "i={i} got {got}");
         }
     }
 

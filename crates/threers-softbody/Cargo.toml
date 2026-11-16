@@ -6,7 +6,6 @@ rust-version = "1.99"
 license = "MIT"
 authors = ["Eugene Hauptmann"]
 repository = "https://github.com/eugenehp/threers"
-homepage = "https://github.com/eugenehp/threers"
 documentation = "https://docs.rs/threers-softbody"
 readme = "README.md"
 description = "Soft bodies that tear and grow back: XPBD on tetrahedral lattices — a bit-for-bit port of Axolotl Jelly's solver — with an optional WebGPU-compute backend; threers' soft-body core, usable on its own"
