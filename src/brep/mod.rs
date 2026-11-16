@@ -39,6 +39,8 @@ pub mod body;
 #[cfg(feature = "brep-kernel")]
 pub mod boolean;
 pub mod curve3d;
+#[cfg(feature = "brep-kernel")]
+pub mod fuse;
 #[cfg(feature = "brep-csg")]
 pub mod intersect;
 #[cfg(feature = "brep-kernel")]
@@ -46,6 +48,7 @@ pub mod planar;
 pub mod primitives;
 pub mod provenance;
 pub mod retessellate;
+pub mod settings;
 pub mod stitch;
 pub mod surface;
 pub mod table;
@@ -56,6 +59,7 @@ pub use body::{Body, BodyReport, Defect, Face, Shell, TrimLoop};
 #[cfg(feature = "brep-kernel")]
 pub use boolean::{BooleanOp, Declined};
 pub use curve3d::Curve3d;
+pub use settings::{settings, with_settings, ChamferCorner, Settings};
 #[cfg(feature = "brep-csg")]
 pub use intersect::{march, ssi, SsiResult};
 pub use provenance::{

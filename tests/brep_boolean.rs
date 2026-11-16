@@ -146,16 +146,16 @@ fn a_curve_is_found_on_a_face_whose_seam_has_moved() {
         .boolean(&column, BooleanOp::Difference, 1e-3)
         .expect("closed form");
 
-    // The sphere face is the one whose seam moved.
-    let sphere = bored
-        .faces()
-        .iter()
-        .find(|f| bored.surfaces()[f.surface].kind() == "sphere")
-        .expect("the ball is still a sphere");
+    // The sphere face is still a sphere. (The face-splitting boolean left
+    // its seam where it fell, 3.069 to 9.352; the general fuse leaves a band
+    // round the ball with nothing cut out of it a face that wraps. Either
+    // way the drill below lands on the far side of where the seam was.)
     assert!(
-        sphere.u_range.0 > 1.0,
-        "this test needs a shifted seam, got {:?}",
-        sphere.u_range
+        bored
+            .faces()
+            .iter()
+            .any(|f| bored.surfaces()[f.surface].kind() == "sphere"),
+        "the ball is still a sphere"
     );
 
     // A drill through the wall of the bore, at a `u` on the other side of that
@@ -1862,5 +1862,246 @@ fn a_bore_across_a_rod_is_right_or_declined_at_every_ratio() {
     assert!(
         resolved == 22,
         "all twenty-two resolved when this was written; {resolved} do now"
+    );
+}
+
+/// A hole a face already has is not a piece of that face.
+///
+/// One box standing on another leaves the lower one's top with a square hole
+/// where they join. A third box cutting that top face sends it through the
+/// arrangement, hole and all — and the hole, a closed path, bounds a region on
+/// its inside. That region used to come back as a face: a lid under the
+/// standing box, four edges with three faces each, and a result that
+/// `boolean` returned as `Ok`.
+#[test]
+fn a_face_with_a_hole_is_cut_again() {
+    let slab = Body::cuboid([30.0, 20.0, 10.0]);
+    let standing = Body::cuboid([10.0, 10.0, 10.0])
+        .translated([5.0, 3.0, 4.0])
+        .unwrap();
+    let post = Body::cuboid([10.0, 10.0, 25.0])
+        .translated([-12.0, -4.0, 2.5])
+        .unwrap();
+    let two = slab
+        .boolean(&standing, BooleanOp::Union, 1e-3)
+        .expect("a box on a box");
+    assert_eq!(two.faces().len(), 11);
+    let three = two
+        .boolean(&post, BooleanOp::Union, 1e-3)
+        .expect("and a third through the face they meet in");
+    assert!(three.is_valid_solid(1e-3), "{:?}", three.defects(1e-3));
+    // The slab's top and bottom, each one face; its four sides, the west one
+    // one face around the post; five faces of the standing box; and of the
+    // post two ends and four sides above and four below.
+    //   slab 6000 + standing 1000 - 600 shared + post 2500 - 800 shared
+    let got = volume(&three, 1e-3);
+    assert!((got - 8100.0).abs() < 1e-2, "volume {got}");
+}
+
+/// A tool flush with a face of what it cuts.
+///
+/// A drill sunk into a plate from its top has its cap lying *in* the top
+/// face, and its rim is three things at once: the edge its wall carries, the
+/// outline its cap cuts out of the face, and the circle its side meets the
+/// face's plane in. They used to stay three — the face's hole on one, the
+/// wall on another — and the result opened along the rim. It is how every
+/// pocket is made: from the face it is drawn on.
+#[test]
+fn a_drill_sunk_from_the_face_it_stands_on() {
+    let block = Body::cuboid([60.0, 60.0, 100.0]);
+    // Its top at the block's top, z = 50, and 15 deep.
+    let drill = Body::cylinder([0.0, 0.0, 35.0], [0.0, 0.0, 1.0], 8.0, 15.0);
+    let pocket = block
+        .boolean(&drill, BooleanOp::Difference, 1e-3)
+        .expect("a pocket from the top face");
+    assert!(pocket.is_valid_solid(1e-3), "{:?}", pocket.defects(1e-3));
+    // The block's six faces, the pocket's wall and its floor.
+    assert_eq!(pocket.faces().len(), 8);
+    let expected = 360_000.0 - PI * 64.0 * 15.0;
+    let got = volume(&pocket, 1e-3);
+    assert!((got - expected).abs() / expected < 1e-3, "volume {got}");
+
+    // And a boss standing on that face: its foot is in the face, the two
+    // looking at each other, and neither survives the union.
+    let boss = Body::cylinder([0.0, 0.0, 50.0], [0.0, 0.0, 1.0], 8.0, 15.0);
+    let with_boss = block
+        .boolean(&boss, BooleanOp::Union, 1e-3)
+        .expect("a boss on the top face");
+    assert!(
+        with_boss.is_valid_solid(1e-3),
+        "{:?}",
+        with_boss.defects(1e-3)
+    );
+    assert_eq!(with_boss.faces().len(), 8);
+    let expected = 360_000.0 + PI * 64.0 * 15.0;
+    let got = volume(&with_boss, 1e-3);
+    assert!((got - expected).abs() / expected < 1e-3, "volume {got}");
+}
+
+/// Blocks that meet in a face: the ways two walls join.
+///
+/// Each pair has faces of the two solids in one plane, overlapping in part —
+/// an end standing in a side, a corner, one wall running on from another or
+/// across it. The kernel declined every one but the plainest, or returned a
+/// solid with edges on one face. What they share:
+///
+///  * an outline running *along* the other face's boundary is not a cut;
+///  * a cut along a side of a piece is that side's edge, whatever edge the
+///    face had there before, and the side takes the cut's points;
+///  * a straight edge is carried a segment at a time, by the faces along
+///    that segment, and a side takes the points its edge was cut at;
+///  * a cut between flat faces that turns corners is an edge per run;
+///  * two straight edges with the same ends are one edge.
+#[test]
+fn walls_that_meet_in_a_face() {
+    let wall = Body::cuboid([40.0, 2.0, 10.0]);
+    let block = |size: [f64; 3], centre: [f64; 3]| Body::cuboid(size).translated(centre).unwrap();
+    // (what, the other wall, the volume the two share)
+    let cases = [
+        (
+            "an end in the side",
+            block([2.0, 15.0, 10.0], [0.0, 8.5, 0.0]),
+            0.0,
+        ),
+        (
+            "a lower end in the side",
+            block([2.0, 15.0, 6.0], [0.0, 8.5, -2.0]),
+            0.0,
+        ),
+        (
+            "a corner, outer faces flush",
+            block([2.0, 15.0, 10.0], [19.0, 8.5, 0.0]),
+            0.0,
+        ),
+        (
+            "a corner overlapping",
+            block([2.0, 16.0, 10.0], [19.0, 7.0, 0.0]),
+            40.0,
+        ),
+        (
+            "end to end",
+            block([10.0, 2.0, 10.0], [25.0, 0.0, 0.0]),
+            0.0,
+        ),
+        (
+            "end to end overlapping",
+            block([10.0, 2.0, 10.0], [20.0, 0.0, 0.0]),
+            100.0,
+        ),
+        ("crossing", block([2.0, 20.0, 10.0], [0.0, 0.0, 0.0]), 40.0),
+        (
+            "one on the other",
+            block([40.0, 2.0, 5.0], [0.0, 0.0, 7.5]),
+            0.0,
+        ),
+    ];
+    for (what, other, common) in &cases {
+        let (a, b) = (volume(&wall, 1e-3), volume(other, 1e-3));
+        for (op, expected) in [
+            (BooleanOp::Union, a + b - common),
+            (BooleanOp::Difference, a - common),
+        ] {
+            let r = wall
+                .boolean(other, op, 1e-3)
+                .unwrap_or_else(|why| panic!("{what}, {op:?}: {why:?}"));
+            assert!(
+                r.is_valid_solid(1e-3),
+                "{what}, {op:?}: {:?}",
+                r.defects(1e-3)
+            );
+            let got = volume(&r, 1e-3);
+            assert!(
+                (got - expected).abs() < 1e-6 * expected,
+                "{what}, {op:?}: {got}"
+            );
+        }
+    }
+}
+
+/// An opening cut through a long, thin wall.
+///
+/// A line where the opening's side meets the wall's face was sampled at a
+/// fixed count over the reach of the whole body: on a wall twenty-four metres
+/// long and a tenth of a metre thick, the steps were wider than the wall, the
+/// line never read as on the face, and the cut was declined. The count now
+/// follows the face's narrowest stretch, about the face itself.
+#[test]
+fn an_opening_through_a_long_thin_wall() {
+    let wall = Body::cuboid([24100.0, 100.0, 3550.0]);
+    let opening = Body::cuboid([800.0, 600.0, 2200.0])
+        .translated([-7850.0, 0.0, -175.0])
+        .unwrap();
+    let cut = wall
+        .boolean(&opening, BooleanOp::Difference, 1.0)
+        .expect("an opening through a wall");
+    assert!(cut.is_valid_solid(1.0), "{:?}", cut.defects(1.0));
+    // The wall's six faces and the four sides of the opening.
+    assert_eq!(cut.faces().len(), 10);
+    let expected = 24100.0 * 100.0 * 3550.0 - 800.0 * 100.0 * 2200.0;
+    let got = volume(&cut, 1.0);
+    assert!((got - expected).abs() / expected < 1e-6, "volume {got}");
+}
+
+/// A collar standing on a plate round a hole of its own bore.
+///
+/// Three things go wrong at once, each now handled: the collar's inner
+/// wall meets the plate's top in the hole's rim, already an edge of both
+/// faces (no cut); the hole's rim and the collar's inner rim are one circle
+/// sampled two ways (one rim); and the plate's top, its middle given up to
+/// the collar's foot, kept the rim inside that hole among its edges.
+#[test]
+fn a_collar_on_a_plate_round_its_hole() {
+    let plate = Body::cuboid([40.0, 40.0, 10.0])
+        .boolean(
+            &Body::cylinder([0.0, 0.0, -6.0], [0.0, 0.0, 1.0], 2.5, 12.0),
+            BooleanOp::Difference,
+            1e-3,
+        )
+        .expect("a hole through a plate");
+    // Standing on the plate's top at z = 5, bored through as the hole is.
+    let collar = Body::cylinder([0.0, 0.0, 5.0], [0.0, 0.0, 1.0], 4.5, 1.2)
+        .boolean(
+            &Body::cylinder([0.0, 0.0, 4.0], [0.0, 0.0, 1.0], 2.5, 3.2),
+            BooleanOp::Difference,
+            1e-3,
+        )
+        .expect("a ring");
+    let both = plate
+        .boolean(&collar, BooleanOp::Union, 1e-3)
+        .expect("a collar on a plate");
+    assert!(both.is_valid_solid(1e-3), "{:?}", both.defects(1e-3));
+    let expected = 40.0 * 40.0 * 10.0 - PI * 6.25 * 10.0 + PI * (20.25 - 6.25) * 1.2;
+    let got = volume(&both, 1e-3);
+    assert!((got - expected).abs() / expected < 1e-3, "volume {got}");
+}
+
+#[test]
+fn a_slanted_end_cut_again() {
+    // A rod cut slantwise ends on an ellipse, and its wall comes out closed
+    // by a seam edge with its region stated in loops rather than wrapping.
+    // Sunk into a block from below, the block's face rings that wall right
+    // round — across its seam — and the bore keeps its slanted end.
+    use threers::math::{Matrix4, Quaternion, Vector3};
+    let rod = Body::cylinder([0.0; 3], [0.0, 0.0, 1.0], 2.0, 10.0);
+    let below = Body::cuboid([40.0, 40.0, 40.0])
+        .translated([0.0, 0.0, -20.0])
+        .unwrap()
+        .transform(&Matrix4::compose(
+            Vector3::new(0.0, 0.0, 5.0),
+            Quaternion::from_axis_angle(Vector3::new(0.0, 1.0, 0.0), 20f32.to_radians()),
+            Vector3::new(1.0, 1.0, 1.0),
+        ))
+        .unwrap();
+    // Through the axis half way up, so half the rod is below.
+    check(&rod, &below, BooleanOp::Intersection, PI * 4.0 * 5.0);
+    let slanted = rod.boolean(&below, BooleanOp::Intersection, 1e-3).unwrap();
+    let block = Body::cuboid([10.0, 10.0, 10.0])
+        .translated([0.0, 0.0, 7.0])
+        .unwrap();
+    check(
+        &block,
+        &slanted,
+        BooleanOp::Difference,
+        1000.0 - PI * 4.0 * 3.0,
     );
 }

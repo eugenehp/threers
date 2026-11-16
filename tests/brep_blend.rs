@@ -196,6 +196,34 @@ fn chamfering_every_edge_of_a_cube() {
     assert_solid(&out, 8.0 - (12.0 * d * d - 6.0 * d * d * d), 1e-6);
 }
 
+/// The other shape a chamfered corner can have, chosen in
+/// [`Settings`](threers::brep::Settings): a triangular facet through the
+/// three points where the bevels' edges meet on the cube's faces. Each
+/// corner loses a further tetrahedron of volume `d³ / 12`, and gains a face.
+#[test]
+fn chamfering_every_edge_of_a_cube_with_faceted_corners() {
+    use threers::brep::{with_settings, ChamferCorner, Settings};
+    let (s, d) = (2.0, 0.25);
+    let cube = Body::cuboid([s, s, s]);
+    let pointed = cube.chamfer(&all_edges(&cube), d, TOL).unwrap();
+    let faceted = with_settings(
+        Settings {
+            chamfer_corner: ChamferCorner::Facet,
+            ..Settings::default()
+        },
+        || cube.chamfer(&all_edges(&cube), d, TOL),
+    )
+    .unwrap();
+    let tetrahedra = 8.0 * d * d * d / 12.0;
+    assert_solid(&faceted, volume(&pointed, TOL) - tetrahedra, 1e-9);
+    // Six faces, twelve bevels, and now eight corners.
+    assert_eq!(faceted.faces().len(), pointed.faces().len() + 8);
+    assert_eq!(kinds(&faceted, "plane"), 26);
+    // The setting was scoped to that call.
+    let again = cube.chamfer(&all_edges(&cube), d, TOL).unwrap();
+    assert_eq!(again.faces().len(), pointed.faces().len());
+}
+
 #[test]
 fn filleting_every_edge_of_a_cube_rounds_its_corners_with_spheres() {
     let a = 2.0;

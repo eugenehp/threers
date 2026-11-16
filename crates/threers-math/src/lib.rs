@@ -2,6 +2,11 @@
 //! bounds, rays and planes, colour scales and ramps, Delaunay and Voronoi,
 //! geographic coordinates and tone mapping. Mirrors three.js's math module.
 //!
+//! Beyond three.js: [`polygon_ops`], booleans, offsets and simplification of
+//! polygons in integer coordinates, exact to the point, and [`std_sort`],
+//! C++'s `std::sort` in libc++'s order for results that must match a C++
+//! program's.
+//!
 //! No dependencies. `threers` re-exports all of it as `threers::math`, so
 //! code written against that path does not change; depend on this crate
 //! directly for the math alone.
@@ -25,6 +30,7 @@ mod line3;
 mod matrix3;
 mod matrix4;
 mod plane;
+pub mod polygon_ops;
 pub mod precision;
 mod quaternion;
 mod ray;
@@ -33,6 +39,7 @@ mod scale;
 mod sphere;
 mod spherical;
 pub mod srgb;
+pub mod std_sort;
 pub mod tone_mapping;
 mod triangle;
 mod triangulate;

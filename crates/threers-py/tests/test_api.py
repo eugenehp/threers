@@ -366,6 +366,21 @@ def test_load_bytes_and_external_gltf_buffers(tmp_path):
         s.load_bytes(gltf.encode(), "gltf")
 
 
+def test_load_gcode(tmp_path, renderer):
+    s = scene()
+    # Travel up and over, then extrude along the machine's X at Z 0 — the
+    # world's X axis once Z-up is turned to Y-up.
+    (tmp_path / "line.gcode").write_text("G0 X-1 Z1\nG1 Z0\nG1 X1 E1 ; extrude\nM104 S0\n")
+    s.load(tmp_path / "line.gcode")
+    # The group and its extruded and travel line segments.
+    assert s.object_count() == 3
+    rgba = renderer.render_rgba(s, camera())
+    column = [px(rgba, W * 3 // 4, y) for y in range(H // 2 - 2, H // 2 + 2)]
+    assert any(g > 100 and r < 50 for r, g, b in column), column
+    with pytest.raises(ValueError, match="no moves"):
+        s.load_bytes(b"M104 S200\n", "gcode")
+
+
 def test_loaders_reject_bad_input(tmp_path):
     s = threers.Scene()
     with pytest.raises(FileNotFoundError):

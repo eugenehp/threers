@@ -72,7 +72,9 @@ pub fn segmented<S: 'static>(
 ) -> NodeId {
     let row = ui.add_box(
         parent,
-        style! { position: relative; display: flex; padding: 2px; border-radius: 8px; gap: 2px; },
+        // Wrapping: options that do not fit the width go on to another row,
+        // each row's sharing it out, rather than running off the edge.
+        style! { position: relative; display: flex; flex-wrap: wrap; padding: 2px; border-radius: 8px; gap: 2px; },
     );
     ui.token_style(row, &[("background", Token::Separator)]);
     ui.set_semantics(row, Semantics::new(Role::RadioGroup).label(label));

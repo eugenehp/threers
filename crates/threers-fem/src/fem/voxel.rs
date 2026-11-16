@@ -1,0 +1,533 @@
+//! Finite elements on voxels: a closed mesh filled with cubes, solved for
+//! how it deforms and where it is stressed.
+//!
+//! Beside the tetrahedral [`Elastic`](super::Elastic), which needs a mesh,
+//! this takes any closed triangle mesh as it is — indexed or not, welded or
+//! not — and fills it with cubes. Each is an eight-node brick. A plain brick
+//! is too stiff in bending when only a few span a part's thickness (it locks
+//! in shear), so each carries Wilson's nine incompatible modes, condensed
+//! out: a cantilever four cubes thick bends within 5 % of beam theory. All
+//! the cubes are alike, so one 24 × 24 stiffness serves every element and
+//! the solve needs no assembled matrix — conjugate gradients preconditioned
+//! by the diagonal, the products split among threads under the `parallel`
+//! feature. Stresses come from each cube's corners, averaged where cubes
+//! meet.
+//!
+//! The price of cubes is the stepped surface: a single node's stress where
+//! the steps make a notch is the grid's, not the part's, so read peaks over
+//! a small share of the most stressed nodes rather than the one most.
+//!
+//! Supports hold a node in any of the three directions — all three for a
+//! clamp, one to keep it on a symmetry plane. The cubes sit on the lattice of
+//! multiples of the cube size, so a layer of nodes lies on every coordinate
+//! plane through the origin.
+//!
+//! Units are any consistent set, as for the rest of the crate.
+//!
+//! ```
+//! use threers_fem::fem::voxel::{self, VoxelBody};
+//! use threers_fem::fem::Material;
+//!
+//! // A bar 40 × 4 × 4, held at one end, pushed down 1 N at the other.
+//! let body = VoxelBody::new(&threers::BoxGeometry::new(40.0, 4.0, 4.0), 1.0).unwrap();
+//! let x: Vec<f64> = body.nodes.iter().map(|q| q[0]).collect();
+//! let (lo, hi) = (x.iter().cloned().fold(f64::MAX, f64::min), x.iter().cloned().fold(f64::MIN, f64::max));
+//! let held: Vec<(u32, [bool; 3])> = (0..x.len()).filter(|&n| x[n] < lo + 0.1).map(|n| (n as u32, [true; 3])).collect();
+//! let end: Vec<u32> = (0..x.len() as u32).filter(|&n| x[n as usize] > hi - 0.1).collect();
+//! let push: Vec<(u32, [f64; 3])> = end.iter().map(|&n| (n, [0.0, -1.0 / end.len() as f64, 0.0])).collect();
+//! let s = voxel::solve(&body, &Material::new(2000.0, 0.3), &held, &push).unwrap();
+//! // Down by about F L³ / 3 E I.
+//! let beam = (hi - lo).powi(3) / (3.0 * 2000.0 * 4f64.powi(4) / 12.0);
+//! assert!((s.displacement[end[0] as usize][1] / -beam - 1.0).abs() < 0.1);
+//! ```
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use threers::BufferGeometry;
+
+use super::{per_chunk, Material};
+use crate::vec3::V3;
+use crate::FemError;
+
+/// A grid of cubes `res` across from `origin`, `size` cubes each way.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VoxelGrid {
+    pub origin: [f32; 3],
+    pub res: f32,
+    pub size: [usize; 3],
+}
+
+impl VoxelGrid {
+    /// A grid round everything in `meshes`, a cube to spare each side.
+    pub fn around(meshes: &[&BufferGeometry], res: f32) -> VoxelGrid {
+        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+        for g in meshes {
+            if let Some(p) = g.get_attribute("position") {
+                for v in p.array.chunks(3) {
+                    for k in 0..3 {
+                        lo[k] = lo[k].min(v[k]);
+                        hi[k] = hi[k].max(v[k]);
+                    }
+                }
+            }
+        }
+        let origin = lo.map(|v| v - res);
+        let size = [0, 1, 2].map(|k| ((hi[k] - lo[k]) / res).ceil().max(0.0) as usize + 3);
+        VoxelGrid { origin, res, size }
+    }
+
+    /// Which cubes have their middles inside `g`, a closed mesh (indexed or
+    /// not, welded or not): each column of cubes filled between the points
+    /// where it crosses the surface, in and out in turn. Indexed x fastest,
+    /// then y, then z.
+    pub fn fill(&self, g: &BufferGeometry) -> Vec<bool> {
+        let [nx, ny, nz] = self.size;
+        let mut cells = vec![false; nx * ny * nz];
+        let Some(position) = g.get_attribute("position") else {
+            return cells;
+        };
+        let pos = &position.array;
+        let n = pos.len() as u32 / 3;
+        let idx = g.index.clone().unwrap_or_else(|| (0..n).collect());
+        let at = |i: u32| {
+            let i = i as usize * 3;
+            [pos[i], pos[i + 1], pos[i + 2]]
+        };
+        // The columns run through the cubes' middles, nudged off the grid's
+        // lines so that none passes exactly through a vertex or an edge.
+        let nudge = self.res * 0.013_7;
+        let column = |i: usize, j: usize| {
+            [
+                self.origin[0] + (i as f32 + 0.5) * self.res + nudge,
+                self.origin[1] + (j as f32 + 0.5) * self.res + nudge * 0.61,
+            ]
+        };
+        let mut hits: Vec<Vec<f32>> = vec![vec![]; nx * ny];
+        for t in idx.chunks(3) {
+            let [a, b, c] = [at(t[0]), at(t[1]), at(t[2])];
+            let d = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+            if d.abs() < 1e-12 {
+                continue;
+            }
+            let cell = |v: f32, k: usize| ((v - self.origin[k]) / self.res - 0.5).floor().max(0.0) as usize;
+            let (i0, i1) = (cell(a[0].min(b[0]).min(c[0]), 0), cell(a[0].max(b[0]).max(c[0]), 0) + 1);
+            let (j0, j1) = (cell(a[1].min(b[1]).min(c[1]), 1), cell(a[1].max(b[1]).max(c[1]), 1) + 1);
+            for j in j0..=j1.min(ny - 1) {
+                for i in i0..=i1.min(nx - 1) {
+                    let [x, y] = column(i, j);
+                    // The column's barycentric weights in the triangle's
+                    // shadow on the grid's floor.
+                    let wb = ((x - a[0]) * (c[1] - a[1]) - (y - a[1]) * (c[0] - a[0])) / d;
+                    let wc = ((b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0])) / d;
+                    if wb >= 0.0 && wc >= 0.0 && wb + wc <= 1.0 {
+                        hits[j * nx + i].push(a[2] + (b[2] - a[2]) * wb + (c[2] - a[2]) * wc);
+                    }
+                }
+            }
+        }
+        for j in 0..ny {
+            for i in 0..nx {
+                let h = &mut hits[j * nx + i];
+                h.sort_by(f32::total_cmp);
+                for pair in h.chunks(2).filter(|p| p.len() == 2) {
+                    let k0 = ((pair[0] - self.origin[2]) / self.res - 0.5).ceil().max(0.0) as usize;
+                    let k1 = (((pair[1] - self.origin[2]) / self.res - 0.5).floor() as isize).min(nz as isize - 1);
+                    for k in k0 as isize..=k1 {
+                        cells[(k as usize * ny + j) * nx + i] = true;
+                    }
+                }
+            }
+        }
+        cells
+    }
+
+    /// The volume of the cubes marked.
+    pub fn volume(&self, cells: &[bool]) -> f32 {
+        cells.iter().filter(|&&c| c).count() as f32 * self.res.powi(3)
+    }
+}
+
+/// The volume two closed meshes share, on cubes `res` across.
+pub fn overlap(a: &BufferGeometry, b: &BufferGeometry, res: f32) -> f32 {
+    let grid = VoxelGrid::around(&[a, b], res);
+    let (ca, cb) = (grid.fill(a), grid.fill(b));
+    ca.iter().zip(&cb).filter(|(x, y)| **x && **y).count() as f32 * res.powi(3)
+}
+
+/// A closed mesh as cubes joined at their corners.
+pub struct VoxelBody {
+    pub res: f32,
+    /// Each node's position.
+    pub nodes: Vec<V3>,
+    /// Each cube's eight nodes, in corner order x + 2y + 4z.
+    elements: Vec<[u32; 8]>,
+    at: HashMap<[i32; 3], u32>,
+    origin: [f32; 3],
+}
+
+impl VoxelBody {
+    /// `g`, a closed mesh, filled with cubes `res` across. The cubes sit on
+    /// the lattice of multiples of `res`, so a layer of nodes lies on every
+    /// coordinate plane through the origin (a symmetry plane, say).
+    pub fn new(g: &BufferGeometry, res: f32) -> Result<VoxelBody, FemError> {
+        // Written so a NaN size fails too.
+        if res.is_nan() || res <= 0.0 {
+            return Err(FemError::InvalidInput("the cube size must be above zero"));
+        }
+        let mut grid = VoxelGrid::around(&[g], res);
+        for k in 0..3 {
+            grid.origin[k] = (grid.origin[k] / res).floor() * res;
+            grid.size[k] += 1;
+        }
+        let cells = grid.fill(g);
+        let [nx, ny, _] = grid.size;
+        let mut at: HashMap<[i32; 3], u32> = HashMap::new();
+        let mut nodes = vec![];
+        let mut elements = vec![];
+        for (k, &filled) in cells.iter().enumerate() {
+            if !filled {
+                continue;
+            }
+            let (i, j, l) = ((k % nx) as i32, ((k / nx) % ny) as i32, (k / (nx * ny)) as i32);
+            let mut e = [0u32; 8];
+            for (c, slot) in e.iter_mut().enumerate() {
+                let key = [i + (c & 1) as i32, j + ((c >> 1) & 1) as i32, l + ((c >> 2) & 1) as i32];
+                *slot = *at.entry(key).or_insert_with(|| {
+                    nodes.push([0, 1, 2].map(|k| grid.origin[k] as f64 + key[k] as f64 * res as f64));
+                    nodes.len() as u32 - 1
+                });
+            }
+            elements.push(e);
+        }
+        if elements.is_empty() {
+            return Err(FemError::InvalidSurface("no cube's middle lies inside the mesh: is it closed, and larger than a cube?"));
+        }
+        Ok(VoxelBody { res, nodes, elements, at, origin: grid.origin })
+    }
+
+    /// How many cubes.
+    pub fn elements(&self) -> usize {
+        self.elements.len()
+    }
+
+    /// The node nearest `q` among those within two cubes of it.
+    pub fn nearest(&self, q: V3) -> Option<u32> {
+        let base = [0, 1, 2].map(|k| ((q[k] - self.origin[k] as f64) / self.res as f64).round() as i32);
+        let mut best: Option<(f64, u32)> = None;
+        for dx in -2..=2 {
+            for dy in -2..=2 {
+                for dz in -2..=2 {
+                    if let Some(&n) = self.at.get(&[base[0] + dx, base[1] + dy, base[2] + dz]) {
+                        let d = crate::vec3::dist(self.nodes[n as usize], q);
+                        if best.is_none_or(|(b, _)| d < b) {
+                            best = Some((d, n));
+                        }
+                    }
+                }
+            }
+        }
+        best.map(|(_, n)| n)
+    }
+}
+
+/// What [`solve`] finds: each node's displacement and von Mises stress.
+pub struct VoxelSolution {
+    pub displacement: Vec<V3>,
+    pub stress: Vec<f64>,
+    /// Conjugate-gradient iterations taken.
+    pub iterations: usize,
+}
+
+/// Solves `body` of `material` under `forces` at nodes, each node in `held`
+/// kept from moving in the directions marked (all three to clamp it; one, to
+/// hold it to a symmetry plane). Held too little to stop the body moving as
+/// a whole, it does not converge.
+pub fn solve(body: &VoxelBody, material: &Material, held: &[(u32, [bool; 3])], forces: &[(u32, V3)]) -> Result<VoxelSolution, FemError> {
+    material.validate()?;
+    if material.anisotropic.is_some() {
+        return Err(FemError::InvalidInput("voxel solver needs an isotropic material"));
+    }
+    let named = held.iter().map(|(n, _)| *n).chain(forces.iter().map(|(n, _)| *n));
+    if named.into_iter().any(|n| n as usize >= body.nodes.len()) {
+        return Err(FemError::InvalidInput("a support or load names a node the body does not have"));
+    }
+    let shared = element(material.poisson);
+    let el: &Element = &shared;
+    let n = body.nodes.len() * 3;
+    let scale = material.youngs * body.res as f64;
+    let mut fixed = vec![false; n];
+    for &(h, which) in held {
+        for c in 0..3 {
+            fixed[h as usize * 3 + c] |= which[c];
+        }
+    }
+    let mut f = vec![0.0f64; n];
+    for &(node, v) in forces {
+        for c in 0..3 {
+            f[node as usize * 3 + c] += v[c];
+        }
+    }
+    let mut diag = vec![0.0f64; n];
+    for e in &body.elements {
+        for (c, &node) in e.iter().enumerate() {
+            for d in 0..3 {
+                diag[node as usize * 3 + d] += el.k[3 * c + d][3 * c + d] * scale;
+            }
+        }
+    }
+    // y += K_e x over some elements.
+    let apply = |elements: &[[u32; 8]], x: &[f64]| -> Vec<f64> {
+        let mut y = vec![0.0f64; n];
+        let mut u = [0.0f64; 24];
+        for e in elements {
+            for (c, &node) in e.iter().enumerate() {
+                for d in 0..3 {
+                    u[3 * c + d] = x[node as usize * 3 + d];
+                }
+            }
+            for (c, &node) in e.iter().enumerate() {
+                for d in 0..3 {
+                    let s: f64 = el.k[3 * c + d].iter().zip(&u).map(|(a, b)| a * b).sum();
+                    y[node as usize * 3 + d] += s * scale;
+                }
+            }
+        }
+        y
+    };
+    let product = |x: &[f64]| -> Vec<f64> {
+        let mut y = vec![0.0f64; n];
+        for part in per_chunk(body.elements.len(), |range| apply(&body.elements[range], x)) {
+            for (a, b) in y.iter_mut().zip(part) {
+                *a += b;
+            }
+        }
+        for (i, v) in y.iter_mut().enumerate() {
+            if fixed[i] {
+                *v = 0.0;
+            }
+        }
+        y
+    };
+    let dot = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
+    let precondition = |r: &[f64]| -> Vec<f64> {
+        r.iter().zip(&diag).enumerate().map(|(i, (v, d))| if fixed[i] || *d == 0.0 { 0.0 } else { v / d }).collect()
+    };
+    let mut x = vec![0.0f64; n];
+    let mut r: Vec<f64> = f.iter().enumerate().map(|(i, v)| if fixed[i] { 0.0 } else { *v }).collect();
+    let mut z = precondition(&r);
+    let mut p = z.clone();
+    let mut rz = dot(&r, &z);
+    let target = dot(&r, &r).sqrt() * 1e-7;
+    let mut iterations = 0;
+    while dot(&r, &r).sqrt() > target {
+        if iterations == MOST_ITERATIONS {
+            return Err(FemError::NoConvergence { iterations });
+        }
+        let q = product(&p);
+        let alpha = rz / dot(&p, &q);
+        for i in 0..n {
+            x[i] += alpha * p[i];
+            r[i] -= alpha * q[i];
+        }
+        z = precondition(&r);
+        let next = dot(&r, &z);
+        let beta = next / rz;
+        rz = next;
+        for i in 0..n {
+            p[i] = z[i] + beta * p[i];
+        }
+        iterations += 1;
+    }
+    // The stress at each cube's corners, averaged where they meet. Over a
+    // cube of side `res` the strain is the displacement over `res`.
+    let to_stress = material.youngs / body.res as f64;
+    let mut sum = vec![0.0f64; body.nodes.len()];
+    let mut count = vec![0u32; body.nodes.len()];
+    for nodes in &body.elements {
+        let mut u = [0.0f64; 24];
+        for (c, &node) in nodes.iter().enumerate() {
+            for d in 0..3 {
+                u[3 * c + d] = x[node as usize * 3 + d];
+            }
+        }
+        for (c, &node) in nodes.iter().enumerate() {
+            let s = el.stress(&u, corner(c)).map(|v| v * to_stress);
+            sum[node as usize] += super::elastic::von_mises(s);
+            count[node as usize] += 1;
+        }
+    }
+    Ok(VoxelSolution {
+        displacement: (0..body.nodes.len()).map(|i| [x[3 * i], x[3 * i + 1], x[3 * i + 2]]).collect(),
+        stress: sum.iter().zip(&count).map(|(s, c)| *s / (*c).max(1) as f64).collect(),
+        iterations,
+    })
+}
+
+/// Iterations before a solve gives up: far past what a body held enough to
+/// stand needs.
+const MOST_ITERATIONS: usize = 20_000;
+
+/// The element: a cube of side 1 and modulus 1 (its stiffness scales with
+/// both), and the matrix recovering its incompatible modes from its
+/// corners' displacements.
+struct Element {
+    /// Condensed stiffness, corners in the order x + 2y + 4z, three
+    /// displacements each.
+    k: [[f64; 24]; 24],
+    /// The incompatible modes from the corners: α = R u.
+    r: [[f64; 24]; 9],
+    nu: f64,
+}
+
+/// Natural coordinates of corner `c`, each −1 or +1.
+fn corner(c: usize) -> [f64; 3] {
+    [(c & 1) as f64 * 2.0 - 1.0, ((c >> 1) & 1) as f64 * 2.0 - 1.0, ((c >> 2) & 1) as f64 * 2.0 - 1.0]
+}
+
+/// The strain–displacement matrix at natural point `x` of a unit cube: 24
+/// columns for the corners, 9 for the incompatible modes.
+fn b_matrix(x: [f64; 3]) -> [[f64; 33]; 6] {
+    let mut b = [[0.0; 33]; 6];
+    let mut put = |col: usize, g: [f64; 3]| {
+        b[0][col] = g[0];
+        b[1][col + 1] = g[1];
+        b[2][col + 2] = g[2];
+        b[3][col] = g[1];
+        b[3][col + 1] = g[0];
+        b[4][col + 1] = g[2];
+        b[4][col + 2] = g[1];
+        b[5][col] = g[2];
+        b[5][col + 2] = g[0];
+    };
+    // dN/dx = 2 dN/dξ on a cube of side 1.
+    for c in 0..8 {
+        let n = corner(c);
+        let f = |k: usize| 1.0 + x[k] * n[k];
+        put(3 * c, [n[0] * f(1) * f(2) / 4.0, f(0) * n[1] * f(2) / 4.0, f(0) * f(1) * n[2] / 4.0]);
+    }
+    // The modes 1 − ξ², 1 − η², 1 − ζ², each in all three directions.
+    for m in 0..3 {
+        let mut g = [0.0; 3];
+        g[m] = -4.0 * x[m];
+        put(24 + 3 * m, g);
+    }
+    b
+}
+
+/// Isotropic elasticity at modulus 1.
+fn d_matrix(nu: f64) -> [[f64; 6]; 6] {
+    let l = nu / ((1.0 + nu) * (1.0 - 2.0 * nu));
+    let mu = 1.0 / (2.0 * (1.0 + nu));
+    let mut d = [[0.0; 6]; 6];
+    for i in 0..3 {
+        d[i][..3].fill(l);
+        d[i][i] = l + 2.0 * mu;
+        d[i + 3][i + 3] = mu;
+    }
+    d
+}
+
+impl Element {
+    fn new(nu: f64) -> Element {
+        let d = d_matrix(nu);
+        let g = 1.0 / 3f64.sqrt();
+        let mut full = [[0.0f64; 33]; 33];
+        // 2 × 2 × 2 Gauss points, weight 1 each, and the cube's Jacobian 1/8.
+        for c in 0..8 {
+            let b = b_matrix(corner(c).map(|v| v * g));
+            for i in 0..33 {
+                for j in 0..33 {
+                    let mut s = 0.0;
+                    for p in 0..6 {
+                        for q in 0..6 {
+                            s += b[p][i] * d[p][q] * b[q][j];
+                        }
+                    }
+                    full[i][j] += s / 8.0;
+                }
+            }
+        }
+        // Condense the modes out: K = Kuu − Kua Kaa⁻¹ Kau, R = −Kaa⁻¹ Kau.
+        let mut kaa = [[0.0; 9]; 9];
+        for i in 0..9 {
+            for j in 0..9 {
+                kaa[i][j] = full[24 + i][24 + j];
+            }
+        }
+        let inv = invert9(kaa);
+        let mut r = [[0.0; 24]; 9];
+        for i in 0..9 {
+            for j in 0..24 {
+                r[i][j] = -(0..9).map(|m| inv[i][m] * full[24 + m][j]).sum::<f64>();
+            }
+        }
+        let mut k = [[0.0; 24]; 24];
+        for i in 0..24 {
+            for j in 0..24 {
+                k[i][j] = full[i][j] + (0..9).map(|m| full[i][24 + m] * r[m][j]).sum::<f64>();
+            }
+        }
+        Element { k, r, nu }
+    }
+
+    /// The stress (modulus 1, unit cube) at natural point `x`.
+    fn stress(&self, u: &[f64; 24], x: [f64; 3]) -> [f64; 6] {
+        let mut all = [0.0; 33];
+        all[..24].copy_from_slice(u);
+        for i in 0..9 {
+            all[24 + i] = (0..24).map(|j| self.r[i][j] * u[j]).sum();
+        }
+        let b = b_matrix(x);
+        let strain: Vec<f64> = (0..6).map(|p| (0..33).map(|j| b[p][j] * all[j]).sum()).collect();
+        let d = d_matrix(self.nu);
+        let mut s = [0.0; 6];
+        for p in 0..6 {
+            s[p] = (0..6).map(|q| d[p][q] * strain[q]).sum();
+        }
+        s
+    }
+}
+
+/// The elements made so far, by their Poisson's ratio's bits.
+type Elements = Mutex<Vec<(u64, Arc<Element>)>>;
+
+/// The element for Poisson's ratio `nu`, made once.
+fn element(nu: f64) -> Arc<Element> {
+    static CACHE: OnceLock<Elements> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let key = nu.to_bits();
+    if let Some((_, e)) = cache.lock().unwrap().iter().find(|(k, _)| *k == key) {
+        return e.clone();
+    }
+    let e = Arc::new(Element::new(nu));
+    cache.lock().unwrap().push((key, e.clone()));
+    e
+}
+
+fn invert9(mut a: [[f64; 9]; 9]) -> [[f64; 9]; 9] {
+    let mut inv = [[0.0; 9]; 9];
+    for (i, row) in inv.iter_mut().enumerate() {
+        row[i] = 1.0;
+    }
+    for col in 0..9 {
+        let pivot = (col..9).max_by(|&x, &y| a[x][col].abs().total_cmp(&a[y][col].abs())).unwrap();
+        a.swap(col, pivot);
+        inv.swap(col, pivot);
+        let d = a[col][col];
+        for j in 0..9 {
+            a[col][j] /= d;
+            inv[col][j] /= d;
+        }
+        for row in 0..9 {
+            if row != col {
+                let f = a[row][col];
+                for j in 0..9 {
+                    a[row][j] -= f * a[col][j];
+                    inv[row][j] -= f * inv[col][j];
+                }
+            }
+        }
+    }
+    inv
+}

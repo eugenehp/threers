@@ -80,22 +80,68 @@ pub struct Region {
 /// A path entirely inside comes back unchanged; one entirely outside comes back
 /// empty.
 pub fn clip_to_region(boundary: &[[f64; 2]], path: &[[f64; 2]]) -> Vec<Vec<[f64; 2]>> {
+    clip_runs(boundary, path, false)
+}
+
+/// As [`clip_to_region`], for a flat face cut by the outline of another in
+/// its plane: a stretch of the outline that runs *along* the boundary is
+/// not inside it.
+///
+/// The top of a wall's end, where it lies in the side of another wall of
+/// the same height, runs along that side's top edge. Its middle is on the
+/// boundary, where a containment test answers either way; taken for a cut
+/// it asks for a chord that divides nothing, and the subdivision declines.
+/// It is the boundary's own edge and cuts no region.
+pub fn clip_to_region_strictly(boundary: &[[f64; 2]], path: &[[f64; 2]]) -> Vec<Vec<[f64; 2]>> {
+    clip_runs(boundary, path, true)
+}
+
+fn clip_runs(boundary: &[[f64; 2]], path: &[[f64; 2]], strict: bool) -> Vec<Vec<[f64; 2]>> {
+    clip_runs_with_holes(boundary, &[], path, strict)
+}
+
+/// As [`clip_to_region_strictly`], for a region with holes: what lies in a
+/// hole is not in the region either.
+///
+/// A door cut down through the foot of a ring of walls lies on the ring's
+/// floor, and the door's own floor reaches across into the courtyard the
+/// ring encloses. Clipped to the outline alone, the cut went over the
+/// courtyard and back, and no side of the floor that was left ran along it.
+pub fn clip_to_region_with_holes(
+    boundary: &[[f64; 2]],
+    holes: &[Vec<[f64; 2]>],
+    path: &[[f64; 2]],
+) -> Vec<Vec<[f64; 2]>> {
+    clip_runs_with_holes(boundary, holes, path, true)
+}
+
+fn clip_runs_with_holes(
+    boundary: &[[f64; 2]],
+    holes: &[Vec<[f64; 2]>],
+    path: &[[f64; 2]],
+    strict: bool,
+) -> Vec<Vec<[f64; 2]>> {
     if boundary.len() < 3 || path.len() < 2 {
         return Vec::new();
     }
     let closed = dist(path[0], *path.last().unwrap()) <= extent(boundary) * SNAP;
+    let rings: Vec<&[[f64; 2]]> = std::iter::once(boundary)
+        .chain(holes.iter().filter(|h| h.len() >= 3).map(|h| h.as_slice()))
+        .collect();
 
     // Every point of the path, with the boundary crossings spliced in.
     let mut pts: Vec<([f64; 2], bool)> = Vec::new(); // (point, is a crossing)
     for i in 0..path.len() - 1 {
         pts.push((path[i], false));
         let mut here: Vec<(f64, [f64; 2])> = Vec::new();
-        for j in 0..boundary.len() {
-            let (q, q2) = (boundary[j], boundary[(j + 1) % boundary.len()]);
-            if let Some((t, _, at)) = segment_cross(path[i], path[i + 1], q, q2)
-                && !here.iter().any(|(_, p)| dist(*p, at) <= SNAP)
-            {
-                here.push((t, at));
+        for ring in &rings {
+            for j in 0..ring.len() {
+                let (q, q2) = (ring[j], ring[(j + 1) % ring.len()]);
+                if let Some((t, _, at)) = segment_cross(path[i], path[i + 1], q, q2)
+                    && !here.iter().any(|(_, p)| dist(*p, at) <= SNAP)
+                {
+                    here.push((t, at));
+                }
             }
         }
         here.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -109,7 +155,7 @@ pub fn clip_to_region(boundary: &[[f64; 2]], path: &[[f64; 2]]) -> Vec<Vec<[f64;
     for (i, (p, crossing)) in pts.iter().enumerate() {
         run.push(*p);
         if *crossing && i + 1 < pts.len() {
-            if run.len() > 1 && inside_run(boundary, &run) {
+            if run.len() > 1 && inside_rings(&rings, &run, strict) {
                 out.push(std::mem::take(&mut run));
                 run.push(*p);
             } else {
@@ -118,7 +164,7 @@ pub fn clip_to_region(boundary: &[[f64; 2]], path: &[[f64; 2]]) -> Vec<Vec<[f64;
             }
         }
     }
-    if run.len() > 1 && inside_run(boundary, &run) {
+    if run.len() > 1 && inside_rings(&rings, &run, strict) {
         out.push(run);
     }
 
@@ -137,8 +183,12 @@ pub fn clip_to_region(boundary: &[[f64; 2]], path: &[[f64; 2]]) -> Vec<Vec<[f64;
     out
 }
 
-/// Is the middle of this run inside the boundary?
-fn inside_run(boundary: &[[f64; 2]], run: &[[f64; 2]]) -> bool {
+/// Is the middle of this run inside the first ring and out of the rest?
+fn inside_rings(rings: &[&[[f64; 2]]], run: &[[f64; 2]], strict: bool) -> bool {
+    let (boundary, holes) = (rings[0], &rings[1..]);
+    if !inside_run(boundary, run, strict) {
+        return false;
+    }
     let mid = run[run.len() / 2];
     let probe = if run.len() >= 2 {
         let a = run[run.len() / 2 - 1];
@@ -146,7 +196,29 @@ fn inside_run(boundary: &[[f64; 2]], run: &[[f64; 2]]) -> bool {
     } else {
         mid
     };
-    point_in_ring(boundary, probe)
+    let reach = extent(boundary) * SNAP * 10.0;
+    holes.iter().all(|h| {
+        !point_in_ring(h, probe)
+            && (!strict
+                || nearest_on_boundary(h, probe).is_none_or(|(_, _, at)| dist(probe, at) > reach))
+    })
+}
+
+/// Is the middle of this run inside the boundary?
+fn inside_run(boundary: &[[f64; 2]], run: &[[f64; 2]], strict: bool) -> bool {
+    let mid = run[run.len() / 2];
+    let probe = if run.len() >= 2 {
+        let a = run[run.len() / 2 - 1];
+        [(a[0] + mid[0]) * 0.5, (a[1] + mid[1]) * 0.5]
+    } else {
+        mid
+    };
+    if !point_in_ring(boundary, probe) {
+        return false;
+    }
+    // Inside, and where asked not merely on the edge.
+    let reach = extent(boundary) * SNAP * 10.0;
+    !strict || nearest_on_boundary(boundary, probe).is_none_or(|(_, _, at)| dist(probe, at) > reach)
 }
 
 /// Where two segments cross, as `(parameter on a, parameter on b, point)`.
@@ -637,6 +709,23 @@ fn extent(ring: &[[f64; 2]]) -> f64 {
 }
 
 /// The closest point of the boundary to `p`, as `(segment, parameter, point)`.
+/// Does `ring` lie within `hole`, every point of it inside or on the edge?
+///
+/// A hole a face already has goes into [`subdivide`] as a closed path, so
+/// that cuts ending on it have something to end on — and a closed path
+/// bounds two regions, the one around it and the one within. The one within
+/// is the hole itself: nothing of the face is there, and it must not come
+/// back as a piece.
+pub fn within_hole(ring: &[[f64; 2]], hole: &[[f64; 2]]) -> bool {
+    let reach = extent(hole) * SNAP * 10.0;
+    ring.len() >= 3
+        && hole.len() >= 3
+        && ring.iter().all(|&p| {
+            point_in_ring(hole, p)
+                || nearest_on_boundary(hole, p).is_some_and(|(_, _, at)| dist(p, at) <= reach)
+        })
+}
+
 fn nearest_on_boundary(boundary: &[[f64; 2]], p: [f64; 2]) -> Option<(usize, f64, [f64; 2])> {
     let n = boundary.len();
     let mut best: Option<(f64, usize, f64, [f64; 2])> = None;
@@ -829,6 +918,154 @@ pub fn regions_of(rings: &[Vec<[f64; 2]>], tolerance: f64) -> Vec<Vec<[f64; 2]>>
     kept
 }
 
+/// A region of the plane: its outer boundary counter-clockwise, and its
+/// holes clockwise.
+pub type PlaneRegion = (Vec<[f64; 2]>, Vec<Vec<[f64; 2]>>);
+
+/// A boolean of two flat regions, each given as its rings (outer boundaries
+/// and holes, either way round; inside is an odd number of them): the
+/// pieces of the plane both are cut into, kept where `keep(in_a, in_b)`.
+///
+/// Every crossing becomes a vertex ([`arrange`]), the faces of the graph
+/// are walked, each is asked whether it lies in A and in B, and a ring of
+/// the graph lying wholly inside a kept face becomes that face's hole. Kept
+/// faces are not merged: a fuse of two overlapping squares is three faces,
+/// as OpenCASCADE's general fuse leaves it.
+pub fn boolean(
+    a: &[Vec<[f64; 2]>],
+    b: &[Vec<[f64; 2]>],
+    keep: impl Fn(bool, bool) -> bool,
+    tolerance: f64,
+) -> Vec<PlaneRegion> {
+    let rings: Vec<Vec<[f64; 2]>> = a.iter().chain(b).cloned().collect();
+    let (pts, edges) = arrange(&rings, tolerance);
+    if pts.len() < 3 || edges.is_empty() {
+        return Vec::new();
+    }
+    // The graph's faces, as in `regions_of`.
+    let mut half: Vec<(usize, usize)> = Vec::with_capacity(edges.len() * 2);
+    for e in &edges {
+        half.push((e[0], e[1]));
+        half.push((e[1], e[0]));
+    }
+    let angle = |h: usize| -> f64 {
+        let (p, q) = half[h];
+        (pts[q][1] - pts[p][1]).atan2(pts[q][0] - pts[p][0])
+    };
+    let mut out_of: Vec<Vec<usize>> = vec![Vec::new(); pts.len()];
+    for h in 0..half.len() {
+        out_of[half[h].0].push(h);
+    }
+    for list in out_of.iter_mut() {
+        list.sort_by(|&x, &y| angle(x).total_cmp(&angle(y)));
+    }
+    let mut seen = vec![false; half.len()];
+    let mut cycles: Vec<Vec<[f64; 2]>> = Vec::new();
+    for start in 0..half.len() {
+        if seen[start] {
+            continue;
+        }
+        let mut cycle = Vec::new();
+        let mut h = start;
+        loop {
+            if seen[h] {
+                break;
+            }
+            seen[h] = true;
+            cycle.push(pts[half[h].0]);
+            let back = h ^ 1;
+            let list = &out_of[half[back].0];
+            let Some(pos) = list.iter().position(|&x| x == back) else {
+                break;
+            };
+            h = list[(pos + list.len() - 1) % list.len()];
+            if h == start {
+                break;
+            }
+        }
+        if cycle.len() >= 3 {
+            cycles.push(cycle);
+        }
+    }
+    // Inside a set of rings: an odd number of them round the point.
+    let inside = |set: &[Vec<[f64; 2]>], p: [f64; 2]| {
+        set.iter()
+            .filter(|r| winding(std::slice::from_ref(*r), p) != 0)
+            .count()
+            % 2
+            == 1
+    };
+    // A point just inside a counter-clockwise cycle: off the middle of its
+    // longest side, to the left.
+    let probe = |c: &[[f64; 2]]| -> [f64; 2] {
+        let n = c.len();
+        let i = (0..n)
+            .max_by(|&i, &j| {
+                let l = |k: usize| {
+                    let (p, q) = (c[k], c[(k + 1) % n]);
+                    (q[0] - p[0]).hypot(q[1] - p[1])
+                };
+                l(i).total_cmp(&l(j))
+            })
+            .unwrap();
+        let (p, q) = (c[i], c[(i + 1) % n]);
+        let len = (q[0] - p[0]).hypot(q[1] - p[1]).max(1e-300);
+        let step = (tolerance * 10.0).max(len * 1e-6);
+        let mid = [(p[0] + q[0]) * 0.5, (p[1] + q[1]) * 0.5];
+        [
+            mid[0] - (q[1] - p[1]) / len * step,
+            mid[1] + (q[0] - p[0]) / len * step,
+        ]
+    };
+    let tiny = tolerance * tolerance;
+    let mut faces: Vec<(Vec<[f64; 2]>, f64, bool)> = Vec::new(); // (cycle, area, kept)
+    let mut outlines: Vec<Vec<[f64; 2]>> = Vec::new();
+    for c in cycles {
+        let area = signed_area(&c);
+        if area > tiny {
+            let p = probe(&c);
+            let kept = keep(inside(a, p), inside(b, p));
+            faces.push((c, area, kept));
+        } else if area < -tiny {
+            outlines.push(c);
+        }
+    }
+    let mut out: Vec<PlaneRegion> = faces
+        .iter()
+        .filter(|f| f.2)
+        .map(|f| (f.0.clone(), Vec::new()))
+        .collect();
+    let index: Vec<usize> = faces
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.2)
+        .map(|(i, _)| i)
+        .collect();
+    // A component's outline is a hole of the smallest face around it, if
+    // that face is kept.
+    for o in outlines {
+        let p = o[0];
+        let around = faces
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| {
+                winding(std::slice::from_ref(&f.0), p) != 0
+                    && !f
+                        .0
+                        .iter()
+                        .any(|q| (q[0] - p[0]).hypot(q[1] - p[1]) <= tolerance)
+            })
+            .min_by(|x, y| x.1 .1.total_cmp(&y.1 .1))
+            .map(|(i, _)| i);
+        if let Some(i) = around
+            && let Some(k) = index.iter().position(|&j| j == i)
+        {
+            out[k].1.push(o);
+        }
+    }
+    out
+}
+
 /// How many times the rings wind around `p`, counted by crossings of a ray.
 fn winding(rings: &[Vec<[f64; 2]>], p: [f64; 2]) -> i32 {
     let mut w = 0;
@@ -855,6 +1092,31 @@ fn winding(rings: &[Vec<[f64; 2]>], p: [f64; 2]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_squares_cut_fused_and_shared() {
+        let a = vec![square()];
+        let b = vec![vec![[2.0, 2.0], [6.0, 2.0], [6.0, 6.0], [2.0, 6.0]]];
+        let area = |rs: &[PlaneRegion]| -> f64 {
+            rs.iter()
+                .map(|(o, hs)| signed_area(o) + hs.iter().map(|h| signed_area(h)).sum::<f64>())
+                .sum()
+        };
+        let cut = boolean(&a, &b, |x, y| x && !y, 1e-9);
+        assert_eq!(cut.len(), 1);
+        assert!((area(&cut) - 12.0).abs() < 1e-9);
+        let common = boolean(&a, &b, |x, y| x && y, 1e-9);
+        assert!((area(&common) - 4.0).abs() < 1e-9);
+        let fuse = boolean(&a, &b, |x, y| x || y, 1e-9);
+        assert_eq!(fuse.len(), 3);
+        assert!((area(&fuse) - 28.0).abs() < 1e-9);
+        // A square cut from the middle of a bigger one leaves a hole.
+        let big = vec![vec![[-4.0, -4.0], [8.0, -4.0], [8.0, 8.0], [-4.0, 8.0]]];
+        let holed = boolean(&big, &a, |x, y| x && !y, 1e-9);
+        assert_eq!(holed.len(), 1);
+        assert_eq!(holed[0].1.len(), 1);
+        assert!((area(&holed) - 128.0).abs() < 1e-9);
+    }
 
     fn square() -> Vec<[f64; 2]> {
         vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]

@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "threers"
 version = "0.0.12"
-description = "Drop-in three.js-shaped 3D toolkit for Python — headless wgpu render, math, animation, physics"
+description = "Drop-in three.js-shaped 3D toolkit for Python — headless wgpu render, math, animation, physics, finite and boundary elements"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
@@ -28,4 +28,4 @@ dev = ["pytest>=7.0"]
 manifest-path = "Cargo.toml"
 module-name = "threers._native"
 python-source = "python"
-features = ["pyo3/extension-module", "headless", "physics", "animation"]
+features = ["pyo3/extension-module", "headless", "physics", "animation", "fem"]

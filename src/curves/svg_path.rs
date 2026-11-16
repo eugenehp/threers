@@ -879,11 +879,11 @@ mod tests {
             }
         }
         // Per span, because the two parameterise their arc length differently.
-        for i in 0..3 {
+        for (i, curve) in rebuilt.curve_path.curves.iter().enumerate().take(3) {
             for k in 0..=8 {
                 let local = k as f32 / 8.0;
                 let want = spline.get_point((i as f32 + local) / 3.0);
-                let got = rebuilt.curve_path.curves[i].get_point(local);
+                let got = curve.get_point(local);
                 assert!(close(want, got), "span {i} at {local}: {want:?} vs {got:?}");
             }
         }

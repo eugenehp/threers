@@ -472,7 +472,8 @@ impl Painter for OverlayPainter<'_> {
         let text = trimmed;
         // Clipped: a line whose middle is outside goes; one running past the
         // right edge loses characters from its end; one starting left of it,
-        // from its start.
+        // from its start (both with half a pixel to spare: the quarter-pixel
+        // rounding above can start a line a hair left of its own box).
         let mut owned;
         let mut text = text;
         if let Some(c) = clip {
@@ -482,7 +483,7 @@ impl Painter for OverlayPainter<'_> {
             }
             let chars: Vec<char> = text.chars().collect();
             let mut start = 0;
-            while start < chars.len() && line.x < c.x {
+            while start < chars.len() && line.x < c.x - 0.5 {
                 let w = o.measure_line(&chars[start].to_string()).0;
                 line.x += w;
                 start += 1;
@@ -683,6 +684,34 @@ mod tests {
         let (a, b) = (ink(&whole), ink(&split));
         let off = a.iter().zip(&b).filter(|(p, q)| p != q).count();
         assert!(off <= 4, "{off} columns inked differently");
+    }
+
+    /// A clipping box a fraction of a pixel right of a whole one keeps its
+    /// first character: the line starts a hair left of the box, rounded to
+    /// a quarter pixel, and that is not a character to drop.
+    #[test]
+    fn a_clipped_line_keeps_its_first_character() {
+        let draw = |clip: bool| {
+            let mut ui = Ui::new();
+            let root = ui.root();
+            ui.set_style(
+                root,
+                crate::style! { background: #ffffff; color: #000000; font-size: 16px; },
+            );
+            let b = ui.add_box(root, crate::style! { margin-left: 10.1px; white-space: nowrap; });
+            if clip {
+                ui.set_style(
+                    b,
+                    crate::style! { margin-left: 10.1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; },
+                );
+            }
+            ui.add_text(b, "loading");
+            let mut overlay = Overlay::new(120, 30);
+            ui.layout(120.0, 30.0, &mut OverlayPainter::new(&mut overlay));
+            paint_to_rgba(&ui, 1.0, 120, 30)
+        };
+        let first = |img: &[u8]| (0..120).find(|&x| (0..30).any(|y| img[(y * 120 + x) * 4] < 128));
+        assert_eq!(first(&draw(true)), first(&draw(false)));
     }
 
     #[test]

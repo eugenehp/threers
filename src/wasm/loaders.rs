@@ -290,3 +290,77 @@ impl WebExrLoader {
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 }
+
+/// three.js `GCodeLoader`: a toolpath as line-list geometries in the
+/// machine's Z-up frame. Draw each with `WebScene.createLine` (mode 0),
+/// extruded green and travel red, in a group rotated −90° about X.
+#[wasm_bindgen]
+pub struct WebGcodeLoader {
+    inner: crate::loaders::GcodeLoader,
+}
+#[wasm_bindgen]
+impl WebGcodeLoader {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> WebGcodeLoader {
+        WebGcodeLoader {
+            inner: crate::loaders::GcodeLoader::default(),
+        }
+    }
+    /// The most an arc's chords may stray from it, in millimetres (0.01).
+    #[wasm_bindgen(setter = arcTolerance)]
+    pub fn set_arc_tolerance(&mut self, mm: f64) {
+        self.inner.arc_tolerance = mm;
+    }
+    pub fn parse(&self, src: &str) -> WebGcodeToolpath {
+        WebGcodeToolpath {
+            inner: self.inner.parse(src),
+        }
+    }
+}
+
+#[wasm_bindgen]
+pub struct WebGcodeToolpath {
+    inner: crate::loaders::GcodeToolpath,
+}
+
+fn line_list(vertices: Vec<f32>) -> WebGeometry {
+    let mut g = crate::core::BufferGeometry::new();
+    g.set_attribute("position", crate::core::BufferAttribute::new(vertices, 3));
+    WebGeometry { inner: Arc::new(g) }
+}
+
+#[wasm_bindgen]
+impl WebGcodeToolpath {
+    #[wasm_bindgen(getter = layerCount)]
+    pub fn layer_count(&self) -> usize {
+        self.inner.layers.len()
+    }
+    /// Whether any move mentioned E; without it, feed moves count as
+    /// extruded (CNC, laser, plotter).
+    #[wasm_bindgen(getter = hasExtrusion)]
+    pub fn has_extrusion(&self) -> bool {
+        self.inner.has_extrusion
+    }
+    /// Every extruding segment.
+    pub fn extruded(&self) -> WebGeometry {
+        line_list(self.inner.extruded())
+    }
+    /// Every travel segment.
+    pub fn travel(&self) -> WebGeometry {
+        line_list(self.inner.travel())
+    }
+    /// One layer's extruding segments (three.js `splitLayer`).
+    #[wasm_bindgen(js_name = layerExtruded)]
+    pub fn layer_extruded(&self, index: usize) -> Option<WebGeometry> {
+        Some(line_list(self.inner.layers.get(index)?.extruded.clone()))
+    }
+    #[wasm_bindgen(js_name = layerTravel)]
+    pub fn layer_travel(&self, index: usize) -> Option<WebGeometry> {
+        Some(line_list(self.inner.layers.get(index)?.travel.clone()))
+    }
+    /// The Z a layer was opened at, in millimetres.
+    #[wasm_bindgen(js_name = layerZ)]
+    pub fn layer_z(&self, index: usize) -> Option<f64> {
+        Some(self.inner.layers.get(index)?.z)
+    }
+}

@@ -20,21 +20,42 @@
 //! write each polygon a geometry remembers ([`BufferGeometry::faces`]) as one
 //! n-gon face instead of its triangles.
 //!
+//! Rhino's `.3dm` ([`write_3dm`]), binary FBX ([`write_fbx_binary`]) and DXF drawings ([`DxfDocument`],
+//! [`write_dxf`]) are here too; the DXF reader is
+//! [`crate::loaders::parse_dxf`].
+//!
+//! 2D drawings go out as SVG too ([`SvgDocument`], [`write_svg`]), and
+//! polylines as G-code toolpaths ([`write_gcode`]); the G-code reader is
+//! [`crate::loaders::GcodeLoader`].
+//!
 //! glTF lives in [`crate::loaders::gltf_write`].
 
+mod dxf;
+mod fbx;
+mod gcode;
 mod number;
 mod obj;
 mod ply;
 mod stl;
+mod svg;
+mod three_dm;
 
 use std::sync::Arc;
 
 use crate::core::BufferGeometry;
 
+pub use dxf::{write_dxf, DxfDocument, DxfEntity, DxfLayer, DxfUnits};
+pub use fbx::{write_fbx_binary, FbxOptions};
+pub use gcode::{write_gcode, GcodeOptions, GcodePath, GcodeUnits};
 pub use number::js_number;
 pub use obj::{write_obj, ObjOptions};
 pub use ply::{write_ply, PlyOptions};
 pub use stl::{write_stl_ascii, write_stl_binary};
+pub use svg::{
+    write_svg, xml_escape, PathCommand, SvgDocument, SvgFillRule, SvgLineCap, SvgLineJoin, SvgNode, SvgPaint, SvgPath,
+    SvgStyle, SvgTextAnchor, SvgTransform, SvgUnit,
+};
+pub use three_dm::{write_3dm, ThreeDmOptions, ThreeDmUnits};
 
 /// What an exported object is, which decides what each format writes for it
 /// (three.js's `isMesh` / `isLine` / `isPoints`, and `type` for lines).

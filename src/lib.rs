@@ -439,9 +439,10 @@ pub use geometries::{
     KirigamiMesh, KirigamiNet, KirigamiNetPanel, KirigamiPreset, LatheGeometry, Lattice,
     LatticeGeometry, LatticeKind, LatticeMetrics, LatticeStyle, OctahedronGeometry,
     ParametricGeometry, PlaneGeometry, PolygonGeometry, PolyhedronGeometry, QuadGeometry, Region,
-    RingGeometry, SeedLayout, SolidMaterial, Solver, SphereGeometry, Stiffness, Stochastic,
-    Strength, Strut, TetrahedronGeometry, TextGeometry, TorusGeometry, TorusKnotGeometry, Tpms,
-    TubeGeometry, WireframeGeometry, KIRIGAMI_NET_VARIANT,
+    RingGeometry, ScaleRich, ScaleRichAngles, ScaleRichLigament, ScaleRichNet, SeedLayout,
+    SolidMaterial, Solver, SphereGeometry, Stiffness, Stochastic, Strength, Strut,
+    TetrahedronGeometry, TextGeometry, TorusGeometry, TorusKnotGeometry, Tpms, TubeGeometry,
+    WireframeGeometry, KIRIGAMI_NET_VARIANT,
 };
 pub use helpers::{
     ArrowHelper, AxesHelper, BoxHelper, CameraHelper, DirectionalLightHelper, GridHelper,
@@ -454,8 +455,8 @@ pub use lights::{
 };
 pub use loaders::{
     AlembicArchive, AlembicError, ColladaError, ColladaLoader, DracoError, DracoHeader, ExrError,
-    ExrLoader, FbxError, FbxLoader, FbxScene, GltfError, GltfImages, GltfLoader, GltfScene,
-    HdrError, HdrLoader, Ktx2, Ktx2Error, MeshoptError, ObjLoader, PlyLoader, PolyMesh, StlLoader,
+    ExrLoader, FbxError, FbxLoader, FbxScene, GcodeLoader, GcodeToolpath, GltfError, GltfImages,
+    GltfLoader, GltfScene, HdrError, HdrLoader, Ktx2, Ktx2Error, MeshoptError, ObjLoader, PlyLoader, PolyMesh, StlLoader,
     TtfError, TtfFont, TtfGlyph,
 };
 pub use origami::{

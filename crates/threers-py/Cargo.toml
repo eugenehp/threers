@@ -27,6 +27,8 @@ default = ["headless", "usd"]
 headless = []
 # Rigid-body physics (threers-physics).
 physics = ["dep:threers-physics"]
+# Finite and boundary element analysis (threers-fem): `FemModel`, `FemSurface`.
+fem = ["dep:threers-fem"]
 # Tweens / springs / cinematic helpers.
 animation = ["dep:threers-animation"]
 # `.usda` / `.usdc` / `.usdz` in `Scene.load` (pure Rust; compile time only).
@@ -35,6 +37,7 @@ usd = ["threers/usd"]
 [dependencies]
 threers = { path = "../..", version = "0.0.12" }
 threers-physics = { path = "../threers-physics", version = "0.0.12", optional = true }
+threers-fem = { path = "../threers-fem", version = "0.0.12", optional = true }
 threers-animation = { path = "../threers-animation", version = "0.0.12", optional = true, default-features = false }
 # `generate-import-lib`: a Windows wheel links against python3.dll, and with
 # this pyo3 writes the import library itself, so the wheel cross-builds from

@@ -432,14 +432,14 @@ impl ParticleAnimator {
 fn glow(system: &ParticleSystem) -> (f32, Vector3) {
     let ps = &system.particles;
     let (mut total, mut centre) = (0.0f32, Vector3::ZERO);
-    for i in 0..ps.len() {
+    for (i, &position) in ps.position.iter().enumerate() {
         let t = system.life_fraction(i);
         let mut w = system.color_over_life.at(t)[3].max(0.0);
         if let Some(k) = &system.temperature_over_life {
             w *= (k.at(t) / 1500.0).powi(4);
         }
         total += w;
-        centre = centre + ps.position[i] * w;
+        centre = centre + position * w;
     }
     (
         total,

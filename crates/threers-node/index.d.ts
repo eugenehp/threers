@@ -18,6 +18,91 @@ export declare class Color {
 }
 export type JsColor = Color
 
+/** A radiated sound field. */
+export declare class FemAcoustic {
+  get power(): number
+  get elementsPerWavelength(): number
+  pressureRe(): Float64Array
+  pressureIm(): Float64Array
+  /** Complex pressure at `points` (x, y, z each), interleaved re, im. */
+  field(points: Array<number>): Float64Array
+  /** Far-field amplitude per direction (x, y, z each). */
+  farField(directions: Array<number>): Float64Array
+}
+
+/** A meshed part with its material, supports and loads. */
+export declare class FemModel {
+  /** A built-in shape — see `femShapes()` — meshed at about `spacing`. */
+  static shape(name: string, spacing: number): FemModel
+  /** Mesh a closed triangle surface (`positions` x, y, z per vertex). */
+  static fromTriangles(positions: Array<number>, indices: Array<number>, spacing: number): FemModel
+  /** An exact box grid with `n` (`[nx, ny, nz]`) cubes per axis. */
+  static boxGrid(lo: Array<number>, hi: Array<number>, n: Array<number>): FemModel
+  get nodeCount(): number
+  get tetCount(): number
+  get volume(): number
+  /** `[min x, min y, min z, max x, max y, max z]`. */
+  bounds(): Array<number>
+  /** Smallest and largest dihedral angle, degrees. */
+  dihedralRange(): Array<number>
+  /** x, y, z per node. */
+  positions(): Float64Array
+  /** Boundary triangles as node indices, wound outward. */
+  surfaceIndices(): Uint32Array
+  setMaterial(youngs: number, poisson: number, density?: number | undefined | null): void
+  /** Ten-node elements (default) or four-node. */
+  setQuadratic(quadratic: boolean): void
+  /** Remove every support, load and thermal condition. */
+  clear(): void
+  /** Clamp every node inside the box. */
+  fixBox(lo: Array<number>, hi: Array<number>): void
+  /** Hold displacement component `axis` (0, 1, 2) at `value` in the box. */
+  holdBox(lo: Array<number>, hi: Array<number>, axis: number, value?: number | undefined | null): void
+  /** A total force spread by area over the boundary faces in the box. */
+  forceBox(lo: Array<number>, hi: Array<number>, force: Array<number>): void
+  /** Inward pressure on the boundary faces in the box. */
+  pressureBox(lo: Array<number>, hi: Array<number>, pressure: number): void
+  setGravity(g: Array<number>): void
+  temperatureBox(lo: Array<number>, hi: Array<number>, t: number): void
+  heatFluxBox(lo: Array<number>, hi: Array<number>, q: number): void
+  convectionBox(lo: Array<number>, hi: Array<number>, h: number, ambient: number): void
+  setHeatSource(q: number): void
+  /** Static solve: displacements and stresses. */
+  solve(): FemStatic
+  /** The lowest `count` natural frequencies and mode shapes. */
+  modes(count?: number | undefined | null): FemModes
+  /** Steady conduction with conductivity `k`. */
+  solveHeat(k: number): FemHeat
+}
+export type JsFemModel = FemModel
+
+/** A closed surface for the boundary element method. */
+export declare class FemSurface {
+  /** A box `size` across, centred on the origin. */
+  static cuboid(size: Array<number>, segmentsPerUnit: number): FemSurface
+  /** An icosphere with `20·(detail + 1)²` triangles. */
+  static sphere(radius: number, detail: number): FemSurface
+  static fromTriangles(positions: Array<number>, indices: Array<number>): FemSurface
+  get triangleCount(): number
+  positions(): Float64Array
+  indices(): Uint32Array
+  centroids(): Float64Array
+  normals(): Float64Array
+  /** Capacitance in units of the permittivity. */
+  capacitance(): number
+  /**
+   * Per-triangle normal velocity for a piston inside the box, facing
+   * `facing`.
+   */
+  piston(lo: Array<number>, hi: Array<number>, facing: Array<number>, velocity: number): Float64Array
+  /**
+   * Radiate at `frequency` from per-triangle normal velocity
+   * `velocityRe + i·velocityIm` (air at 20 °C unless given).
+   */
+  radiate(frequency: number, velocityRe: Array<number>, velocityIm?: Array<number> | undefined | null, soundSpeed?: number | undefined | null, density?: number | undefined | null): FemAcoustic
+}
+export type JsFemSurface = FemSurface
+
 /**
  * A triangle mesh's vertex data, built with the static factories
  * (three.js `*Geometry` classes, same parameters and defaults).
@@ -384,18 +469,22 @@ export declare class Scene {
   /**
    * Load a model file into the scene: `.glb`, `.gltf` (external buffers
    * resolved next to the file), `.obj`, `.stl`, `.ply`, and `.usda` /
-   * `.usdc` / `.usdz` / `.usd` when built with the `usd` feature. Returns a
-   * handle: the mesh itself for the single-mesh formats (OBJ/STL/PLY), a
-   * group holding the model otherwise. `material` replaces the loaded
-   * materials (OBJ/STL/PLY default to a grey `Material.standard`).
+   * `.usdc` / `.usdz` / `.usd` when built with the `usd` feature, and
+   * G-code toolpaths (`.gcode` / `.gco` / `.ngc`, as three.js's
+   * `GCodeLoader` draws them: green extrusion, red travel, Z up turned to
+   * Y up). Returns a handle: the mesh itself for the single-mesh formats
+   * (OBJ/STL/PLY), a group holding the model otherwise. `material` replaces
+   * the loaded materials (OBJ/STL/PLY default to a grey
+   * `Material.standard`; G-code ignores it).
    */
   load(path: string, material?: Material): number
   /**
    * Like `load`, from bytes. `format`: `'glb' | 'gltf' | 'obj' | 'stl' |
-   * 'ply' | 'usd'` (`'usda' | 'usdc' | 'usdz'` also accepted). A `.gltf`
-   * given as bytes must embed its buffers as data URIs.
+   * 'ply' | 'usd' | 'gcode'` (`'usda' | 'usdc' | 'usdz'`, `'gco' | 'ngc'`
+   * also accepted). A `.gltf` given as bytes must embed its buffers as data
+   * URIs.
    */
-  loadBytes(data: Buffer, format: 'glb' | 'gltf' | 'obj' | 'stl' | 'ply' | 'usd' | 'usda' | 'usdc' | 'usdz', material?: Material): number
+  loadBytes(data: Buffer, format: 'glb' | 'gltf' | 'obj' | 'stl' | 'ply' | 'usd' | 'usda' | 'usdc' | 'usdz' | 'gcode' | 'gco' | 'ngc', material?: Material): number
 }
 export type JsScene = Scene
 
@@ -467,6 +556,38 @@ export declare class Vector3 {
   normalized(): Vector3
 }
 export type JsVector3 = Vector3
+
+/** A temperature field, per node. */
+export interface FemHeat {
+  temperature: Float64Array
+  /** x, y, z heat flux per node. */
+  flux: Float64Array
+  min: number
+  max: number
+}
+
+/** Natural frequencies and mode shapes (x, y, z per node, largest 1). */
+export interface FemModes {
+  frequencies: Array<number>
+  shapes: Array<Float64Array>
+}
+
+/** The built-in shapes, as `name: description` lines. */
+export declare function femShapes(): Array<string>
+
+/** A static solution, per node. */
+export interface FemStatic {
+  /** x, y, z per node. */
+  displacement: Float64Array
+  vonMises: Float64Array
+  /** Voigt xx, yy, zz, yz, xz, xy per node. */
+  stress: Float64Array
+  maxVonMises: number
+  maxDisplacement: number
+  /** Total support reaction, `[x, y, z]`. */
+  reaction: Array<number>
+  compliance: number
+}
 
 /**
  * Material parameters. Each factory accepts the subset that applies to it

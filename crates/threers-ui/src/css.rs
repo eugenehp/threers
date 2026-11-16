@@ -868,7 +868,10 @@ pub fn try_apply(s: &mut Style, name: &str, value: &str) -> bool {
             }
             "font-style" => s.italic = v == "italic" || v == "oblique",
             "text-overflow" => s.ellipsis = v == "ellipsis",
-            "white-space" => s.wrap = v != "nowrap" && v != "pre",
+            "white-space" => {
+                s.wrap = v != "nowrap" && v != "pre";
+                s.keep_newlines = matches!(v, "pre" | "pre-wrap" | "pre-line" | "break-spaces");
+            }
             "text-align" => {
                 s.text_align = match v {
                     "center" => crate::style::TextAlign::Center,

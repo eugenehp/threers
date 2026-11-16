@@ -1,100 +1,29 @@
 use crate::math::Vector2;
 
-/// Triangulate a simple polygon (and optional holes) by ear clipping.
-/// Returns indices into the flat `points` array (counter-clockwise winding).
+/// Triangulates a polygon given as its outer ring followed by any holes,
+/// `hole_indices` saying where in `points` each hole starts (mapbox earcut's
+/// convention). Either ring orientation is accepted. Returns indices into
+/// `points`, three per triangle, each triangle counter-clockwise.
 ///
-/// This is a compact, allocation-light implementation: O(n²) which is fine for
-/// the polygon counts used by `ExtrudeGeometry`. Production code should reach
-/// for `earcutr` once `Shape` outlines get complex.
+/// The work is done by [`shapes::earcut`](super::shapes::earcut), the full
+/// mapbox earcut port, which copes with holes, collinear and repeated points
+/// and self-touching outlines, in about O(n log n).
 pub fn earcut(points: &[Vector2], hole_indices: &[usize]) -> Vec<u32> {
     if points.len() < 3 {
         return Vec::new();
     }
-
-    // Build the working polygon: outer ring, then each hole inserted by bridge.
-    // For now, we ignore holes — the resulting triangulation is the outer ring only.
-    // Holes would require finding a bridge vertex to merge into the outer polygon,
-    // which is straightforward but adds ~80 LOC.
-    let _ = hole_indices;
-    let mut indices: Vec<u32> = (0..points.len() as u32).collect();
-    let mut tris = Vec::new();
-
-    // Ensure CCW orientation (signed area > 0). Reverse if CW.
-    if signed_area(points, &indices) < 0.0 {
-        indices.reverse();
-    }
-
-    let mut guard = indices.len() as i32 * indices.len() as i32 + 1;
-    while indices.len() > 3 && guard > 0 {
-        guard -= 1;
-        let n = indices.len();
-        let mut found_ear = false;
-        for i in 0..n {
-            let i_prev = (i + n - 1) % n;
-            let i_next = (i + 1) % n;
-            let a = points[indices[i_prev] as usize];
-            let b = points[indices[i] as usize];
-            let c = points[indices[i_next] as usize];
-            if !is_convex(a, b, c) {
-                continue;
-            }
-            // Check no other vertex is inside triangle (a,b,c).
-            let mut contains = false;
-            for j in 0..n {
-                if j == i_prev || j == i || j == i_next {
-                    continue;
-                }
-                if point_in_triangle(points[indices[j] as usize], a, b, c) {
-                    contains = true;
-                    break;
-                }
-            }
-            if contains {
-                continue;
-            }
-            tris.push(indices[i_prev]);
-            tris.push(indices[i]);
-            tris.push(indices[i_next]);
-            indices.remove(i);
-            found_ear = true;
-            break;
+    let data: Vec<f64> = points
+        .iter()
+        .flat_map(|p| [p.x as f64, p.y as f64])
+        .collect();
+    let mut tris = super::shapes::earcut::triangulate(&data, hole_indices, 2);
+    for t in tris.chunks_mut(3) {
+        let [a, b, c] = [t[0], t[1], t[2]].map(|i| points[i as usize]);
+        if (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) < 0.0 {
+            t.swap(1, 2);
         }
-        if !found_ear {
-            // Bail out to avoid an infinite loop on degenerate input.
-            break;
-        }
-    }
-    if indices.len() == 3 {
-        tris.extend_from_slice(&indices);
     }
     tris
-}
-
-fn signed_area(points: &[Vector2], indices: &[u32]) -> f32 {
-    let mut a = 0.0f32;
-    for i in 0..indices.len() {
-        let p = points[indices[i] as usize];
-        let q = points[indices[(i + 1) % indices.len()] as usize];
-        a += p.x * q.y - q.x * p.y;
-    }
-    a * 0.5
-}
-
-fn is_convex(a: Vector2, b: Vector2, c: Vector2) -> bool {
-    ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)) > 0.0
-}
-
-fn point_in_triangle(p: Vector2, a: Vector2, b: Vector2, c: Vector2) -> bool {
-    let d1 = sign(p, a, b);
-    let d2 = sign(p, b, c);
-    let d3 = sign(p, c, a);
-    let neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
-    let pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
-    !(neg && pos)
-}
-
-fn sign(p: Vector2, a: Vector2, b: Vector2) -> f32 {
-    (p.x - b.x) * (a.y - b.y) - (a.x - b.x) * (p.y - b.y)
 }
 
 #[cfg(test)]
@@ -126,5 +55,69 @@ mod tests {
         ];
         let tris = earcut(&pts, &[]);
         assert_eq!(tris.len(), 9);
+    }
+
+    fn covered(pts: &[Vector2], tris: &[u32]) -> f32 {
+        tris.chunks(3)
+            .map(|t| {
+                let [a, b, c] = [t[0], t[1], t[2]].map(|i| pts[i as usize]);
+                let twice = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+                assert!(twice >= 0.0, "counter-clockwise");
+                twice / 2.0
+            })
+            .sum()
+    }
+
+    #[test]
+    fn holes_are_left_open() {
+        // A 10 × 6 plate with two 2 × 2 windows, outer ring clockwise this
+        // time, holes either way.
+        let mut pts = vec![
+            Vector2::new(0.0, 0.0),
+            Vector2::new(0.0, 6.0),
+            Vector2::new(10.0, 6.0),
+            Vector2::new(10.0, 0.0),
+        ];
+        let square = |x: f32, y: f32| {
+            [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)].map(|(dx, dy)| Vector2::new(x + dx, y + dy))
+        };
+        pts.extend(square(2.0, 2.0));
+        pts.extend(square(6.0, 2.0).into_iter().rev());
+        let tris = earcut(&pts, &[4, 8]);
+        assert!((covered(&pts, &tris) - (60.0 - 8.0)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn collinear_and_repeated_points() {
+        // A square with points along its edges and one repeated: the old
+        // ear clipper gave up on these and left the polygon part-covered.
+        let mut pts = vec![];
+        for i in 0..10 {
+            pts.push(Vector2::new(i as f32, 0.0));
+        }
+        pts.push(Vector2::new(10.0, 0.0));
+        pts.push(Vector2::new(10.0, 0.0));
+        for i in 0..=10 {
+            pts.push(Vector2::new(10.0 - i as f32, 10.0));
+        }
+        let tris = earcut(&pts, &[]);
+        assert!((covered(&pts, &tris) - 100.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn many_points_quickly() {
+        // A 2000-point circle with a 1000-point hole: the old O(n³) clipper
+        // took seconds here.
+        let ring = |n: usize, r: f32| (0..n).map(move |i| {
+            let a = i as f32 / n as f32 * std::f32::consts::TAU;
+            Vector2::new(r * a.cos(), r * a.sin())
+        });
+        let mut pts: Vec<Vector2> = ring(2000, 10.0).collect();
+        pts.extend(ring(1000, 5.0));
+        let start = std::time::Instant::now();
+        let tris = earcut(&pts, &[2000]);
+        assert!(start.elapsed().as_millis() < 500);
+        let want = std::f32::consts::PI * (100.0 - 25.0);
+        assert!((covered(&pts, &tris) - want).abs() / want < 1e-3);
     }
 }

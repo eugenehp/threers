@@ -9,6 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Finite and boundary elements** (new crate `threers-fem`): a
+  tetrahedral mesher for any closed `BufferGeometry` or signed distance
+  function (isosurface stuffing; boundary nodes on the surface, edges
+  bevelled by a fraction of the spacing); linear elasticity on four- and
+  ten-node tetrahedra with exact element integrals, isotropic or full
+  anisotropic stiffness, clamps, rollers, forces, pressure and gravity;
+  natural frequencies by shift-invert subspace iteration; steady heat
+  conduction with convection and sources; a matrix-free voxel elasticity
+  solver; and constant-element BEM for Laplace (interior and exterior,
+  mixed conditions, capacitance) and exterior Helmholtz acoustics (radiation,
+  rigid scattering, CHIEF, far field, sound power). Sparse Cholesky after
+  nested dissection, with conjugate gradients past a size budget. Tested
+  against patch tests, beam theory and analytic spheres, rigid-sphere
+  scattering included. Examples `fem_bracket` and `bem_speaker`. Bound for
+  JavaScript (wasm, `build-web.sh`), Python (`threers.FemModel`,
+  `threers.FemSurface`) and Node through a box-region `flat` API, with a
+  browser demo at `web/fem/`: stress, mode shapes and heat in four parts,
+  and a loudspeaker's sound field.
+- **Scale-rich networks** (`ScaleRich`, `ScaleRichNet`; also in
+  `prelude::lattice`): the grown metamaterials of Both, Chen et al.
+  (*Nature* 659, 2026) — ligaments laid one at a time through random points
+  of the remaining voids, each `λ₀ · t^(−α)` wide, so length, width and
+  degree all span orders of magnitude in one part. The growth rule is the
+  authors' reference code's, gap and skipped steps included, and the
+  densities of their published samples come out within the spread between
+  seeds. The network gives its ligaments and voids, degrees (a `k⁻³` tail),
+  the orientation tensor and geometric anisotropy, the paper's `ζ` density
+  estimate, and the part: outlines from an integer boolean, to a nanometre
+  on a 100 mm part at any scale tested, or a closed extruded mesh. 30,000 steps grow in about 20 ms. As in the
+  paper's Fig. 6, it grows in any polygon with holes (`domain`: convex ones
+  as one void, others as triangles a ligament crosses without stopping),
+  with directions from a field (`ScaleRichAngles::field`) and with density
+  graded by where ligaments seed (`nucleation`).
+  `examples/lattice_scale_rich.rs` renders the (α, density) design space and
+  those shapes.
+- **G-code** (`exporters::write_gcode`, `loaders::GcodeLoader`): toolpaths
+  written from polylines for plotters, lasers and 2.5D routers — rapids,
+  plunges at their own rate, per-path tool on/off lines, `start` / `end`
+  lines round the whole program (a router's spindle, started before the
+  first plunge), and holes drilled in pecks (`peck`) as plain moves for
+  controllers without `G83`; and read back, as three.js's `GCodeLoader`
+  does, into cutting and travel lines.
+- **Polygon operations** (`threers_math::polygon_ops`): booleans of
+  polygons and open paths (`Boolean64`: union, intersection, difference,
+  xor; results as paths or as a tree of outers and holes), offsets
+  (`PathOffset`: round, square, bevel and miter joins, open paths butt,
+  square, round or joined), simplification and an integer `ellipse`, in
+  64-bit integer coordinates with an optional `z` carried by a callback.
+  Exact to the point: 400 cases are checked against the C++ library the
+  algorithms follow (Angus Johnson's, Boost Software License 1.0). Like
+  that library, it can union polygons that nearly touch (T-junctions after
+  rounding) wrongly; the module docs give the workaround.
+  `threers_math::std_sort` sorts in libc++ `std::sort`'s order.
 - **Tailwind classes** (`threers_ui::tailwind`): `ui.add_tw(parent, "flex
   items-center gap-2 px-4 rounded-lg bg-blue-500 hover:bg-blue-600
   md:flex-row")`, `ui.tw(node, …)`, `tw("…")` for a `Style`, and
@@ -1355,6 +1408,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rounded yet.
 
 ### Changed
+
+- **OpenSCAD 2D:** `union`, `difference`, `intersection` and `offset()` of
+  2D shapes run on `polygon_ops` in integer coordinates, filled non-zero,
+  as OpenSCAD does them. `offset(r)` rounds corners within the sagitta of
+  `$fn`/`$fa`/`$fs`, `offset(delta)` keeps them sharp, and `chamfer = true`
+  cuts them square at `delta` from the corner. An offset no longer works
+  ring by ring: pieces it brings together merge, and parts thinner than a
+  shrink disappear.
 
 - **The AV1 encoder's probabilities adapt** (`disable_cdf_update` off): every
   symbol updates its CDF as the decoder does, so the arithmetic coder learns

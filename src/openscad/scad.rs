@@ -46,10 +46,12 @@ use super::mechanism::{
     ContinuumSpec, DriveSpec, MateSpec, MateSpecKind, MechanismSpec, PartFit, PartSpec, TendonSpec,
 };
 use super::{cube, polyhedron, Solid};
+use crate::math::polygon_ops::ClipType;
 use crate::math::Matrix4;
 use std::collections::HashMap;
 
 mod import;
+mod polygon2d;
 use import::{
     decode_png_luma, parse_3mf, parse_amf, parse_dxf, parse_off, parse_svg, surface_dat,
     surface_grid,
@@ -2511,117 +2513,6 @@ fn minkowski2d(a: &Shape, b: &Shape) -> Shape {
     union_shapes(&pieces)
 }
 
-/// Offset a single CCW/CW contour by `d` (outward for the ring's winding) with
-/// rounded (`round=true`, arc joins) or mitered corners. Returns the offset ring.
-fn offset_ring(ring: &[[f32; 2]], d: f32, round: bool, fnv: usize) -> Vec<[f32; 2]> {
-    let n = ring.len();
-    if n < 3 || d == 0.0 {
-        return ring.to_vec();
-    }
-    // Signed area sets the interior side; outward normal of edge (a→b) for a CCW
-    // ring is (dy, -dx). Positive `d` grows the region.
-    let mut area = 0.0;
-    for i in 0..n {
-        let a = ring[i];
-        let b = ring[(i + 1) % n];
-        area += a[0] * b[1] - b[0] * a[1];
-    }
-    let ccw = area > 0.0;
-    let sgn = if ccw { 1.0 } else { -1.0 };
-    let edge_normal = |i: usize| {
-        let a = ring[i];
-        let b = ring[(i + 1) % n];
-        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-        let l = (dx * dx + dy * dy).sqrt().max(1e-9);
-        [sgn * dy / l, -sgn * dx / l]
-    };
-    let mut out: Vec<[f32; 2]> = Vec::new();
-    // `i` names a vertex, and its neighbours are derived from it.
-    #[allow(clippy::needless_range_loop)]
-    for i in 0..n {
-        let prev = (i + n - 1) % n;
-        let np = edge_normal(prev); // normal of edge into vertex i
-        let nn = edge_normal(i); // normal of edge out of vertex i
-        let v = ring[i];
-        let p_in = [v[0] + np[0] * d, v[1] + np[1] * d];
-        let p_out = [v[0] + nn[0] * d, v[1] + nn[1] * d];
-        // Convex corner (outward turn) when cross(np, nn)*sgn... use the turn sign.
-        let cross = np[0] * nn[1] - np[1] * nn[0];
-        let convex = if d > 0.0 {
-            cross * sgn > 1e-9
-        } else {
-            cross * sgn < -1e-9
-        };
-        if round && convex {
-            // Arc from p_in to p_out around v.
-            let a0 = (p_in[1] - v[1]).atan2(p_in[0] - v[0]);
-            let mut a1 = (p_out[1] - v[1]).atan2(p_out[0] - v[0]);
-            let dir = if d > 0.0 { sgn } else { -sgn };
-            // ensure we sweep the short convex way in the correct direction
-            if dir > 0.0 {
-                while a1 < a0 {
-                    a1 += std::f32::consts::TAU;
-                }
-            } else {
-                while a1 > a0 {
-                    a1 -= std::f32::consts::TAU;
-                }
-            }
-            let steps = ((fnv as f32) * (a1 - a0).abs() / std::f32::consts::TAU)
-                .ceil()
-                .max(1.0) as usize;
-            for k in 0..=steps {
-                let t = a0 + (a1 - a0) * (k as f32 / steps as f32);
-                out.push([v[0] + d.abs() * t.cos(), v[1] + d.abs() * t.sin()]);
-            }
-        } else {
-            // Miter: intersection of the two offset edges, else average.
-            if let Some(x) = line_intersize(p_in, np, p_out, nn) {
-                out.push(x);
-            } else {
-                out.push([(p_in[0] + p_out[0]) * 0.5, (p_in[1] + p_out[1]) * 0.5]);
-            }
-        }
-    }
-    out
-}
-
-/// Intersection of the two offset lines through `p_in` (⟂ `n_in`) and `p_out`
-/// (⟂ `n_out`) — i.e. lines with directions perpendicular to the given normals.
-fn line_intersize(
-    p_in: [f32; 2],
-    n_in: [f32; 2],
-    p_out: [f32; 2],
-    n_out: [f32; 2],
-) -> Option<[f32; 2]> {
-    let d1 = [-n_in[1], n_in[0]]; // direction of the incoming offset edge
-    let d2 = [-n_out[1], n_out[0]];
-    let denom = d1[0] * d2[1] - d1[1] * d2[0];
-    if denom.abs() < 1e-9 {
-        return None;
-    }
-    let t = ((p_out[0] - p_in[0]) * d2[1] - (p_out[1] - p_in[1]) * d2[0]) / denom;
-    Some([p_in[0] + d1[0] * t, p_in[1] + d1[1] * t])
-}
-
-/// OpenSCAD `offset`: grow (`r`/`delta` > 0) or shrink (< 0) every contour.
-/// Outer rings offset by `+d`, holes by `-d` (they follow the opposite winding).
-fn offset_shape(sh: &Shape, d: f32, round: bool, fnv: usize) -> Shape {
-    let polys = sh
-        .polys
-        .iter()
-        .map(|p| Poly {
-            outer: offset_ring(&p.outer, d, round, fnv),
-            holes: p
-                .holes
-                .iter()
-                .map(|h| offset_ring(h, d, round, fnv))
-                .collect(),
-        })
-        .collect();
-    Shape { polys }
-}
-
 /// Slice a triangle mesh with the plane z = 0, returning cross-section polygons
 /// (OpenSCAD `projection(cut=true)`). Segments are chained into closed loops.
 fn slice_z0(g: &crate::core::BufferGeometry) -> Shape {
@@ -2717,18 +2608,6 @@ fn ring_edges_into(out: &mut Vec<Seg>, ring: &[[f32; 2]]) {
         let b = ring[(i + 1) % n];
         out.push(([a[0] as f64, a[1] as f64], [b[0] as f64, b[1] as f64]));
     }
-}
-
-/// Directed boundary edges of a shape: outer CCW, holes CW (interior on left).
-fn shape_edges(s: &Shape) -> Vec<Seg> {
-    let mut e = Vec::new();
-    for p in &s.polys {
-        ring_edges_into(&mut e, &orient_ring(&p.outer, true));
-        for h in &p.holes {
-            ring_edges_into(&mut e, &orient_ring(h, false));
-        }
-    }
-    e
 }
 
 fn cross_side(a: [f64; 2], b: [f64; 2], p: [f64; 2]) -> f64 {
@@ -3020,36 +2899,26 @@ fn arrange_extract(edges: &[Seg], inside: &dyn Fn([f64; 2]) -> bool) -> Shape {
 
 /// n-ary 2D union.
 fn union_shapes(ss: &[Shape]) -> Shape {
-    let per: Vec<Vec<Seg>> = ss.iter().map(shape_edges).collect();
-    let all: Vec<Seg> = per.iter().flatten().cloned().collect();
-    let inside = move |p: [f64; 2]| per.iter().any(|e| pip_evenodd(p, e));
-    arrange_extract(&all, &inside)
+    let all: Vec<&Shape> = ss.iter().collect();
+    polygon2d::boolean(ClipType::Union, &all, &[])
 }
 
 /// 2D difference: `first − rest…`.
 fn diff_shapes(first: &Shape, rest: &[Shape]) -> Shape {
-    let ef = shape_edges(first);
-    let er: Vec<Vec<Seg>> = rest.iter().map(shape_edges).collect();
-    let mut all = ef.clone();
-    all.extend(er.iter().flatten().cloned());
-    let inside = move |p: [f64; 2]| pip_evenodd(p, &ef) && !er.iter().any(|e| pip_evenodd(p, e));
-    arrange_extract(&all, &inside)
+    let rest: Vec<&Shape> = rest.iter().collect();
+    polygon2d::boolean(ClipType::Difference, &[first], &rest)
 }
 
 /// n-ary 2D intersection.
 fn inter_shapes(ss: &[Shape]) -> Shape {
-    let per: Vec<Vec<Seg>> = ss.iter().map(shape_edges).collect();
-    let all: Vec<Seg> = per.iter().flatten().cloned().collect();
-    let inside = move |p: [f64; 2]| per.iter().all(|e| pip_evenodd(p, e));
-    arrange_extract(&all, &inside)
-}
+    let Some((first, rest)) = ss.split_first() else {
+        return Shape::default();
+    };
 
-/// Resolve self-intersections in a shape (nonzero winding = filled union).
-fn simplify2d(s: &Shape) -> Shape {
-    let e = shape_edges(s);
-    let ec = e.clone();
-    let inside = move |p: [f64; 2]| pip_winding(p, &ec);
-    arrange_extract(&e, &inside)
+    rest.iter().fold(
+        polygon2d::boolean(ClipType::Union, &[first], &[]),
+        |acc, s| polygon2d::boolean(ClipType::Intersection, &[&acc], &[s]),
+    )
 }
 
 /// Silhouette of a mesh onto z=0 (OpenSCAD `projection(cut=false)`): the union
@@ -4260,21 +4129,20 @@ fn eval_call_stmt(
             let chamfer = arg(args, "chamfer", 999, sc, env)
                 .map(|v| v.truthy())
                 .unwrap_or(false);
-            let (d, round) = match (r, delta) {
-                (Some(r), _) => (r as f32, !chamfer),
-                (None, Some(dl)) => (dl as f32, false),
-                (None, None) => (1.0, true),
+            // OpenSCAD: `r` rounds the corners, `delta` keeps them sharp or,
+            // with `chamfer`, cuts them square
+            let (d, join) = match (r, delta) {
+                (Some(r), _) => (r as f32, polygon2d::Join::Round),
+                (None, Some(dl)) if chamfer => (dl as f32, polygon2d::Join::Chamfer),
+                (None, Some(dl)) => (dl as f32, polygon2d::Join::Miter),
+                (None, None) => (1.0, polygon2d::Join::Round),
             };
             match child()? {
-                // Per-contour offset, then resolve any self-intersection it created.
                 Some(Geom::Shape(s)) => {
-                    let off = offset_shape(&s, d, round, frags(d));
-                    let clean = simplify2d(&off);
-                    Some(Geom::Shape(if clean.polys.is_empty() {
-                        off
-                    } else {
-                        clean
-                    }))
+                    // the arcs within the sagitta of the fragment count
+                    let n = frags(d) as f64;
+                    let tol = f64::from(d.abs()) * (1.0 - (std::f64::consts::PI / n).cos());
+                    Some(Geom::Shape(polygon2d::offset(&s, d, join, tol)))
                 }
                 other => other, // offset of a 3D solid is undefined in OpenSCAD
             }
@@ -5961,6 +5829,50 @@ mod tests {
         chunk(&mut png, b"IDAT", &idat);
         chunk(&mut png, b"IEND", &[]);
         png
+    }
+
+    #[test]
+    fn offset_round_miter_chamfer() {
+        // a 10x10 square grown by 1: rounded corners add a circle's area
+        // (pi), sharp ones a full unit square at each corner (4); a chamfer
+        // cuts each corner square at 1 from the original corner, leaving
+        // 1 - (2 - sqrt 2)^2 / 2 of it
+        let area = |op: &str| {
+            vol(parse_scad(&format!("linear_extrude(1) offset({op}) square([10,10]);")).unwrap())
+        };
+        let base = 100.0 + 4.0 * 10.0;
+        assert!(
+            (area("r = 1, $fn = 256") - (base + std::f64::consts::PI)).abs() < 0.01,
+            "round"
+        );
+        assert!((area("delta = 1") - (base + 4.0)).abs() < 1e-3, "miter");
+        let cut = (2.0 - std::f64::consts::SQRT_2).powi(2) / 2.0;
+        assert!(
+            (area("delta = 1, chamfer = true") - (base + 4.0 * (1.0 - cut))).abs() < 1e-3,
+            "chamfer"
+        );
+    }
+
+    #[test]
+    fn offset_shrink_drops_thin_parts() {
+        // a 10x10 square with a 1-wide arm: shrinking by 1 leaves only the
+        // square's 8x8 core
+        let src =
+            "linear_extrude(1) offset(delta = -1) union() { square([10,10]); square([30,1]); }";
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 64.0).abs() < 1e-3,
+            "shrink"
+        );
+    }
+
+    #[test]
+    fn offset_merges_what_it_brings_together() {
+        // two squares 1 apart grown by 1 meet: one piece, the gap filled
+        let src = "linear_extrude(1) offset(delta = 1) { square([10,10]); translate([11,0]) square([10,10]); }";
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 23.0 * 12.0).abs() < 1e-3,
+            "merge"
+        );
     }
 
     #[test]

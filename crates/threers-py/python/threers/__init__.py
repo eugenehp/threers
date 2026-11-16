@@ -31,10 +31,28 @@ try:
 except ImportError:
     PhysicsWorld = None  # type: ignore[misc, assignment]
 
+try:
+    from threers._native import (
+        FemAcoustic,
+        FemHeat,
+        FemModel,
+        FemModes,
+        FemStatic,
+        FemSurface,
+    )
+except ImportError:  # built without `fem`
+    FemAcoustic = FemHeat = FemModel = FemModes = FemStatic = FemSurface = None  # type: ignore[misc, assignment]
+
 __version__ = version()
 
 __all__ = [
     "Color",
+    "FemAcoustic",
+    "FemHeat",
+    "FemModel",
+    "FemModes",
+    "FemStatic",
+    "FemSurface",
     "FurMaterial",
     "Geometry",
     "HeadlessRenderer",

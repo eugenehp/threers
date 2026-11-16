@@ -718,6 +718,9 @@ per-entity tolerance, healing pass after assembly.
 Falls back to the Stage 2 mesh path whenever SSI marching fails to converge or
 validity checking rejects the result — same deferential contract.
 
+Shipped as `src/brep/boolean.rs`; its successor — topology with coedges and a
+general-fuse pipeline — is planned in [`brep-boolean-v2-plan.md`](brep-boolean-v2-plan.md).
+
 ### 3c — fillets and chamfers — **SHIPPED** (see the last section)
 
 The capability that is *impossible* on triangle soup and that OpenSCAD itself

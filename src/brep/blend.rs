@@ -18,8 +18,9 @@
 //! * **A straight edge between two planes**, convex or concave, whose ends are
 //!   corners where exactly three planar faces meet. Any number of the three
 //!   edges at a corner may be selected: one ends the blend on the third face,
-//!   two mitre into each other, three meet in a point (chamfer) or a spherical
-//!   patch (fillet).
+//!   two mitre into each other, three meet in a point or, with
+//!   [`ChamferCorner::Facet`](super::ChamferCorner), a triangular facet
+//!   (chamfer), or a spherical patch (fillet).
 //! * **A circular rim** where a plane caps a cylinder square to its axis: the
 //!   end of a shaft, the mouth of a hole, the foot of a boss, the floor of a
 //!   blind bore. A chamfer there is a cone and a fillet a torus.
@@ -950,6 +951,57 @@ fn blend_straight(
             }
             // Three: bevels meet in a point, fillets around a sphere.
             _ => match kind {
+                Kind::Chamfer
+                    if super::settings::settings().chamfer_corner
+                        == super::settings::ChamferCorner::Facet =>
+                {
+                    // A facet through the three points that replace the
+                    // vertex, one on each original face. The bevel of edge
+                    // `k` contains the two on the faces that edge lies
+                    // between, so it meets the facet along the line joining
+                    // them.
+                    let mut at = [0usize; 3];
+                    for (k, slot) in at.iter_mut().enumerate() {
+                        *slot = corner.points[k].ok_or(unsupported.clone())?;
+                    }
+                    let p = at.map(|v| parts.vertices[v]);
+                    let normal = v3::normalize(v3::cross(v3::sub(p[1], p[0]), v3::sub(p[2], p[0])))
+                        .ok_or(unsupported.clone())?;
+                    // Outward: towards the vertex that was cut off at a
+                    // convex corner, away from it at a concave one.
+                    let gone = v3::sub(parts.vertices[vertex], p[0]);
+                    let outward = if v3::dot(normal, gone) * convex >= 0.0 {
+                        normal
+                    } else {
+                        v3::scale(normal, -1.0)
+                    };
+                    parts.surfaces.push(Surface::plane(p[0], outward));
+                    let facet = parts.surfaces.len() - 1;
+                    let mut around = Vec::with_capacity(3);
+                    for k in 0..3 {
+                        let (i, j) = ((k + 1) % 3, (k + 2) % 3);
+                        let ck = which(k);
+                        parts.edges.push(Edge {
+                            surfaces: pair(chosen[ck].surface, facet),
+                            vertices: vec![at[i], at[j]],
+                            closed: false,
+                        });
+                        let e = parts.edges.len() - 1;
+                        chosen[ck].boundary.push(e);
+                        around.push(e);
+                    }
+                    fresh.push(parts.faces.len());
+                    parts.faces.push(Face {
+                        surface: facet,
+                        edges: around,
+                        flipped: false,
+                        u_range: (0.0, 0.0),
+                        v_range: (0.0, 0.0),
+                        u_wraps: false,
+                        v_wraps: false,
+                        loops: None,
+                    });
+                }
                 Kind::Chamfer => {
                     let mut rows = [[0.0; 3]; 3];
                     let mut rhs = [0.0; 3];

@@ -116,6 +116,18 @@ pub trait App: Sized + 'static {
         false
     }
 
+    /// The window's shape (width over height) — of what its UI leaves
+    /// uncovered ([`covered_left`](Self::covered_left)) — each frame before
+    /// it is framed ([`focus`](Self::focus)): for an app that frames a
+    /// portrait view closer than a landscape one.
+    fn view_aspect(&mut self, _aspect: f32) {}
+
+    /// How much of the window's left the app's own UI covers (a docked
+    /// sidebar), in UI pixels: the view is centred, and framed, in the rest.
+    fn covered_left(&self) -> f32 {
+        0.0
+    }
+
     /// Ambient occlusion on the volume's picture (threers' SSAO): its
     /// radius in the scene's world units and its strength (the web
     /// composite's soft `1 / (1 + strength · occlusion)`); `None`, none.

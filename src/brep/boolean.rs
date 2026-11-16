@@ -172,6 +172,31 @@ struct SharedCurve {
 }
 
 impl Body {
+    /// A face that goes once round a periodic surface without saying it
+    /// wraps: closed instead by a seam edge it uses twice, its region stated
+    /// in loops over `u_range`. A boolean's own output is such a face, and
+    /// so is a slanted cut of a cylinder brought in from a B-rep. Returns the
+    /// seam edge and the `u` it is at, the start of the face's range.
+    fn stated_seam(&self, fi: usize) -> Option<(usize, f64)> {
+        let face = self.faces().get(fi)?;
+        if face.u_wraps || face.loops.is_none() {
+            return None;
+        }
+        let surface = &self.surfaces()[face.surface];
+        let period = surface.period().0?;
+        if ((face.u_range.1 - face.u_range.0) - period).abs() > period * 1e-6 {
+            return None;
+        }
+        let seam = face.edges.iter().copied().find(|&e| {
+            face.edges.iter().filter(|&&x| x == e).count() == 2
+                && self.edges().get(e).is_some_and(|edge| !edge.closed)
+        })?;
+        let p = *self.vertices().get(*self.edges()[seam].vertices.first()?)?;
+        let (u, _) = surface.invert(p)?;
+        let off = (u - face.u_range.0).rem_euclid(period);
+        (off.min(period - off) <= period * 1e-6).then_some((seam, face.u_range.0))
+    }
+
     /// Boolean this body against another, exactly or not at all.
     ///
     /// `tolerance` is used for the tessellation that answers inside/outside
@@ -180,6 +205,46 @@ impl Body {
     pub fn boolean(&self, other: &Body, op: BooleanOp, tolerance: f64) -> Result<Body, Declined> {
         if !self.is_valid_solid(tolerance) || !other.is_valid_solid(tolerance) {
             return Err(Declined::NotASolid);
+        }
+        // The general fuse first, which shares every split point and edge by
+        // construction; what it cannot settle comes on here.
+        if std::env::var_os("THREERS_BREP_DEBUG").is_some() {
+            let kinds = |b: &Body| {
+                let mut k: Vec<&str> = b
+                    .faces()
+                    .iter()
+                    .map(|f| b.surfaces()[f.surface].kind())
+                    .collect();
+                k.sort_unstable();
+                k.dedup();
+                k
+            };
+            eprintln!(
+                "  [brep] boolean of {:?} with {:?}",
+                kinds(self),
+                kinds(other)
+            );
+        }
+        // THREERS_NO_FUSE=1 turns it off from outside, for comparing the two.
+        if super::settings().general_fuse
+            && std::env::var_os("THREERS_NO_FUSE").is_none()
+            && let Some(result) = super::fuse::general(self, other, op, tolerance)
+        {
+            match result {
+                Ok(body) if body.faces().is_empty() || body.is_valid_solid(tolerance) => {
+                    return Ok(body)
+                }
+                // Touching is a fact about the shapes, not about the method.
+                Err(graze @ Declined::TangentialContact { .. }) => return Err(graze),
+                other => {
+                    if std::env::var_os("THREERS_BREP_DEBUG").is_some() {
+                        eprintln!(
+                            "  [brep] general fuse fell back: {:?}",
+                            other.map(|b| b.defects(tolerance))
+                        );
+                    }
+                }
+            }
         }
 
         // Every interacting pair must be resolvable before anything is built:
@@ -338,7 +403,16 @@ impl Body {
                         // *both*, so ray parity has nothing to say about it and
                         // a rule decides which copy survives.
                         if self.faces_overlap(ia, other, ib, tolerance) {
-                            coincident.push((ia, ib, opposite));
+                            // Which way a *face* looks is its surface's
+                            // normal or the reverse of it. `ssi` compares the
+                            // surfaces; a face wound against its surface
+                            // turns the answer round. A body brought in from
+                            // elsewhere may keep every plane's normal along
+                            // its axis and flip the faces on the far side —
+                            // a boss standing on a plate was then read as
+                            // facing the same way as the plate's top, and
+                            // both its foot and the disc under it were kept.
+                            coincident.push((ia, ib, opposite ^ (fa.flipped != fb.flipped)));
                         }
                     }
                     SsiResult::Unknown => {
@@ -441,12 +515,77 @@ impl Body {
                         spans.iter().map(|(t0, t1)| t1 - t0).sum::<f64>() >= full * 0.999
                     })
                 };
-                let whole = sample_closed_curve(c, surface, tolerance)
-                    .filter(|_| all_of_it(self, *ia) && all_of_it(other, *ib));
+                let samples = sample_closed_curve(c, surface, tolerance);
+                // Whether the ring runs along an edge the face already has,
+                // all the way round: the face's rim, which a clip — asking
+                // for points strictly inside — finds none of.
+                let rim_of = |body: &Body, fi: usize, uv: &[[f64; 2]]| {
+                    body.faces()[fi].edges.iter().find_map(|&e| {
+                        let edge = body.edges().get(e)?;
+                        if !edge.closed || edge.vertices.len() < 4 {
+                            return None;
+                        }
+                        let points: Vec<V3> = edge.vertices[..edge.vertices.len() - 1]
+                            .iter()
+                            .filter_map(|&v| body.vertices().get(v).copied())
+                            .collect();
+                        let on_curve = points.iter().all(|p| c.distance(*p) <= tolerance);
+                        let sagitta = points
+                            .windows(2)
+                            .map(|w| v3::dist(w[0], w[1]))
+                            .fold(0.0f64, f64::max);
+                        let covered = uv.iter().all(|q| {
+                            let at = surface.point(q[0], q[1]);
+                            points
+                                .iter()
+                                .any(|p| v3::dist(*p, at) <= sagitta + tolerance)
+                        });
+                        (on_curve && covered).then_some(points)
+                    })
+                };
+                let on_rim = |body: &Body, fi: usize| {
+                    samples
+                        .as_deref()
+                        .is_some_and(|uv| rim_of(body, fi, uv).is_some())
+                };
+                let whole = samples.clone().filter(|_| {
+                    (on_rim(self, *ia) || all_of_it(self, *ia))
+                        && (on_rim(other, *ib) || all_of_it(other, *ib))
+                });
                 if let Some(uv) = whole {
                     let start = vertices.len();
-                    for p in &uv {
-                        vertices.push(surface.point(p[0], p[1]));
+                    // A ring that is already a rim is sampled as the rim is.
+                    //
+                    // A drill sunk into a plate from its top face has its cap
+                    // *in* that face, and its side meets the face's plane in
+                    // the cap's own rim. The rim then reaches the face twice:
+                    // as the outline the shared wall cuts out of it, which is
+                    // the rim's vertices, and as this intersection, sampled
+                    // afresh — the same circle through other points. Straight
+                    // edges never showed it, since a segment sampled twice is
+                    // the same two ends; a circle sampled twice is two
+                    // polygons, the face was cut by both, and a pocket opened
+                    // 96 edges on a box. Taking the rim's own points makes the
+                    // two the one curve they are, and the weld joins them.
+                    //
+                    // A ring that is already a rim of *both* faces is no cut
+                    // of either: they meet there already. A ring standing on
+                    // a plate round a hole of its own bore, its inner wall
+                    // meeting the plate's top in the hole's rim, was cut
+                    // along the hole a second time and declined.
+                    if rim_of(self, *ia, &uv).is_some() && rim_of(other, *ib, &uv).is_some() {
+                        continue;
+                    }
+                    let rim = [(self, *ia), (other, *ib)]
+                        .into_iter()
+                        .find_map(|(body, fi)| rim_of(body, fi, &uv));
+                    match rim {
+                        Some(points) => vertices.extend(points),
+                        None => {
+                            for p in &uv {
+                                vertices.push(surface.point(p[0], p[1]));
+                            }
+                        }
                     }
                     let mut vs: Vec<usize> = (start..vertices.len()).collect();
                     vs.push(start);
@@ -463,10 +602,16 @@ impl Body {
                 // is also what makes the two ends land on a boundary, since one
                 // face or the other is what stopped it.
                 let Some(mine) = self.clip_to_face(*ia, c, tolerance) else {
-                    return Err(Declined::NeedsArrangement { face: *ia });
+                    return Err(debug_decline(
+                        Declined::NeedsArrangement { face: *ia },
+                        line!(),
+                    ));
                 };
                 let Some(theirs) = other.clip_to_face(*ib, c, tolerance) else {
-                    return Err(Declined::NeedsArrangement { face: *ib });
+                    return Err(debug_decline(
+                        Declined::NeedsArrangement { face: *ib },
+                        line!(),
+                    ));
                 };
                 // Every stretch both faces carry. A curve can be on a face more
                 // than once, so this is an intersection of two *sets* of
@@ -567,6 +712,34 @@ impl Body {
                     }
                     false
                 });
+                // Touching all the way along, and never crossing: a plane
+                // resting on a cylinder along a ruling, a pocket's wall that a
+                // drill grazes. Neither face is cut — the other solid stays on
+                // one side of it — so the pair is no cut at all, and the rest
+                // of the boolean decides as for any faces that do not meet.
+                // The result is still held to the gate at the end, closed and
+                // sound or declined, so a graze misread here cannot come back
+                // as a quietly wrong solid.
+                let grazing = ids.iter().all(|&id| {
+                    let vs = &shared[id].vertices;
+                    vs.len() >= 2
+                        && vs.iter().all(|&v| {
+                            let p = vertices[v];
+                            let (Some((ua, va)), Some((ub, vb))) = (sa.invert(p), sb.invert(p))
+                            else {
+                                return false;
+                            };
+                            let (Some(na), Some(nb)) = (sa.normal(ua, va), sb.normal(ub, vb))
+                            else {
+                                return false;
+                            };
+                            let x = v3::cross(na, nb);
+                            v3::dot(x, x).sqrt() < 1e-6
+                        })
+                });
+                if touching && grazing {
+                    continue;
+                }
                 if touching {
                     return Err(Declined::TangentialContact {
                         face_a: *ia,
@@ -681,6 +854,179 @@ impl Body {
                         by_pair.push((ia, usize::MAX, vec![id]));
                     } else {
                         by_pair.push((usize::MAX, ib, vec![id]));
+                    }
+                }
+            }
+        }
+
+        // An edge of one solid lying in a flat face of the other cuts that
+        // face along it. The two faces it bounds meet the plane only along
+        // their boundary, so neither intersection survives the clipping, and
+        // the face was left whole. Measured on a wall whose end lies on the
+        // crease of a stepped roof: the end came out wholly inside, and the
+        // part below the crease went missing.
+        for (from_a, (this, that)) in [(true, (self, other)), (false, (other, self))] {
+            for (fi, face) in this.faces().iter().enumerate() {
+                let surface = &this.surfaces()[face.surface];
+                if surface.kind() != "plane" {
+                    continue;
+                }
+                for edge in that.edges() {
+                    let pts: Vec<V3> = edge
+                        .vertices
+                        .iter()
+                        .filter_map(|&v| that.vertices().get(v).copied())
+                        .collect();
+                    if pts.len() < 2 || pts.iter().any(|p| surface.distance(*p) > tolerance) {
+                        continue;
+                    }
+                    // Not where a curve on this face already runs.
+                    let mine: Vec<usize> = by_pair
+                        .iter()
+                        .filter(|(a, b, _)| if from_a { *a == fi } else { *b == fi })
+                        .flat_map(|(_, _, ids)| ids.iter().copied())
+                        .collect();
+                    // Whether every point lies along one of the curves `ids`.
+                    fn along(
+                        shared: &[SharedCurve],
+                        vertices: &[V3],
+                        _: usize,
+                        points: &[V3],
+                        tolerance: f64,
+                        ids: &[usize],
+                    ) -> bool {
+                        ids.iter().any(|&id| {
+                            let vs = &shared[id].vertices;
+                            let segments = if shared[id].closed {
+                                vs.len()
+                            } else {
+                                vs.len().saturating_sub(1)
+                            };
+                            points.iter().all(|p| {
+                                (0..segments).any(|w| {
+                                    let (a, b) =
+                                        (vertices[vs[w]], vertices[vs[(w + 1) % vs.len()]]);
+                                    v3::dist(a, *p) + v3::dist(*p, b) - v3::dist(a, b) <= tolerance
+                                })
+                            })
+                        })
+                    }
+                    let curve = Curve3d::Sampled {
+                        points: pts.clone(),
+                        closed: edge.closed,
+                    };
+                    let Some(spans) = this.clip_to_face(fi, &curve, tolerance) else {
+                        continue;
+                    };
+                    // The face's own boundary, to tell a cut across it from an
+                    // edge running along its rim.
+                    let rim: Vec<Vec<V3>> = this
+                        .face_loops(fi)
+                        .iter()
+                        .map(|l| l.uv.iter().map(|q| surface.point(q[0], q[1])).collect())
+                        .collect();
+                    let on_rim = |p: V3| {
+                        rim.iter().any(|ring| {
+                            let n = ring.len();
+                            (0..n).any(|i| {
+                                let (a, b) = (ring[i], ring[(i + 1) % n]);
+                                v3::dist(a, p) + v3::dist(p, b) - v3::dist(a, b) <= tolerance
+                            })
+                        })
+                    };
+                    let mut ids = Vec::new();
+                    for (t0, t1) in spans {
+                        if t1 - t0 <= 1e-9 {
+                            continue;
+                        }
+                        let run = sample_open_curve(&curve, t0, t1, tolerance);
+                        if run.len() < 2 || v3::dist(run[0], run[run.len() - 1]) <= tolerance {
+                            continue;
+                        }
+                        let middle = curve.point(0.5 * (t0 + t1));
+                        if on_rim(middle) {
+                            continue;
+                        }
+                        // Only the stretches no curve already covers: split
+                        // where a curve's vertex lies on the run, and keep
+                        // the pieces whose middles nothing runs along.
+                        let length: Vec<f64> = std::iter::once(0.0)
+                            .chain(run.windows(2).scan(0.0, |acc, w| {
+                                *acc += v3::dist(w[0], w[1]);
+                                Some(*acc)
+                            }))
+                            .collect();
+                        let at = |p: V3| -> Option<f64> {
+                            (0..run.len() - 1).find_map(|i| {
+                                let (a, b) = (run[i], run[i + 1]);
+                                let ab = v3::dist(a, b);
+                                (v3::dist(a, p) + v3::dist(p, b) - ab <= tolerance)
+                                    .then(|| length[i] + v3::dist(a, p).min(ab))
+                            })
+                        };
+                        let point_at = |d: f64| -> V3 {
+                            let i = (0..run.len() - 1)
+                                .find(|&i| length[i + 1] >= d)
+                                .unwrap_or(run.len() - 2);
+                            let (a, b) = (run[i], run[i + 1]);
+                            let span = (length[i + 1] - length[i]).max(1e-300);
+                            let t = ((d - length[i]) / span).clamp(0.0, 1.0);
+                            [
+                                a[0] + (b[0] - a[0]) * t,
+                                a[1] + (b[1] - a[1]) * t,
+                                a[2] + (b[2] - a[2]) * t,
+                            ]
+                        };
+                        let total = *length.last().unwrap();
+                        let mut cuts: Vec<f64> = vec![0.0, total];
+                        for &id in &mine {
+                            for &v in &shared[id].vertices {
+                                if let Some(d) = at(vertices[v]) {
+                                    cuts.push(d);
+                                }
+                            }
+                        }
+                        cuts.sort_by(|a, b| a.total_cmp(b));
+                        cuts.dedup_by(|a, b| (*a - *b).abs() <= tolerance);
+                        for w in cuts.windows(2) {
+                            let (d0, d1) = (w[0], w[1]);
+                            if d1 - d0 <= tolerance
+                                || along(
+                                    &shared,
+                                    &vertices,
+                                    usize::MAX,
+                                    &[point_at(0.5 * (d0 + d1))],
+                                    tolerance,
+                                    &mine,
+                                )
+                            {
+                                continue;
+                            }
+                            // The run's own corners between, and the two ends.
+                            let mut piece = vec![point_at(d0)];
+                            piece.extend(
+                                (0..run.len())
+                                    .filter(|&i| {
+                                        length[i] > d0 + tolerance && length[i] < d1 - tolerance
+                                    })
+                                    .map(|i| run[i]),
+                            );
+                            piece.push(point_at(d1));
+                            let start = vertices.len();
+                            vertices.extend(piece);
+                            shared.push(SharedCurve {
+                                vertices: (start..vertices.len()).collect(),
+                                closed: false,
+                            });
+                            ids.push(shared.len() - 1);
+                        }
+                    }
+                    if !ids.is_empty() {
+                        by_pair.push(if from_a {
+                            (fi, usize::MAX, ids)
+                        } else {
+                            (usize::MAX, fi, ids)
+                        });
                     }
                 }
             }
@@ -846,7 +1192,9 @@ impl Body {
         let mut seam_cuts: HashMap<(u8, usize), Vec<(f64, usize)>> = HashMap::new();
         for (tag, body) in [(0u8, self), (1u8, other)] {
             for (fi, face) in body.faces().iter().enumerate() {
-                if !face.u_wraps {
+                // A face with a seam edge of its own has its seam already.
+                let stated = body.stated_seam(fi);
+                if !face.u_wraps && stated.is_none() {
                     continue;
                 }
                 let mine: Vec<usize> = by_pair
@@ -858,14 +1206,21 @@ impl Body {
                     continue;
                 }
                 let surface = &body.surfaces()[face.surface];
-                let Some(origin) = seam_origin(face, surface, &mine, &shared, &vertices) else {
-                    continue;
-                };
-                for &e in &face.edges {
-                    if let Some(pts) = carried_points.get_mut(&(tag, e)) {
-                        insert_at_u(pts, surface, origin);
+                let origin = match stated {
+                    Some((_, origin)) => origin,
+                    None => {
+                        let Some(origin) = seam_origin(face, surface, &mine, &shared, &vertices)
+                        else {
+                            continue;
+                        };
+                        for &e in &face.edges {
+                            if let Some(pts) = carried_points.get_mut(&(tag, e)) {
+                                insert_at_u(pts, surface, origin);
+                            }
+                        }
+                        origin
                     }
-                }
+                };
                 // And into the curves themselves. A curve that wraps this face
                 // is cut open at the seam, and the point it is cut at has to be
                 // a *vertex* — the face on the other side of that curve joins
@@ -905,8 +1260,75 @@ impl Body {
                         origin,
                         face.u_range,
                     ) {
+                        // Where a curve crosses a seam edge, the edge has the
+                        // point too: the pieces either side of the curve each
+                        // run along their own part of it.
+                        if let Some((seam, _)) = stated
+                            && let Some(pts) = carried_points.get_mut(&(tag, seam))
+                        {
+                            let at = vertices[v.1];
+                            if !pts.iter().any(|p| v3::dist(*p, at) <= tolerance) {
+                                let mut best = (f64::MAX, 0usize);
+                                for i in 0..pts.len().saturating_sub(1) {
+                                    let d = v3::dist(pts[i], at) + v3::dist(at, pts[i + 1])
+                                        - v3::dist(pts[i], pts[i + 1]);
+                                    if d < best.0 {
+                                        best = (d, i + 1);
+                                    }
+                                }
+                                if best.0 <= tolerance {
+                                    pts.insert(best.1, at);
+                                }
+                            }
+                        }
                         seam_cuts.entry((tag, fi)).or_default().push(v);
                     }
+                }
+            }
+        }
+
+        // One curve, not two that coincide. Where two solids share a wall,
+        // each one's outline is cut into the other's face, and where the
+        // outlines run together they are the same line made twice: the face
+        // on one side took one and the face beyond took the other, and the
+        // edge between them had one face on each copy. Measured on a window
+        // opening cut through a wall at an existing slot: three such edges.
+        {
+            let along = |p: V3, id: usize| {
+                let vs = &shared[id].vertices;
+                vs.windows(2).any(|w| {
+                    let (a, b) = (vertices[w[0]], vertices[w[1]]);
+                    v3::dist(a, p) + v3::dist(p, b) - v3::dist(a, b) <= tolerance
+                })
+            };
+            let same = |i: usize, j: usize| {
+                let (a, b) = (&shared[i].vertices, &shared[j].vertices);
+                !shared[i].closed
+                    && !shared[j].closed
+                    && a.len() >= 2
+                    && b.len() >= 2
+                    && {
+                        let (a0, a1) = (vertices[a[0]], vertices[a[a.len() - 1]]);
+                        let (b0, b1) = (vertices[b[0]], vertices[b[b.len() - 1]]);
+                        (v3::dist(a0, b0) <= tolerance && v3::dist(a1, b1) <= tolerance)
+                            || (v3::dist(a0, b1) <= tolerance && v3::dist(a1, b0) <= tolerance)
+                    }
+                    && a.iter().all(|&v| along(vertices[v], j))
+                    && b.iter().all(|&v| along(vertices[v], i))
+            };
+            let mut alias: Vec<usize> = (0..shared.len()).collect();
+            for j in 0..shared.len() {
+                if let Some(i) = (0..j).find(|&i| alias[i] == i && same(i, j)) {
+                    alias[j] = i;
+                }
+            }
+            if alias.iter().enumerate().any(|(j, &i)| i != j) {
+                for (_, _, ids) in &mut by_pair {
+                    for id in ids.iter_mut() {
+                        *id = alias[*id];
+                    }
+                    let mut seen = std::collections::HashSet::new();
+                    ids.retain(|id| seen.insert(*id));
                 }
             }
         }
@@ -998,14 +1420,17 @@ impl Body {
         }
 
         let mut pieces: Vec<Piece> = Vec::new();
-        let wall_of_a: HashMap<usize, (usize, bool)> = coincident
-            .iter()
-            .map(|&(ia, ib, opposite)| (ia, (ib, !opposite)))
-            .collect();
-        let wall_of_b: HashMap<usize, (usize, bool)> = coincident
-            .iter()
-            .map(|&(ia, ib, opposite)| (ib, (ia, !opposite)))
-            .collect();
+        // A face can lie on more than one face of the other solid: the end
+        // of a wall against a stepped roof lies on the step, facing the same
+        // way, and on the face above it, facing back. Kept to one, the pieces
+        // on the other were classified by a ray from a point on the other
+        // solid's boundary, and the wall's end came out missing.
+        let mut wall_of_a: HashMap<usize, Vec<(usize, bool)>> = HashMap::new();
+        let mut wall_of_b: HashMap<usize, Vec<(usize, bool)>> = HashMap::new();
+        for &(ia, ib, opposite) in &coincident {
+            wall_of_a.entry(ia).or_default().push((ib, !opposite));
+            wall_of_b.entry(ib).or_default().push((ia, !opposite));
+        }
 
         // A's faces, split by the curves B puts on them.
         for (ia, fa) in self.faces().iter().enumerate() {
@@ -1027,9 +1452,12 @@ impl Body {
                 &seam_origins,
                 &seam_cuts,
             )?;
-            if let Some(&(fj, same_way)) = wall_of_a.get(&ia) {
+            if let Some(walls) = wall_of_a.get(&ia) {
                 for piece in &mut made {
-                    if other.point_on_face(fj, piece.sample, tolerance) {
+                    if let Some(&(fj, same_way)) = walls
+                        .iter()
+                        .find(|(fj, _)| other.point_on_face(*fj, piece.sample, tolerance))
+                    {
                         piece.shared_wall = Some((fj, same_way));
                     }
                 }
@@ -1056,9 +1484,12 @@ impl Body {
                 &seam_origins,
                 &seam_cuts,
             )?;
-            if let Some(&(fi, same_way)) = wall_of_b.get(&ib) {
+            if let Some(walls) = wall_of_b.get(&ib) {
                 for piece in &mut made {
-                    if self.point_on_face(fi, piece.sample, tolerance) {
+                    if let Some(&(fi, same_way)) = walls
+                        .iter()
+                        .find(|(fi, _)| self.point_on_face(*fi, piece.sample, tolerance))
+                    {
                         piece.shared_wall = Some((fi, same_way));
                     }
                 }
@@ -1101,9 +1532,537 @@ impl Body {
                     (BooleanOp::Difference, false, inside) => (inside, true),
                 },
             };
+            if std::env::var("THREERS_BREP_PIECES").is_ok() {
+                eprintln!(
+                    "  [brep] piece {i} of {} ({}): sample {:?} inside {inside_other} wall {:?} keep {keep}",
+                    if from_this { "A" } else { "B" },
+                    piece.surface.kind(),
+                    piece.sample,
+                    piece.shared_wall
+                );
+            }
             if keep {
                 piece.flipped ^= flip;
                 kept.push(piece);
+            }
+        }
+
+        // A flat piece that a ring cut a hole in does not run along a rim
+        // inside that hole.
+        //
+        // A plate's top with a hole in it, cut again by a ring round the
+        // hole — the foot of a collar standing on it — keeps the outside and
+        // gives the inside up. It kept the hole's rim among its edges all the
+        // same, and that rim, which the hole's wall and the collar's wall
+        // share, then had three faces.
+        for piece in &mut kept {
+            if piece.surface.kind() != "plane" {
+                continue;
+            }
+            let rings: Vec<Vec<[f64; 2]>> = piece
+                .bounding
+                .iter()
+                .filter(|&&b| shared[b].closed)
+                .map(|&b| {
+                    shared[b]
+                        .vertices
+                        .iter()
+                        .filter_map(|&v| piece.surface.invert(vertices[v]))
+                        .map(|(u, v)| [u, v])
+                        .collect()
+                })
+                .collect();
+            if rings.is_empty() {
+                continue;
+            }
+            let surface = piece.surface.clone();
+            piece.carried.retain(|c| {
+                if !c.3 {
+                    return true;
+                }
+                let uv: Vec<[f64; 2]> =
+                    c.2.iter()
+                        .filter_map(|p| surface.invert(*p))
+                        .map(|(u, v)| [u, v])
+                        .collect();
+                !rings.iter().any(|ring| {
+                    ring.len() >= 3 && !uv.is_empty() && uv.iter().all(|q| point_in_ring(ring, *q))
+                })
+            });
+        }
+        // A rim both solids carry is one rim.
+        //
+        // A ring standing on a plate round a hole of its own bore: the
+        // hole's rim on the plate and the ring's inner rim are one circle,
+        // and once the face between them is gone the hole's wall meets the
+        // ring's wall along it. Each solid brings it sampled its own way,
+        // and two polygons on one circle are a crack all the way round. The
+        // second takes the first's points and name.
+        {
+            let rim_points = |c: &Carried| -> Vec<V3> {
+                let n = c.2.len().saturating_sub(1);
+                c.2[..n].to_vec()
+            };
+            // On the polygon `line`, within its longest chord's sagitta.
+            let close_to = |p: V3, ring: &[V3]| {
+                let n = ring.len();
+                let chord = (0..n)
+                    .map(|i| v3::dist(ring[i], ring[(i + 1) % n]))
+                    .fold(0.0f64, f64::max);
+                ring.iter().any(|q| v3::dist(*q, p) <= chord + tolerance)
+                    && (0..n).any(|i| {
+                        let (a, b) = (ring[i], ring[(i + 1) % n]);
+                        v3::dist(a, p) + v3::dist(p, b) - v3::dist(a, b)
+                            <= chord * chord / 4.0 + tolerance
+                    })
+            };
+            let same_rim = |a: &Carried, b: &Carried| {
+                let (pa, pb) = (rim_points(a), rim_points(b));
+                pa.len() >= 3
+                    && pb.len() >= 3
+                    && pa.iter().all(|p| close_to(*p, &pb))
+                    && pb.iter().all(|p| close_to(*p, &pa))
+            };
+            let mut first: Vec<Carried> = Vec::new();
+            for piece in &kept {
+                for c in &piece.carried {
+                    if c.3 && c.0 == 0 && !first.iter().any(|f| (f.0, f.1) == (c.0, c.1)) {
+                        first.push(c.clone());
+                    }
+                }
+            }
+            for piece in &mut kept {
+                for c in &mut piece.carried {
+                    if !c.3 || c.0 == 0 {
+                        continue;
+                    }
+                    if let Some(f) = first.iter().find(|f| same_rim(f, c)) {
+                        *c = f.clone();
+                    }
+                }
+            }
+        }
+        // A cut between flat faces that turns corners is one edge to each
+        // side it runs along.
+        //
+        // A wall whose end stands in the side of a taller one meets it in
+        // three sides of a rectangle: one outline, cut into the taller
+        // wall's side as a single bent curve. But along each of the three
+        // runs a different face of the lower wall — its two sides and its
+        // top — each on a straight edge of its own. The bent curve had
+        // one face, and so did each of theirs. Taken a straight run at a
+        // time, each run is the edge of the two faces that meet in it.
+        {
+            let turns =
+                |a: V3, b: V3, c: V3| v3::dist(a, b) + v3::dist(b, c) - v3::dist(a, c) > tolerance;
+            let flat_only = |id: usize| {
+                kept.iter()
+                    .filter(|p| p.bounding.contains(&id))
+                    .all(|p| p.surface.kind() == "plane")
+            };
+            let mut runs_of: HashMap<usize, Vec<usize>> = HashMap::new();
+            for id in 0..shared.len() {
+                let vs = shared[id].vertices.clone();
+                if shared[id].closed || vs.len() < 3 || !flat_only(id) {
+                    continue;
+                }
+                let corners: Vec<usize> = (1..vs.len() - 1)
+                    .filter(|&k| turns(vertices[vs[k - 1]], vertices[vs[k]], vertices[vs[k + 1]]))
+                    .collect();
+                if corners.is_empty() {
+                    continue;
+                }
+                let mut ids = Vec::with_capacity(corners.len() + 1);
+                let mut from = 0;
+                for &k in corners.iter().chain(std::iter::once(&(vs.len() - 1))) {
+                    shared.push(SharedCurve {
+                        vertices: vs[from..=k].to_vec(),
+                        closed: false,
+                    });
+                    ids.push(shared.len() - 1);
+                    from = k;
+                }
+                runs_of.insert(id, ids);
+            }
+            if !runs_of.is_empty() {
+                // Only the runs a piece's outline goes along: a piece beside
+                // one leg of the bend names the whole curve, and the other
+                // legs are its neighbours' business.
+                let on = |p: V3, line: &[V3]| {
+                    line.windows(2).any(|w| {
+                        v3::dist(w[0], p) + v3::dist(p, w[1]) - v3::dist(w[0], w[1]) <= tolerance
+                    })
+                };
+                for piece in &mut kept {
+                    let outline: Vec<Vec<V3>> = piece
+                        .loops
+                        .iter()
+                        .map(|l| {
+                            let mut pts: Vec<V3> =
+                                l.uv.iter()
+                                    .map(|q| piece.surface.point(q[0], q[1]))
+                                    .collect();
+                            if let Some(&first) = pts.first() {
+                                pts.push(first);
+                            }
+                            pts
+                        })
+                        .collect();
+                    let runs_along = |run: usize| {
+                        outline.is_empty()
+                            || shared[run]
+                                .vertices
+                                .iter()
+                                .all(|&v| outline.iter().any(|l| on(vertices[v], l)))
+                    };
+                    let mut bounding = Vec::with_capacity(piece.bounding.len());
+                    for &b in &piece.bounding {
+                        match runs_of.get(&b) {
+                            Some(runs) => {
+                                let mine: Vec<usize> =
+                                    runs.iter().copied().filter(|&r| runs_along(r)).collect();
+                                if mine.is_empty() {
+                                    bounding.extend(runs.iter().copied());
+                                } else {
+                                    bounding.extend(mine);
+                                }
+                            }
+                            None => bounding.push(b),
+                        }
+                    }
+                    piece.bounding = bounding;
+                }
+            }
+        }
+        // One curve, one name.
+        //
+        // A rim that is also a seam arrives under up to three: the edge the
+        // tool's wall carries, the outline the shared wall cut into the face
+        // it lies in, and the intersection of the wall's surface with that
+        // face. The last two are rings on the same vertices once welded, and
+        // the first is the same circle again. Left apart, the face's hole is
+        // bounded by one, the wall by another, and every vertex of the rim is
+        // on an edge with a single face — a drill sunk into a plate from its
+        // top came back with three open rings where it should have had one
+        // closed one.
+        //
+        // So: rings on the same vertices are the same ring, and a carried rim
+        // lying on a ring *is* that ring — the piece is bounded by it rather
+        // than carrying its own copy.
+        {
+            let ring_key = |sc: &SharedCurve| -> Option<Vec<usize>> {
+                sc.closed.then(|| {
+                    let mut k = sc.vertices[..sc.vertices.len() - 1].to_vec();
+                    k.sort_unstable();
+                    k
+                })
+            };
+            let mut first_of: HashMap<Vec<usize>, usize> = HashMap::new();
+            let canonical: Vec<usize> = shared
+                .iter()
+                .enumerate()
+                .map(|(i, sc)| match ring_key(sc) {
+                    Some(k) => *first_of.entry(k).or_insert(i),
+                    None => i,
+                })
+                .collect();
+            // Which ring a closed carried edge lies on, if any: every one of
+            // its points on a vertex of the ring, and as many of them.
+            let ring_of = |points: &[V3]| -> Option<usize> {
+                let n = points.len().saturating_sub(1);
+                shared.iter().enumerate().find_map(|(i, sc)| {
+                    if !sc.closed || canonical[i] != i || sc.vertices.len() - 1 != n {
+                        return None;
+                    }
+                    points[..n]
+                        .iter()
+                        .all(|p| {
+                            sc.vertices
+                                .iter()
+                                .any(|&v| v3::dist(vertices[v], *p) <= tolerance)
+                        })
+                        .then_some(i)
+                })
+            };
+            // A cut that runs along a side of a piece bounds that piece, even
+            // where the side is a stretch of an edge the piece's face always
+            // had. Two blocks crossing at one height share the middle of
+            // their tops. The long edge of one, where it passes over the
+            // other, is on one side the edge of the shared part — a stretch
+            // of an edge that face carries — and on the other the outline
+            // that cut the rest of the other block's top. Same two points,
+            // two names, one face on each. The cut is the name both can use:
+            // the piece is bounded by it, and gives up the carried edge if
+            // that stretch is all of the edge it touches.
+            {
+                let near = |a: V3, b: V3| v3::dist(a, b) <= tolerance;
+                let on = |p: V3, line: &[V3]| {
+                    line.windows(2).any(|w| {
+                        v3::dist(w[0], p) + v3::dist(p, w[1]) - v3::dist(w[0], w[1]) <= tolerance
+                    })
+                };
+                let named: HashSet<usize> = kept
+                    .iter()
+                    .flat_map(|p| p.bounding.iter().copied())
+                    .collect();
+                let open_cuts: Vec<(usize, Vec<V3>)> = shared
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, sc)| !sc.closed && sc.vertices.len() >= 2 && named.contains(i))
+                    .map(|(i, sc)| (i, sc.vertices.iter().map(|&v| vertices[v]).collect()))
+                    .collect();
+                // Flat faces and straight cuts only. On a curved face a cut
+                // along a rim is the rim's business, settled further down.
+                let straight = |pts: &[V3]| {
+                    let (a, z) = (pts[0], pts[pts.len() - 1]);
+                    pts.iter()
+                        .all(|p| v3::dist(a, *p) + v3::dist(*p, z) - v3::dist(a, z) <= tolerance)
+                };
+                for piece in &mut kept {
+                    if piece.surface.kind() != "plane" {
+                        continue;
+                    }
+                    // The piece's outline in space, each loop closed.
+                    let outline: Vec<Vec<V3>> = piece
+                        .loops
+                        .iter()
+                        .map(|l| {
+                            let mut pts: Vec<V3> =
+                                l.uv.iter()
+                                    .map(|q| piece.surface.point(q[0], q[1]))
+                                    .collect();
+                            if let Some(&first) = pts.first() {
+                                pts.push(first);
+                            }
+                            pts
+                        })
+                        .collect();
+                    if outline.is_empty() {
+                        continue;
+                    }
+                    let corner = |p: V3| outline.iter().any(|l| l.iter().any(|q| near(*q, p)));
+                    let mut along: Vec<&Vec<V3>> = Vec::new();
+                    for (id, pts) in &open_cuts {
+                        let (first, last) = (pts[0], pts[pts.len() - 1]);
+                        let runs_along = straight(pts)
+                            && corner(first)
+                            && corner(last)
+                            && pts.iter().all(|p| outline.iter().any(|l| on(*p, l)));
+                        if !runs_along {
+                            continue;
+                        }
+                        if !piece.bounding.contains(id) {
+                            piece.bounding.push(*id);
+                        }
+                        // And the piece's side takes the cut's own points: a
+                        // side left as its two corners beside a neighbour
+                        // sampled along the cut is a crack the length of it.
+                        let ids = &shared[*id].vertices;
+                        for l in &mut piece.loops {
+                            let n = l.uv.len();
+                            let at = |i: usize| piece.surface.point(l.uv[i][0], l.uv[i][1]);
+                            let side = (0..n).find_map(|i| {
+                                let (a, b) = (at(i), at((i + 1) % n));
+                                if near(a, first) && near(b, last) {
+                                    Some((i, false))
+                                } else if near(a, last) && near(b, first) {
+                                    Some((i, true))
+                                } else {
+                                    None
+                                }
+                            });
+                            let Some((i, backwards)) = side else { continue };
+                            let mut inner: Vec<(usize, [f64; 2])> = (1..pts.len() - 1)
+                                .filter_map(|k| {
+                                    let (u, v) = piece.surface.invert(pts[k])?;
+                                    Some((ids[k], [u, v]))
+                                })
+                                .collect();
+                            if backwards {
+                                inner.reverse();
+                            }
+                            for (k, (v, uv)) in inner.into_iter().enumerate() {
+                                l.uv.insert(i + 1 + k, uv);
+                                if l.vertices.len() + 1 == l.uv.len() {
+                                    l.vertices.insert(i + 1 + k, v);
+                                }
+                            }
+                            break;
+                        }
+                        along.push(pts);
+                    }
+                    if along.is_empty() {
+                        continue;
+                    }
+                    // An edge carried only along such cuts is the cuts'. Told
+                    // by the piece's sides, not its corners: a side that runs
+                    // along the edge between two cuts ends on both of them
+                    // and lies along neither.
+                    piece.carried.retain(|c| {
+                        if c.3 {
+                            return true;
+                        }
+                        let mids: Vec<V3> = outline
+                            .iter()
+                            .flat_map(|l| l.windows(2))
+                            .filter(|w| on(w[0], &c.2) && on(w[1], &c.2))
+                            .map(|w| {
+                                [
+                                    (w[0][0] + w[1][0]) * 0.5,
+                                    (w[0][1] + w[1][1]) * 0.5,
+                                    (w[0][2] + w[1][2]) * 0.5,
+                                ]
+                            })
+                            .filter(|m| on(*m, &c.2))
+                            .collect();
+                        mids.is_empty() || !mids.iter().all(|m| along.iter().any(|cut| on(*m, cut)))
+                    });
+                }
+            }
+            // A straight edge is carried a segment at a time, and only the
+            // segments the piece runs along.
+            //
+            // A face's edge is cut where the other solid crosses it, and its
+            // pieces each keep the whole of it: the stretch a piece does not
+            // reach is then an edge with that piece's name on it and nothing
+            // beside it. Two walls meeting at a corner leave the top of one
+            // ending part way along the other's edge, and the far stretch —
+            // which belongs to the other wall's faces, under their own
+            // edge's name — came back with one face. Segment by segment each
+            // stretch is named by exactly the faces along it, and the same
+            // segment under two solids' names is merged where the body is
+            // assembled, by its ends.
+            {
+                let near = |a: V3, b: V3| v3::dist(a, b) <= tolerance;
+                let on = |p: V3, line: &[V3]| {
+                    line.windows(2).any(|w| {
+                        v3::dist(w[0], p) + v3::dist(p, w[1]) - v3::dist(w[0], w[1]) <= tolerance
+                    })
+                };
+                let straight = |pts: &[V3]| {
+                    let (a, z) = (pts[0], pts[pts.len() - 1]);
+                    pts.iter()
+                        .all(|p| v3::dist(a, *p) + v3::dist(*p, z) - v3::dist(a, z) <= tolerance)
+                };
+                for piece in &mut kept {
+                    if piece.surface.kind() != "plane" {
+                        continue;
+                    }
+                    // First the piece's sides take the points its edges were
+                    // cut at. A side left as its two corners, beside a
+                    // neighbour that stops part way along it, is a crack
+                    // from there on.
+                    let marks: Vec<V3> = piece
+                        .carried
+                        .iter()
+                        .filter(|c| !c.3 && c.2.len() > 2 && straight(&c.2))
+                        .flat_map(|c| c.2[1..c.2.len() - 1].iter().copied())
+                        .collect();
+                    for mark in marks {
+                        for l in &mut piece.loops {
+                            let n = l.uv.len();
+                            let at = |i: usize| piece.surface.point(l.uv[i][0], l.uv[i][1]);
+                            let side = (0..n).find(|&i| {
+                                let (a, b) = (at(i), at((i + 1) % n));
+                                !near(a, mark)
+                                    && !near(b, mark)
+                                    && v3::dist(a, mark) + v3::dist(mark, b) - v3::dist(a, b)
+                                        <= tolerance
+                            });
+                            let Some(i) = side else { continue };
+                            let Some((u, v)) = piece.surface.invert(mark) else {
+                                continue;
+                            };
+                            l.uv.insert(i + 1, [u, v]);
+                            if l.vertices.len() + 1 == l.uv.len() {
+                                // Named by where it is, when the body is
+                                // assembled.
+                                l.vertices.insert(i + 1, usize::MAX);
+                            }
+                            break;
+                        }
+                    }
+                    let outline: Vec<Vec<V3>> = piece
+                        .loops
+                        .iter()
+                        .map(|l| {
+                            let mut pts: Vec<V3> =
+                                l.uv.iter()
+                                    .map(|q| piece.surface.point(q[0], q[1]))
+                                    .collect();
+                            if let Some(&first) = pts.first() {
+                                pts.push(first);
+                            }
+                            pts
+                        })
+                        .collect();
+                    let mut split: Vec<Carried> = Vec::with_capacity(piece.carried.len());
+                    for c in piece.carried.drain(..) {
+                        if c.3 || c.2.len() < 2 || !straight(&c.2) {
+                            split.push(c);
+                            continue;
+                        }
+                        for k in 0..c.2.len() - 1 {
+                            let (p, q) = (c.2[k], c.2[k + 1]);
+                            if near(p, q) {
+                                continue;
+                            }
+                            let mid = [
+                                (p[0] + q[0]) * 0.5,
+                                (p[1] + q[1]) * 0.5,
+                                (p[2] + q[2]) * 0.5,
+                            ];
+                            // A face left whole runs along all of its edge.
+                            let along = outline.is_empty()
+                                || outline.iter().any(|l| on(mid, l) && on(p, l) && on(q, l));
+                            if !along {
+                                continue;
+                            }
+                            let ids = if c.4.len() == c.2.len() {
+                                vec![c.4[k], c.4[k + 1]]
+                            } else {
+                                Vec::new()
+                            };
+                            split.push((c.0, c.1, vec![p, q], false, ids));
+                        }
+                    }
+                    piece.carried = split;
+                }
+            }
+            let mut rim_ring: HashMap<(u8, usize), Option<usize>> = HashMap::new();
+            // Only rings some piece is bounded by: a ring nothing kept names
+            // would bound the wall with an edge no other face shares.
+            let named: HashSet<usize> = kept
+                .iter()
+                .flat_map(|p| p.bounding.iter().map(|&b| canonical[b]))
+                .collect();
+            for piece in &mut kept {
+                for b in &mut piece.bounding {
+                    *b = canonical[*b];
+                }
+                piece.bounding.sort_unstable();
+                piece.bounding.dedup();
+                let mut onto: Vec<usize> = Vec::new();
+                piece.carried.retain(|(tag, e, points, closed, _)| {
+                    if !*closed {
+                        return true;
+                    }
+                    let ring = *rim_ring
+                        .entry((*tag, *e))
+                        .or_insert_with(|| ring_of(points).filter(|r| named.contains(r)));
+                    match ring {
+                        Some(r) => {
+                            onto.push(r);
+                            false
+                        }
+                        None => true,
+                    }
+                });
+                for r in onto {
+                    if !piece.bounding.contains(&r) {
+                        piece.bounding.push(r);
+                    }
+                }
             }
         }
 
@@ -1127,6 +2086,27 @@ impl Body {
         check.refine_edges(tolerance);
         let (_, report) = check.tessellate(tolerance);
         if !report.is_closed() || report.carried_through > 0 {
+            if std::env::var("THREERS_BREP_DEBUG").is_ok() {
+                for (i, f) in result.faces().iter().enumerate() {
+                    let loops: Vec<(usize, f64)> = f
+                        .loops
+                        .iter()
+                        .flatten()
+                        .map(|l| (l.uv.len(), l.area))
+                        .collect();
+                    eprintln!(
+                        "  [brep] result face {i}: {} edges {:?} loops {:?} u {:?} v {:?} wraps {} flipped {}",
+                        result.surfaces()[f.surface].kind(),
+                        f.edges,
+                        loops,
+                        f.u_range,
+                        f.v_range,
+                        f.u_wraps,
+                        f.flipped
+                    );
+                    eprintln!("  [brep]   surface {:?}", result.surfaces()[f.surface]);
+                }
+            }
             return Err(Declined::NotWatertight {
                 open_edges: report.boundary_edges,
             });
@@ -1213,7 +2193,17 @@ impl Body {
             if same_ring(&outer.uv, &uv) {
                 continue; // the wall is the whole of both
             }
-            for run in planar::clip_to_region(&outer.uv, &uv) {
+            let holes: Vec<Vec<[f64; 2]>> = mine
+                .iter()
+                .filter(|l| l.is_hole())
+                .map(|l| l.uv.clone())
+                .collect();
+            let runs = if surface.kind() == "plane" {
+                planar::clip_to_region_with_holes(&outer.uv, &holes, &uv)
+            } else {
+                planar::clip_to_region(&outer.uv, &uv)
+            };
+            for run in runs {
                 if run.len() < 2 {
                     continue;
                 }
@@ -1320,16 +2310,42 @@ impl Body {
         let surface = &self.surfaces()[face.surface];
         let loops = self.face_loops(face_index);
 
-        // An unbounded line is sampled over the face's own reach.
-        let extent = {
+        // An unbounded line is sampled over the face's own reach, about the
+        // point of it nearest the face, and finely enough that the face's
+        // narrowest stretch holds a few samples: sixty-four over a wall
+        // twenty-four metres long stepped over its thickness, and a line
+        // across the wall was taken not to reach it.
+        let (extent, narrow) = {
             let (u0, u1) = face.u_range;
             let (v0, v1) = face.v_range;
-            (u1 - u0).abs().max((v1 - v0).abs()).max(1.0) * 2.0
+            let (du, dv) = ((u1 - u0).abs(), (v1 - v0).abs());
+            (du.max(dv).max(1.0) * 2.0, du.min(dv).max(tolerance))
         };
-        const N: usize = 64;
+        let centre = {
+            let (u0, u1) = face.u_range;
+            let (v0, v1) = face.v_range;
+            surface.point(0.5 * (u0 + u1), 0.5 * (v0 + v1))
+        };
+        let along = match curve {
+            Curve3d::Line { .. } => {
+                let (o, d) = (
+                    curve.point(0.0),
+                    v3::sub(curve.point(1.0), curve.point(0.0)),
+                );
+                v3::dot(v3::sub(centre, o), d) / v3::dot(d, d).max(f64::MIN_POSITIVE)
+            }
+            _ => 0.0,
+        };
+        let samples = if matches!(curve, Curve3d::Line { .. }) && surface.kind() == "plane" {
+            ((16.0 * extent / narrow).ceil() as usize).clamp(64, 1 << 16)
+        } else {
+            64
+        };
         let sample = |i: usize| -> V3 {
             match curve {
-                Curve3d::Line { .. } => curve.point(-extent + 2.0 * extent * i as f64 / N as f64),
+                Curve3d::Line { .. } => {
+                    curve.point(along - extent + 2.0 * extent * i as f64 / samples as f64)
+                }
                 Curve3d::Point(p) => *p,
                 // A traced curve is parameterised by sample index.
                 Curve3d::Sampled { points, closed } => {
@@ -1338,13 +2354,13 @@ impl Body {
                     } else {
                         points.len() - 1
                     };
-                    curve.point(last as f64 * i as f64 / N as f64)
+                    curve.point(last as f64 * i as f64 / samples as f64)
                 }
-                _ => curve.point(TAU * i as f64 / N as f64),
+                _ => curve.point(TAU * i as f64 / samples as f64),
             }
         };
 
-        for i in 0..=N {
+        for i in 0..=samples {
             let p = sample(i);
             // The same question `clip_to_face` was asking wrongly: a sampled
             // curve is walked along its chords, and a chord sags off a curved
@@ -1442,11 +2458,21 @@ impl Body {
 
         let (lo, hi) = match curve {
             Curve3d::Line { .. } => {
-                // Far enough to leave the face at both ends.
-                let reach = self
-                    .vertices()
+                // Far enough to leave the face at both ends: the face's own
+                // corners where it has them, the whole body's otherwise.
+                let origin = curve.point(0.0);
+                let face_points: Vec<V3> = loops
                     .iter()
-                    .map(|p| v3::norm(v3::sub(*p, curve.point(0.0))))
+                    .flat_map(|l| l.uv.iter().map(|q| surface.point(q[0], q[1])))
+                    .collect();
+                let points: &[V3] = if face_points.is_empty() {
+                    self.vertices()
+                } else {
+                    &face_points
+                };
+                let reach = points
+                    .iter()
+                    .map(|p| v3::norm(v3::sub(*p, origin)))
                     .fold(0.0f64, f64::max)
                     .max(1.0)
                     * 2.0;
@@ -1473,7 +2499,7 @@ impl Body {
         // curve was traced onto both surfaces; it does not leave them between
         // samples, only the straight line drawn through it does.
         let sagging = matches!(curve, Curve3d::Sampled { .. });
-        let inside = |t: f64| -> bool {
+        let inside_by = |t: f64, margin: f64| -> bool {
             let p = curve.point(t);
             if !sagging && surface.distance(p) > tolerance.max(1e-9) {
                 return false;
@@ -1511,6 +2537,8 @@ impl Body {
                     .filter(|l| l.is_hole())
                     .any(|h| h.contains([u, v], surface.period()))
         };
+        let inside = |t: f64| inside_by(t, margin);
+        let clean = matches!(curve, Curve3d::Line { .. }) && surface.kind() == "plane";
 
         // Where a curve *runs along* the boundary rather than crossing it, its
         // answer is a coin toss: asked "is this inside" of a point on the edge,
@@ -1524,11 +2552,39 @@ impl Body {
         // nothing here: the drill grazing a bored ball still clips into six
         // pieces and seven, unchanged, so whatever fragments that circle is not
         // the curve lying along an edge.
-        const N: usize = 512;
-        let at = |i: usize| lo + (hi - lo) * i as f64 / N as f64;
+        // Fine enough that the narrowest stretch of the face holds a few
+        // samples, however long the face is. At a fixed count, a line across
+        // a wall twenty-four metres long and a tenth of a metre thick was
+        // sampled at steps wider than the wall: it never read as inside, and
+        // the face it cuts was declined as needing an arrangement.
+        let narrow = outer.map_or(f64::INFINITY, |o| {
+            let (mut low, mut high) = ([f64::MAX; 3], [f64::MIN; 3]);
+            for q in &o.uv {
+                let p = surface.point(q[0], q[1]);
+                for k in 0..3 {
+                    low[k] = low[k].min(p[k]);
+                    high[k] = high[k].max(p[k]);
+                }
+            }
+            (0..3)
+                .map(|k| high[k] - low[k])
+                .filter(|d| *d > tolerance)
+                .fold(f64::INFINITY, f64::min)
+        });
+        let span = if matches!(curve, Curve3d::Line { .. }) {
+            hi - lo
+        } else {
+            f64::INFINITY
+        };
+        let samples = if span.is_finite() && narrow.is_finite() {
+            ((8.0 * span / narrow).ceil() as usize).clamp(512, 1 << 16)
+        } else {
+            512
+        };
+        let at = |i: usize| lo + (hi - lo) * i as f64 / samples as f64;
         let mut runs: Vec<(usize, usize)> = Vec::new();
         let mut start: Option<usize> = None;
-        for i in 0..=N {
+        for i in 0..=samples {
             if inside(at(i)) {
                 start.get_or_insert(i);
             } else if let Some(s) = start.take() {
@@ -1536,9 +2592,21 @@ impl Body {
             }
         }
         if let Some(s) = start {
-            runs.push((s, N));
+            runs.push((s, samples));
         }
         if runs.is_empty() {
+            if std::env::var("THREERS_BREP_DEBUG").is_ok() {
+                let p = curve.point(at(samples / 3));
+                eprintln!(
+                    "  [brep] clip_to_face {fi}: nothing inside; {surface:?} u {:?} v {:?} wraps {} loops {}; sample {p:?} off {} uv {:?}",
+                    face.u_range,
+                    face.v_range,
+                    face.u_wraps,
+                    loops.len(),
+                    surface.distance(p),
+                    surface.invert(p)
+                );
+            }
             return None;
         }
 
@@ -1555,7 +2623,22 @@ impl Body {
             let span = (hi - lo).abs().max(1.0);
             for _ in 0..80 {
                 let m = 0.5 * (i + o);
-                if inside(m) {
+                // To the boundary itself, not to the margin short of it.
+                //
+                // The margin is for *finding* the runs: a curve lying along
+                // an edge must read as outside throughout. An end found with
+                // it stops that far inside — 1e-9 of the face's extent, and a
+                // box cut by a box came back with corners at 6.99999999 where
+                // the faces meet at 7. Every such corner is a vertex of the
+                // result, and a result is measured: 600 came out 599.9999996.
+                //
+                // Only for a straight line on a flat face, where the boundary
+                // is crossed cleanly and there is an exact place to land. On
+                // curved faces the margin is also what keeps an end off a
+                // boundary it merely grazes: without it a sphere clipping a
+                // corner opens four edges, and three of forty-two chained
+                // operations that resolved stop resolving.
+                if inside_by(m, if clean { 0.0 } else { margin }) {
                     i = m;
                 } else {
                     o = m;
@@ -1580,8 +2663,8 @@ impl Body {
                 } else {
                     edge(at(a), at(a - 1))
                 };
-                let t1 = if b == N {
-                    at(N)
+                let t1 = if b == samples {
+                    at(samples)
                 } else {
                     edge(at(b), at(b + 1))
                 };
@@ -1637,7 +2720,10 @@ impl Body {
 
         if curve_ids.is_empty() {
             let Some(sample) = self.face_sample(face_index, &surface, &loops) else {
-                return Err(Declined::UnclassifiablePiece { face: face_index });
+                return Err(debug_decline(
+                    Declined::UnclassifiablePiece { face: face_index },
+                    line!(),
+                ));
             };
             // Reproduce the face as it was: its own edges, and no trim loops to
             // contradict them.
@@ -1771,7 +2857,10 @@ impl Body {
                 }
             }
             if !ok || uv.len() < 2 || (closed && uv.len() < 3) {
-                return Err(Declined::NeedsArrangement { face: face_index });
+                return Err(debug_decline(
+                    Declined::NeedsArrangement { face: face_index },
+                    line!(),
+                ));
             }
             if closed {
                 let area = ring_area(&uv);
@@ -1800,7 +2889,14 @@ impl Body {
         // rectangles, so they re-tessellate at any tolerance. Anything else —
         // a cut across the sweep, or a ring that closes inside the face — needs
         // the same subdivision the planar case uses, in `(u, v)`.
+        //
+        // Not for a face that states its own loops: bands are rectangles,
+        // and its region is not one. A cylinder cut slantwise ends on an
+        // ellipse; banded at a ring, the band claimed the whole rectangle up
+        // to the ellipse's highest point and the bore came back with 100 open
+        // edges along the ring.
         if chords.is_empty()
+            && face.loops.is_none()
             && let Ok(bands) =
                 self.split_swept(face_index, face, &surface, rings.clone(), carried.clone())
         {
@@ -1874,7 +2970,8 @@ impl Body {
         // branch already runs. Note their margin: 6.183 against a threshold of
         // 0.98 × 6.2832 = 6.158, four parts in a thousand. The note below about
         // this measure being the wrong one is not theoretical.
-        if face.u_wraps {
+        let stated = self.stated_seam(face_index);
+        if face.u_wraps || stated.is_some() {
             let period = face.u_range.1 - face.u_range.0;
             // A ring that goes *all the way round* is not a hole. A bore right
             // through a rod meets its wall in a curve that wraps the wall
@@ -2000,12 +3097,18 @@ impl Body {
                 // anything was split, so both this face and the one beyond each
                 // rim carry the point.
                 let Some(origin) = chosen_origin() else {
-                    return Err(Declined::NeedsArrangement { face: face_index });
+                    return Err(debug_decline(
+                        Declined::NeedsArrangement { face: face_index },
+                        line!(),
+                    ));
                 };
                 let cut_open = chords.len();
                 for (id, uv) in wrapping {
                     let Some((chord, order)) = seam_chord(&uv, origin, period) else {
-                        return Err(Declined::NeedsArrangement { face: face_index });
+                        return Err(debug_decline(
+                            Declined::NeedsArrangement { face: face_index },
+                            line!(),
+                        ));
                     };
                     chords.push((id, chord, order));
                 }
@@ -2090,6 +3193,28 @@ impl Body {
                 // Where the chords meet the seam edges, so the outline can
                 // name those places. Both edges are the same line on the
                 // surface, so a chord crossing there gives the same `v` to each.
+                // A face with a seam of its own is bounded by its loops, and
+                // the chords end on its seam's two sides: the outline gets
+                // those points.
+                if let Some((seam, _)) = stated {
+                    // Its seam is cut where the chords end: the pieces run
+                    // along their parts of it, and the whole of it is no
+                    // piece's.
+                    let carried: Vec<Carried> =
+                        carried.into_iter().filter(|c| c.1 != seam).collect();
+                    let mut outline = loops.clone();
+                    for (_, c, _) in &chords[cut_open..] {
+                        for end in [c[0], c[c.len() - 1]] {
+                            for l in outline.iter_mut() {
+                                insert_on_loop(l, end, period * 1e-9);
+                            }
+                        }
+                    }
+                    return self.split_planar(
+                        face_index, &face, &surface, outline, rings, chords, carried, shared,
+                        false, vertices, tolerance,
+                    );
+                }
                 let known: &[(f64, usize)] = seam_cuts
                     .get(&(tag, face_index))
                     .map(|v| v.as_slice())
@@ -2296,14 +3421,47 @@ impl Body {
         // 32.78, where the outline has no vertex to meet. The walk has nothing
         // to attach them to. What wants fixing is `parameter_outline`, which
         // must carry the points where a chord lands on a seam edge.
-        let regions = planar::subdivide(&outer.uv, &paths)
-            .ok_or(Declined::NeedsArrangement { face: face_index })?;
+        if std::env::var("THREERS_BREP_DEBUG").is_ok() {
+            eprintln!(
+                "  [brep] subdivide face {face_index} ({}): outer {} pts {:?}",
+                surface.kind(),
+                outer.uv.len(),
+                outer.uv
+            );
+            for (i, p) in paths.iter().enumerate() {
+                eprintln!(
+                    "  [brep]   path {i}: {} pts {:?} .. {:?}",
+                    p.len(),
+                    p[0],
+                    p[p.len() - 1]
+                );
+            }
+        }
+        let mut regions = planar::subdivide(&outer.uv, &paths).ok_or_else(|| {
+            debug_decline(Declined::NeedsArrangement { face: face_index }, line!())
+        })?;
+        // What a hole the face already had encloses is not a piece of the
+        // face. The hole went in as a closed path, and a closed path comes
+        // back bounding the region inside it as well as the one around —
+        // which for a ring cut by the *other* body is a face of the result,
+        // and for the face's own hole is nothing at all. Kept, it comes out
+        // as a lid over the hole: one box standing on another, fused with a
+        // third that cuts the face they meet in, had the footprint of the
+        // standing box as a 21st face and four edges with three faces each.
+        regions.retain(|r| {
+            !already
+                .iter()
+                .any(|hole| planar::within_hole(&r.outer.uv, hole))
+        });
         // One region *with a hole* is a cut: a closed curve inside a face
         // leaves it connected and takes a piece out of the middle. One region
         // with no holes means nothing happened, and leaving the face whole would
         // drop the seam the other side is expecting.
         if regions.len() < 2 && regions.iter().all(|r| r.holes.is_empty()) {
-            return Err(Declined::NeedsArrangement { face: face_index });
+            return Err(debug_decline(
+                Declined::NeedsArrangement { face: face_index },
+                line!(),
+            ));
         }
 
         let mut out = Vec::with_capacity(regions.len());
@@ -2378,8 +3536,36 @@ impl Body {
                     _ => None,
                 })
                 .collect();
+            // And a chord one of whose segments is a side of the region. A
+            // leg of a bent cut has no point of its own: its ends are the
+            // bend, where another cut also ends, and the face's boundary. Its
+            // points come back as crossings and boundary points, and the
+            // region beside it named only the straight cut across its top —
+            // a strip of a wall where a window met an existing slot lost both
+            // its sides.
+            let near_uv = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) <= tolerance;
+            for ring in std::iter::once(&region.outer).chain(&region.holes) {
+                let n = ring.uv.len();
+                for i in 0..n {
+                    let (a, b) = (ring.uv[i], ring.uv[(i + 1) % n]);
+                    for (id, uv, _) in chords {
+                        if uv.windows(2).any(|w| {
+                            (near_uv(w[0], a) && near_uv(w[1], b))
+                                || (near_uv(w[0], b) && near_uv(w[1], a))
+                        }) {
+                            along.push(*id);
+                        }
+                    }
+                }
+            }
             along.sort_unstable();
             along.dedup();
+            if std::env::var("THREERS_BREP_DEBUG").is_ok() {
+                eprintln!(
+                    "  [brep]   region of face {face_index}: {} pts along {along:?}",
+                    region.outer.uv.len()
+                );
+            }
             let ring = TrimLoop {
                 area: region.area.abs(),
                 uv: region.outer.uv,
@@ -2439,10 +3625,16 @@ impl Body {
             // band on one is bounded at both ends and a single turn is always a
             // ring that stopped early.
             if surface.kind() == "cylinder" && loops[0].wraps(surface.period()).iter().any(|&w| w) {
-                return Err(Declined::NeedsArrangement { face: face_index });
+                return Err(debug_decline(
+                    Declined::NeedsArrangement { face: face_index },
+                    line!(),
+                ));
             }
             let Some(sample) = self.sample_between(surface, &loops) else {
-                return Err(Declined::UnclassifiablePiece { face: face_index });
+                return Err(debug_decline(
+                    Declined::UnclassifiablePiece { face: face_index },
+                    line!(),
+                ));
             };
             // Only the rims this piece actually runs along.
             //
@@ -2529,7 +3721,10 @@ impl Body {
         tolerance: f64,
     ) -> Result<Vec<Piece>, Declined> {
         let Some(outer) = loops.iter().find(|l| l.is_outer()) else {
-            return Err(Declined::NeedsArrangement { face: face_index });
+            return Err(debug_decline(
+                Declined::NeedsArrangement { face: face_index },
+                line!(),
+            ));
         };
 
         if !chords.is_empty() {
@@ -2661,7 +3856,10 @@ impl Body {
         // here kept the ring and then threw the face out for having it.
         for (_, r) in &rings {
             if !r.uv.iter().all(|p| point_in_ring(&outer.uv, fold(*p))) {
-                return Err(Declined::NeedsArrangement { face: face_index });
+                return Err(debug_decline(
+                    Declined::NeedsArrangement { face: face_index },
+                    line!(),
+                ));
             }
         }
 
@@ -2684,7 +3882,10 @@ impl Body {
             outside.push(oriented(r.clone(), false));
         }
         let Some(sample) = self.sample_between(surface, &outside) else {
-            return Err(Declined::UnclassifiablePiece { face: face_index });
+            return Err(debug_decline(
+                Declined::UnclassifiablePiece { face: face_index },
+                line!(),
+            ));
         };
         {
             // Keep the loops only when nothing else describes the boundary.
@@ -2719,7 +3920,10 @@ impl Body {
         for (id, r) in rings {
             let ring = oriented(r, true);
             let Some(sample) = self.sample_between(surface, std::slice::from_ref(&ring)) else {
-                return Err(Declined::UnclassifiablePiece { face: face_index });
+                return Err(debug_decline(
+                    Declined::UnclassifiablePiece { face: face_index },
+                    line!(),
+                ));
             };
             out.push(Piece {
                 surface: surface.clone(),
@@ -2766,7 +3970,10 @@ impl Body {
             let spread = vs.iter().cloned().fold(f64::MIN, f64::max)
                 - vs.iter().cloned().fold(f64::MAX, f64::min);
             if spread > range * 1e-3 {
-                return Err(Declined::NeedsArrangement { face: face_index });
+                return Err(debug_decline(
+                    Declined::NeedsArrangement { face: face_index },
+                    line!(),
+                ));
             }
             let v = vs.iter().sum::<f64>() / vs.len() as f64;
             if v > face.v_range.0 + range * 1e-6 && v < face.v_range.1 - range * 1e-6 {
@@ -3029,7 +4236,7 @@ impl Body {
     }
 
     /// This body as a triangle list, for in/out tests only.
-    fn solid_triangles(&self, tolerance: f64) -> Vec<[V3; 3]> {
+    pub(super) fn solid_triangles(&self, tolerance: f64) -> Vec<[V3; 3]> {
         // `refine_edges` is not optional here. Without it the edges stay at the
         // resolution the body was built at while the fills go to tolerance, the
         // two disagree, and the mesh is not closed — nine tests' worth.
@@ -3074,6 +4281,79 @@ impl Body {
         shared: Vec<SharedCurve>,
         tolerance: f64,
     ) -> Body {
+        // A carried edge that a shared curve runs along end to end is that
+        // curve. Where a wall's outline is cut into a face along one of the
+        // other solid's own edges, the face beyond that edge carries the
+        // edge through and the face cut takes the curve: two edges in one
+        // place, each with one face. Measured on a window cut through a wall
+        // at an existing slot.
+        {
+            let along = |p: V3, id: usize| {
+                let vs = &shared[id].vertices;
+                vs.windows(2).any(|w| {
+                    let (a, b) = (vertices[w[0]], vertices[w[1]]);
+                    v3::dist(a, p) + v3::dist(p, b) - v3::dist(a, b) <= tolerance
+                })
+            };
+            let matches = |pts: &[V3], id: usize| {
+                let vs = &shared[id].vertices;
+                if shared[id].closed || vs.len() < 2 || pts.len() < 2 {
+                    return false;
+                }
+                let (a0, a1) = (pts[0], pts[pts.len() - 1]);
+                let (b0, b1) = (vertices[vs[0]], vertices[vs[vs.len() - 1]]);
+                let ends = (v3::dist(a0, b0) <= tolerance && v3::dist(a1, b1) <= tolerance)
+                    || (v3::dist(a0, b1) <= tolerance && v3::dist(a1, b0) <= tolerance);
+                ends && pts.iter().all(|p| along(*p, id))
+                    && vs.iter().all(|&v| {
+                        let q = vertices[v];
+                        pts.windows(2).any(|w| {
+                            v3::dist(w[0], q) + v3::dist(q, w[1]) - v3::dist(w[0], w[1])
+                                <= tolerance
+                        })
+                    })
+            };
+            for piece in &mut pieces {
+                let mut taken = Vec::new();
+                piece.carried.retain(|(_, _, pts, closed, _)| {
+                    if *closed {
+                        return true;
+                    }
+                    match (0..shared.len()).find(|&id| matches(pts, id)) {
+                        Some(id) => {
+                            taken.push(id);
+                            false
+                        }
+                        None => true,
+                    }
+                });
+                for id in taken {
+                    if !piece.bounding.contains(&id) {
+                        piece.bounding.push(id);
+                    }
+                }
+            }
+        }
+        if std::env::var_os("THREERS_BREP_DEBUG").is_some() {
+            for (i, piece) in pieces.iter().enumerate() {
+                eprintln!("from_pieces piece {i}: bounding {:?}", piece.bounding);
+                for id in &piece.bounding {
+                    let vs = &shared[*id].vertices;
+                    eprintln!(
+                        "    curve {id}: {:?} .. {:?}",
+                        vs.first().map(|&v| vertices[v]),
+                        vs.last().map(|&v| vertices[v])
+                    );
+                }
+                for (tag, e, pts, closed, _) in &piece.carried {
+                    eprintln!(
+                        "    carried {tag}/{e} closed {closed}: {:?} .. {:?}",
+                        pts.first(),
+                        pts.last()
+                    );
+                }
+            }
+        }
         // Weld the carried-through loop corners.
         //
         // A seam is shared because both faces name the same curve; a shared
@@ -3765,12 +5045,13 @@ impl Body {
             }
         }
 
-        settle_shared_vertices(&surfaces, &mut vertices, &mut faces, tolerance);
+        settle_shared_vertices(&surfaces, &mut vertices, &mut faces, None, tolerance);
         prune_orphan_vertices(&mut vertices, &mut edges, &mut faces);
         materialise_seams(&mut edges, &mut faces);
         materialise_seam_steps(&mut edges, &mut faces);
         materialise_shared(&mut edges, &mut faces);
         split_at_seam_ends(&mut edges, &mut faces);
+        merge_duplicate_edges(&mut edges, &mut faces, &vertices, tolerance);
         let mut body = Body::from_parts(surfaces, vertices, edges, faces);
         body.restate_rings();
         body
@@ -5104,10 +6385,11 @@ fn sample_closed_curve(
 /// the marcher uses, and recompute each ring's `uv` from the result. Only a
 /// vertex claimed by exactly two surfaces is touched, only a move within a few
 /// tolerances is taken, and only when it lands nearer both than it started.
-fn settle_shared_vertices(
+pub(super) fn settle_shared_vertices(
     surfaces: &[Surface],
     vertices: &mut [V3],
     faces: &mut [Face],
+    edges: Option<&[Edge]>,
     tolerance: f64,
 ) {
     let mut claims: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -5120,6 +6402,20 @@ fn settle_shared_vertices(
                 let e = claims.entry(v).or_default();
                 if !e.contains(&f.surface) {
                     e.push(f.surface);
+                }
+            }
+        }
+    }
+    // A face that wraps states no loops; its rims are its edges, and the
+    // points on them are its as much as a loop's would be.
+    if let Some(edges) = edges {
+        for f in faces.iter().filter(|f| f.loops.is_none()) {
+            for &e in &f.edges {
+                for &v in &edges[e].vertices {
+                    let c = claims.entry(v).or_default();
+                    if !c.contains(&f.surface) {
+                        c.push(f.surface);
+                    }
                 }
             }
         }
@@ -5311,6 +6607,78 @@ fn deep_in_ring(ring: &[[f64; 2]], p: [f64; 2], margin: f64) -> bool {
     })
 }
 
+/// Two edges through the same vertices are one edge.
+///
+/// Two solids overlapping along a stretch of collinear edges each bring that
+/// stretch, and the wall they share is kept from one of them with both — the
+/// same two vertices under two edges, each named by the same two faces. No
+/// edge has the wrong number of faces, so nothing reads as a defect; but a
+/// face listing a side twice has ends that meet nothing, and its shell is
+/// then not closed.
+fn merge_duplicate_edges(
+    edges: &mut Vec<Edge>,
+    faces: &mut [Face],
+    vertices: &[V3],
+    tolerance: f64,
+) {
+    // Straight edges only: two ends say all there is to say about one,
+    // however many points it was sampled at on the way. A seam and the rim
+    // it closes can run through the same vertices and are not the same edge.
+    let straight = |edge: &Edge| -> Option<(usize, usize)> {
+        let (&first, &last) = (edge.vertices.first()?, edge.vertices.last()?);
+        if edge.closed || first == last {
+            return None;
+        }
+        let (a, z) = (*vertices.get(first)?, *vertices.get(last)?);
+        edge.vertices
+            .iter()
+            .all(|&v| {
+                vertices.get(v).is_some_and(|p| {
+                    v3::dist(a, *p) + v3::dist(*p, z) - v3::dist(a, z) <= tolerance
+                })
+            })
+            .then_some((first.min(last), first.max(last)))
+    };
+    let mut first: HashMap<(usize, usize), usize> = HashMap::new();
+    let mut slot: Vec<usize> = Vec::with_capacity(edges.len());
+    let mut kept: Vec<Edge> = Vec::with_capacity(edges.len());
+    for edge in edges.drain(..) {
+        let Some(ends) = straight(&edge) else {
+            kept.push(edge);
+            slot.push(kept.len() - 1);
+            continue;
+        };
+        match first.get(&ends) {
+            Some(&at) => {
+                // The one with more points on it is the one its faces were
+                // sampled along.
+                if edge.vertices.len() > kept[at].vertices.len() {
+                    kept[at].vertices = edge.vertices;
+                }
+                slot.push(at);
+            }
+            None => {
+                kept.push(edge);
+                first.insert(ends, kept.len() - 1);
+                slot.push(kept.len() - 1);
+            }
+        }
+    }
+    *edges = kept;
+    for f in faces.iter_mut() {
+        // Only a side named under two edges loses one of the names. A face
+        // that lists one edge twice means it: a seam bounds its face on
+        // both sides.
+        let mut seen: Vec<(usize, usize)> = Vec::with_capacity(f.edges.len());
+        for &e in &f.edges {
+            if !seen.iter().any(|&(to, from)| to == slot[e] && from != e) {
+                seen.push((slot[e], e));
+            }
+        }
+        f.edges = seen.into_iter().map(|(to, _)| to).collect();
+    }
+}
+
 /// How far from a boundary a point must be to count as inside it.
 fn ring_margin(ring: &[[f64; 2]]) -> f64 {
     let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
@@ -5356,7 +6724,7 @@ fn point_in_ring(ring: &[[f64; 2]], p: [f64; 2]) -> bool {
 /// The ray direction is irrational on purpose: an axis-aligned one hits shared
 /// edges and vertices of a tessellated quadric constantly, and each such hit is
 /// a coin flip on the parity.
-fn point_in_mesh(tris: &[[V3; 3]], p: V3) -> bool {
+pub(super) fn point_in_mesh(tris: &[[V3; 3]], p: V3) -> bool {
     // An arbitrary direction, unlikely to line up with any face; its first
     // component only happens to be close to Euler's gamma.
     #[allow(clippy::approx_constant)]
@@ -5393,6 +6761,39 @@ fn ray_triangle(origin: V3, dir: V3, t: &[V3; 3]) -> Option<f64> {
         return None;
     }
     Some(f * v3::dot(e2, q))
+}
+
+/// Put `p` into the loop where it lies on one of its steps in parameter
+/// space, unless it is already a point of the loop.
+fn insert_on_loop(l: &mut TrimLoop, p: [f64; 2], eps: f64) {
+    let n = l.uv.len();
+    if l.uv.iter().any(|q| (q[0] - p[0]).hypot(q[1] - p[1]) <= eps) {
+        return;
+    }
+    for i in 0..n {
+        let (a, b) = (l.uv[i], l.uv[(i + 1) % n]);
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let len2 = dx * dx + dy * dy;
+        if len2 <= 0.0 {
+            continue;
+        }
+        let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2;
+        let off = ((p[0] - a[0]) * dy - (p[1] - a[1]) * dx).abs() / len2.sqrt();
+        if t > 0.0 && t < 1.0 && off <= eps.max(len2.sqrt() * 1e-9) {
+            l.uv.insert(i + 1, p);
+            l.vertices.insert(i + 1, usize::MAX);
+            l.area = ring_area(&l.uv);
+            return;
+        }
+    }
+}
+
+/// A decline, said where it was decided when `THREERS_BREP_DEBUG` is set.
+fn debug_decline(d: Declined, line: u32) -> Declined {
+    if std::env::var("THREERS_BREP_DEBUG").is_ok() {
+        eprintln!("  [brep] declined {d:?} at boolean.rs:{line}");
+    }
+    d
 }
 
 #[cfg(test)]

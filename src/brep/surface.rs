@@ -921,21 +921,34 @@ fn nurbs_invert(s: &NurbsSurface, p: V3) -> Option<(f64, f64)> {
     let seed_u = (2 * s.n_u()).clamp(12, 96);
     let seed_v = (2 * s.n_v()).clamp(12, 96);
 
-    let (mut bu, mut bv, mut best) = (u0, v0, f64::INFINITY);
+    let mut seeds: Vec<(f64, f64, f64)> = Vec::with_capacity((seed_u + 1) * (seed_v + 1));
     for i in 0..=seed_u {
         for j in 0..=seed_v {
             let u = u0 + (u1 - u0) * i as f64 / seed_u as f64;
             let v = v0 + (v1 - v0) * j as f64 / seed_v as f64;
-            let d = v3::dist(s.point(u, v), p);
-            if d < best {
-                best = d;
-                bu = u;
-                bv = v;
-            }
+            seeds.push((v3::dist(s.point(u, v), p), u, v));
         }
     }
+    // Polished from the best few, not the best one: a surface that closes
+    // on itself has both ends of its domain at the same place, and the seed
+    // at the wrong end can only walk into the clamp. Measured on a swept
+    // ellipse: a point just short of the seam came back at the start of the
+    // domain, 0.27 off the surface.
+    seeds.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut best: Option<(f64, f64, f64)> = None;
+    for &(d, u, v) in seeds.iter().take(4) {
+        let (u, v, d) = nurbs_polish(s, p, u, v, d);
+        if best.is_none_or(|b| d < b.0) {
+            best = Some((d, u, v));
+        }
+    }
+    best.map(|(_, u, v)| (u, v))
+}
 
-    let (mut u, mut v) = (bu, bv);
+/// Newton on the distance from `p`, from `(u, v)` at distance `best`.
+fn nurbs_polish(s: &NurbsSurface, p: V3, mut u: f64, mut v: f64, mut best: f64) -> (f64, f64, f64) {
+    let (u0, u1) = s.domain_u();
+    let (v0, v1) = s.domain_v();
     for _ in 0..48 {
         let d = s.derivatives(u, v, 2);
         let r = v3::sub(d[0][0], p);
@@ -974,7 +987,7 @@ fn nurbs_invert(s: &NurbsSurface, p: V3) -> Option<(f64, f64)> {
                 v = nv;
                 accepted = true;
                 if moved < 1e-15 {
-                    return Some((u, v));
+                    return (u, v, best);
                 }
                 break;
             }
@@ -984,7 +997,7 @@ fn nurbs_invert(s: &NurbsSurface, p: V3) -> Option<(f64, f64)> {
             break; // already at the best point this basin offers
         }
     }
-    Some((u, v))
+    (u, v, best)
 }
 
 /// An f64 affine transform lifted out of the crate's f32 [`Matrix4`].

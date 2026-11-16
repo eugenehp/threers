@@ -9,7 +9,7 @@ repository = "https://github.com/eugenehp/threers"
 homepage = "https://github.com/eugenehp/threers"
 documentation = "https://docs.rs/threers-math"
 readme = "README.md"
-description = "The math under threers: vectors, matrices, quaternions, colours and colour scales, bounds, rays, Delaunay and Voronoi, geographic coordinates and tone mapping, with three.js's semantics and no dependencies"
+description = "The math under threers: vectors, matrices, quaternions, colours and colour scales, bounds, rays, Delaunay and Voronoi, polygon booleans and offsets, geographic coordinates and tone mapping, with three.js's semantics and no dependencies"
 keywords = ["math", "vector", "matrix", "threejs", "graphics"]
 categories = ["mathematics", "graphics", "game-development", "wasm"]
 

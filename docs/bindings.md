@@ -55,6 +55,8 @@ Examples (THREE.* first): [`crates/examples/README.md`](../crates/examples/READM
 Day-one native bindings mirror each other:
 
 - `version`, `Vector3`, `Color`, `Scene`, `PerspectiveCamera`
-- Feature-gated: `HeadlessRenderer`, `Tween`, `PhysicsWorld`
+- Feature-gated: `HeadlessRenderer`, `Tween`, `PhysicsWorld`, and with `fem`
+  `FemModel` and `FemSurface` — finite and boundary element analysis, also
+  bound for the browser; see [fem.md](fem.md#javascript-python-and-node)
 
 The browser THREE.* API remains the wasm shim — not reimplemented in napi.

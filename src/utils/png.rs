@@ -51,7 +51,7 @@ impl PngImage {
 
 // ---------------------------------------------------------------- checksums
 
-fn crc32(data: &[u8]) -> u32 {
+pub(crate) fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for &b in data {
         crc ^= b as u32;

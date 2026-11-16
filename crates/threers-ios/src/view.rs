@@ -603,12 +603,20 @@ impl<A: App> View<A> {
                 CameraRequest::Zoom(_) => {}
             }
         }
+        // what the app's UI leaves of the view (a docked sidebar off its
+        // left): the picture shifted to centre there, and framed to fit it
+        let (sw, sh) = self.surface.size();
+        let (sw, sh) = (sw as f32, sh.max(1) as f32);
+        let left = (self.app.covered_left() * self.scale).clamp(0.0, sw * 0.6);
+        self.camera.view_offset = (left > 0.0).then(|| threers::cameras::ViewOffset { full_width: sw, full_height: sh, x: -left * 0.5, y: 0.0, width: sw, height: sh });
+        let aspect = (sw - left) / sh;
+        self.app.view_aspect(aspect);
         if !self.framed
             && let Some((centre, radius)) = self.app.focus()
         {
             let radius = radius.max(1e-6);
             // fit the narrower way: across, on a phone held upright
-            let across = 2.0 * ((self.camera.fov * 0.5).tan() * self.camera.aspect).atan();
+            let across = 2.0 * ((self.camera.fov * 0.5).tan() * aspect).atan();
             let distance = radius / (self.camera.fov.min(across) * 0.5).sin() * 1.1;
             self.camera.target = centre;
             self.camera.position = centre + Vector3::new(0.0, 0.0, distance);

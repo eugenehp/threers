@@ -346,3 +346,43 @@ impl WebSceneExporter {
         (arena, roots, options)
     }
 }
+
+/// Polylines to G-code. `paths` is flat `x, y, z` triples, `counts` the
+/// points in each path; `safeZ` NaN rapids straight between paths.
+#[wasm_bindgen(js_name = writeGcode)]
+pub fn write_gcode(
+    paths: &[f64],
+    counts: &[u32],
+    feed_rate: f64,
+    safe_z: f64,
+    tool_on: Vec<String>,
+    tool_off: Vec<String>,
+) -> Result<String, JsValue> {
+    let total: usize = counts.iter().map(|&c| c as usize).sum();
+    if total * 3 != paths.len() {
+        return Err(JsValue::from_str(&format!(
+            "writeGcode: counts sum to {total} points, paths holds {} numbers",
+            paths.len()
+        )));
+    }
+    let mut at = 0;
+    let polylines: Vec<_> = counts
+        .iter()
+        .map(|&c| {
+            let pts = paths[at..at + c as usize * 3]
+                .chunks(3)
+                .map(|p| [p[0], p[1], p[2]])
+                .collect();
+            at += c as usize * 3;
+            crate::exporters::GcodePath::new(pts)
+        })
+        .collect();
+    let options = crate::exporters::GcodeOptions {
+        feed_rate,
+        safe_z: (!safe_z.is_nan()).then_some(safe_z),
+        tool_on,
+        tool_off,
+        ..Default::default()
+    };
+    Ok(crate::exporters::write_gcode(&polylines, &options))
+}

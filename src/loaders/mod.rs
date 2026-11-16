@@ -5,9 +5,11 @@ pub mod cff;
 mod collada;
 pub mod deflate;
 pub mod draco;
+mod dxf;
 mod exr;
 mod exr_codec;
 mod exr_dwa;
+mod gcode;
 pub mod fbx;
 mod gltf;
 pub mod gltf_write;
@@ -50,8 +52,12 @@ mod xml;
 pub use alembic::{AlembicError, Archive as AlembicArchive, PolyMesh};
 pub use collada::{ColladaError, ColladaLoader};
 pub use draco::{DracoError, Header as DracoHeader};
+pub use dxf::{parse_dxf, DxfError, DxfRead};
 pub use exr::{ExrError, ExrLoader};
 pub use fbx::{FbxError, FbxLoader, FbxScene};
+pub use gcode::{
+    GcodeLayer, GcodeLoader, GcodeToolpath, GCODE_EXTRUDED_COLOR, GCODE_TRAVEL_COLOR,
+};
 pub use gltf::{
     add_to_scene as gltf_add_to_scene, add_to_scene_mapped, GltfError, GltfImages, GltfLoader,
     GltfScene,

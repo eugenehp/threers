@@ -1,0 +1,731 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>threers-fem — finite and boundary elements in the browser</title>
+<link rel="stylesheet" href="../viewer-theme.css">
+<style>
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    display: grid; grid-template-columns: 320px 1fr; grid-template-areas: "side view";
+  }
+  aside { grid-area: side; border-right: 1px solid var(--border); padding: 16px; overflow-y: auto; }
+  main { grid-area: view; position: relative; min-width: 0; min-height: 0; }
+  h1 { font-size: 15px; margin: 0 0 2px; color: var(--title); }
+  h1 + p { margin: 0 0 14px; color: var(--muted); font-size: 12px; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+       margin: 18px 0 8px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+  .control { margin: 0 0 10px; }
+  .control > label { display: block; margin-bottom: 3px; }
+  select, input[type=range], button { width: 100%; }
+  select, button {
+    font: inherit; color: var(--fg); background: var(--hover); border: 1px solid var(--border);
+    border-radius: 5px; padding: 5px 8px; cursor: pointer;
+  }
+  button:hover, select:hover { border-color: var(--accent); }
+  button[aria-pressed="true"] { background: var(--active); border-color: var(--accent); }
+  .segmented { display: flex; gap: 4px; }
+  .segmented button { flex: 1; padding: 5px 2px; }
+  .hint { color: var(--muted); font-size: 11px; margin-top: 3px; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 2px 0; }
+  td:last-child { text-align: right; color: var(--title); }
+  canvas#view { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; background: var(--scene); }
+  #legend { position: absolute; left: 16px; bottom: 16px; background: var(--panel);
+            border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; width: 260px; }
+  #legend canvas { display: block; width: 100%; height: 12px; border-radius: 3px; }
+  #legend .ends { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+  #legendTitle { font-size: 11px; margin-bottom: 4px; }
+  #polar { position: absolute; right: 16px; top: 16px; width: 220px; height: 220px;
+           background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
+  #banner { position: absolute; inset: 0; display: grid; place-items: center; background: #0008;
+            color: #fff; font-size: 14px; pointer-events: none; }
+  #error { color: #ff8b8b; white-space: pre-wrap; font-size: 12px; }
+  code { color: var(--title); }
+</style>
+</head>
+<body>
+<aside>
+  <h1>threers-fem</h1>
+  <p>finite &amp; boundary elements, in wasm</p>
+
+  <div class="control segmented" role="tablist">
+    <button data-tab="structure" aria-pressed="true">Structure (FEM)</button>
+    <button data-tab="sound" aria-pressed="false">Sound (BEM)</button>
+  </div>
+
+  <section id="structurePanel">
+    <div class="control">
+      <label for="part">Part</label>
+      <select id="part">
+        <option value="bracket">L-bracket, wall-mounted</option>
+        <option value="plate">Plate with a hole, in tension</option>
+        <option value="beam">Cantilever beam</option>
+        <option value="hook">Split ring, hanging</option>
+      </select>
+      <div class="hint" id="partHint"></div>
+    </div>
+    <div class="control">
+      <label for="spacing">Mesh spacing — <b id="spacingValue"></b></label>
+      <input id="spacing" type="range" min="0" max="4" step="1" value="1">
+      <div class="hint">Finer is more accurate and slower; the solve is a sparse Cholesky, so it grows faster than the mesh.</div>
+    </div>
+    <div class="control">
+      <label for="material">Material</label>
+      <select id="material">
+        <option value="steel">Steel — 200 GPa, yield 235 MPa</option>
+        <option value="aluminium">Aluminium 6061 — 69 GPa, yield 240 MPa</option>
+        <option value="pla">Printed PLA — 3.5 GPa, yield 50 MPa</option>
+      </select>
+    </div>
+    <div class="control">
+      <label for="load">Load — <b id="loadValue"></b></label>
+      <input id="load" type="range" min="10" max="200" step="10" value="100">
+    </div>
+    <div class="control segmented">
+      <button data-order="10" aria-pressed="true" title="Ten-node tetrahedra">Tet10</button>
+      <button data-order="4" aria-pressed="false" title="Four-node tetrahedra: watch them lock in bending">Tet4</button>
+    </div>
+
+    <h2>Show</h2>
+    <div class="control segmented" id="views">
+      <button data-view="stress" aria-pressed="true">Stress</button>
+      <button data-view="modes" aria-pressed="false">Modes</button>
+      <button data-view="heat" aria-pressed="false">Heat</button>
+    </div>
+    <div class="control segmented" id="modeButtons" hidden></div>
+    <div class="control">
+      <label for="exaggerate">Deformation × <b id="exaggerateValue"></b></label>
+      <input id="exaggerate" type="range" min="0" max="100" step="1" value="50">
+    </div>
+
+    <h2>Result</h2>
+    <table id="results"></table>
+    <div class="hint" id="caseHint"></div>
+  </section>
+
+  <section id="soundPanel" hidden>
+    <div class="control">
+      <label for="freq">Frequency — <b id="freqValue"></b> Hz</label>
+      <input id="freq" type="range" min="100" max="1500" step="50" value="500">
+    </div>
+    <div class="control">
+      <label for="quality">Surface mesh</label>
+      <select id="quality">
+        <option value="25" selected>Coarse — 420 triangles</option>
+        <option value="40">Medium — 1,024 triangles</option>
+        <option value="55">Fine — 1,936 triangles</option>
+      </select>
+    </div>
+    <div class="control segmented">
+      <button data-sound="wave" aria-pressed="true">Pressure wave</button>
+      <button data-sound="spl" aria-pressed="false">Level (dB)</button>
+    </div>
+    <h2>Result</h2>
+    <table id="soundResults"></table>
+    <div class="hint">A 20 × 30 × 20 cm closed cabinet; a 12 cm square piston on its
+      front face moves at 1 mm/s. Air at 20 °C. The slice is the horizontal
+      plane through the driver, 2 m across; only the cabinet's surface is
+      meshed — the air is exact. The polar plot is the far-field directivity.</div>
+  </section>
+
+  <h2>View</h2>
+  <div class="hint"><b>drag</b> orbit · <b>wheel</b> zoom · <b>double-click</b> fit</div>
+  <div id="error"></div>
+</aside>
+
+<main>
+  <canvas id="view"></canvas>
+  <div id="legend"><div id="legendTitle"></div><canvas id="ramp" width="256" height="1"></canvas>
+    <div class="ends"><span id="legendLo"></span><span id="legendHi"></span></div></div>
+  <canvas id="polar" width="440" height="440" hidden></canvas>
+  <div id="banner"><p id="bannerText">Loading wasm…</p></div>
+</main>
+
+<script type="module">
+import init, { FemModel, FemSurface } from "../pkg-fem/threers_fem.js";
+
+const $ = (id) => document.getElementById(id);
+const canvas = $("view");
+const ctx = canvas.getContext("2d");
+const params = new URLSearchParams(location.search);
+
+// ---- colour ramps -------------------------------------------------------
+// Viridis and a blue–white–red diverging ramp, as RGB stops.
+const VIRIDIS = [[68,1,84],[72,40,120],[62,74,137],[49,104,142],[38,130,142],[31,158,137],[53,183,121],[109,205,89],[180,222,44],[253,231,37]];
+const INFERNO = [[0,0,4],[40,11,84],[101,21,110],[159,42,99],[212,72,66],[245,125,21],[250,193,39],[252,255,164]];
+const DIVERGE = [[33,102,172],[103,169,207],[209,229,240],[247,247,247],[253,219,199],[239,138,98],[178,24,43]];
+function ramp(stops, t) {
+  t = Math.min(1, Math.max(0, Number.isFinite(t) ? t : 0)) * (stops.length - 1);
+  const i = Math.min(stops.length - 2, Math.floor(t)), f = t - i;
+  const a = stops[i], b = stops[i + 1];
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+}
+function drawLegend(stops, title, lo, hi) {
+  const c = $("ramp"), g = c.getContext("2d"), img = g.createImageData(256, 1);
+  for (let i = 0; i < 256; i++) {
+    const [r, gg, b] = ramp(stops, i / 255);
+    img.data.set([r, gg, b, 255], i * 4);
+  }
+  g.putImageData(img, 0, 0);
+  $("legendTitle").textContent = title;
+  $("legendLo").textContent = lo;
+  $("legendHi").textContent = hi;
+}
+const fmt = (v, d = 3) => {
+  if (!Number.isFinite(v)) return "—";
+  const a = Math.abs(v);
+  if (a !== 0 && (a < 1e-3 || a >= 1e5)) return v.toExponential(2);
+  return v.toPrecision(d);
+};
+
+// ---- camera -------------------------------------------------------------
+const cam = { yaw: -0.6, pitch: 0.45, dist: 1, target: [0, 0, 0], size: 1 };
+function fit(b) {
+  cam.target = [(b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2];
+  cam.size = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]);
+  cam.dist = cam.size * 1.6;
+}
+function viewMatrix() {
+  const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw), cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  // Rows: right, up, forward (toward the viewer).
+  const f = [sy * cp, sp, cy * cp];
+  const r = [cy, 0, -sy];
+  const u = [f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0]];
+  return { r, u, f };
+}
+let dragging = null;
+canvas.addEventListener("pointerdown", (e) => { dragging = [e.clientX, e.clientY]; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener("pointerup", () => { dragging = null; });
+canvas.addEventListener("pointermove", (e) => {
+  if (!dragging || tab !== "structure") return;
+  cam.yaw -= (e.clientX - dragging[0]) * 0.008;
+  cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch + (e.clientY - dragging[1]) * 0.008));
+  dragging = [e.clientX, e.clientY];
+  dirty = true;
+});
+canvas.addEventListener("wheel", (e) => { e.preventDefault(); cam.dist *= Math.exp(e.deltaY * 0.001); dirty = true; }, { passive: false });
+canvas.addEventListener("dblclick", () => { if (model) { fit(model.bounds()); dirty = true; } });
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(canvas.clientWidth * dpr);
+  canvas.height = Math.round(canvas.clientHeight * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  dirty = true;
+}
+window.addEventListener("resize", resize);
+
+// ---- the structure tab --------------------------------------------------
+// Every part in mm, N and MPa, with its supports and load as boxes: the same
+// box-region API the Python and Node bindings have.
+const PARTS = {
+  bracket: {
+    spacings: [5, 4, 3, 2.5, 2], load: 500, unit: "N",
+    hint: "Bolted to a wall at its back face; pushed down at the tip of the arm.",
+    setup(m, f) { m.fixBox([-1, -1, -1], [0, 51, 31]); m.forceBox([60, -1, -1], [61, 7, 31], [0, -f, 0]); },
+    heat(m) { m.temperatureBox([-1, -1, -1], [0, 51, 31], 80); m.convectionBox([-1, -1, -1], [61, 51, 31], 25e-6, 20); },
+    marks: { fix: [[-1, -1, -1], [0, 51, 31]], load: [[60, -1, -1], [61, 7, 31], [0, -1, 0]] },
+  },
+  plate: {
+    spacings: [5, 4, 3, 2.5, 2], load: 10000, unit: "N",
+    hint: "Pulled along its length; a hole half the width concentrates the stress about 2.2× (Peterson).",
+    setup(m, f) {
+      m.holdBox([-1, -1, -1], [0, 41, 6], 0, 0);
+      m.holdBox([-1, -1, -1], [101, 41, 0], 2, 0);
+      m.holdBox([-1, 19, -1], [0, 21, 6], 1, 0);
+      m.forceBox([100, -1, -1], [101, 41, 6], [f, 0, 0]);
+    },
+    heat(m) { m.temperatureBox([-1, -1, -1], [0, 41, 6], 100); m.temperatureBox([100, -1, -1], [101, 41, 6], 0); },
+    marks: { fix: [[-1, -1, -1], [0, 41, 6]], load: [[100, -1, -1], [101, 41, 6], [1, 0, 0]] },
+  },
+  beam: {
+    spacings: [1, 0.5, 0.34, 0.25, 0.2], load: 5, unit: "N",
+    hint: "A 10 × 1 × 1 mm cantilever on an exact grid. Beam theory: δ = FL³/3EI. Try Tet4.",
+    setup(m, f) { m.fixBox([-1, -1, -1], [0, 2, 2]); m.forceBox([10, -1, -1], [11, 2, 2], [0, -f, 0]); },
+    heat(m) { m.temperatureBox([-1, -1, -1], [0, 2, 2], 100); m.convectionBox([-1, -1, -1], [11, 2, 2], 50e-6, 20); },
+    marks: { fix: [[-1, -1, -1], [0, 2, 2]], load: [[10, -1, -1], [11, 2, 2], [0, -1, 0]] },
+  },
+  hook: {
+    spacings: [2.6, 2.2, 1.8, 1.5, 1.3], load: 200, unit: "N",
+    hint: "A split ring of 6 mm section hung from the top, one end of the gap pulled down.",
+    setup(m, f) { m.fixBox([-4, 19, -4], [4, 27, 4]); m.forceBox([2, -25, -4], [8, -15, 4], [0, -f, 0]); },
+    heat(m) { m.temperatureBox([-4, 19, -4], [4, 27, 4], 100); m.convectionBox([-27, -27, -4], [27, 27, 4], 25e-6, 20); },
+    marks: { fix: [[-4, 19, -4], [4, 27, 4]], load: [[2, -25, -4], [8, -15, 4], [0, -1, 0]] },
+  },
+};
+const MATERIALS = {
+  steel: { E: 200e3, nu: 0.3, rho: 7.85e-9, k: 0.05, yield: 235 },
+  aluminium: { E: 69e3, nu: 0.33, rho: 2.7e-9, k: 0.167, yield: 240 },
+  pla: { E: 3.5e3, nu: 0.36, rho: 1.24e-9, k: 0.00013, yield: 50 },
+};
+
+let tab = "structure";
+let model = null, modelKey = "";
+let positions = null, surface = null;
+let field = null, disp = null, fieldLo = 0, fieldHi = 1, ramped = VIRIDIS;
+let view = "stress", modeIndex = 0, modes = null, quadratic = true;
+let dirty = true;
+const animStart = performance.now();
+
+const part = () => PARTS[$("part").value];
+const material = () => MATERIALS[$("material").value];
+const spacing = () => part().spacings[+$("spacing").value];
+const load = () => part().load * $("load").value / 100;
+const exaggerate = () => {
+  // 0..100 → 0 ×, then a log scale up to 10,000 ×.
+  const v = +$("exaggerate").value;
+  return v === 0 ? 0 : Math.pow(10, v / 25);
+};
+
+const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+async function busy(text, fn) {
+  $("banner").hidden = false;
+  $("bannerText").textContent = text;
+  await nextFrame();
+  try { return await fn(); }
+  catch (e) { $("error").textContent = String(e && e.message || e); throw e; }
+  finally { $("banner").hidden = true; }
+}
+
+function updateLabels() {
+  $("spacingValue").textContent = spacing() + " mm";
+  $("loadValue").textContent = fmt(load(), 3) + " " + part().unit;
+  $("exaggerateValue").textContent = fmt(exaggerate(), 2);
+  $("partHint").textContent = part().hint;
+}
+
+async function rebuild() {
+  updateLabels();
+  const key = $("part").value + "@" + spacing();
+  if (key !== modelKey) {
+    await busy("Meshing…", () => {
+      model?.free();
+      const t = performance.now();
+      model = FemModel.shape($("part").value, spacing());
+      meshMs = performance.now() - t;
+      positions = model.positions();
+      surface = model.surfaceIndices();
+      modelKey = key;
+      fit(model.bounds());
+    });
+  }
+  await solve();
+}
+
+let meshMs = 0, solveMs = 0, last = null;
+async function solve() {
+  updateLabels();
+  const mat = material();
+  model.clear();
+  model.setMaterial(mat.E, mat.nu, mat.rho);
+  model.setQuadratic(quadratic);
+  $("modeButtons").hidden = view !== "modes";
+  const rows = [
+    ["nodes", model.nodeCount.toLocaleString()],
+    ["tetrahedra", model.tetCount.toLocaleString()],
+    ["dihedral angles", Array.from(model.dihedralRange(), (a) => a.toFixed(0) + "°").join(" – ")],
+    ["meshed in", meshMs.toFixed(0) + " ms"],
+  ];
+  if (view === "stress") {
+    part().setup(model, load());
+    const r = await busy("Solving for stress…", () => {
+      const t = performance.now();
+      const r = model.solve();
+      solveMs = performance.now() - t;
+      return r;
+    });
+    field = r.vonMises(); disp = r.displacement();
+    fieldLo = 0; fieldHi = r.maxVonMises; ramped = VIRIDIS;
+    drawLegend(VIRIDIS, "von Mises stress (MPa)", "0", fmt(fieldHi));
+    const re = r.reaction();
+    rows.push(["solved in", solveMs.toFixed(0) + " ms"],
+      ["max displacement", fmt(r.maxDisplacement) + " mm"],
+      ["peak von Mises", fmt(r.maxVonMises) + " MPa"],
+      ["safety factor", fmt(mat.yield / r.maxVonMises, 3) + (r.maxVonMises > mat.yield ? "  ⚠ yields" : "")],
+      ["support reaction", re.map((v) => fmt(v, 4)).join(", ") + " N"]);
+    last = { maxVonMises: r.maxVonMises, maxDisplacement: r.maxDisplacement, reaction: Array.from(re) };
+    r.free();
+  } else if (view === "modes") {
+    part().setup(model, load());
+    modes?.free();
+    modes = await busy("Finding natural frequencies…", () => {
+      const t = performance.now();
+      const m = model.modes(4);
+      solveMs = performance.now() - t;
+      return m;
+    });
+    const f = modes.frequencies();
+    $("modeButtons").innerHTML = "";
+    f.forEach((hz, i) => {
+      const b = document.createElement("button");
+      b.textContent = (hz >= 1000 ? (hz / 1000).toFixed(2) + " k" : hz.toFixed(0) + " ") + "Hz";
+      b.setAttribute("aria-pressed", String(i === modeIndex));
+      b.onclick = () => { modeIndex = i; showMode(); for (const o of $("modeButtons").children) o.setAttribute("aria-pressed", String(o === b)); };
+      $("modeButtons").appendChild(b);
+    });
+    modeIndex = Math.min(modeIndex, f.length - 1);
+    showMode();
+    rows.push(["solved in", solveMs.toFixed(0) + " ms"]);
+    f.forEach((hz, i) => rows.push(["mode " + (i + 1), fmt(hz, 4) + " Hz"]));
+    last = { frequencies: Array.from(f) };
+  } else {
+    part().heat(model);
+    const r = await busy("Solving for temperature…", () => {
+      const t = performance.now();
+      const r = model.solveHeat(mat.k);
+      solveMs = performance.now() - t;
+      return r;
+    });
+    field = r.temperature(); disp = null;
+    fieldLo = r.min; fieldHi = r.max; ramped = INFERNO;
+    drawLegend(INFERNO, "temperature (°C)", fmt(fieldLo), fmt(fieldHi));
+    rows.push(["solved in", solveMs.toFixed(0) + " ms"], ["coldest", fmt(r.min) + " °C"], ["hottest", fmt(r.max) + " °C"]);
+    last = { min: r.min, max: r.max };
+    r.free();
+  }
+  $("caseHint").textContent = view === "heat"
+    ? "Held hot where the part is supported and cooled by still air (h = 25 W/m²K) everywhere else."
+    : view === "modes" ? "Shapes animate at an exaggerated amplitude; supports as for stress." : "";
+  $("results").innerHTML = rows.map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join("");
+  dirty = true;
+}
+
+function showMode() {
+  disp = modes.shape(modeIndex);
+  field = new Float64Array(disp.length / 3);
+  for (let i = 0; i < field.length; i++) field[i] = Math.hypot(disp[3 * i], disp[3 * i + 1], disp[3 * i + 2]);
+  fieldLo = 0; fieldHi = 1; ramped = VIRIDIS;
+  drawLegend(VIRIDIS, "mode " + (modeIndex + 1) + " displacement (relative)", "0", "1");
+  dirty = true;
+}
+
+function drawStructure(now) {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  ctx.clearRect(0, 0, w, h);
+  if (!positions) return;
+  const { r, u, f } = viewMatrix();
+  const n = positions.length / 3;
+  let amp = 0;
+  if (disp) {
+    // Exaggeration relative to the part: a "×1" in modes means 5 % of its size.
+    amp = view === "modes"
+      ? cam.size * 0.05 * Math.min(4, exaggerate() / 10) * Math.sin((now - animStart) / 1000 * Math.PI * 1.2)
+      : exaggerate();
+  }
+  const sx = new Float32Array(n), sy = new Float32Array(n), sz = new Float32Array(n);
+  const px = new Float32Array(n), py = new Float32Array(n), pz = new Float32Array(n);
+  const focal = h * 1.2;
+  for (let i = 0; i < n; i++) {
+    let x = positions[3 * i] - cam.target[0], y = positions[3 * i + 1] - cam.target[1], z = positions[3 * i + 2] - cam.target[2];
+    if (disp) { x += disp[3 * i] * amp; y += disp[3 * i + 1] * amp; z += disp[3 * i + 2] * amp; }
+    const vx = x * r[0] + y * r[1] + z * r[2];
+    const vy = x * u[0] + y * u[1] + z * u[2];
+    const vz = cam.dist - (x * f[0] + y * f[1] + z * f[2]);
+    px[i] = vx; py[i] = vy; pz[i] = vz;
+    sx[i] = w / 2 + (vx / vz) * focal;
+    sy[i] = h / 2 - (vy / vz) * focal;
+    sz[i] = vz;
+  }
+  const nt = surface.length / 3;
+  const order = [];
+  const depth = new Float32Array(nt), shade = new Float32Array(nt);
+  for (let t = 0; t < nt; t++) {
+    const a = surface[3 * t], b = surface[3 * t + 1], c = surface[3 * t + 2];
+    // Screen-space winding: back faces wind clockwise on screen.
+    const area = (sx[b] - sx[a]) * (sy[c] - sy[a]) - (sx[c] - sx[a]) * (sy[b] - sy[a]);
+    if (area >= 0) continue;
+    // View-space normal for lighting from over the viewer's shoulder.
+    const e1 = [px[b] - px[a], py[b] - py[a], pz[b] - pz[a]], e2 = [px[c] - px[a], py[c] - py[a], pz[c] - pz[a]];
+    const nx = e1[1] * e2[2] - e1[2] * e2[1], ny = e1[2] * e2[0] - e1[0] * e2[2], nz = e1[0] * e2[1] - e1[1] * e2[0];
+    const len = Math.hypot(nx, ny, nz) || 1;
+    const lit = Math.abs((nx * 0.3 + ny * 0.5 - nz * 0.81) / len);
+    shade[t] = 0.35 + 0.65 * lit;
+    depth[t] = sz[a] + sz[b] + sz[c];
+    order.push(t);
+  }
+  order.sort((p, q) => depth[q] - depth[p]);
+  const span = fieldHi > fieldLo ? fieldHi - fieldLo : 1;
+  for (const t of order) {
+    const a = surface[3 * t], b = surface[3 * t + 1], c = surface[3 * t + 2];
+    let col = [150, 160, 175];
+    if (field) col = ramp(ramped, ((field[a] + field[b] + field[c]) / 3 - fieldLo) / span);
+    const s = shade[t];
+    ctx.fillStyle = `rgb(${col[0] * s | 0},${col[1] * s | 0},${col[2] * s | 0})`;
+    ctx.beginPath();
+    ctx.moveTo(sx[a], sy[a]); ctx.lineTo(sx[b], sy[b]); ctx.lineTo(sx[c], sy[c]); ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = ctx.fillStyle;
+    ctx.lineWidth = 0.6;
+    ctx.stroke();
+  }
+  drawMarks(r, u, f, w, h, focal, amp);
+}
+
+// Supports and the load, as a hatch of the fixed box's nodes and an arrow.
+function drawMarks(r, u, f, w, h, focal, amp) {
+  if (view === "heat") return;
+  const project = (p) => {
+    const x = p[0] - cam.target[0], y = p[1] - cam.target[1], z = p[2] - cam.target[2];
+    const vz = cam.dist - (x * f[0] + y * f[1] + z * f[2]);
+    return [w / 2 + ((x * r[0] + y * r[1] + z * r[2]) / vz) * focal, h / 2 - ((x * u[0] + y * u[1] + z * u[2]) / vz) * focal];
+  };
+  const m = part().marks;
+  const [flo, fhi] = m.fix;
+  ctx.fillStyle = "#4da3ff";
+  const n = positions.length / 3;
+  for (let i = 0; i < n; i += 1) {
+    const p = [positions[3 * i], positions[3 * i + 1], positions[3 * i + 2]];
+    if (p.every((v, k) => v >= flo[k] - 1e-6 && v <= fhi[k] + 1e-6)) {
+      const [x, y] = project(p);
+      ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+    }
+  }
+  if (view !== "stress") return;
+  const [llo, lhi, dir] = m.load;
+  const b = model.bounds();
+  const c = [0, 1, 2].map((k) => Math.min(b[k + 3], Math.max(b[k], (llo[k] + lhi[k]) / 2)));
+  // Ride along with the loaded face: the mean displacement of its nodes.
+  if (disp && amp) {
+    const mean = [0, 0, 0];
+    let count = 0;
+    for (let i = 0; i < n; i++) {
+      const p = [positions[3 * i], positions[3 * i + 1], positions[3 * i + 2]];
+      if (p.every((v, k) => v >= llo[k] - 1e-6 && v <= lhi[k] + 1e-6)) {
+        for (let k = 0; k < 3; k++) mean[k] += disp[3 * i + k];
+        count++;
+      }
+    }
+    if (count) for (let k = 0; k < 3; k++) c[k] += mean[k] / count * amp;
+  }
+  const tip = project(c);
+  const tail = project(c.map((v, k) => v - dir[k] * cam.size * 0.25));
+  ctx.strokeStyle = ctx.fillStyle = "#ffb454";
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(tail[0], tail[1]); ctx.lineTo(tip[0], tip[1]); ctx.stroke();
+  const ang = Math.atan2(tip[1] - tail[1], tip[0] - tail[0]);
+  ctx.beginPath();
+  ctx.moveTo(tip[0], tip[1]);
+  ctx.lineTo(tip[0] - 12 * Math.cos(ang - 0.4), tip[1] - 12 * Math.sin(ang - 0.4));
+  ctx.lineTo(tip[0] - 12 * Math.cos(ang + 0.4), tip[1] - 12 * Math.sin(ang + 0.4));
+  ctx.fill();
+}
+
+// ---- the sound tab ------------------------------------------------------
+const GRID = 72, HALF = 1.0; // the slice: 2 m across, 72 × 72 samples
+let sound = null, soundKey = "", soundView = "wave";
+
+async function solveSound() {
+  const f = +$("freq").value, q = +$("quality").value;
+  $("freqValue").textContent = f;
+  const key = f + "@" + q;
+  if (key === soundKey) { dirty = true; return; }
+  const out = await busy("Solving the boundary integral equation…", () => {
+    const t0 = performance.now();
+    const surf = FemSurface.cuboid([0.2, 0.3, 0.2], q);
+    const v = surf.piston([-0.06, -0.06, 0], [0.06, 0.06, 1], [0, 0, 1], 1e-3);
+    const r = surf.radiate(f, 343, 1.204, v, new Float64Array(v.length));
+    const t1 = performance.now();
+    const pts = new Float64Array(GRID * GRID * 3);
+    const inside = new Uint8Array(GRID * GRID);
+    for (let j = 0; j < GRID; j++) for (let i = 0; i < GRID; i++) {
+      const x = -HALF + (i + 0.5) * 2 * HALF / GRID, z = HALF - (j + 0.5) * 2 * HALF / GRID;
+      const k = j * GRID + i;
+      inside[k] = Math.abs(x) < 0.105 && Math.abs(z) < 0.105 ? 1 : 0;
+      pts.set([x, 0, inside[k] ? 5 : z], 3 * k); // keep the solver off the body
+    }
+    const p = r.field(pts);
+    const dirs = new Float64Array(72 * 3);
+    for (let a = 0; a < 72; a++) dirs.set([Math.sin(a * Math.PI / 36), 0, Math.cos(a * Math.PI / 36)], 3 * a);
+    const ff = r.farField(dirs);
+    const onAxis = r.field(new Float64Array([0, 0, 1]));
+    const res = {
+      f, triangles: surf.triangleCount, power: r.power, epw: r.elementsPerWavelength,
+      solveMs: t1 - t0, fieldMs: performance.now() - t1, p, inside, ff,
+      spl1m: 20 * Math.log10(Math.hypot(onAxis[0], onAxis[1]) / Math.SQRT2 / 20e-6),
+    };
+    r.free(); surf.free();
+    return res;
+  });
+  sound = out; soundKey = key;
+  // The wave view multiplies by distance from the driver, so the 1/r fall-off
+  // does not leave everything past the first wavelength white, and scales to
+  // the 95th percentile so the near field's peak does not set the scale.
+  out.spread = new Float64Array(GRID * GRID);
+  const mags = [];
+  let peak = 0;
+  for (let k = 0; k < GRID * GRID; k++) {
+    if (out.inside[k]) continue;
+    const i = k % GRID, j = Math.floor(k / GRID);
+    const x = -HALF + (i + 0.5) * 2 * HALF / GRID, z = HALF - (j + 0.5) * 2 * HALF / GRID;
+    out.spread[k] = Math.max(0.15, Math.hypot(x, z - 0.1));
+    const m = Math.hypot(out.p[2 * k], out.p[2 * k + 1]);
+    peak = Math.max(peak, m);
+    mags.push(m * out.spread[k]);
+  }
+  mags.sort((a, b) => a - b);
+  out.peak = peak;
+  out.scale = mags[Math.floor(mags.length * 0.95)] || 1;
+  $("soundResults").innerHTML = [
+    ["triangles", out.triangles.toLocaleString()],
+    ["elements per wavelength", out.epw.toFixed(1) + (out.epw < 6 ? "  ⚠ coarse" : "")],
+    ["surface solve", out.solveMs.toFixed(0) + " ms"],
+    ["field (" + (GRID * GRID).toLocaleString() + " points)", out.fieldMs.toFixed(0) + " ms"],
+    ["on-axis level at 1 m", out.spl1m.toFixed(1) + " dB SPL"],
+    ["radiated power", fmt(out.power) + " W"],
+  ].map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join("");
+  drawPolar();
+  dirty = true;
+}
+
+function drawSound(now) {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  ctx.clearRect(0, 0, w, h);
+  if (!sound) return;
+  const side = Math.min(w, h) - 40, x0 = (w - side) / 2, y0 = (h - side) / 2;
+  const img = ctx.createImageData(GRID, GRID);
+  const phase = (now - animStart) / 1000 * Math.PI * 2 * 0.5;
+  const c = Math.cos(phase), s = Math.sin(phase);
+  const dbTop = 20 * Math.log10(sound.peak / Math.SQRT2 / 20e-6);
+  for (let k = 0; k < GRID * GRID; k++) {
+    let col;
+    if (sound.inside[k]) col = [60, 66, 80];
+    else if (soundView === "wave") {
+      const v = (sound.p[2 * k] * c + sound.p[2 * k + 1] * s) * sound.spread[k] / sound.scale;
+      col = ramp(DIVERGE, 0.5 + 0.5 * v);
+    } else {
+      const db = 20 * Math.log10(Math.hypot(sound.p[2 * k], sound.p[2 * k + 1]) / Math.SQRT2 / 20e-6);
+      col = ramp(VIRIDIS, (db - (dbTop - 40)) / 40);
+    }
+    img.data.set([col[0], col[1], col[2], 255], 4 * k);
+  }
+  const off = new OffscreenCanvas(GRID, GRID);
+  off.getContext("2d").putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(off, x0, y0, side, side);
+  // The cabinet and its driver, to scale.
+  const m = side / (2 * HALF);
+  ctx.strokeStyle = "#cdd3df"; ctx.lineWidth = 1.5;
+  ctx.strokeRect(x0 + side / 2 - 0.1 * m, y0 + side / 2 - 0.1 * m, 0.2 * m, 0.2 * m);
+  ctx.strokeStyle = "#ffb454"; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(x0 + side / 2 - 0.06 * m, y0 + side / 2 - 0.1 * m);
+  ctx.lineTo(x0 + side / 2 + 0.06 * m, y0 + side / 2 - 0.1 * m); ctx.stroke();
+  ctx.fillStyle = "#8b93a6"; ctx.font = "11px ui-monospace, monospace";
+  ctx.fillText("front ↑   2 m × 2 m slice through the driver", x0, y0 - 6);
+  if (soundView === "wave") drawLegend(DIVERGE, "pressure × distance, at this instant", "−", "+");
+  else drawLegend(VIRIDIS, "sound pressure level (dB SPL)", (dbTop - 40).toFixed(0), dbTop.toFixed(0));
+}
+
+function drawPolar() {
+  const c = $("polar"), g = c.getContext("2d"), S = c.width, R = S / 2 - 30, cx = S / 2, cy = S / 2;
+  g.clearRect(0, 0, S, S);
+  g.strokeStyle = "#3a4152"; g.fillStyle = "#8b93a6"; g.font = "18px ui-monospace, monospace";
+  for (const db of [0, -10, -20, -30]) {
+    g.beginPath(); g.arc(cx, cy, R * (1 + db / 30) || 1, 0, 2 * Math.PI); g.stroke();
+    if (db < 0) g.fillText(db + "", cx + 4, cy - R * (1 + db / 30) + 16);
+  }
+  const ff = sound.ff, top = Math.max(...ff);
+  g.strokeStyle = "#ffb454"; g.lineWidth = 3; g.beginPath();
+  for (let a = 0; a <= 72; a++) {
+    const v = Math.max(0, 1 + 20 * Math.log10(ff[a % 72] / top) / 30);
+    const th = a * Math.PI / 36;
+    const x = cx + R * v * Math.sin(th), y = cy - R * v * Math.cos(th);
+    a ? g.lineTo(x, y) : g.moveTo(x, y);
+  }
+  g.stroke();
+  g.fillStyle = "#cdd3df"; g.fillText("front", cx - 24, 22); g.fillText(sound.f + " Hz", 10, S - 12);
+}
+
+// ---- wiring -------------------------------------------------------------
+function tick(now) {
+  if (tab === "structure") { if (dirty || view === "modes") drawStructure(now); }
+  else if (sound && (dirty || soundView === "wave")) drawSound(now);
+  dirty = false;
+  requestAnimationFrame(tick);
+}
+
+for (const b of document.querySelectorAll("[data-tab]")) b.onclick = async () => {
+  tab = b.dataset.tab;
+  for (const o of document.querySelectorAll("[data-tab]")) o.setAttribute("aria-pressed", String(o === b));
+  $("structurePanel").hidden = tab !== "structure";
+  $("soundPanel").hidden = tab !== "sound";
+  $("polar").hidden = tab !== "sound";
+  if (tab === "sound") await solveSound(); else await solve();
+  dirty = true;
+};
+for (const b of document.querySelectorAll("[data-view]")) b.onclick = () => {
+  view = b.dataset.view;
+  for (const o of document.querySelectorAll("[data-view]")) o.setAttribute("aria-pressed", String(o === b));
+  solve();
+};
+for (const b of document.querySelectorAll("[data-order]")) b.onclick = () => {
+  quadratic = b.dataset.order === "10";
+  for (const o of document.querySelectorAll("[data-order]")) o.setAttribute("aria-pressed", String(o === b));
+  solve();
+};
+for (const b of document.querySelectorAll("[data-sound]")) b.onclick = () => {
+  soundView = b.dataset.sound;
+  for (const o of document.querySelectorAll("[data-sound]")) o.setAttribute("aria-pressed", String(o === b));
+  dirty = true;
+};
+$("part").onchange = () => { modeIndex = 0; rebuild(); };
+$("spacing").oninput = updateLabels;
+$("spacing").onchange = rebuild;
+$("material").onchange = solve;
+$("load").oninput = updateLabels;
+$("load").onchange = solve;
+$("exaggerate").oninput = () => { updateLabels(); dirty = true; };
+$("freq").oninput = () => { $("freqValue").textContent = $("freq").value; };
+$("freq").onchange = solveSound;
+$("quality").onchange = solveSound;
+
+// A scripted run for headless checks: `?beacon` solves every case and posts
+// the numbers to the serving script's /__status.
+async function beacon() {
+  const report = { ok: true, cases: [] };
+  try {
+    for (const name of Object.keys(PARTS)) {
+      $("part").value = name;
+      for (const v of ["stress", "modes", "heat"]) {
+        view = v;
+        await rebuild();
+        report.cases.push({ part: name, view: v, nodes: model.nodeCount, ms: Math.round(solveMs), ...last });
+      }
+    }
+    view = "stress";
+    document.querySelector('[data-tab="sound"]').click();
+    await new Promise((r) => setTimeout(r, 50));
+    while (!sound) await new Promise((r) => setTimeout(r, 100));
+    report.sound = { f: sound.f, triangles: sound.triangles, spl1m: sound.spl1m, power: sound.power, ms: Math.round(sound.solveMs + sound.fieldMs) };
+  } catch (e) {
+    report.ok = false;
+    report.error = String(e && e.message || e);
+  }
+  await fetch("/__status", { method: "POST", body: JSON.stringify(report) });
+}
+
+window.addEventListener("error", (e) => {
+  $("error").textContent = String(e.message);
+  if (params.has("beacon")) fetch("/__status", { method: "POST", body: JSON.stringify({ ok: false, error: String(e.message) }) });
+});
+
+init()
+  .then(async () => {
+    resize();
+    $("banner").hidden = true;
+    requestAnimationFrame(tick);
+    if (params.has("beacon")) await beacon(); else await rebuild();
+  })
+  .catch((e) => {
+    $("bannerText").innerHTML = "Could not load the wasm module.<br><br>Build it with " +
+      "<code>crates/threers-fem/build-web.sh</code>, then serve this directory:<br>" +
+      "<code>python3 -m http.server --directory web 8080</code><br><br><small>" + e + "</small>";
+  });
+</script>
+</body>
+</html>

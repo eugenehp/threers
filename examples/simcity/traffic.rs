@@ -1493,9 +1493,7 @@ pub(crate) fn car_lamp_geometry(part: Lamp) -> BufferGeometry {
             );
             // Overwrite the far pair's colours so the pool fades out.
             let n = m.col.len();
-            for i in (n - 6)..n {
-                m.col[i] = 0.0;
-            }
+            m.col[n - 6..].fill(0.0);
         }
     }
     m.build()

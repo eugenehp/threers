@@ -1,0 +1,47 @@
+[package]
+name = "threers-fem"
+version.workspace = true
+edition = "2024"
+# Matches `threers`, which this depends on.
+rust-version = "1.99"
+authors = ["Eugene Hauptmann"]
+description = "Finite and boundary element analysis for threers — a tetrahedral mesher, linear elasticity, heat conduction and modal analysis (FEM), potential problems and acoustics (BEM). Pure Rust, wasm-ready"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/eugenehp/threers"
+homepage = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-fem"
+keywords = ["fem", "bem", "finite-element", "simulation", "acoustics"]
+categories = ["science", "simulation", "mathematics", "wasm"]
+
+[lib]
+bench = false
+# `cdylib` for the wasm build the web demo and the npm users load; `rlib` for
+# everyone else.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# Element assembly, BEM matrix assembly and field evaluation across threads
+# via rayon. Native only; on wasm32 it is a no-op, as in the other crates.
+parallel = ["dep:rayon"]
+# JavaScript bindings through wasm-bindgen (`threers_fem::wasm`), for the
+# browser: `build-web.sh` builds them into web/pkg-fem.
+wasm = ["dep:wasm-bindgen"]
+
+[dependencies]
+# Geometry in and out (`BufferGeometry`) and colour ramps for result plots.
+# Nothing here draws, so the renderer stays out of the build.
+threers = { path = "../..", version = "0.0.12", default-features = false }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { version = "1.10", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
+
+[[example]]
+name = "fem_bracket"
+
+[[example]]
+name = "bem_speaker"

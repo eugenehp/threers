@@ -108,8 +108,18 @@ impl BodyReport {
 
 impl Body {
     /// Assemble from parts. Used by the boolean, which builds faces directly
-    /// rather than deriving them from a mesh.
-    pub(crate) fn from_parts(
+    /// rather than deriving them from a mesh, and by callers that hold a
+    /// B-rep of their own (a CAD file's topology) and want this kernel's
+    /// operations on it.
+    ///
+    /// Nothing is checked here. What the operations expect of the parts: each
+    /// [`Edge`] names the two surfaces it lies between and lists its vertices
+    /// in order, both of its faces using those same indices; a face lists
+    /// every edge that bounds it; `flipped` says whether the face's outside is
+    /// against its surface's normal; and a face that closes on itself has its
+    /// `u_wraps` / `v_wraps` set instead of a seam edge. Ask
+    /// [`Body::is_valid_solid`] whether the result is a closed solid.
+    pub fn from_parts(
         surfaces: Vec<Surface>,
         vertices: Vec<V3>,
         edges: Vec<Edge>,
@@ -651,6 +661,28 @@ impl Body {
         }
 
         let boundary_edges = count_boundary_edges(&indices);
+        if boundary_edges > 0 && std::env::var("THREERS_BREP_DEBUG").is_ok() {
+            let mut counts: HashMap<(u32, u32), usize> = HashMap::new();
+            for t in indices.as_chunks::<3>().0 {
+                for k in 0..3 {
+                    let (a, b) = (t[k], t[(k + 1) % 3]);
+                    *counts.entry((a.min(b), a.max(b))).or_insert(0) += 1;
+                }
+            }
+            let at = |i: u32| {
+                let o = i as usize * 3;
+                [positions[o], positions[o + 1], positions[o + 2]]
+            };
+            let mut open: Vec<_> = counts
+                .iter()
+                .filter(|(_, c)| **c == 1)
+                .map(|(e, _)| *e)
+                .collect();
+            open.sort_unstable();
+            for (a, b) in open.iter().take(12) {
+                eprintln!("  [brep] open edge {a}-{b}: {:?} {:?}", at(*a), at(*b));
+            }
+        }
         let mut g = BufferGeometry::new();
         let vertices = positions.len() / 3;
         g.set_attribute("position", BufferAttribute::new(positions, 3));
@@ -727,12 +759,20 @@ impl Body {
 
         // One simple polygon covering the face, holes spliced in.
         let hole_uv: Vec<Vec<[f64; 2]>> = holes.iter().map(|h| undoubled(&h.uv)).collect();
-        let Some((ring_uv, ring_map)) = bridge_holes(&outer.uv, &hole_uv) else {
-            if std::env::var("THREERS_BREP_DEBUG").is_ok() {
-                eprintln!("  [brep] face {face_index}: bridge_holes failed");
+        // Where no bridge can be found, the loops as they are, for the
+        // triangulation below that needs none.
+        let bridged = bridge_holes(&outer.uv, &hole_uv);
+        if bridged.is_none() && std::env::var("THREERS_BREP_DEBUG").is_ok() {
+            eprintln!("  [brep] face {face_index}: bridge_holes failed");
+        }
+        let (ring_uv, ring_map) = bridged.clone().unwrap_or_else(|| {
+            let mut uv = outer.uv.clone();
+            for h in &hole_uv {
+                uv.extend_from_slice(h);
             }
-            return false;
-        };
+            let n = uv.len();
+            (uv, (0..n).collect())
+        });
 
         // `ring_map` indexes the concatenation outer ++ holes. Each entry
         // resolves to a *body* vertex when the loop was derived from edges, and
@@ -793,7 +833,11 @@ impl Body {
             return false;
         }
 
-        let tris = earclip(&ring_uv);
+        let mut tris = if bridged.is_some() {
+            earclip(&ring_uv)
+        } else {
+            Vec::new()
+        };
 
         // Say so when the clip did not cover the face.
         //
@@ -809,7 +853,27 @@ impl Body {
         // 71` that cover their rings completely. What matters is whether any of
         // the face is missing.
         {
-            let want = signed_area(&ring_uv).abs();
+            let want = signed_area(&outer.uv).abs()
+                - hole_uv.iter().map(|h| signed_area(h).abs()).sum::<f64>();
+            let got: f64 = tris
+                .iter()
+                .map(|t| {
+                    let (a, b, c) = (ring_uv[t[0]], ring_uv[t[1]], ring_uv[t[2]]);
+                    (((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])) / 2.0).abs()
+                })
+                .sum();
+            if want > 0.0 && got < want * 0.99 {
+                // Bridging holes to the outline makes a ring that is simple
+                // only weakly — its channels meet at shared vertices — and an
+                // ear clip is not sure to finish one. A constrained Delaunay
+                // triangulation of the loops themselves needs no bridges:
+                // three holes in a row through a plate, its top left 676
+                // edges open by the clip, fill by it.
+                #[cfg(feature = "brep-csg")]
+                if let Some(t) = constrained_fill(&lookup_uv, outer.uv.len(), &hole_uv, &ring_map) {
+                    tris = t;
+                }
+            }
             let got: f64 = tris
                 .iter()
                 .map(|t| {
@@ -1698,8 +1762,7 @@ fn subdivide(
     vertices: &mut Vec<V3>,
     out: &mut Vec<usize>,
 ) {
-    const MAX_DEPTH: usize = 10;
-    if depth >= MAX_DEPTH {
+    if depth >= super::settings::settings().max_refine_depth {
         return;
     }
     let mid = v3::scale(v3::add(p, q), 0.5);
@@ -3018,7 +3081,7 @@ impl Body {
     /// face.
     fn revolved(base: V3, axis: V3, radius_top: f64, radius_bottom: f64, height: f64) -> Body {
         use std::f64::consts::{PI, TAU};
-        const NOMINAL: usize = 16;
+        let nominal = super::settings::settings().rim_segments.max(3);
 
         let axis = crate::nurbs::v3::normalize(axis).unwrap_or([0.0, 0.0, 1.0]);
         let side = if (radius_top - radius_bottom).abs() < 1e-12 {
@@ -3050,9 +3113,9 @@ impl Body {
         let side_surface = surfaces[0].clone();
         let rim = |centre: V3, r: f64, vertices: &mut Vec<V3>| -> Vec<usize> {
             let s = &side_surface;
-            let mut ids = Vec::with_capacity(NOMINAL + 1);
-            for i in 0..NOMINAL {
-                let u = -PI + TAU * i as f64 / NOMINAL as f64;
+            let mut ids = Vec::with_capacity(nominal + 1);
+            for i in 0..nominal {
+                let u = -PI + TAU * i as f64 / nominal as f64;
                 // Take the point from the *side* surface, so the rim lies on it
                 // exactly rather than merely near it.
                 let p = match s.invert(v3::add(
@@ -3234,8 +3297,14 @@ impl TrimLoop {
                 hi[k] = hi[k].max(c[k]);
             }
         }
+        // A rim at constant `v` read off a surface whose axis carries a
+        // rounding error spans `v` by 1e-15 or so: a line still. Measured on
+        // a drill mirrored in a datum plane whose normal was out by 4e-16 —
+        // its rims counted as rings, the wall stopped being a rectangle,
+        // and every cut through it was declined.
+        let flat = (0..2).any(|k| hi[k] - lo[k] <= 1e-12 * (1.0 + lo[k].abs().max(hi[k].abs())));
         let extent = (hi[0] - lo[0]) * (hi[1] - lo[1]);
-        extent <= 0.0 || self.area.abs() <= extent * 1e-9
+        flat || extent <= 0.0 || self.area.abs() <= extent * 1e-9
     }
 
     /// The ring a face is bounded *by*. Never a rim.
@@ -3689,7 +3758,7 @@ impl Body {
     /// another.
     pub fn plate_with_holes(size: V3, holes: &[([f64; 2], f64)]) -> Option<Body> {
         use std::f64::consts::{PI, TAU};
-        const NOMINAL: usize = 16;
+        let nominal = super::settings::settings().rim_segments.max(3);
 
         let (hx, hy, hz) = (size[0] * 0.5, size[1] * 0.5, size[2] * 0.5);
         if holes.is_empty() {
@@ -3761,9 +3830,9 @@ impl Body {
         for b in 0..holes.len() {
             let bore = first_bore + b;
             for (plane, z) in [(4usize, hz), (5usize, -hz)] {
-                let mut ids = Vec::with_capacity(NOMINAL + 1);
-                for i in 0..NOMINAL {
-                    let u = -PI + TAU * i as f64 / NOMINAL as f64;
+                let mut ids = Vec::with_capacity(nominal + 1);
+                for i in 0..nominal {
+                    let u = -PI + TAU * i as f64 / nominal as f64;
                     vertices.push(surfaces[bore].point(u, z));
                     ids.push(vertices.len() - 1);
                 }
@@ -3810,6 +3879,95 @@ impl Body {
 
         Some(Body::from_parts(surfaces, vertices, edges, faces))
     }
+}
+
+/// A face's loops triangulated as they are, without bridging: a constrained
+/// Delaunay triangulation of all their points with their sides as
+/// constraints, kept where it is inside the face. The triangles index the
+/// bridged ring (`ring_map` takes a ring position to a loop point), so they
+/// stand in for the ear clip's.
+#[cfg(feature = "brep-csg")]
+fn constrained_fill(
+    points: &[[f64; 2]],
+    outer: usize,
+    holes: &[Vec<[f64; 2]>],
+    ring_map: &[usize],
+) -> Option<Vec<[usize; 3]>> {
+    use crate::exact_csg::cdt::triangulate_constrained;
+    // The loops' sizes, as the points list concatenates them.
+    let mut sizes = vec![outer];
+    sizes.extend(holes.iter().map(|h| h.len()));
+    if sizes.iter().sum::<usize>() != points.len() {
+        return None;
+    }
+    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for p in points {
+        for k in 0..2 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+    }
+    let span = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(1e-12);
+    let c = [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5];
+    // A triangle round everything, then the loops' points.
+    let mut pts = vec![
+        [c[0] - 20.0 * span, c[1] - 10.0 * span],
+        [c[0] + 20.0 * span, c[1] - 10.0 * span],
+        [c[0], c[1] + 20.0 * span],
+    ];
+    pts.extend_from_slice(points);
+    let mut constraints = Vec::new();
+    let mut rings: Vec<Vec<[f64; 2]>> = Vec::new();
+    let mut start = 0;
+    for &n in &sizes {
+        for k in 0..n {
+            constraints.push([3 + start + k, 3 + start + (k + 1) % n]);
+        }
+        rings.push(points[start..start + n].to_vec());
+        start += n;
+    }
+    let tris = triangulate_constrained(&pts, &constraints)?;
+    // Each loop point at one place in the bridged ring.
+    let mut at: Vec<Option<usize>> = vec![None; points.len()];
+    for (j, &k) in ring_map.iter().enumerate() {
+        if k < at.len() && at[k].is_none() {
+            at[k] = Some(j);
+        }
+    }
+    let inside = |p: [f64; 2]| {
+        let mut odd = false;
+        for r in &rings {
+            let n = r.len();
+            for i in 0..n {
+                let (a, b) = (r[i], r[(i + 1) % n]);
+                if (a[1] > p[1]) != (b[1] > p[1])
+                    && p[0] < a[0] + (p[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0])
+                {
+                    odd = !odd;
+                }
+            }
+        }
+        odd
+    };
+    let mut out = Vec::with_capacity(tris.len());
+    for t in tris {
+        if t.iter().any(|&i| i < 3) {
+            continue;
+        }
+        let (a, b, d) = (pts[t[0]], pts[t[1]], pts[t[2]]);
+        if !inside([(a[0] + b[0] + d[0]) / 3.0, (a[1] + b[1] + d[1]) / 3.0]) {
+            continue;
+        }
+        let ids = [at[t[0] - 3]?, at[t[1] - 3]?, at[t[2] - 3]?];
+        // As the ear clip winds them.
+        let cross = (b[0] - a[0]) * (d[1] - a[1]) - (b[1] - a[1]) * (d[0] - a[0]);
+        out.push(if cross >= 0.0 {
+            ids
+        } else {
+            [ids[0], ids[2], ids[1]]
+        });
+    }
+    Some(out)
 }
 
 /// Ear-clip a simple polygon that may contain bridge channels.

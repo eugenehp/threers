@@ -12,6 +12,7 @@ members = [
     "crates/threers-softbody",
     "crates/threers-probe",
     "crates/threers-physics",
+    "crates/threers-fem",
     "crates/threers-ocean",
     "crates/threers-animation",
     "crates/threers-ecs",
@@ -428,6 +429,10 @@ required-features = ["usd"]
 
 [[example]]
 name = "ui_panel"
+required-features = ["ui"]
+
+[[example]]
+name = "ui_model_view"
 required-features = ["ui"]
 
 [[example]]
@@ -926,6 +931,10 @@ required-features = ["brep-kernel"]
 
 [[test]]
 name = "brep_boolean"
+required-features = ["brep-kernel"]
+
+[[test]]
+name = "brep_boolean_property"
 required-features = ["brep-kernel"]
 
 [[test]]

@@ -28,7 +28,7 @@
 pub mod analytic;
 mod arrangement;
 mod bvh;
-mod cdt;
+pub(crate) mod cdt;
 mod coplanar;
 pub mod metrics;
 

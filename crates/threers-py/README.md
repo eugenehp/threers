@@ -6,7 +6,7 @@ Python bindings for [threers](https://github.com/eugenehp/threers) via
 ```bash
 pip install threers          # when published
 # or from this crate:
-maturin develop --features headless,physics,animation
+maturin develop --features headless,physics,animation,fem
 ```
 
 ## Quick start
@@ -196,7 +196,7 @@ print(tween.value())
 ## Tests
 
 ```bash
-maturin develop --features headless,physics,animation
+maturin develop --features headless,physics,animation,fem
 pytest tests
 ```
 
@@ -205,11 +205,11 @@ pytest tests
 ```bash
 cd crates/threers-py
 # editable install for local work
-maturin develop --features headless,physics,animation
+maturin develop --features headless,physics,animation,fem
 
 # wheels for PyPI
-maturin build --release --features headless,physics,animation
-maturin publish --features headless,physics,animation
+maturin build --release --features headless,physics,animation,fem
+maturin publish --features headless,physics,animation,fem
 ```
 
 Requires a working Rust toolchain and, for `HeadlessRenderer`, a GPU that wgpu
@@ -229,7 +229,7 @@ Wheels are built per platform (see
 | Windows x64 | `x86_64-pc-windows-msvc` |
 
 ```bash
-maturin build --release --features headless,physics,animation --target aarch64-apple-darwin
+maturin build --release --features headless,physics,animation,fem --target aarch64-apple-darwin
 ```
 
 Language binding overview: [`docs/bindings.md`](../../docs/bindings.md).

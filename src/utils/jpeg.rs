@@ -36,7 +36,9 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<JpegImage, String> {
     let rgba = match pixels.len() / count {
         4 => pixels,
         3 => pixels
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|c| [c[0], c[1], c[2], 255])
             .collect(),
         1 => pixels.iter().flat_map(|&g| [g, g, g, 255]).collect(),
@@ -101,7 +103,9 @@ mod tests {
         assert!(
             image
                 .rgba
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .all(|p| near(p, [128, 128, 128, 255])),
             "{:?}",
             &image.rgba[..4]

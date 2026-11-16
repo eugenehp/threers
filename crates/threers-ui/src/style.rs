@@ -660,6 +660,11 @@ pub struct Style {
     /// and zero-width spaces (U+200B, `<wbr>`), or anywhere in a word too
     /// long for the line (inherited).
     pub wrap: bool,
+    /// `white-space: pre`, `pre-wrap`, `pre-line` or `break-spaces`: a
+    /// line break in the text starts a new line, and the box is as tall as
+    /// its lines and as wide as the widest (inherited). Without it a text is
+    /// laid out as one run, as `normal` and `nowrap` treat a break as space.
+    pub keep_newlines: bool,
     /// `text-align`: each line of a text across its box (inherited).
     pub text_align: TextAlign,
     /// `font-style: italic` (inherited).
@@ -784,6 +789,7 @@ impl Default for Style {
             background_clip_content: false,
             subpixel: false,
             wrap: false,
+            keep_newlines: false,
             text_align: TextAlign::Start,
             italic: false,
             ellipsis: false,

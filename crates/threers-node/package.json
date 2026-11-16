@@ -1,7 +1,7 @@
 {
   "name": "threers-node",
   "version": "0.0.12",
-  "description": "Native Node.js bindings for threers (napi-rs) — headless wgpu, math, animation, physics",
+  "description": "Native Node.js bindings for threers (napi-rs) — headless wgpu, math, animation, physics, finite and boundary elements",
   "license": "MIT",
   "main": "index.js",
   "types": "index.d.ts",
@@ -23,8 +23,8 @@
   ],
   "scripts": {
     "artifacts": "napi artifacts",
-    "build": "napi build --platform --release --features headless,physics,animation",
-    "build:debug": "napi build --platform --features headless,physics,animation",
+    "build": "napi build --platform --release --features headless,physics,animation,fem",
+    "build:debug": "napi build --platform --features headless,physics,animation,fem",
     "test": "node --test test/*.test.mjs",
     "pack": "bash ../../scripts/release-all.sh pack",
     "prepublishOnly": "napi pre-publish -t npm --skip-optional-publish",

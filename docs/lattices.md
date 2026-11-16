@@ -295,6 +295,73 @@ and wave directions a hash of their own, so the field is a pure function of the
 point and the seed. The same lattice samples the same at any resolution, on any
 thread, in any process.
 
+## Scale-rich networks
+
+Every lattice above has a scale — a cell, a strut diameter, a coordination
+number — and a foam only blurs it. `ScaleRich` has none (Both, Chen et al.,
+*Nature* 659, 2026). It is grown, not sampled: a point is picked in the open
+space, a straight ligament laid through it until it meets material or the
+wall, and the next one is thinner — `λ₀ · t^(−α)` at step `t`. Lengths,
+widths and connectivity then all span orders of magnitude in one part, and two
+numbers set everything: `λ₀` the first ligament's width, `α` how fast the
+rest thin out.
+
+```rust
+use threers::{ScaleRich, ScaleRichAngles};
+
+// One of the paper's samples: 500 ligaments, about 40 % dense.
+let net = ScaleRich::new(0.3, 0.03).steps(500).seed(1).grow();
+let density = net.relative_density();
+let eta = net.geometric_anisotropy(); // 1 isotropic, 0 all one way
+let part = net.geometry(40.0, 5.0); // a 40 mm tile, 5 mm thick
+
+// The same rule in a ring, its ligaments following the ring round, seeded
+// more often towards the outside.
+let circle = |r: f64| -> Vec<[f64; 2]> {
+    (0..96)
+        .map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / 96.0;
+            [r * a.cos(), r * a.sin()]
+        })
+        .collect()
+};
+let ring = ScaleRich::new(0.3, 0.05)
+    .domain(circle(1.0), vec![circle(0.42)])
+    .angles(ScaleRichAngles::field(|p| p[1].atan2(p[0]) + std::f64::consts::FRAC_PI_2))
+    .nucleation(|p| (p[0] * p[0] + p[1] * p[1]).sqrt())
+    .grow();
+```
+
+| | |
+|--|--|
+| `steps`, `seed` | ligaments to try, and which network |
+| `gap` | a point is accepted only if a strip `λ + gap` wide fits across it (0.03, as the authors'; 0 for the paper's analytical model) |
+| `angles` | `Uniform`, a `Set` of directions, or a `field` read at each nucleation point |
+| `domain` | any polygon, holes allowed, in place of the unit square |
+| `nucleation` | how likely each point is to seed a ligament: a density gradient |
+
+The growth rule is the authors' reference code's, down to what the paper
+leaves out, and the densities of their published samples come out within the
+spread between seeds. A grown `ScaleRichNet` gives its ligaments (width,
+direction, centreline, outline, neighbours) and pores, the degree
+distribution (a `k⁻³` tail), the orientation tensor and its anisotropy, and
+the part — `outlines()` from an integer boolean, `shapes()`, or a closed
+extruded `geometry()`. The pores meet one another and the walls exactly, and
+an integer boolean can misjudge polygons that nearly touch, so each pore is
+grown by two grid units first: the part is a few nanometres thinner round
+each pore on a 100 mm part, and its area holds at every scale tested. 30,000 steps grow in about 20 ms.
+
+It is not a `LatticeKind`, on purpose: at `α = 0.9` the widest ligament is
+hundreds of times the thinnest, and a sample grid fine enough for the thin
+ones is hopeless for the part. The outline is polygons instead.
+
+![Scale-rich networks across α and density, and grown in shapes](images/lattice_scale_rich.jpg)
+
+<sub>`cargo run --release --example lattice_scale_rich` — columns: α = 0, 0.3,
+0.6, 0.9; top three rows: 20, 40 and 60 % dense, λ₀ from the published design
+table; bottom row: a ring along a circular field, seeding graded left to
+right, an L with two holes, three directions.</sub>
+
 ## Before it goes to the printer
 
 `utils::mesh_check` answers the questions a slicer will ask, for any mesh:

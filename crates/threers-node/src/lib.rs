@@ -6,6 +6,9 @@
 
 #![deny(clippy::all)]
 
+#[cfg(feature = "fem")]
+pub mod fem;
+
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
@@ -890,10 +893,13 @@ impl JsScene {
 
     /// Load a model file into the scene: `.glb`, `.gltf` (external buffers
     /// resolved next to the file), `.obj`, `.stl`, `.ply`, and `.usda` /
-    /// `.usdc` / `.usdz` / `.usd` when built with the `usd` feature. Returns a
-    /// handle: the mesh itself for the single-mesh formats (OBJ/STL/PLY), a
-    /// group holding the model otherwise. `material` replaces the loaded
-    /// materials (OBJ/STL/PLY default to a grey `Material.standard`).
+    /// `.usdc` / `.usdz` / `.usd` when built with the `usd` feature, and
+    /// G-code toolpaths (`.gcode` / `.gco` / `.ngc`, as three.js's
+    /// `GCodeLoader` draws them: green extrusion, red travel, Z up turned to
+    /// Y up). Returns a handle: the mesh itself for the single-mesh formats
+    /// (OBJ/STL/PLY), a group holding the model otherwise. `material` replaces
+    /// the loaded materials (OBJ/STL/PLY default to a grey
+    /// `Material.standard`; G-code ignores it).
     #[napi]
     pub fn load(
         &mut self,
@@ -912,14 +918,15 @@ impl JsScene {
     }
 
     /// Like `load`, from bytes. `format`: `'glb' | 'gltf' | 'obj' | 'stl' |
-    /// 'ply' | 'usd'` (`'usda' | 'usdc' | 'usdz'` also accepted). A `.gltf`
-    /// given as bytes must embed its buffers as data URIs.
+    /// 'ply' | 'usd' | 'gcode'` (`'usda' | 'usdc' | 'usdz'`, `'gco' | 'ngc'`
+    /// also accepted). A `.gltf` given as bytes must embed its buffers as data
+    /// URIs.
     #[napi]
     pub fn load_bytes(
         &mut self,
         data: Buffer,
         #[napi(
-            ts_arg_type = "'glb' | 'gltf' | 'obj' | 'stl' | 'ply' | 'usd' | 'usda' | 'usdc' | 'usdz'"
+            ts_arg_type = "'glb' | 'gltf' | 'obj' | 'stl' | 'ply' | 'usd' | 'usda' | 'usdc' | 'usdz' | 'gcode' | 'gco' | 'ngc'"
         )]
         format: String,
         #[napi(ts_arg_type = "Material")] material: Option<Instance<JsMaterial>>,
@@ -2472,6 +2479,7 @@ enum ModelFormat {
     Ply,
     Fbx,
     Usd,
+    Gcode,
 }
 
 fn parse_format(name: &str) -> std::result::Result<ModelFormat, String> {
@@ -2483,8 +2491,9 @@ fn parse_format(name: &str) -> std::result::Result<ModelFormat, String> {
         "ply" => ModelFormat::Ply,
         "fbx" => ModelFormat::Fbx,
         "usd" | "usda" | "usdc" | "usdz" => ModelFormat::Usd,
+        "gcode" | "gco" | "ngc" => ModelFormat::Gcode,
         other => {
-            let known = "glb, gltf, obj, stl, ply, fbx, usd, usda, usdc, usdz";
+            let known = "glb, gltf, obj, stl, ply, fbx, usd, usda, usdc, usdz, gcode, gco, ngc";
             return Err(format!("unknown model format '{other}' ({known})"));
         }
     })
@@ -2534,6 +2543,17 @@ fn load_into(
         ModelFormat::Ply => {
             let obj = mesh_of(threers::loaders::PlyLoader::parse(bytes), material)?;
             return Ok(scene.add(obj));
+        }
+        ModelFormat::Gcode => {
+            // Slicers write Latin-1 into comments now and then; they hold
+            // nothing the toolpath needs.
+            let text = String::from_utf8_lossy(bytes);
+            let path = threers::loaders::GcodeLoader::default().parse(&text);
+            if path.layers.is_empty() {
+                return Err("G-code: file contains no moves".into());
+            }
+            // Travel and extrusion keep their colours; `material` is for meshes.
+            return Ok(path.add_to_scene(scene));
         }
         ModelFormat::Glb => GltfLoader::parse_glb(bytes)
             .map_err(|e| format!("glTF: {e:?}"))?

@@ -190,9 +190,9 @@ pub fn depths(system: &ParticleSystem, sun: Vector3) -> Vec<[f32; 2]> {
     let n = ps.len();
     let mut radius = Vec::with_capacity(n);
     let mut sigma = Vec::with_capacity(n);
-    for i in 0..n {
+    for (i, &size) in ps.size.iter().enumerate().take(n) {
         let t = system.life_fraction(i);
-        radius.push(ps.size[i] * system.size_over_life.at(t) * 0.5);
+        radius.push(size * system.size_over_life.at(t) * 0.5);
         sigma.push(system.look.extinction * system.color_over_life.at(t)[3].clamp(0.0, 1.0));
     }
     let to_sun = optical_depths(&ps.position, &radius, &sigma, sun);

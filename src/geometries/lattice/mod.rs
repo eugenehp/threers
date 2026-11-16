@@ -175,6 +175,7 @@ mod infill;
 mod mesher;
 mod metrics;
 mod region;
+mod scale_rich;
 mod stochastic;
 mod strut;
 mod tpms;
@@ -192,6 +193,7 @@ pub use homogenize::{
 pub use infill::Infill;
 pub use metrics::LatticeMetrics;
 pub use region::Region;
+pub use scale_rich::{ScaleRich, ScaleRichAngles, ScaleRichLigament, ScaleRichNet};
 pub use stochastic::{SeedLayout, Stochastic};
 pub use strut::{Segment, Strut};
 pub use tpms::Tpms;

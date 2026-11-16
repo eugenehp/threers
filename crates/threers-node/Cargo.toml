@@ -23,6 +23,8 @@ path = "src/lib.rs"
 default = ["headless", "usd"]
 headless = []
 physics = ["dep:threers-physics"]
+# Finite and boundary element analysis (threers-fem): `FemModel`, `FemSurface`.
+fem = ["dep:threers-fem"]
 animation = ["dep:threers-animation"]
 # `.usda` / `.usdc` / `.usdz` in `Scene.load` (pure Rust; compile time only).
 usd = ["threers/usd"]
@@ -30,6 +32,7 @@ usd = ["threers/usd"]
 [dependencies]
 threers = { path = "../..", version = "0.0.12" }
 threers-physics = { path = "../threers-physics", version = "0.0.12", optional = true }
+threers-fem = { path = "../threers-fem", version = "0.0.12", optional = true }
 threers-animation = { path = "../threers-animation", version = "0.0.12", optional = true, default-features = false }
 napi = { version = "3", default-features = false, features = ["napi4"] }
 napi-derive = "3"

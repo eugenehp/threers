@@ -59,8 +59,8 @@ pub use lattice::{
     ChiralRule, Conductivity, Conform, Cuboct, CuboctAssembly, CuboctAssemblyPlan,
     CuboctAssemblyStep, CuboctFrame, CuboctJoint, CuboctJointKind, Field, FrameMaterial,
     FrameResponse, Hand, Infill, Lattice, LatticeGeometry, LatticeKind, LatticeMetrics,
-    LatticeStyle, Region, SeedLayout, Segment, SolidMaterial, Solver, Stiffness, Stochastic,
-    Strength, Strut, Tpms,
+    LatticeStyle, Region, ScaleRich, ScaleRichAngles, ScaleRichLigament, ScaleRichNet, SeedLayout,
+    Segment, SolidMaterial, Solver, Stiffness, Stochastic, Strength, Strut, Tpms,
 };
 pub use mesh_builder::{MeshBuilder, MeshReport};
 #[cfg(feature = "nurbs")]

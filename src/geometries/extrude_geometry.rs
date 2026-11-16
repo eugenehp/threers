@@ -1,25 +1,58 @@
 use crate::core::{BufferAttribute, BufferGeometry};
-use crate::curves::{earcut, Curve2, Shape};
+use crate::curves::{earcut, Shape};
 
 pub struct ExtrudeGeometry;
 
 impl ExtrudeGeometry {
-    /// Simplified extrusion: take the outline of `shape`, sample it into a
-    /// 2D contour, then sweep it along Z by `depth`. The cap faces are
-    /// triangulated with a fan from the first vertex (assumes a convex
-    /// outline — three.js's earcut-based triangulation lands later).
+    /// Simplified extrusion: sample the outline of `shape` and its holes
+    /// into 2D contours and sweep them along Z by `depth`: earcut caps with
+    /// the holes left open, and a wall round the outline and every hole.
     pub fn new(shape: &Shape, depth: f32, samples_per_segment: usize) -> BufferGeometry {
-        let pts2 = shape
-            .outline
-            .curve_path
-            .get_points(samples_per_segment.max(2));
-        let n = pts2.len();
-        if n < 3 {
+        let divisions = samples_per_segment.max(2);
+        let signed_area = |c: &[crate::math::Vector2]| {
+            let n = c.len();
+            (0..n)
+                .map(|i| c[i].x * c[(i + 1) % n].y - c[(i + 1) % n].x * c[i].y)
+                .sum::<f32>()
+        };
+        // A closed contour, wound counter-clockwise for the outline and
+        // clockwise for a hole, so every wall's normal points out of the
+        // material. A sampled loop repeats its first point at the end.
+        let contour = |path: &crate::curves::Path, ccw: bool| {
+            // Per segment: `curve_path.get_points` would spread `divisions`
+            // over the whole outline and cut its corners.
+            let mut c = path.get_points(divisions);
+            if c.len() > 1 && c.first() == c.last() {
+                c.pop();
+            }
+            if (signed_area(&c) > 0.0) != ccw {
+                c.reverse();
+            }
+            c
+        };
+        let outline = contour(&shape.outline, true);
+        if outline.len() < 3 {
             return BufferGeometry::new();
         }
-        let mut positions = Vec::with_capacity(2 * n * 3 + 6 * n);
-        let mut normals = Vec::with_capacity(2 * n * 3 + 6 * n);
-        let mut uvs = Vec::with_capacity(2 * n * 2 + 4 * n);
+        let mut contours = vec![outline];
+        contours.extend(
+            shape
+                .holes
+                .iter()
+                .map(|h| contour(h, false))
+                .filter(|h| h.len() >= 3),
+        );
+        let pts2: Vec<crate::math::Vector2> = contours.iter().flatten().copied().collect();
+        let mut hole_starts = vec![];
+        let mut at = 0;
+        for c in &contours[..contours.len() - 1] {
+            at += c.len();
+            hole_starts.push(at);
+        }
+        let n = pts2.len();
+        let mut positions = Vec::with_capacity(2 * n * 3 + 12 * n);
+        let mut normals = Vec::with_capacity(2 * n * 3 + 12 * n);
+        let mut uvs = Vec::with_capacity(2 * n * 2 + 8 * n);
         let mut indices = Vec::new();
 
         // Bottom cap (z = 0).
@@ -34,8 +67,8 @@ impl ExtrudeGeometry {
             normals.extend_from_slice(&[0.0, 0.0, 1.0]);
             uvs.extend_from_slice(&[p.x, p.y]);
         }
-        // Earcut caps (handles concave outlines).
-        let tris = earcut::earcut(&pts2, &[]);
+        // Earcut caps, counter-clockwise, holes left open.
+        let tris = earcut::earcut(&pts2, &hole_starts);
         // Read only by the `brep` tagging below; without that feature nothing
         // consumes it, and it is not worth cfg-ing the arithmetic itself.
         #[cfg_attr(not(feature = "brep"), allow(unused_variables))]
@@ -51,30 +84,29 @@ impl ExtrudeGeometry {
         let mut polygons = super::polygons::CellPolygons::new();
         polygons.triangles(indices.len() / 3);
         // Sides — each contour edge becomes a quad (4 unique vertices for flat shading).
-        let side_base = positions.len() / 3;
-        let _ = side_base;
-        for i in 0..n {
-            let a = pts2[i];
-            let b = pts2[(i + 1) % n];
-            // Per-quad normal (outward in XY plane).
-            let edge_x = b.x - a.x;
-            let edge_y = b.y - a.y;
-            let nx_raw = edge_y;
-            let ny_raw = -edge_x;
-            let nlen = (nx_raw * nx_raw + ny_raw * ny_raw).sqrt().max(1e-8);
-            let nx = nx_raw / nlen;
-            let ny = ny_raw / nlen;
-            let base = (positions.len() / 3) as u32;
-            positions.extend_from_slice(&[a.x, a.y, 0.0]);
-            positions.extend_from_slice(&[b.x, b.y, 0.0]);
-            positions.extend_from_slice(&[b.x, b.y, depth]);
-            positions.extend_from_slice(&[a.x, a.y, depth]);
-            for _ in 0..4 {
-                normals.extend_from_slice(&[nx, ny, 0.0]);
+        for c in &contours {
+            let m = c.len();
+            for i in 0..m {
+                let a = c[i];
+                let b = c[(i + 1) % m];
+                // Per-quad normal (outward in XY plane).
+                let edge_x = b.x - a.x;
+                let edge_y = b.y - a.y;
+                let nlen = (edge_y * edge_y + edge_x * edge_x).sqrt().max(1e-8);
+                let nx = edge_y / nlen;
+                let ny = -edge_x / nlen;
+                let base = (positions.len() / 3) as u32;
+                positions.extend_from_slice(&[a.x, a.y, 0.0]);
+                positions.extend_from_slice(&[b.x, b.y, 0.0]);
+                positions.extend_from_slice(&[b.x, b.y, depth]);
+                positions.extend_from_slice(&[a.x, a.y, depth]);
+                for _ in 0..4 {
+                    normals.extend_from_slice(&[nx, ny, 0.0]);
+                }
+                uvs.extend_from_slice(&[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]);
+                indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+                polygons.quad(&positions, [base, base + 1, base + 2, base + 3]);
             }
-            uvs.extend_from_slice(&[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]);
-            indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-            polygons.quad(&positions, [base, base + 1, base + 2, base + 3]);
         }
 
         let mut g = BufferGeometry::new();
@@ -83,8 +115,11 @@ impl ExtrudeGeometry {
         g.set_attribute("uv", BufferAttribute::new(uvs, 2));
         g.set_index(indices);
         polygons.apply(&mut g);
+        // The B-rep tags describe a prism over one contour.
         #[cfg(feature = "brep")]
-        crate::brep::primitives::tag_extrude(&mut g, &pts2, depth, cap_triangles);
+        if contours.len() == 1 {
+            crate::brep::primitives::tag_extrude(&mut g, &pts2, depth, cap_triangles);
+        }
         g
     }
 }
@@ -587,5 +622,86 @@ fn side_wall_uv(v: &[f64], a: usize, b: usize, c: usize, d: usize) -> [[f64; 2];
             [cy, 1.0 - cz],
             [dy, 1.0 - dz],
         ]
+    }
+}
+
+#[cfg(test)]
+mod hole_tests {
+    use super::ExtrudeGeometry;
+    use crate::curves::{Path, Shape};
+    use crate::math::Vector2;
+
+    fn square(path: &mut Path, x: f32, y: f32, size: f32) {
+        path.move_to(Vector2::new(x, y))
+            .line_to(Vector2::new(x + size, y))
+            .line_to(Vector2::new(x + size, y + size))
+            .line_to(Vector2::new(x, y + size))
+            .line_to(Vector2::new(x, y));
+    }
+
+    /// A 4 × 4 plate with a 2 × 2 window, 1 deep.
+    fn plate(hole_clockwise: bool) -> Shape {
+        let mut shape = Shape::new();
+        square(&mut shape.outline, 0.0, 0.0, 4.0);
+        let mut hole = Path::new();
+        if hole_clockwise {
+            hole.move_to(Vector2::new(1.0, 1.0))
+                .line_to(Vector2::new(1.0, 3.0))
+                .line_to(Vector2::new(3.0, 3.0))
+                .line_to(Vector2::new(3.0, 1.0))
+                .line_to(Vector2::new(1.0, 1.0));
+        } else {
+            square(&mut hole, 1.0, 1.0, 2.0);
+        }
+        shape.add_hole(hole);
+        shape
+    }
+
+    fn triangles(g: &crate::core::BufferGeometry) -> Vec<[[f32; 3]; 3]> {
+        let pos = &g.get_attribute("position").unwrap().array;
+        let v = |i: u32| [pos[i as usize * 3], pos[i as usize * 3 + 1], pos[i as usize * 3 + 2]];
+        let n = (pos.len() / 3) as u32;
+        let idx = g.index.clone().unwrap_or_else(|| (0..n).collect());
+        assert!(!idx.is_empty(), "something was built");
+        idx.chunks(3).map(|t| [v(t[0]), v(t[1]), v(t[2])]).collect()
+    }
+
+    #[test]
+    fn caps_leave_the_hole_open_and_it_is_walled() {
+        for clockwise in [false, true] {
+            let tris = triangles(&ExtrudeGeometry::new(&plate(clockwise), 1.0, 2));
+            let mut top = 0.0;
+            let mut volume = 0.0;
+            for [a, b, c] in &tris {
+                let cross = |u: [f32; 3], w: [f32; 3]| [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+                let d = |p: [f32; 3], q: [f32; 3]| [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+                let n = cross(d(*a, *b), d(*a, *c));
+                if a[2] == 1.0 && b[2] == 1.0 && c[2] == 1.0 {
+                    assert!(n[2] > 0.0, "the top faces up");
+                    top += n[2] / 2.0;
+                }
+                let bc = cross(*b, *c);
+                volume += (a[0] * bc[0] + a[1] * bc[1] + a[2] * bc[2]) / 6.0;
+            }
+            assert!((top - 12.0).abs() < 1e-4, "top cap area {top}");
+            // Outward everywhere: the volume of the plate less its window.
+            assert!((volume - 12.0).abs() < 1e-4, "volume {volume}");
+        }
+    }
+
+    #[test]
+    fn closed_round_the_hole() {
+        // Every edge, by position, shared by one triangle each way.
+        let tris = triangles(&ExtrudeGeometry::new(&plate(false), 1.0, 2));
+        let key = |p: [f32; 3]| p.map(|v| (v * 1e4).round() as i64);
+        let mut edges = std::collections::HashMap::new();
+        for t in &tris {
+            for e in 0..3 {
+                *edges.entry((key(t[e]), key(t[(e + 1) % 3]))).or_insert(0) += 1;
+            }
+        }
+        for (&(a, b), &n) in &edges {
+            assert_eq!((n, edges.get(&(b, a)).copied()), (1, Some(1)), "edge {a:?} {b:?}");
+        }
     }
 }

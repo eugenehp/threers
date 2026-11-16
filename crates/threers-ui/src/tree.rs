@@ -478,6 +478,7 @@ impl Ui {
             line_height: p.line_height,
             line_through: p.line_through,
             wrap: p.wrap,
+            keep_newlines: p.keep_newlines,
             text_align: p.text_align,
             line_clamp: p.line_clamp,
             italic: p.italic,
@@ -799,6 +800,7 @@ impl Ui {
                 && self.own_weight(c) == p.font_weight
                 && s.italic == p.italic
                 && s.wrap == p.wrap
+                && s.keep_newlines == p.keep_newlines
                 && self
                     .env
                     .unscaled
@@ -814,6 +816,7 @@ impl Ui {
             s.font_weight = p.font_weight;
             s.italic = p.italic;
             s.wrap = p.wrap;
+            s.keep_newlines = p.keep_newlines;
             s.text_align = p.text_align;
             s.font_size = p.font_size;
             s.line_height = p.line_height;

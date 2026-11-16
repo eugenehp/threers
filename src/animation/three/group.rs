@@ -173,7 +173,6 @@ impl<K: HostKind> AnimationObjectGroup<K> {
 
     /// `remove(...objects)`: move active objects to the cached region.
     pub fn remove<H: AnimationHost<K>>(&mut self, host: &H, objects: &[K::Node]) {
-        let n_bindings = self.bindings.len();
         let mut n_cached = self.n_cached_objects;
         for object in objects {
             let uuid = host.node_uuid(object);
@@ -190,8 +189,7 @@ impl<K: HostKind> AnimationObjectGroup<K> {
                 self.objects[index] = first_active_object;
                 self.indices_by_uuid.insert(uuid, last_cached_index);
                 self.objects[last_cached_index] = object.clone();
-                for j in 0..n_bindings {
-                    let list = &mut self.bindings[j];
+                for list in &mut self.bindings {
                     let need = index.max(last_cached_index) + 1;
                     if list.len() < need {
                         list.resize_with(need, || None);
@@ -205,7 +203,6 @@ impl<K: HostKind> AnimationObjectGroup<K> {
 
     /// `uncache(...objects)`: forget objects (and their bindings) entirely.
     pub fn uncache<H: AnimationHost<K>>(&mut self, host: &mut H, objects: &[K::Node]) {
-        let n_bindings = self.bindings.len();
         let mut n_cached = self.n_cached_objects;
         let mut n_objects = self.objects.len();
         for object in objects {
@@ -230,8 +227,7 @@ impl<K: HostKind> AnimationObjectGroup<K> {
                     .insert(host.node_uuid(&last_object), first_active_index);
                 self.objects[first_active_index] = last_object;
                 self.objects.pop();
-                for j in 0..n_bindings {
-                    let list = &mut self.bindings[j];
+                for list in &mut self.bindings {
                     if list.len() < last_index + 1 {
                         list.resize_with(last_index + 1, || None);
                     }
@@ -255,8 +251,7 @@ impl<K: HostKind> AnimationObjectGroup<K> {
                 let last_object = self.objects[last_index].clone();
                 self.objects[index] = last_object;
                 self.objects.pop();
-                for j in 0..n_bindings {
-                    let list = &mut self.bindings[j];
+                for list in &mut self.bindings {
                     if list.len() < last_index + 1 {
                         list.resize_with(last_index + 1, || None);
                     }

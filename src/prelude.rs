@@ -40,6 +40,7 @@
 //! | [`animation`] | Mixer, clips, keyframe tracks |
 //! | [`loaders`] | glTF, OBJ, HDR, … |
 //! | [`helpers`] | Axes, grid, light helpers, … |
+//! | [`lattice`] | Infill lattices — TPMS, struts, foams, cuboct voxels — their regions, grading and homogenised stiffness, and scale-rich networks |
 //! | `sketch` | A window, a scene and a loop in one call (native) |
 //! | `csg` | CSG evaluator / brush (`bvh-csg`) |
 //! | `openscad` | Solid DSL + `.scad` parse (`openscad`) |
@@ -150,8 +151,8 @@ pub mod animation {
 pub mod loaders {
     pub use crate::loaders::{
         AlembicArchive, AlembicError, ColladaError, ColladaLoader, DracoError, ExrError, ExrLoader,
-        FbxError, FbxLoader, FbxScene, GltfError, GltfImages, GltfLoader, GltfScene, HdrError,
-        HdrLoader, Ktx2, Ktx2Error, MeshoptError, ObjLoader, PlyLoader, PolyMesh, StlLoader,
+        FbxError, FbxLoader, FbxScene, GcodeLoader, GcodeToolpath, GltfError, GltfImages,
+        GltfLoader, GltfScene, HdrError, HdrLoader, Ktx2, Ktx2Error, MeshoptError, ObjLoader, PlyLoader, PolyMesh, StlLoader,
         TtfError, TtfFont, TtfGlyph,
     };
     // Writing, not only reading.
@@ -164,6 +165,17 @@ pub mod helpers {
         ArrowHelper, AxesHelper, BoxHelper, CameraHelper, DirectionalLightHelper, GridHelper,
         HemisphereLightHelper, PointLightHelper, PolarGridHelper, SkeletonHelper, SpotLightHelper,
         VertexNormalsHelper, VertexTangentsHelper,
+    };
+}
+
+/// Lattices and architected materials: the [`Lattice`](crate::Lattice)
+/// builder with its five families, what it fills and grades, what it is worth
+/// as a material, and grown [`ScaleRich`](crate::ScaleRich) networks.
+pub mod lattice {
+    pub use crate::geometries::{
+        Conform, Cuboct, Field, Infill, Lattice, LatticeKind, LatticeMetrics, LatticeStyle, Region,
+        ScaleRich, ScaleRichAngles, ScaleRichLigament, ScaleRichNet, SeedLayout, SolidMaterial,
+        Stiffness, Stochastic, Strut, Tpms,
     };
 }
 

@@ -3807,6 +3807,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "threers-fem"
+version = "0.0.12"
+dependencies = [
+ "rayon",
+ "threers",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "threers-fluid-ios"
 version = "0.0.12"
 dependencies = [
@@ -3868,6 +3877,7 @@ dependencies = [
  "napi-derive",
  "threers",
  "threers-animation",
+ "threers-fem",
  "threers-physics",
 ]
 
@@ -3927,6 +3937,7 @@ dependencies = [
  "pyo3-build-config",
  "threers",
  "threers-animation",
+ "threers-fem",
  "threers-physics",
 ]
 

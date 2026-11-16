@@ -9,7 +9,8 @@
 //! and `gap` on the main axis. Block children stack vertically at the
 //! container's width (vertical margins do not collapse). Absolutely
 //! positioned boxes are placed in their nearest positioned ancestor's padding
-//! box. Text is one line (`white-space: nowrap`).
+//! box. Text is one line (`white-space: nowrap`), or wraps (`normal`), and
+//! breaks where its text does under `pre`, `pre-wrap` and `pre-line`.
 
 use super::style::{
     AlignContent, AlignItems, BoxSizing, Display, FlexDirection, FlexWrap, GridPlacement,
@@ -243,6 +244,14 @@ impl Ctx<'_> {
             // Blink keeps lengths in 1/64 px (`LayoutUnit`) and rounds a
             // run's width up to one.
             let h = self.text.measure(&t, &style).1;
+            // Its own line breaks: as tall as its lines, as wide as the
+            // widest (each wrapped too, under `pre-wrap`).
+            if let Some(lines) = self.kept_lines(id.0, &t, &style, width.map(|w| (w - fx).max(0.0))) {
+                let shown = style.line_clamp.map_or(lines.len(), |n| lines.len().min(n as usize));
+                let widest = lines.iter().map(|l| self.text.measure(l.trim_end(), &style).0).fold(0.0, f32::max);
+                let widest = (widest * 64.0).ceil() / 64.0;
+                return (width.unwrap_or(widest + fx), shown.max(1) as f32 * h + fy);
+            }
             let w = self.run_width(id.0, 0, &t, &style);
             let w = (w * 64.0).ceil() / 64.0;
             if let (true, Some(width)) = (style.wrap, width) {
@@ -387,6 +396,10 @@ impl Ctx<'_> {
             let t = t.clone();
             if style.vertical {
                 self.text.measure(&t, &style).1 + fx
+            } else if let Some(lines) = self.kept_lines(id.0, &t, &style, style.wrap.then_some(0.0)) {
+                // Its widest line, or under `pre-wrap` its widest word.
+                let widest = lines.iter().map(|l| self.text.measure(l.trim_end(), &style).0).fold(0.0, f32::max);
+                (widest * 64.0).ceil() / 64.0 + fx
             } else if style.wrap {
                 let mut widest = 0.0f32;
                 let mut at = 0;
@@ -467,6 +480,24 @@ impl Ctx<'_> {
             v = v.max(m);
         }
         v.max(frame(style, horizontal))
+    }
+
+    /// The lines of a text that keeps its line breaks
+    /// ([`keep_newlines`](Style::keep_newlines)), each wrapped to `width`
+    /// as well when it wraps and a width is given. `None` for a text that
+    /// does not keep them, or has none to keep: laid out as before.
+    fn kept_lines(&mut self, node: usize, text: &str, style: &Style, width: Option<f32>) -> Option<Vec<String>> {
+        if !style.keep_newlines || !text.contains('\n') {
+            return None;
+        }
+        let mut lines = vec![];
+        for hard in text.split('\n') {
+            match (style.wrap, width) {
+                (true, Some(w)) => lines.extend(self.wrap(node, hard, style, w)),
+                _ => lines.push(hard.to_string()),
+            }
+        }
+        Some(lines)
     }
 
     /// `text` broken into lines no wider than `width`: at spaces and
@@ -690,7 +721,7 @@ impl Ctx<'_> {
                 offset += line.len();
                 // Wrapped lines lose the break they ended at.
                 if let NodeKind::Text(t) = &self.ui.nodes[i].kind {
-                    while t[offset.min(t.len())..].starts_with([' ', '\u{200b}']) {
+                    while t[offset.min(t.len())..].starts_with([' ', '\u{200b}', '\n']) {
                         offset += t[offset..].chars().next().map_or(1, char::len_utf8);
                     }
                 }
@@ -796,17 +827,30 @@ impl Ctx<'_> {
         };
         self.ui.nodes[id.0].rect = rect;
         let style = self.style(id).clone();
-        if let (NodeKind::Text(t), true) = (&self.ui.nodes[id.0].kind, style.wrap) {
-            let t = t.clone();
-            let width = (rect.width - frame(&style, true)).max(0.0);
-            let lines = self.wrap(id.0, &t, &style, width);
-            let lines = self.clamp_lines(&style, lines, width);
+        // Its own line breaks, each line wrapped too under `pre-wrap`.
+        let kept = match &self.ui.nodes[id.0].kind {
+            NodeKind::Text(t) => {
+                let t = t.clone();
+                let width = (rect.width - frame(&style, true)).max(0.0);
+                self.kept_lines(id.0, &t, &style, Some(width)).map(|lines| self.clamp_lines(&style, lines, width))
+            }
+            _ => None,
+        };
+        if let Some(lines) = kept {
             self.ui.nodes[id.0].lines = lines;
-        }
-        // A run that does not wrap: one line, unless its box ellipsizes it
-        // (after this, from the box).
-        if let (NodeKind::Text(_), false) = (&self.ui.nodes[id.0].kind, style.wrap) {
-            self.ui.nodes[id.0].lines.clear();
+        } else {
+            if let (NodeKind::Text(t), true) = (&self.ui.nodes[id.0].kind, style.wrap) {
+                let t = t.clone();
+                let width = (rect.width - frame(&style, true)).max(0.0);
+                let lines = self.wrap(id.0, &t, &style, width);
+                let lines = self.clamp_lines(&style, lines, width);
+                self.ui.nodes[id.0].lines = lines;
+            }
+            // A run that does not wrap: one line, unless its box ellipsizes
+            // it (after this, from the box).
+            if let (NodeKind::Text(_), false) = (&self.ui.nodes[id.0].kind, style.wrap) {
+                self.ui.nodes[id.0].lines.clear();
+            }
         }
         let content = Rect {
             x: rect.x + style.border.left + style.padding.left,
@@ -2338,6 +2382,36 @@ mod tests {
         assert_eq!(ui.nodes[t.0].lines, vec!["abcd\u{2026}"]);
         assert!(ui.nodes[u.0].lines.is_empty());
         assert_eq!(ui.rect(t).width, 50.0);
+    }
+
+    /// `white-space: pre` keeps the text's own line breaks: the box is as
+    /// tall as its lines and as wide as the widest, and what follows it
+    /// moves down; `pre-wrap` wraps each line as well; `normal` and
+    /// `nowrap` lay it out as one run.
+    #[test]
+    fn line_breaks_kept_by_pre_make_the_box_as_tall_as_its_lines() {
+        let mut ui = Ui::new();
+        let root = ui.root();
+        ui.set_style(root, Style::flex(FlexDirection::Column));
+        let pre = ui.add_box(root, crate::style! { white-space: pre; align-self: flex-start; });
+        let t = ui.add_text(pre, "one\nthree\ntwo");
+        let after = ui.add_box(root, crate::style! { height: 10px; });
+        let wrapped = ui.add_box(root, crate::style! { white-space: pre-wrap; width: 50px; });
+        let w = ui.add_text(wrapped, "short\nfour more words");
+        let run = ui.add_box(root, crate::style! { white-space: nowrap; align-self: flex-start; });
+        let r = ui.add_text(run, "a\nb");
+        ui.layout(200.0, 400.0, &mut FixedWidthText(10.0));
+        // Three lines of 19.2, as wide as "three".
+        assert_eq!(ui.rect(pre).height, 3.0 * 19.2);
+        assert_eq!(ui.rect(pre).width, 50.0);
+        assert_eq!(ui.rect(after).y, 3.0 * 19.2);
+        assert_eq!(ui.text_lines_of(t), vec!["one", "three", "two"]);
+        // "short", then "four more words" wrapped at 50 px into three.
+        assert_eq!(ui.rect(wrapped).height, 4.0 * 19.2);
+        assert_eq!(ui.text_lines_of(w).len(), 4);
+        // One run, one line.
+        assert_eq!(ui.rect(run).height, 19.2);
+        assert_eq!(ui.text_lines_of(r).len(), 1);
     }
 
     /// A row's height comes from its items at the widths flexing gives

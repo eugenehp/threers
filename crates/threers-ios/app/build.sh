@@ -48,7 +48,10 @@ else
 fi
 
 echo "==> $package for $rust_target"
-IPHONEOS_DEPLOYMENT_TARGET=17.0 XROS_DEPLOYMENT_TARGET=26.0 CARGO_TARGET_DIR=$target_dir \
+# only this platform's deployment target: clang refuses C (cc-rs builds:
+# zlib, blosc) with both an iOS and a visionOS one in the environment
+if [[ $kind == ios* ]]; then export IPHONEOS_DEPLOYMENT_TARGET=17.0; unset XROS_DEPLOYMENT_TARGET; else export XROS_DEPLOYMENT_TARGET=26.0; unset IPHONEOS_DEPLOYMENT_TARGET; fi
+CARGO_TARGET_DIR=$target_dir \
   cargo rustc --manifest-path "$crate/Cargo.toml" --lib --crate-type staticlib --target $rust_target --release \
   ${FEATURES:+--features=$FEATURES} ${NO_DEFAULT_FEATURES:+--no-default-features}
 
