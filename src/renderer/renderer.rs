@@ -2037,13 +2037,19 @@ struct ThreersUserData { data: array<vec4<f32>, 16>, };\n\
     };
     // `s0`/`s1`/`s2` are the portable way to read the storage arrays: they are
     // defined on every backend, and on one without storage buffers they read
-    // the same data out of a texture instead. `u_s0`..`u_s2` stay for the
+    // the same data out of a texture instead. `s0x4(t)`… read floats `4t` to
+    // `4t + 3` at once: one texel on that path, where `s0` fetches a whole
+    // texel for each float. On storage buffers, and on Metal (which brings its
+    // own `s0`), they are four `s0` reads. `u_s0`..`u_s2` stay for the
     // shaders that already index them directly, but they only exist where the
     // device does.
     let accessors = if storage_buffers {
         "fn s0(i: u32) -> f32 { return u_s0[i]; }\n\
 fn s1(i: u32) -> f32 { return u_s1[i]; }\n\
 fn s2(i: u32) -> f32 { return u_s2[i]; }\n\
+fn s0x4(t: u32) -> vec4<f32> { let i = t * 4u; return vec4<f32>(s0(i), s0(i + 1u), s0(i + 2u), s0(i + 3u)); }\n\
+fn s1x4(t: u32) -> vec4<f32> { let i = t * 4u; return vec4<f32>(s1(i), s1(i + 1u), s1(i + 2u), s1(i + 3u)); }\n\
+fn s2x4(t: u32) -> vec4<f32> { let i = t * 4u; return vec4<f32>(s2(i), s2(i + 1u), s2(i + 2u), s2(i + 3u)); }\n\
 fn s_len(slot: u32) -> u32 {\n\
     if (slot == 0u) { return arrayLength(&u_s0); }\n\
     if (slot == 1u) { return arrayLength(&u_s1); }\n\
@@ -2064,6 +2070,13 @@ fn s_len(slot: u32) -> u32 {\n\
 fn s0(i: u32) -> f32 { return s_fetch(u_s0_tex, i); }\n\
 fn s1(i: u32) -> f32 { return s_fetch(u_s1_tex, i); }\n\
 fn s2(i: u32) -> f32 { return s_fetch(u_s2_tex, i); }\n\
+fn s_texel(t: texture_2d<f32>, i: u32) -> vec4<f32> {\n\
+    let w = u32(textureDimensions(t).x);\n\
+    return textureLoad(t, vec2<i32>(i32(i % w), i32(i / w)), 0);\n\
+}\n\
+fn s0x4(t: u32) -> vec4<f32> { return s_texel(u_s0_tex, t); }\n\
+fn s1x4(t: u32) -> vec4<f32> { return s_texel(u_s1_tex, t); }\n\
+fn s2x4(t: u32) -> vec4<f32> { return s_texel(u_s2_tex, t); }\n\
 fn s_len(slot: u32) -> u32 {\n\
     var d = textureDimensions(u_s0_tex);\n\
     if (slot == 1u) { d = textureDimensions(u_s1_tex); }\n\

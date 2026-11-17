@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>threers — Gaussian splats</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
+               font: 12px/1.45 -apple-system, system-ui, sans-serif; color: #dbe6f0; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+  #ui { position: fixed; top: 12px; left: 12px; width: 250px;
+        background: rgba(10,14,20,.7); backdrop-filter: blur(10px);
+        padding: 10px 12px; border-radius: 10px; border: 1px solid #263445; }
+  #ui b { color: #fff; font-weight: 600; }
+  #stats { font-variant-numeric: tabular-nums; color: #9fb6c9; margin-top: 6px; }
+  #hint { color: #61778c; margin-top: 6px; }
+  label { display: block; margin-top: 8px; color: #9fb6c9; }
+  #drop { position: fixed; inset: 0; display: none; place-items: center;
+          background: rgba(30,60,90,.45); font-size: 18px; pointer-events: none; }
+  #drop.on { display: grid; }
+  #msg { position: fixed; inset: 0; display: grid; place-items: center; text-align: center;
+         padding: 2rem; font-size: 14px; }
+  #msg.hidden { display: none; }
+  code { color: #7fd1ff; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <b>Gaussian splats</b> <span id="src"></span>
+  <div id="stats">loading…</div>
+  <label>open a <code>.ply</code>, <code>.spz</code> or <code>.splat</code>
+    <input type="file" id="file" accept=".ply,.spz,.splat"></label>
+  <div id="hint">drag to orbit · wheel to zoom · drop a file anywhere<br>
+    <code>?src=url</code> · <code>?n=splats</code> · <code>?backend=gl</code> · <code>?flip=0|1</code> · <code>?bench=frames</code> · <code>?scale=1</code> · <code>?worker=0</code></div>
+</div>
+<div id="drop">drop to load</div>
+<div id="msg">loading…</div>
+
+<!--
+  Build the package this page loads (the `splats` feature, and WebGL2 for
+  browsers without WebGPU) and serve web/:
+
+    SPLATS=1 WEBGL=1 SIMD=1 ./web/build.sh   # SIMD=1: the sort's keys in simd128
+    python3 -m http.server -d web 8000   # then open /splats.html
+
+  A trained scene's PLY (the reference 3DGS trainer's output, or the
+  chunk-compressed PLY SuperSplat writes), an `.spz` or a `.splat` loads with
+  `?src=` (same origin), the file picker, or by dropping it on the page;
+  without one the page makes a galaxy of its own. Trained scenes come out
+  y-down, so PLYs and `.splat`s are turned over; `.spz` is already y-up.
+  `?flip=0` or `?flip=1` overrides.
+
+  The renderer runs in a Worker on an OffscreenCanvas and the sort in
+  another; `?worker=0` keeps the renderer on the page, `?sortWorker=0` the
+  sort with it.
+-->
+<script type="module">
+// The page's own thread: UI and input only. The renderer runs in a Worker on
+// an OffscreenCanvas (web/splats-render-worker.js) and the sort in another
+// (web/splats-sort-worker.js), so neither loading a file nor sorting a
+// million splats blocks this thread. Where a canvas cannot be handed to a
+// worker, or with `?worker=0`, the same renderer (web/splats-view.js) runs
+// here instead, still with the sort on its own thread.
+const params = new URLSearchParams(location.search);
+const canvas = document.getElementById("c");
+const stats = document.getElementById("stats");
+const msg = document.getElementById("msg");
+// What a test driving the page reads.
+window.splatStatus = { ready: false };
+
+const useWorker = params.get("worker") !== "0" && "transferControlToOffscreen" in canvas;
+const useSortWorker = params.get("sortWorker") !== "0";
+
+let port;
+if (useWorker) {
+  port = new Worker(new URL("./splats-render-worker.js", import.meta.url), { type: "module" });
+} else {
+  const channel = new MessageChannel();
+  const { run } = await import("./splats-view.js");
+  run(channel.port2, false, canvas);
+  port = channel.port1;
+}
+
+const init = {
+  type: "init",
+  width: canvas.clientWidth, height: canvas.clientHeight, dpr: devicePixelRatio,
+  params: location.search,
+};
+const transfer = [];
+if (useSortWorker) {
+  const sorter = new Worker(new URL("./splats-sort-worker.js", import.meta.url), { type: "module" });
+  const channel = new MessageChannel();
+  sorter.postMessage({ port: channel.port1 }, [channel.port1]);
+  init.sortPort = channel.port2;
+  transfer.push(channel.port2);
+}
+if (useWorker) {
+  init.canvas = canvas.transferControlToOffscreen();
+  transfer.push(init.canvas);
+}
+
+port.onmessage = ({ data: m }) => {
+  if (m.type === "ready") {
+    const src = params.get("src");
+    if (src) {
+      msg.textContent = `loading ${src}…`;
+      port.postMessage({ type: "load", url: new URL(src, location.href).href, name: src.split("/").pop() });
+    } else {
+      port.postMessage({ type: "load", galaxy: Number(params.get("n")) || 300_000 });
+    }
+  } else if (m.type === "status") {
+    const s = (window.splatStatus = m.status);
+    if (s.name) document.getElementById("src").textContent = "— " + s.name;
+    msg.classList.add("hidden");
+    if (s.fps !== undefined) {
+      stats.innerHTML = `<b>${(s.count / 1e6).toFixed(2)}M</b> splats · ${s.backend}` +
+        `${s.worker ? " · in a worker" : ""}<br>` +
+        `${s.fps.toFixed(0)} fps · ${s.cpuMs.toFixed(1)} ms a frame on the render thread<br>` +
+        `sort: ${s.sortedElsewhere ? "its own thread" : "the render thread"}<br>` +
+        `render scale ${s.scale.toFixed(2)}${s.fixedScale ? "" : " (adaptive)"}<br>` +
+        `loaded in ${s.loadMs.toFixed(0)} ms`;
+    }
+  } else if (m.type === "error") {
+    msg.textContent = m.text;
+    msg.classList.remove("hidden");
+  }
+};
+port.postMessage(init, transfer);
+
+new ResizeObserver(() => port.postMessage({
+  type: "resize", width: canvas.clientWidth, height: canvas.clientHeight, dpr: devicePixelRatio,
+})).observe(canvas);
+
+async function openFile(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  msg.textContent = `loading ${file.name}…`;
+  msg.classList.remove("hidden");
+  port.postMessage({ type: "load", bytes, name: file.name }, [bytes.buffer]);
+}
+document.getElementById("file").onchange = (e) => e.target.files[0] && openFile(e.target.files[0]);
+const drop = document.getElementById("drop");
+addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("on"); });
+addEventListener("dragleave", () => drop.classList.remove("on"));
+addEventListener("drop", (e) => {
+  e.preventDefault();
+  drop.classList.remove("on");
+  if (e.dataTransfer.files[0]) openFile(e.dataTransfer.files[0]);
+});
+
+// Orbit: drag turns, wheel zooms; the renderer moves the camera.
+let dragging = null;
+canvas.onpointerdown = (e) => { dragging = [e.clientX, e.clientY]; canvas.setPointerCapture(e.pointerId); };
+canvas.onpointerup = () => (dragging = null);
+canvas.onpointermove = (e) => {
+  if (!dragging) return;
+  port.postMessage({ type: "orbit", daz: (e.clientX - dragging[0]) * 0.008, del: (e.clientY - dragging[1]) * 0.008 });
+  dragging = [e.clientX, e.clientY];
+};
+canvas.onwheel = (e) => {
+  e.preventDefault();
+  port.postMessage({ type: "zoom", factor: Math.exp(e.deltaY * 0.001) });
+};
+</script>
+</body>
+</html>

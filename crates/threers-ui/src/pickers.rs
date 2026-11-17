@@ -88,7 +88,8 @@ pub fn segmented<S: 'static>(
         .iter()
         .enumerate()
         .map(|(i, c)| {
-            let b = ui.add_box(row, style! { position: relative; flex-grow: 1; padding: 4px 12px; border-radius: 6px; cursor: pointer; display: flex; justify-content: center; });
+            // At least 24 px tall, whatever size of text it inherits.
+            let b = ui.add_box(row, style! { position: relative; flex-grow: 1; padding: 4px 12px; border-radius: 6px; cursor: pointer; display: flex; justify-content: center; align-items: center; min-height: 24px; box-sizing: border-box; });
             ui.add_text(b, *c);
             ui.set_semantics(b, Semantics::new(Role::Radio).label(*c).checked(false));
             ui.focus_visible_style(b, "box-shadow: 0 0 0 2px #93c5fd");
@@ -139,9 +140,10 @@ pub fn stepper<S: 'static>(
     step: i64,
 ) -> NodeId {
     let (lo, hi) = (*range.start(), *range.end());
+    // At least 24 px tall, whatever size of text it inherits (WCAG 2.2).
     let row = ui.add_box(
         parent,
-        style! { display: flex; align-items: center; gap: 8px; },
+        style! { display: flex; align-items: center; gap: 8px; min-height: 24px; },
     );
     let name = ui.add_box(row, style! { flex-grow: 1; });
     ui.add_text(name, label);

@@ -117,7 +117,12 @@ pub struct ShaderMaterial {
     pub vertex: Option<String>,
     /// Up to 16 `vec4<f32>` uniform slots, exposed as `u_data.data[i]`.
     pub data: Vec<[f32; 4]>,
-    /// Read-only `array<f32>` storage buffers, exposed as `u_s0`/`u_s1`/`u_s2`.
+    /// Read-only `array<f32>` storage buffers, exposed as `u_s0`/`u_s1`/`u_s2`
+    /// and, on every backend, read through `s0(i)`… (one float) and
+    /// `s0x4(t)`… (floats `4t..4t + 4` as a `vec4`). On WebGL2 they live in a
+    /// float texture and each `s0` call fetches a whole texel, so data read
+    /// four floats at a time should be laid out in fours and read with
+    /// `s0x4`.
     pub storage0: Vec<f32>,
     pub storage1: Vec<f32>,
     pub storage2: Vec<f32>,

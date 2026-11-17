@@ -154,8 +154,39 @@ pub struct Hinter {
     point_size: i64,
     x_scale: i64,
     y_scale: i64,
+    /// `tt_face_get_cleartype_policy` at the vertical ppem: symmetric
+    /// smoothing, as GETINFO reports it.
+    symmetric_smoothing: bool,
     /// Whether the programs ran without error; hinting is skipped otherwise.
     ready: bool,
+}
+
+/// `tt_face_get_cleartype_policy` (FreeType 2.15): DirectWrite's fallback,
+/// symmetric smoothing for a font without bytecode or above 20 ppem, unless
+/// a version-1 `gasp` range says otherwise.
+fn symmetric_smoothing(face: &Face, ppem: u32) -> bool {
+    let fit = face.max_size_of_instructions != 0;
+    let mut symmetric = !fit || ppem > 20;
+
+    if let Some(gasp) = face.table(b"gasp") {
+        let u16_at = |i: usize| gasp.get(i..i + 2).map(|b| u16::from_be_bytes([b[0], b[1]]));
+
+        if let (Some(version), Some(count)) = (u16_at(0), u16_at(2)) {
+            if version >= 1 {
+                for r in 0..usize::from(count) {
+                    let (Some(max_ppem), Some(flags)) = (u16_at(4 + r * 4), u16_at(6 + r * 4)) else { break };
+
+                    if ppem <= u32::from(max_ppem) {
+                        // GASP_SYMMETRIC_SMOOTHING
+                        symmetric = flags & 0x8 != 0;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    symmetric
 }
 
 /// The interpreter running one program.
@@ -183,9 +214,11 @@ struct Exec<'a> {
     threshold: i64,
     subpixel_hinting_lean: bool,
     grayscale_cleartype: bool,
-    backward_compatibility: bool,
-    iupx_called: bool,
-    iupy_called: bool,
+    /// v40 backward compatibility: 4 when on, with bit 0 and 1 set once
+    /// IUP[y] and IUP[x] have run; 0 when off.
+    backward_compatibility: u8,
+    /// `moveVector`: the freedom vector over its projection, 16.16.
+    move_vec: (i64, i64),
     is_composite: bool,
     x_scale: i64,
     y_scale: i64,
@@ -313,6 +346,7 @@ impl Hinter {
             point_size: 0,
             x_scale: m.x_scale,
             y_scale: m.y_scale,
+            symmetric_smoothing: symmetric_smoothing(face, u32::from(m.y_ppem)),
             ready: true,
         };
 
@@ -404,9 +438,8 @@ impl<'a> Exec<'a> {
             threshold: 0,
             subpixel_hinting_lean: subpixel,
             grayscale_cleartype: subpixel,
-            backward_compatibility: false,
-            iupx_called: false,
-            iupy_called: false,
+            backward_compatibility: 0,
+            move_vec: (0x10000, 0),
             is_composite,
             x_scale,
             y_scale,
@@ -435,23 +468,28 @@ impl<'a> Exec<'a> {
 
     // --- projections and moves -------------------------------------
 
-    /// `Compute_Funcs`
+    /// `Compute_Funcs` (FreeType 2.15): the dot product rounded to
+    /// F2Dot14, and the move vector it gives; nearly perpendicular vectors
+    /// move nothing.
     fn compute_funcs(&mut self) {
         let (p, f) = (self.gs.proj, self.gs.free);
+        self.f_dot_p = (p.0 * f.0 + p.1 * f.1 + 0x2000) >> 14;
 
-        // the dot product, rounded to F2Dot14
-        self.f_dot_p = if f.0 == 0x4000 {
-            p.0
-        } else if f.1 == 0x4000 {
-            p.1
+        self.move_vec = if self.f_dot_p >= 0x3FFE {
+            (f.0 * 4, f.1 * 4)
+        } else if -0x1555 < self.f_dot_p && self.f_dot_p < 0x1555 {
+            (0, 0)
         } else {
-            dot_fix14(p.0, p.1, f.0, f.1)
+            // C division, truncated
+            (f.0 * 0x10000 / self.f_dot_p, f.1 * 0x10000 / self.f_dot_p)
         };
+    }
 
-        // nearly perpendicular vectors would move points without bound
-        if self.f_dot_p.abs() < 0x400 {
-            self.f_dot_p = 0x4000;
-        }
+    /// `Direct_Move_X` or `Direct_Move_Y` in place of `Direct_Move`.
+    fn move_axis(&self) -> (bool, bool) {
+        let f = self.gs.free;
+        let axis_x = self.f_dot_p >= 0x3FFE && f.0 == 0x4000;
+        (axis_x, !axis_x && self.f_dot_p >= 0x3FFE && f.1 == 0x4000)
     }
 
     fn project(&self, dx: i64, dy: i64) -> i64 {
@@ -488,21 +526,24 @@ impl<'a> Exec<'a> {
 
     /// Whether x moves are dropped (v40 backward compatibility).
     fn x_blocked(&self) -> bool {
-        self.backward_compatibility
+        self.backward_compatibility != 0
     }
 
     /// Whether y moves are dropped (after both IUPs in backward
     /// compatibility).
     fn y_blocked(&self) -> bool {
-        self.backward_compatibility && self.iupx_called && self.iupy_called
+        self.backward_compatibility == 7
     }
 
     /// `func_move` (`Direct_Move` and its axis cases)
     fn move_point(&mut self, z: usize, point: usize, distance: i64) {
-        let (f, fdp) = (self.gs.free, self.f_dot_p);
-        let axis_x = fdp == 0x4000 && f.0 == 0x4000;
-        let axis_y = fdp == 0x4000 && !axis_x && f.1 == 0x4000;
+        let mv = self.move_vec;
+        let (axis_x, axis_y) = self.move_axis();
+
+        // a horizontal projection moves even so (Comic Sans MS)
+        let horizontal = self.gs.proj.1 == 0;
         let (xb, yb) = (self.x_blocked(), self.y_blocked());
+        let (dxb, dyb) = (xb && !horizontal, yb && !horizontal);
         let zone = self.zone_mut(z);
 
         if axis_x {
@@ -523,17 +564,17 @@ impl<'a> Exec<'a> {
             return;
         }
 
-        if f.0 != 0 {
-            if !xb {
-                zone.cur[point].0 = zone.cur[point].0.wrapping_add(mul_div(distance, f.0, fdp));
+        if mv.0 != 0 {
+            if !dxb {
+                zone.cur[point].0 = zone.cur[point].0.wrapping_add(mul_fix(distance, mv.0));
             }
 
             zone.tags[point] |= TOUCH_X;
         }
 
-        if f.1 != 0 {
-            if !yb {
-                zone.cur[point].1 = zone.cur[point].1.wrapping_add(mul_div(distance, f.1, fdp));
+        if mv.1 != 0 {
+            if !dyb {
+                zone.cur[point].1 = zone.cur[point].1.wrapping_add(mul_fix(distance, mv.1));
             }
 
             zone.tags[point] |= TOUCH_Y;
@@ -542,20 +583,21 @@ impl<'a> Exec<'a> {
 
     /// `func_move_orig` (`Direct_Move_Orig` and its axis cases)
     fn move_orig(&mut self, z: usize, point: usize, distance: i64) {
-        let (f, fdp) = (self.gs.free, self.f_dot_p);
+        let mv = self.move_vec;
+        let (axis_x, axis_y) = self.move_axis();
         let zone = self.zone_mut(z);
 
-        if fdp == 0x4000 && f.0 == 0x4000 {
+        if axis_x {
             zone.org[point].0 = zone.org[point].0.wrapping_add(distance);
-        } else if fdp == 0x4000 && f.1 == 0x4000 {
+        } else if axis_y {
             zone.org[point].1 = zone.org[point].1.wrapping_add(distance);
         } else {
-            if f.0 != 0 {
-                zone.org[point].0 = zone.org[point].0.wrapping_add(mul_div(distance, f.0, fdp));
+            if mv.0 != 0 {
+                zone.org[point].0 = zone.org[point].0.wrapping_add(mul_fix(distance, mv.0));
             }
 
-            if f.1 != 0 {
-                zone.org[point].1 = zone.org[point].1.wrapping_add(mul_div(distance, f.1, fdp));
+            if mv.1 != 0 {
+                zone.org[point].1 = zone.org[point].1.wrapping_add(mul_fix(distance, mv.1));
             }
         }
     }
@@ -721,10 +763,10 @@ impl<'a> Exec<'a> {
 
         self.ip = 0;
 
-        // backward compatibility as the font asks, for each program
-        self.backward_compatibility = self.subpixel_hinting_lean && self.gs.instruct_control & 4 == 0;
-        self.iupx_called = false;
-        self.iupy_called = false;
+        // backward compatibility as the font asks for a glyph, its IUP
+        // bits cleared for each program; the CVT program runs without it
+        self.backward_compatibility =
+            if self.ini_range == Range::Glyph && self.subpixel_hinting_lean && self.gs.instruct_control & 4 == 0 { 4 } else { 0 };
 
         let mut steps: u64 = 0;
 
@@ -1140,18 +1182,26 @@ impl<'a> Exec<'a> {
 
                 let Some((dx, dy, refz, refp)) = self.displacement() else { return Ok(None) };
 
-                let limit = if self.gs.gep2 == 0 {
-                    self.zone(2).len()
-                } else if self.gs.gep2 == 1 && !self.zone(2).contours.is_empty() {
-                    self.zone(2).contours.last().map_or(0, |c| c + 1)
-                } else {
-                    0
-                };
-                let same_zone = self.zp[refz] == self.zp[2];
+                // Ins_SHZ (2.15): the zone the argument names, its phantom
+                // points left; points moved untouched, x not at all in
+                // backward compatibility, y not after both IUPs
+                let glyph = e == 1;
+                let same_zone = self.zp[refz] == glyph;
+                let (xb, yb) = (self.x_blocked(), self.y_blocked());
+                let zone = if glyph { &mut self.pts } else { &mut self.h.twilight };
+                let limit = if glyph { zone.len().saturating_sub(4) } else { zone.len() };
 
                 for i in 0..limit {
-                    if !same_zone || refp != i {
-                        self.move_zp2(i, dx, dy, false);
+                    if same_zone && refp == i {
+                        continue;
+                    }
+
+                    if dx != 0 && !xb {
+                        zone.cur[i].0 = zone.cur[i].0.wrapping_add(dx);
+                    }
+
+                    if dy != 0 && !yb {
+                        zone.cur[i].1 = zone.cur[i].1.wrapping_add(dy);
                     }
                 }
             }
@@ -1164,7 +1214,7 @@ impl<'a> Exec<'a> {
 
                 let dx = mul_fix14(amount, self.gs.free.0);
                 let dy = mul_fix14(amount, self.gs.free.1);
-                let in_twilight = self.gs.gep0 == 0 && self.gs.gep1 == 0 && self.gs.gep2 == 0;
+                let in_twilight = self.gs.gep0 == 0 || self.gs.gep1 == 0 || self.gs.gep2 == 0;
 
                 while self.gs.loop_ > 0 {
                     let p = self.pop()? as u16 as usize;
@@ -1174,11 +1224,11 @@ impl<'a> Exec<'a> {
                         continue;
                     }
 
-                    if self.backward_compatibility {
+                    if self.backward_compatibility != 0 {
                         let touched_y = self.zone(2).tags[p] & TOUCH_Y != 0;
 
                         if in_twilight
-                            || (!(self.iupx_called && self.iupy_called) && ((self.is_composite && self.gs.free.1 != 0) || touched_y))
+                            || (self.backward_compatibility != 7 && ((self.is_composite && self.gs.free.1 != 0) || touched_y))
                         {
                             self.move_zp2(p, 0, dy, true);
                         }
@@ -1482,7 +1532,7 @@ impl<'a> Exec<'a> {
                 self.pop()?;
             }
             0x80 => {
-                if self.backward_compatibility && self.iupx_called && self.iupy_called {
+                if self.backward_compatibility == 7 {
                     return self.fail_loop();
                 }
 
@@ -1506,7 +1556,7 @@ impl<'a> Exec<'a> {
                 let k = self.pop()? as u16 as usize;
                 let l = self.pop()? as u16 as usize;
 
-                if !(self.backward_compatibility && self.iupx_called && self.iupy_called) && k < self.pts.len() && l < self.pts.len() {
+                if self.backward_compatibility != 7 && k < self.pts.len() && l < self.pts.len() {
                     for tag in &mut self.pts.tags[l..=k] {
                         if op == 0x81 {
                             *tag |= TAG_ON;
@@ -1732,7 +1782,7 @@ impl<'a> Exec<'a> {
 
         let zone = self.zone(z);
         let d = self.project_pts(zone.cur[p], zone.org[p]);
-        Some((mul_div(d, self.gs.free.0, self.f_dot_p), mul_div(d, self.gs.free.1, self.f_dot_p), z, p))
+        Some((mul_fix(d, self.move_vec.0), mul_fix(d, self.move_vec.1), z, p))
     }
 
     /// `Ins_IP`
@@ -1948,10 +1998,10 @@ impl<'a> Exec<'a> {
 
                 d *= 1 << (6 - self.gs.delta_shift);
 
-                if self.backward_compatibility {
+                if self.backward_compatibility != 0 {
                     let touched_y = self.zone(0).tags[a] & TOUCH_Y != 0;
 
-                    if !(self.iupx_called && self.iupy_called) && ((self.is_composite && self.gs.free.1 != 0) || touched_y) {
+                    if self.backward_compatibility != 7 && ((self.is_composite && self.gs.free.1 != 0) || touched_y) {
                         self.move_point(0, a, d);
                     }
                 } else {
@@ -2007,20 +2057,15 @@ impl<'a> Exec<'a> {
 
     /// `Ins_IUP`
     fn iup(&mut self, x: bool) {
-        if self.pts.contours.is_empty() {
+        // allowed until it has run on both axes
+        if self.backward_compatibility == 7 {
             return;
+        } else if self.backward_compatibility != 0 {
+            self.backward_compatibility |= 1 << u8::from(x);
         }
 
-        if self.backward_compatibility {
-            if self.iupx_called && self.iupy_called {
-                return;
-            }
-
-            if x {
-                self.iupx_called = true;
-            } else {
-                self.iupy_called = true;
-            }
+        if self.pts.contours.is_empty() {
+            return;
         }
 
         let mask = if x { TOUCH_X } else { TOUCH_Y };
@@ -2149,7 +2194,7 @@ impl<'a> Exec<'a> {
                 k |= 1 << 17;
             }
 
-            if a & 2048 != 0 {
+            if a & 2048 != 0 && self.h.symmetric_smoothing {
                 k |= 1 << 18;
             }
 
@@ -2177,7 +2222,7 @@ impl<'a> Exec<'a> {
             self.gs.instruct_control &= !(kf as u8);
             self.gs.instruct_control |= l as u8;
         } else if self.ini_range == Range::Glyph && k == 3 {
-            self.backward_compatibility = l != 4;
+            self.backward_compatibility = ((l & 4) ^ 4) as u8;
         }
     }
 }
@@ -2255,7 +2300,7 @@ impl Loader<'_> {
             exec.gs.loop_ = 1;
             exec.compute_funcs();
             let _ = exec.run_code(code);
-            backward = exec.backward_compatibility;
+            backward = exec.backward_compatibility != 0;
             *zone = std::mem::take(&mut exec.pts);
             self.cvt = std::mem::take(&mut exec.cvt);
             self.storage = std::mem::take(&mut exec.storage);

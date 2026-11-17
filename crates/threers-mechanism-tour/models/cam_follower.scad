@@ -45,10 +45,24 @@ module barrel(centre, r, h, sides) {
         rotate([90, 0, 0]) cylinder(h = h, r = r, $fn = sides);
 }
 
+// The follower's stem is held in a guide: a post standing behind the cam, out
+// of the band it sweeps, and two cheeks reaching forward either side of the
+// stem. They sit where the stem always is — the roller rides 18 to 34 above the
+// shaft, so the stem covers 74 to 96 whatever the cam is doing — and above
+// anywhere the roller can reach.
+GUIDE = [88, 94];
+
 part("frame", fixed = true)
     color("slategray") {
         translate([0, -18, 0]) cube([96, 36, 10]);
         translate([O[0] - 9, -26, 10]) cube([18, 8, O[2] - 10]);   // shaft pedestal
+        // The shaft itself, out of the pedestal and through the cam.
+        color("dimgray") translate([O[0], -18, O[2]]) rotate([-90, 0, 0])
+            cylinder(h = 27, r = 4, $fn = 24);
+        // The guide post, behind the cam, and its two cheeks.
+        translate([O[0] - 9, -18, 10]) cube([18, 8, GUIDE[1] - 10]);
+        for (x = [O[0] - 9, O[0] + 4])
+            translate([x, -10, GUIDE[0]]) cube([5, 15, GUIDE[1] - GUIDE[0]]);
     }
 
 part("cam", density = STEEL, friction = 0.06)

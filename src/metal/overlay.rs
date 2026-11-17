@@ -23,6 +23,8 @@ pub(crate) struct MetalOverlay {
     pipelines: HashMap<NSUInteger, Owned>,
     /// the opaque copy's pipelines ([`draw_texture`](Self::draw_texture))
     copies: HashMap<NSUInteger, Owned>,
+    /// the premultiplied blend's ([`blend_texture`](Self::blend_texture))
+    blends: HashMap<NSUInteger, Owned>,
 }
 
 impl MetalOverlay {
@@ -142,14 +144,26 @@ impl MetalOverlay {
     /// offscreen, shown in a window — then present the drawable if `pass`
     /// has one.
     pub(crate) fn draw_texture(&mut self, device: &MetalDevice, texture: Id, pass: &PassAttachments) -> Result<(), MetalError> {
+        self.texture_pass(device, texture, pass, false)
+    }
+
+    /// Blend `texture` (premultiplied linear colour, the size of the pass)
+    /// over the frame in `pass`, then present the drawable if it has one.
+    pub(crate) fn blend_texture(&mut self, device: &MetalDevice, texture: Id, pass: &PassAttachments) -> Result<(), MetalError> {
+        self.texture_pass(device, texture, pass, true)
+    }
+
+    fn texture_pass(&mut self, device: &MetalDevice, texture: Id, pass: &PassAttachments, over: bool) -> Result<(), MetalError> {
         let _pool = AutoreleasePool::new();
         let dst = if pass.resolve.is_null() { pass.color } else { pass.resolve };
-        let pipeline = match self.copies.get(&pass.color_format) {
+        let (pipelines, fragment) =
+            if over { (&mut self.blends, "fs_overlay_premultiplied") } else { (&mut self.copies, "fs_overlay") };
+        let pipeline = match pipelines.get(&pass.color_format) {
             Some(p) => p.id(),
             None => {
-                let p = fullscreen_pipeline_blend(device, "vs_fullscreen", "fs_overlay", pass.color_format, false)?;
+                let p = fullscreen_pipeline_blend(device, "vs_fullscreen", fragment, pass.color_format, over)?;
                 let id = p.id();
-                self.copies.insert(pass.color_format, p);
+                pipelines.insert(pass.color_format, p);
                 id
             }
         };
@@ -161,7 +175,8 @@ impl MetalOverlay {
             let desc = render_pass_descriptor(dst);
             let attachments: Id = msg0(desc, sel!("colorAttachments"));
             let color: Id = msg1(attachments, sel!("objectAtIndexedSubscript:"), 0usize);
-            let _: () = msg1(color, sel!("setLoadAction:"), load_action::DONT_CARE);
+            let load = if over { load_action::LOAD } else { load_action::DONT_CARE };
+            let _: () = msg1(color, sel!("setLoadAction:"), load);
             let enc: Id = msg1(cmd, sel!("renderCommandEncoderWithDescriptor:"), desc);
             if enc.is_null() {
                 return Err(MetalError::Unsupported("texture render encoder failed".into()));

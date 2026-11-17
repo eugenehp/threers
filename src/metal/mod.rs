@@ -357,6 +357,7 @@ mod tests {
             "fs_upscale",
             "fs_bloom_composite",
             "fs_overlay",
+            "fs_overlay_premultiplied",
             "fs_mesh_encoded_add",
             "fs_point_encoded_add",
         ] {

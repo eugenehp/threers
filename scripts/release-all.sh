@@ -19,8 +19,8 @@
 # Targets (env TARGETS, comma-separated, or default "all"):
 #   language  — npm ESM (mini+full), npm native (host), PyPI wheel (host)
 #   crates    — crates.io: every workspace crate not marked `publish = false`
-#               (today threers-math, -captions, -audio, -codec, -softbody, threers,
-#               -physics, -animation, -probe and -video); versions
+#               (today threers-math, -captions, -audio, -codec, -softbody,
+#               -splat-sort, threers, -physics, -animation, -probe and -video); versions
 #               already on the index are skipped, so a partial publish can be rerun
 #   npm-esm   — @threers/threers on npm (wasm mini + full)
 #   npm-node  — threers-node + @threers/node-* (host .node only locally)

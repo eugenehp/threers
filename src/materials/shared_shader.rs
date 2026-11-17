@@ -101,7 +101,31 @@ pub struct SharedShader {
 ///
 /// The body is captured as tokens — so it is checked for balanced brackets
 /// and valid literals as it compiles — and translated to WGSL, and that to
-/// MSL, when the material is built.
+/// MSL, when the material is built. What the tokens alone can show is wrong
+/// fails the build at the macro: Rust that is not the shared syntax, and a
+/// missing entry point.///
+/// ```compile_fail
+/// let s = threers::shader! {
+///     fn shade(s: Shading) -> vec4f { let mut x = 1.0; return vec4f(x); }
+/// };
+/// ```
+///
+/// ```compile_fail
+/// let s = threers::shader! {
+///     fn shade(s: Shading) -> vec4f { return vec4f(s.uv.x as f32); }
+/// };
+/// ```
+///
+/// ```compile_fail
+/// let s = threers::shader! { fn tint(c: vec3f) -> vec3f { return c; } };
+/// ```
+///
+/// ```
+/// // `var`, a constructor, and a `shade`: builds.
+/// let s = threers::shader! {
+///     fn shade(s: Shading) -> vec4f { var x = f32(1u32); x += 1.0; return vec4f(x); }
+/// };
+/// ```
 #[macro_export]
 macro_rules! shader {
     ($($body:tt)*) => {{
@@ -1649,6 +1673,9 @@ struct ThreersWgsl {
     float s0(uint i) const { return i < lens_.x ? u_s0[i] : 0.0; }
     float s1(uint i) const { return i < lens_.y ? u_s1[i] : 0.0; }
     float s2(uint i) const { return i < lens_.z ? u_s2[i] : 0.0; }
+    float4 s0x4(uint t) const { return float4(s0(4u * t), s0(4u * t + 1u), s0(4u * t + 2u), s0(4u * t + 3u)); }
+    float4 s1x4(uint t) const { return float4(s1(4u * t), s1(4u * t + 1u), s1(4u * t + 2u), s1(4u * t + 3u)); }
+    float4 s2x4(uint t) const { return float4(s2(4u * t), s2(4u * t + 1u), s2(4u * t + 2u), s2(4u * t + 3u)); }
     uint s_len(uint slot) const { return slot == 0u ? lens_.x : (slot == 1u ? lens_.y : lens_.z); }
     // The attachment encodes; standing in for a `Unorm` target, the shader
     // does, as on wgpu (`threers_raw_out` undoes the attachment's).
@@ -1855,12 +1882,15 @@ fn preamble_constants() -> &'static str {
 /// Names the Metal environment provides itself, which the preamble's WGSL
 /// versions (texture reads, bindings) must not replace.
 #[cfg(feature = "render")]
-const PROVIDED: [&str; 22] = [
+const PROVIDED: [&str; 25] = [
     "sample_env_cube",
     "sample_env_cube_unrotated",
     "s0",
     "s1",
     "s2",
+    "s0x4",
+    "s1x4",
+    "s2x4",
     "s_len",
     "framebuffer_encode",
     "apply_tone_mapping",
@@ -2162,9 +2192,11 @@ mod tests {
         );
     }
 
+    /// Through the macro this fails the build (see `check_tokens`); built
+    /// from a string, it is still an error when translated.
     #[test]
     fn a_shader_without_an_entry_point_is_an_error() {
-        let e = crate::shader! { fn f(x: f32) -> f32 { return x; } }
+        let e = SharedShader::new("fn f(x: f32) -> f32 { return x; }")
             .wgsl()
             .unwrap_err();
         assert!(e.contains("shade"), "{e}");

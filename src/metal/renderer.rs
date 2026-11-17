@@ -1209,6 +1209,15 @@ impl MetalRenderer {
         self.overlay.draw_texture(&self.device, texture, pass)
     }
 
+    /// Blend `texture` — premultiplied linear colour the size of `pass`, on
+    /// this renderer's device: a volume marched with a clear background,
+    /// say — over the frame, then present the drawable if `pass` has one.
+    /// Render the scene [`without_drawable`](PassAttachments::without_drawable)
+    /// first, so it is not on screen before what goes over it.
+    pub fn blend_texture(&mut self, texture: Id, pass: &PassAttachments) -> Result<(), MetalError> {
+        self.overlay.blend_texture(&self.device, texture, pass)
+    }
+
     /// How many renders so far drew the shadow maps.
     pub fn shadow_map_updates(&self) -> u64 {
         self.shadow_updates
@@ -2009,9 +2018,10 @@ mod tests {
             // `model` and `normal_mat`; nine float4/uint4 rows; `extra`,
             // `map_scalars`, `env_params` and the three `env_dir` rows; the
             // six `map_samplers`, seven `physical` and one `phys_flags` rows;
-            // two `map_xform` rows a map; and the five `planet` rows — the
-            // members `struct Draw` declares in `shaders.metal`.
-            64 + 64 + 9 * 16 + 6 * 16 + 6 * 16 + 7 * 16 + 16 + 2 * MAP_COUNT * 16 + 5 * 16
+            // two `map_xform` rows a map; the five `planet` rows; and the
+            // `clip` plane — the members `struct Draw` declares in
+            // `shaders.metal`.
+            64 + 64 + 9 * 16 + 6 * 16 + 6 * 16 + 7 * 16 + 16 + 2 * MAP_COUNT * 16 + 5 * 16 + 16
         );
         assert_eq!(
             std::mem::size_of::<FrameUniforms>(),

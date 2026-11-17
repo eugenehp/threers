@@ -110,6 +110,14 @@ if [ "${XR:-}" = "1" ]; then
     echo "    (xr feature enabled — WebXR sessions, both eyes drawn to a headset)"
 fi
 
+# Gaussian splats, composable with any variant: SPLATS=1 ./web/build.sh —
+# `WebScene.addSplats` for a captured scene's PLY or `.splat`, sorted for the
+# camera by every render (web/splats.html).
+if [ "${SPLATS:-}" = "1" ]; then
+    FEATURE_LIST+=("splats")
+    echo "    (splats feature enabled — 3D Gaussian splats)"
+fi
+
 # Wasm SIMD, composable with any variant: SIMD=1 VARIANT=full ./web/build.sh
 #
 # A target feature, not a Cargo feature: it changes codegen for every crate, so

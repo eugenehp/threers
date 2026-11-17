@@ -81,7 +81,7 @@ pub const MODELS: &[Model] = &[
         frames: 300,
         fps: 60,
         units_per_metre: 1000.0,
-        substeps: 12,
+        substeps: 16,
     },
     Model {
         id: "latch",
@@ -91,7 +91,7 @@ pub const MODELS: &[Model] = &[
         frames: 420,
         fps: 60,
         units_per_metre: 1000.0,
-        substeps: 12,
+        substeps: 16,
     },
 ];
 

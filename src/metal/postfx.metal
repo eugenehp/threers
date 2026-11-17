@@ -372,6 +372,17 @@ fragment float4 fs_tonemap(
     return float4(aces(hdr), c.a);
 }
 
+// A premultiplied frame (a volume marched with a clear background) over a
+// finished one, texel for pixel, as it stands: the `One, OneMinusSrcAlpha`
+// blend is the premultiplied "over".
+fragment float4 fs_overlay_premultiplied(
+    FullscreenOut in [[stage_in]],
+    texture2d<float, access::sample> src [[texture(0)]])
+{
+    constexpr sampler s(coord::pixel, filter::nearest, address::clamp_to_edge);
+    return src.sample(s, in.position.xy);
+}
+
 // A straight-alpha RGBA overlay (text, panels, captions) over a finished
 // frame, one overlay texel per target pixel. The texture is sRGB, so the sample
 // is linear light; returned premultiplied for the `One, OneMinusSrcAlpha`

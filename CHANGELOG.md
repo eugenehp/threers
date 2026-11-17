@@ -7,8 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-11-16
+
 ### Added
 
+- **3D Gaussian splats** (`threers::splats`, the opt-in `splats` feature).
+  `GaussianSplats` reads and writes the reference trainer's PLY (ASCII or
+  binary, spherical harmonics to degree 3) and the 32-byte `.splat` format,
+  and reads SuperSplat's chunk-compressed PLY and Niantic's `.spz` (versions
+  1–4: gzip through the crate's own inflate, version 4's zstd through the
+  pure-Rust `ruzstd`); `from_bytes` tells them apart. The readers are checked
+  against files the reference tools wrote — splat-transform's `.spz`
+  fixtures, Niantic's samples, and one capture PlayCanvas ships as both `.spz`
+  and compressed PLY, which decode to the same splats.
+  `splat_object` draws them in the scene with everything else — projected as
+  the reference rasteriser does (EWA, with its 0.3 px² low-pass), depth-tested
+  against opaque meshes, the object's transform applied, view-dependent
+  colour evaluated in the splats' own frame — through a `ShaderMaterial`, so
+  on WebGPU, WebGL2, native wgpu and the Metal renderer alike. `SplatSorter`
+  orders them back to front on the CPU (a million in ~10 ms) and uploads only
+  the order, and only when the view axis turns. The higher bands are stored
+  packed, three bytes a coefficient scaled per splat, and dropped a degree at
+  a time when they would not fit a storage binding. `examples/splats.rs`
+  renders a file or a generated million. From JavaScript, `WebScene.addSplats`
+  takes a file's bytes and every `render` sorts for its camera;
+  `web/splats.html` (`SPLATS=1 ./web/build.sh`) is a viewer for dropped or
+  linked captures. `tests/web_splats` holds the browser checks, run by both the
+  WebGL2 and the WebGPU suite. The sort is its own crate,
+  `threers-splat-sort` (compiled at `opt-level = 3` in the wasm profile, its
+  keys in `simd128` under `SIMD=1`): an orbiting frame of a million splats
+  costs about 5 ms of CPU in the browser, against 21 before. Quads stop where
+  a splat fades below 1/255, so faint splats get small ones — a captured
+  scene of large faint splats went from 42 ms a frame to 17. `?bench=<frames>`
+  on the viewer page times an orbit (`&still=1`, the GPU alone). The
+  shader decoded its packed view-dependent colour with `u32(x + 0.5)`, which
+  past 2²³ rounds to even: green and blue flipped sign wherever a
+  coefficient's blue byte was 255, colour noise all over shiny surfaces. It
+  now matches a CPU port of the reference rasteriser to 39–56 dB on real
+  captures (`compare_with_the_reference_rasteriser`, ignored, needs a file);
+  what is left is colours past 1, which a straight-alpha blend clamps.
+  `GaussianSplats::framing` picks where to look from — close for a captured
+  scene, all in view for a scanned object — and the viewer and example use
+  it: from outside a scene, its floaters are most of what shows.
+  Splat data is laid out in fours and read with the new `s0x4`/`s1x4`/`s2x4`
+  (on every `ShaderMaterial`: one texel on WebGL2, where `s0` fetches a texel
+  a float), which took WebGL2 frames from 30–35 ms to 23–30; the viewer page
+  adapts its render scale to hold 30+ fps.
+  `loaders::deflate` now decodes Huffman codes
+  through a lookup table rather than bit by bit, about 1.5× faster for every
+  zlib-compressed format it serves.
 - **RealityKit on every Apple device** (`threers-ios`). The RealityKit read-out
   and shell (`app/Reality.swift`, `RealityScene`) are shared by the visionOS
   volume, a new `ios-reality` build (a `RealityView` on iPhone and iPad, over
@@ -83,26 +130,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `fluid::volume_config`: the 3D configuration, quality levels, atlas,
   memory arithmetic, impulse geometry and random bursts, shared by both
   backends.
+- **`threers-candles`**: candles on a table as a C ABI static library, drawn
+  by the Metal scene renderer into a `CAMetalLayer` — add, move, remove and
+  recolour candles, screen↔table points and picking for placing and dragging
+  them, orbit and zoom; `threers_candles_set_bodies(h, 0)` for the flames
+  alone.
+- `Candle::with_body(false)`: a flame and its light with no candle under
+  them — no wax, wick or wax glow, the flame's base just above the foot.
+  `Candle::flame_base` is where the flame starts either way.
+- `threers_candles_set_fire(h, 1)`: the flames burn as one volume of gas —
+  threers' 3D fluid on Metal, fed at each flame's foot in its colour — in
+  place of their meshes. Flames within 9 cm lean into each other and run
+  into one plume, their colours mixing; `close_flames_mix_in_the_fire`
+  holds a red and a blue pair to a plume of both and a lone green one to its
+  own colour.
+- `threers_candles_set_sweep`, `threers_candles_flare` and
+  `threers_candles_project`: a hand that sweeps round the table (a line and
+  a fading trail, drawn on the table by a WGSL `ShaderMaterial`), a flame
+  thrown up brighter for a moment as it is played, and any table point on
+  screen. `the_sweep_draws_its_hand` renders it on Metal.
+- `MetalRenderer::copy_frame`: the finished frame — resolved, under MSAA —
+  copied into a texture of the caller's in a command buffer handed back
+  enqueued and uncommitted, so a completion handler can be added and
+  anything presented afterwards runs after the copy. What a movie recorder
+  takes before the frame goes on screen; `copy_frame_hands_back_the_finished_frame`
+  checks it at one and four samples.
+- `threers_candles_frame_record` and `threers_candles_set_fire_amount`: a
+  frame drawn and copied into the app's texture (a movie of the table), and
+  how much fire burns — brighter and taller with more.
+- `MetalFluid3d::render_over`: march the volume over a frame the scene
+  renderer drew, premultiplied, and present; `MetalRenderer::blend_texture`
+  is the premultiplied "over" it uses. `MetalFluid3d::splat_batch` is public,
+  for emitters that feed the volume every frame. `a_volume_renders_over_a_scene`
+  holds an empty volume to leaving the frame untouched and a dyed one to
+  showing over it.
+- `CandleHandle::set_flame_color`: a candle burns in a colour of its own —
+  the gas recoloured at its own brightness, the hottest core still white, the
+  wax's glow and the light it throws following.
+- `shader!`, `passes!` and `shader_functions!` fail the build, at the macro,
+  on what the tokens alone show is wrong: `let mut` and `as` (Rust, not the
+  shared syntax) and, for `shader!`, a missing `fn shade`.
+- The shared syntax supports `++` and `--`.
 - `threers-fluid-ios`: `THREERS_FLUID_PAINT` (dye into the volume under a
   point, a tap or a stroke), `THREERS_FLUID_PAINT_COLOR` and
   `THREERS_FLUID_AMBIENT` (the self-feeding plume, on by default).
-
-### Changed
-
-- `threers-fluid-ios` runs on `MetalFluid3d` instead of wgpu: the same C
-  ABI and header, and an app linking it no longer carries wgpu.
-- The Metal fluid's frame-rate read-out uploads its row with a blit on the
-  frame's own command buffer; `show_fps` no longer waits for every frame to
-  finish on the GPU.
-- The fullscreen-pass and texture helpers the fluid uses moved to
-  `metal::pass`, outside the scene renderer.
-- No more warnings on a plain build: the redundant `homepage` fields are gone
-  from the crates' manifests, and the renderer-only `ShaderMaterial` helpers
-  no longer warn when `render` is off.
-
-## [0.1.0] — 2026-11-15
-
-### Added
 
 - **Finite and boundary elements** (new crate `threers-fem`): a
   tetrahedral mesher for any closed `BufferGeometry` or signed distance
@@ -1504,6 +1575,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Reserved names in the shared syntax are renamed rather than refused: a
+  local or parameter called `half`, `sample` or `kernel` just works. A
+  *function* with such a name is still an error, because its name is how
+  other shaders and the renderer find it.
+
+- `threers-fluid-ios` runs on `MetalFluid3d` instead of wgpu: the same C
+  ABI and header, and an app linking it no longer carries wgpu.
+- The Metal fluid's frame-rate read-out uploads its row with a blit on the
+  frame's own command buffer; `show_fps` no longer waits for every frame to
+  finish on the GPU.
+- The fullscreen-pass and texture helpers the fluid uses moved to
+  `metal::pass`, outside the scene renderer.
+- No more warnings on a plain build: the redundant `homepage` fields are gone
+  from the crates' manifests, and the renderer-only `ShaderMaterial` helpers
+  no longer warn when `render` is off.
+
 - **OpenSCAD 2D:** `union`, `difference`, `intersection` and `offset()` of
   2D shapes run on `polygon_ops` in integer coordinates, filled non-zero,
   as OpenSCAD does them. `offset(r)` rounds corners within the sagitta of
@@ -1632,6 +1719,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the tensor conversions read every format, BC7 and ASTC included.
 
 ### Fixed
+
+- A WGSL `ShaderMaterial` using a name MSL reserves (`half`, `constant`,
+  `kernel`…) no longer draws its fallback colour on the Metal backend: such
+  names are renamed in translation. And `i++` no longer reaches MSL as
+  `i + +`. Between them, the realistic candle flame did not draw on Metal at
+  all; `tests/metal_candles.rs` now holds both flames to the wgpu picture.
 
 - **visionOS bindings read garbage matrices.** `simd_float4x4` results
   (eye transforms, projections, the head anchor) were declared as plain

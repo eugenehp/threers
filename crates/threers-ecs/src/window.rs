@@ -113,16 +113,26 @@ fn set_pointer_lock(window: &winit::window::Window, lock: bool) -> bool {
 ///
 /// If the window or a GPU for it cannot be had.
 pub fn run(mut app: App, options: WindowOptions) {
-    let attributes = winit::window::Window::default_attributes()
-        .with_title(options.title.clone())
-        .with_inner_size(winit::dpi::LogicalSize::new(options.width, options.height));
+    let attributes = winit::window::Window::default_attributes().with_title(options.title.clone());
+    // On iOS the window is the screen: a size asked for would only shrink the
+    // surface inside it.
+    #[cfg(not(target_os = "ios"))]
+    let attributes =
+        attributes.with_inner_size(winit::dpi::LogicalSize::new(options.width, options.height));
     threers::sketch::run_window(attributes, move |window| {
         let mut view = match WindowRenderer::with_backend(window.clone(), options.backend) {
             Ok(view) => view,
             Err(error) => panic!("no {:?} renderer for the window: {error}", options.backend),
         };
+        // The surface as big as the window really is: on iOS no resize
+        // follows to put it right.
+        let size = window.inner_size();
+        view.resize(size.width, size.height);
         view.set_msaa(options.msaa);
         view.set_pixel_ratio(window.scale_factor() as f32);
+        if let Some(touch) = app.world.get_resource_mut::<crate::touch::TouchControls>() {
+            touch.scale = window.scale_factor() as f32;
+        }
 
         if app.world.get_resource::<MainCamera>().is_none() {
             let camera = PerspectiveCamera::new(50.0, view.aspect(), 0.1, 1000.0);
@@ -145,6 +155,9 @@ pub fn run(mut app: App, options: WindowOptions) {
         #[cfg(feature = "gamepad")]
         let mut focused = window.has_focus();
 
+        #[cfg(all(target_os = "ios", feature = "ar"))]
+        let mut ar = crate::ar::Driver::new();
+
         let mut last = Instant::now();
         let mut locked = false;
         let win = window.clone();
@@ -158,6 +171,13 @@ pub fn run(mut app: App, options: WindowOptions) {
                 } if locked => {
                     let delta = Vector2::new(delta.0 as f32, delta.1 as f32);
                     app.world.resource_mut::<Input>().add_mouse_motion(delta);
+                    return;
+                }
+                // Ask for the next frame whenever the loop goes idle as well as
+                // after each one: iOS drops a redraw asked for while one is
+                // being drawn, and the game would stop after its first frames.
+                Event::AboutToWait => {
+                    win.request_redraw();
                     return;
                 }
                 _ => return,
@@ -175,6 +195,9 @@ pub fn run(mut app: App, options: WindowOptions) {
                 }
                 WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                     view.set_pixel_ratio(scale_factor as f32);
+                    if let Some(touch) = app.world.get_resource_mut::<crate::touch::TouchControls>() {
+                        touch.scale = scale_factor as f32;
+                    }
                 }
                 WindowEvent::Focused(has_focus) => {
                     #[cfg(feature = "gamepad")]
@@ -228,6 +251,8 @@ pub fn run(mut app: App, options: WindowOptions) {
                     if let Some(gamepads) = &mut gamepads {
                         gamepads.poll(app.world.resource_mut::<Input>(), focused);
                     }
+                    #[cfg(all(target_os = "ios", feature = "ar"))]
+                    ar.drive(&win, &mut view, &mut app.world);
                     let now = Instant::now();
                     app.frame(now.duration_since(last).as_secs_f64());
                     last = now;

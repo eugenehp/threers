@@ -224,6 +224,8 @@ pub mod origami;
 pub mod particles;
 #[cfg(feature = "render")]
 pub mod postprocessing;
+#[cfg(feature = "splats")]
+pub mod splats;
 pub mod prelude;
 pub mod renderers;
 pub mod scene;

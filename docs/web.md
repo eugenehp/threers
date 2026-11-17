@@ -48,6 +48,8 @@ work width are live controls; `?gl=1` forces WebGL2. The capture uses an sRGB
 render target — a plain one reads back linear light, as three.js's does. See
 [Time smear](time-smear.md).
 
+**Gaussian splats**: [`web/splats.html`](../web/splats.html) — a viewer for captured scenes: drop or link a trainer's PLY, a compressed PLY, an `.spz` or a `.splat`, drag to orbit. `scene.addSplats(bytes)` from your own page; build with `SPLATS=1 WEBGL=1 SIMD=1 ./web/build.sh`. See [Gaussian splats](splats.md).
+
 **Gummy jelly**: [`web/examples/jelly.html`](../web/examples/jelly.html)
 is a set of gummy creatures you can pull apart — a jellyfish, a gecko, a
 starfish, an octopus, a sea slug, a gummy worm, a gummy bear and a salamander

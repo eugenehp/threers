@@ -40,6 +40,11 @@ mod web_maps;
 #[path = "web_scenes/mod.rs"]
 mod web_scenes;
 
+// Gaussian splats through the JavaScript API — shared with the other backend.
+#[cfg(feature = "splats")]
+#[path = "web_splats/mod.rs"]
+mod web_splats;
+
 // Video: the browser's frames copied on the GPU, and the player on WebCodecs
 // — shared with the other backend.
 #[cfg(feature = "native-decode")]

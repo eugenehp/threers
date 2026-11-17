@@ -5,6 +5,13 @@
 //! or a stick under each thumb for a twin-stick game. They stay hidden until
 //! the first touch, so a desktop player never sees them.
 //!
+//! A finger no stick or button holds is the mouse: it moves the pointer and
+//! holds the left button, so menus and anything else made for a mouse work
+//! by tapping. Turn the sticks off where there is nothing to fly
+//! ([`sticks_on`](TouchControls::sticks_on)) and the whole screen is the
+//! pointer's; with them on, a quick tap where a stick would start is still a
+//! click.
+//!
 //! ```
 //! use threers_ecs::prelude::*;
 //! use threers_ecs::touch::{TouchButton, TouchControls};
@@ -27,7 +34,7 @@
 
 use crate::app::{App, Plugin};
 use crate::hud::with_hud;
-use crate::input::{Button, Input, TOUCH_STICKS};
+use crate::input::{Button, Input, MouseButton, TOUCH_STICKS};
 use crate::world::World;
 use threers::math::{Color, Vector2};
 
@@ -41,8 +48,12 @@ pub struct TouchButton {
     pub x: f32,
     /// Centre, as a fraction of the screen's height.
     pub y: f32,
-    /// In pixels.
+    /// In points: pixels times [`TouchControls::scale`].
     pub radius: f32,
+    /// A word under it, saying what it does, for a label that cannot.
+    pub caption: String,
+    /// Not drawn and not pressed: for a button that means nothing now.
+    pub hidden: bool,
 }
 
 impl TouchButton {
@@ -54,7 +65,20 @@ impl TouchButton {
             x,
             y,
             radius: 48.0,
+            caption: String::new(),
+            hidden: false,
         }
+    }
+
+    /// With `caption` written small under it.
+    pub fn caption(mut self, caption: &str) -> Self {
+        self.caption = caption.to_owned();
+        self
+    }
+
+    /// The action it presses.
+    pub fn action(&self) -> &str {
+        &self.action
     }
 }
 
@@ -66,6 +90,8 @@ struct Stick {
     /// From and to, as fractions of the screen's width.
     area: (f32, f32),
     held: Option<StickState>,
+    /// A word for the ring drawn where a thumb could go, while none is.
+    hint: Option<String>,
 }
 
 /// The on-screen controls, as a plugin and then a resource.
@@ -74,21 +100,65 @@ pub struct TouchControls {
     sticks: Vec<Stick>,
     /// The buttons, in the order [`Button::Touch`] numbers them.
     pub buttons: Vec<TouchButton>,
-    /// How far a thumb travels for full deflection, in pixels.
+    /// How far a thumb travels for full deflection, in points.
     pub stick_radius: f32,
+    /// Pixels a point: the screen's scale (2 or 3 on a phone or an iPad), so
+    /// the controls are the same size under the thumb on every screen. The
+    /// window keeps it current.
+    pub scale: f32,
     /// A [`stick`](Self::stick) takes touches left of this fraction of the
     /// screen.
     pub stick_area: f32,
     /// Screen size in pixels. A host with a HUD keeps this current.
     pub screen: (f32, f32),
+    /// Whether the sticks take thumbs. Off, every finger that is not on a
+    /// button is the mouse.
+    pub sticks_on: bool,
+    /// The finger that is the mouse.
+    pointer: Option<u64>,
+    /// A tap on a stick's area, clicked: the button comes up next frame.
+    clicked: bool,
     used: bool,
+}
+
+impl TouchControls {
+    /// Show the controls as if the screen had been touched: for a picture
+    /// of them, or a host that knows it is a touch screen.
+    pub fn show(&mut self) {
+        self.used = true;
+    }
+
+    /// Whether the screen has been touched (or [`show`](Self::show) called):
+    /// a game lays its UI out for fingers from then on.
+    pub fn in_use(&self) -> bool {
+        self.used
+    }
+
+    fn button_radius(&self, button: &TouchButton) -> f32 {
+        button.radius * self.scale
+    }
+
+    fn stick_pixels(&self) -> f32 {
+        self.stick_radius * self.scale
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 struct StickState {
     touch: u64,
     origin: Vector2,
+    /// The furthest the thumb has been from where it landed, pixels.
+    travel: f32,
+    /// Frames it has been down.
+    frames: u32,
 }
+
+/// A thumb down no longer than this, frames, and moved no further than
+/// this, pixels, was a tap rather than a push.
+const TAP_FRAMES: u32 = 18;
+const TAP_TRAVEL: f32 = 12.0;
+/// How much further than its circle a button takes a finger.
+const TOUCH_SLOP: f32 = 1.3;
 
 impl TouchControls {
     /// No stick and no buttons; add them with [`stick`](Self::stick) and [`button`](Self::button).
@@ -97,8 +167,12 @@ impl TouchControls {
             sticks: Vec::new(),
             buttons: Vec::new(),
             stick_radius: 70.0,
+            scale: 1.0,
             stick_area: 0.5,
             screen: (640.0, 360.0),
+            sticks_on: true,
+            pointer: None,
+            clicked: false,
             used: false,
         }
     }
@@ -119,7 +193,17 @@ impl TouchControls {
                 axes: (x_axis.to_owned(), y_axis.to_owned()),
                 area: (from, to),
                 held: None,
+                hint: None,
             });
+        }
+        self
+    }
+
+    /// Show the last stick added as a faint ring with `hint` under it while
+    /// no thumb is on it, so a newcomer sees where the thumbs go.
+    pub fn stick_hint(mut self, hint: &str) -> Self {
+        if let Some(stick) = self.sticks.last_mut() {
+            stick.hint = Some(hint.to_owned());
         }
         self
     }
@@ -135,8 +219,13 @@ impl TouchControls {
     }
 
     fn over(&self, button: &TouchButton, at: Vector2) -> bool {
+        if button.hidden {
+            return false;
+        }
         let (dx, dy) = (at.x - self.centre(button).x, at.y - self.centre(button).y);
-        dx * dx + dy * dy <= button.radius * button.radius
+        // A fingertip is not a point: a little more than the circle drawn.
+        let r = self.button_radius(button) * TOUCH_SLOP;
+        dx * dx + dy * dy <= r * r
     }
 }
 
@@ -181,26 +270,43 @@ pub fn touch_step(w: &mut World) {
 
         // A button keeps the touch that lands on it, so the stick must not claim it.
         for index in 0..controls.buttons.len() {
-            let held = touches
-                .iter()
-                .any(|touch| controls.over(&controls.buttons[index], touch.position));
+            // By where a finger came down, so a thumb sliding off a stick
+            // presses nothing; and a tap quicker than a frame still presses
+            // it, for a frame.
+            let button_at = &controls.buttons[index];
+            let held = touches.iter().any(|touch| controls.over(button_at, touch.start))
+                || input.touches_begun.iter().any(|&at| controls.over(button_at, at));
             let button = Button::Touch(index as u8);
             if held {
+                if !input.is_down(button) {
+                    haptic::tap();
+                }
                 input.press(button);
             } else {
                 input.release(button);
             }
         }
 
+        // Last frame's tap comes up.
+        if controls.clicked {
+            input.release(MouseButton::Left);
+            controls.clicked = false;
+        }
         let mut moved = Vec::new();
         for n in 0..controls.sticks.len() {
-            // A stick lets go when its thumb lifts.
+            // A stick lets go when its thumb lifts: after a tap, a click
+            // where it landed.
             if let Some(held) = controls.sticks[n].held
                 && !touches.iter().any(|touch| touch.id == held.touch)
             {
                 controls.sticks[n].held = None;
+                if held.frames <= TAP_FRAMES && held.travel <= TAP_TRAVEL * controls.scale {
+                    input.move_mouse(held.origin);
+                    input.press(MouseButton::Left);
+                    controls.clicked = true;
+                }
             }
-            if controls.sticks[n].held.is_none() {
+            if controls.sticks[n].held.is_none() && controls.sticks_on {
                 let (from, to) = controls.sticks[n].area;
                 let (from, to) = (from * controls.screen.0, to * controls.screen.0);
                 let taken: Vec<u64> = controls
@@ -220,18 +326,52 @@ pub fn touch_step(w: &mut World) {
                 controls.sticks[n].held = free.map(|touch| StickState {
                     touch: touch.id,
                     origin: touch.start,
+                    travel: 0.0,
+                    frames: 0,
                 });
             }
             let (mut x, mut y) = (0.0, 0.0);
-            if let Some(held) = controls.sticks[n].held
+            let reach = controls.stick_pixels();
+            if let Some(held) = &mut controls.sticks[n].held
                 && let Some(touch) = touches.iter().find(|touch| touch.id == held.touch)
             {
-                x = (touch.position.x - held.origin.x) / controls.stick_radius;
+                held.frames += 1;
+                let d = touch.position - held.origin;
+                held.travel = held.travel.max((d.x * d.x + d.y * d.y).sqrt());
+                x = (touch.position.x - held.origin.x) / reach;
                 // The screen's y runs down; a stick's up is positive.
-                y = (held.origin.y - touch.position.y) / controls.stick_radius;
+                y = (held.origin.y - touch.position.y) / reach;
             }
             input.set_touch_stick_at(n, x, y);
             moved.push((x, y));
+        }
+
+        // The mouse: the first finger neither a button nor a stick holds.
+        let held: Vec<u64> = controls
+            .sticks
+            .iter()
+            .filter_map(|s| s.held.map(|h| h.touch))
+            .collect();
+        if let Some(id) = controls.pointer
+            && (held.contains(&id) || !touches.iter().any(|touch| touch.id == id))
+        {
+            controls.pointer = None;
+            input.release(MouseButton::Left);
+        }
+        if controls.pointer.is_none()
+            && let Some(touch) = touches.iter().find(|touch| {
+                !held.contains(&touch.id)
+                    && !controls.buttons.iter().any(|b| controls.over(b, touch.start))
+            })
+        {
+            controls.pointer = Some(touch.id);
+            input.move_mouse(touch.position);
+            input.press(MouseButton::Left);
+        }
+        if let Some(id) = controls.pointer
+            && let Some(touch) = touches.iter().find(|touch| touch.id == id)
+        {
+            input.move_mouse(touch.position);
         }
 
         if controls.used {
@@ -241,27 +381,88 @@ pub fn touch_step(w: &mut World) {
 }
 
 fn draw(w: &mut World, controls: &TouchControls, moved: &[(f32, f32)]) {
+    let input = w.resource::<Input>();
+    let held: Vec<bool> = (0..controls.buttons.len())
+        .map(|i| input.is_down(Button::Touch(i as u8)))
+        .collect();
     with_hud(w, |hud| {
         hud.no_stroke();
-        for button in &controls.buttons {
+        for (button, &held) in controls.buttons.iter().zip(&held) {
+            if button.hidden {
+                continue;
+            }
             let at = controls.centre(button);
-            hud.fill_alpha(Color::WHITE, 0.25);
-            hud.circle(at.x, at.y, button.radius);
-            hud.fill_alpha(Color::WHITE, 0.8);
-            hud.text_size(24.0);
-            hud.text(at.x - 8.0, at.y + 8.0, &button.label);
+            let r = controls.button_radius(button);
+            // Lit while held, so a press is seen to land.
+            hud.fill_alpha(Color::WHITE, if held { 0.6 } else { 0.25 });
+            hud.circle(at.x, at.y, r);
+            hud.fill_alpha(Color::WHITE, 0.85);
+            // A label as big as the button allows, in its middle.
+            hud.text_size(r * if button.label.chars().count() > 1 { 0.6 } else { 0.8 });
+            let (_, h) = hud.measure_text(&button.label);
+            hud.text_centered(at.x, at.y - h / 2.0, &button.label);
+            if !button.caption.is_empty() {
+                hud.fill_alpha(Color::WHITE, 0.7);
+                hud.text_size(r * 0.34);
+                hud.text_centered(at.x, at.y + r + 3.0 * controls.scale, &button.caption);
+            }
         }
         for (stick, (x, y)) in controls.sticks.iter().zip(moved) {
-            let Some(held) = stick.held else { continue };
+            let Some(held) = stick.held else {
+                // Where a thumb could go, while none is.
+                if let Some(hint) = stick.hint.as_ref().filter(|_| controls.sticks_on) {
+                    let (w, h) = controls.screen;
+                    let at = Vector2::new((stick.area.0 + stick.area.1) / 2.0 * w, 0.62 * h);
+                    let r = controls.stick_pixels();
+                    hud.fill_alpha(Color::WHITE, 0.08);
+                    hud.circle(at.x, at.y, r);
+                    hud.fill_alpha(Color::WHITE, 0.45);
+                    hud.text_size(16.0 * controls.scale);
+                    let (_, th) = hud.measure_text(hint);
+                    hud.text_centered(at.x, at.y - th / 2.0, hint);
+                }
+                continue;
+            };
             hud.fill_alpha(Color::WHITE, 0.2);
-            hud.circle(held.origin.x, held.origin.y, controls.stick_radius);
+            let r = controls.stick_pixels();
+            hud.circle(held.origin.x, held.origin.y, r);
             hud.fill_alpha(Color::WHITE, 0.5);
             let (dx, dy) = (x.clamp(-1.0, 1.0), y.clamp(-1.0, 1.0));
             hud.circle(
-                held.origin.x + dx * controls.stick_radius,
-                held.origin.y - dy * controls.stick_radius,
-                24.0,
+                held.origin.x + dx * r,
+                held.origin.y - dy * r,
+                24.0 * controls.scale,
             );
         }
     });
+}
+
+/// A light tap felt under the finger as a button goes down, as iOS's own
+/// buttons give. Nothing elsewhere.
+mod haptic {
+    #[cfg(all(target_os = "ios", any(feature = "gamepad", feature = "ar")))]
+    pub fn tap() {
+        use objc2::msg_send;
+        use objc2::rc::{Allocated, Retained};
+        use objc2::runtime::{AnyClass, AnyObject};
+        thread_local! {
+            static GENERATOR: Option<Retained<AnyObject>> = AnyClass::get(c"UIImpactFeedbackGenerator")
+                .and_then(|class| unsafe {
+                    let made: Allocated<AnyObject> = msg_send![class, alloc];
+                    // UIImpactFeedbackStyleLight
+                    msg_send![made, initWithStyle: 0isize]
+                });
+        }
+        GENERATOR.with(|g| {
+            if let Some(g) = g {
+                // SAFETY: a UIKit object, on the main thread the loop runs on.
+                unsafe {
+                    let _: () = msg_send![&**g, impactOccurred];
+                }
+            }
+        });
+    }
+
+    #[cfg(not(all(target_os = "ios", any(feature = "gamepad", feature = "ar"))))]
+    pub fn tap() {}
 }

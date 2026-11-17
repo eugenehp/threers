@@ -33,6 +33,13 @@ unsafe extern "C" {
 const FLEXIBLE_SIZE: usize = 2 | 16;
 /// `UIInterfaceOrientationPortrait`
 const PORTRAIT: isize = 1;
+/// `ARPlaneDetectionHorizontal`
+const HORIZONTAL_PLANES: usize = 1;
+/// `ARRaycastTargetExistingPlaneGeometry`, `…EstimatedPlane`
+const FOUND_PLANE: isize = 0;
+const ESTIMATED_PLANE: isize = 2;
+/// `ARRaycastTargetAlignmentHorizontal`
+const HORIZONTAL: isize = 0;
 
 /// Whether this device can track the world (not the simulator, not the
 /// oldest devices).
@@ -81,6 +88,8 @@ impl ArSession {
             let config = config?;
             // +Y against gravity, the origin where the session starts
             let _: () = msg_send![&*config, setWorldAlignment: 0isize];
+            // Tables and floors, for `surface`.
+            let _: () = msg_send![&*config, setPlaneDetection: HORIZONTAL_PLANES];
             let session: Retained<AnyObject> = msg_send![&*feed, session];
             let _: () = msg_send![&*session, runWithConfiguration: &*config];
             Some(ArSession { view: feed })
@@ -120,6 +129,36 @@ impl ArSession {
             .invert()
             .elements;
             Some((world, flat(projection)))
+        }
+    }
+
+    /// Where a horizontal surface (a table, the floor) is under the view's
+    /// middle: a point in the world, metres. A plane ARKit has found if the
+    /// middle is on one, else its estimate; `None` before it has either.
+    pub fn surface(&self) -> Option<[f32; 3]> {
+        unsafe {
+            let bounds: CGRect = msg_send![&*self.view, bounds];
+            let middle = objc2_core_foundation::CGPoint {
+                x: bounds.origin.x + bounds.size.width / 2.0,
+                y: bounds.origin.y + bounds.size.height / 2.0,
+            };
+            let session: Retained<AnyObject> = msg_send![&*self.view, session];
+            for target in [FOUND_PLANE, ESTIMATED_PLANE] {
+                let query: Option<Retained<AnyObject>> = msg_send![
+                    &*self.view,
+                    raycastQueryFromPoint: middle,
+                    allowingTarget: target,
+                    alignment: HORIZONTAL
+                ];
+                let Some(query) = query else { continue };
+                let hits: Retained<AnyObject> = msg_send![&*session, raycast: &*query];
+                let first: Option<Retained<AnyObject>> = msg_send![&*hits, firstObject];
+                let Some(first) = first else { continue };
+                let hit = Retained::as_ptr(&first) as usize;
+                let m = call_int(hit, sel_bits(sel!(worldTransform)), 0);
+                return Some([m[3][0], m[3][1], m[3][2]]);
+            }
+            None
         }
     }
 

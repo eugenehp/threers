@@ -68,6 +68,7 @@
 //! | Drive a car | `car` module (`physics` feature) |
 //! | Follow something with the camera | [`camera`] |
 //! | A camera's picture on a monitor in the scene | [`offscreen`] |
+//! | The game over the camera, on iOS (ARKit) | [`ar`] |
 //! | Spawn and set up a node in one go | [`World::mesh`] |
 //! | Open a window | `window` module (`window` feature) |
 //! | Run in a browser | `web` module (`web` feature) |
@@ -91,6 +92,7 @@
 #![warn(missing_docs)]
 
 pub mod animator;
+pub mod ar;
 mod app;
 pub mod assets;
 #[cfg(feature = "audio")]
@@ -165,6 +167,7 @@ pub mod prelude {
     pub use threers::prelude::*;
 
     pub use crate::batch::Static;
+    pub use crate::ar::{Ar, ArCamera};
     pub use crate::camera::{CameraTarget, ChaseCamera};
     pub use crate::gizmos::Gizmos;
     pub use crate::hud::{with_hud, Hud};

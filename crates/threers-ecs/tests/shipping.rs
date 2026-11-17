@@ -122,6 +122,46 @@ fn twin_sticks_take_a_thumb_each_and_record_both() {
 }
 
 #[test]
+fn a_finger_no_stick_holds_is_the_mouse() {
+    let mut g = touch_game();
+    g.world().resource_mut::<TouchControls>().sticks_on = false;
+    // With the sticks off, a finger on the left is the pointer too.
+    g.input().touch_start(1, at(100.0, 200.0));
+    g.frames(1);
+    assert!(g.input().is_down(MouseButton::Left));
+    assert_eq!(g.input().mouse_position, at(100.0, 200.0));
+    assert_eq!(g.input().axis("x"), 0.0, "and not the stick");
+    g.input().touch_move(1, at(120.0, 210.0));
+    g.frames(1);
+    assert_eq!(g.input().mouse_position, at(120.0, 210.0));
+    g.input().touch_end(1);
+    g.frames(1);
+    assert!(!g.input().is_down(MouseButton::Left));
+}
+
+#[test]
+fn a_quick_tap_on_a_stick_is_a_click() {
+    let mut g = touch_game();
+    g.input().touch_start(1, at(100.0, 200.0));
+    g.frames(2);
+    assert!(!g.input().is_down(MouseButton::Left), "a thumb on the stick is not the mouse");
+    g.input().touch_end(1);
+    g.frames(1);
+    assert!(g.input().is_down(MouseButton::Left), "the tap clicks where it landed");
+    assert_eq!(g.input().mouse_position, at(100.0, 200.0));
+    g.frames(1);
+    assert!(!g.input().is_down(MouseButton::Left));
+    // A push is not a tap.
+    g.input().touch_start(2, at(100.0, 200.0));
+    g.frames(1);
+    g.input().touch_move(2, at(160.0, 200.0));
+    g.frames(1);
+    g.input().touch_end(2);
+    g.frames(1);
+    assert!(!g.input().is_down(MouseButton::Left));
+}
+
+#[test]
 fn nothing_is_drawn_until_someone_touches_the_screen() {
     let painted = |g: &TestGame| {
         let hud = g.resource::<Hud>();
@@ -401,4 +441,27 @@ fn locked_motion_adds_up_with_no_position() {
     assert_eq!(input.mouse_position.x, 0.0);
     app.frame(0.0);
     assert_eq!(app.world.resource::<Input>().mouse_delta.x, 0.0);
+}
+
+#[test]
+fn a_tap_quicker_than_a_frame_still_presses_a_button() {
+    let mut g = touch_game();
+    let button = at(0.88 * 640.0, 0.75 * 360.0);
+    // Down and up between two frames.
+    g.input().touch_start(1, button);
+    g.input().touch_end(1);
+    g.frames(1);
+    assert!(g.input().pressed("jump"), "the tap lands");
+    g.frames(1);
+    assert!(!g.input().pressed("jump"), "and lets go");
+}
+
+#[test]
+fn a_thumb_sliding_over_a_button_does_not_press_it() {
+    let mut g = touch_game();
+    g.input().touch_start(1, at(100.0, 200.0));
+    g.frames(1);
+    g.input().touch_move(1, at(0.88 * 640.0, 0.75 * 360.0));
+    g.frames(1);
+    assert!(!g.input().pressed("jump"));
 }

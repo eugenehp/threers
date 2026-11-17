@@ -13,7 +13,9 @@
 
 use crate::body::{BodySet, RigidBody};
 use crate::contact::{ContactManifold, ContactSet};
-use crate::joint::{Dof, DofMotion, Joint, JointKind, JointSet, JointSpring, Softness};
+use crate::joint::{
+    Dof, DofMotion, Joint, JointKind, JointLimits, JointSet, JointSpring, Softness,
+};
 use crate::math::{orthonormal_basis, try_normalize, Mat3};
 use crate::tendon::{ResolvedPath, Tendon, TendonKind, TendonSet};
 use threers::math::{Quaternion, Vector3};
@@ -34,6 +36,8 @@ struct SoftParams {
     bias_rate: f32,
     mass_scale: f32,
     impulse_scale: f32,
+    /// The step these were made for, for a limit to look ahead by.
+    dt: f32,
 }
 
 impl SoftParams {
@@ -42,6 +46,7 @@ impl SoftParams {
             bias_rate: baumgarte / dt,
             mass_scale: 1.0,
             impulse_scale: 0.0,
+            dt,
         }
     }
 
@@ -72,8 +77,69 @@ impl SoftParams {
             bias_rate: omega / a1,
             mass_scale: a2 * a3,
             impulse_scale: a3,
+            dt,
         }
     }
+}
+
+/// Which end of a `min..=max` limit is in play, and the velocity bias to solve
+/// it with: `(error, bias)`, where the sign of `error` says which way the
+/// impulse may push — negative at the lower end, positive at the upper.
+///
+/// The nearer end is solved even while the joint is inside the range, and that
+/// is the point. A joint resting on its stop — a pawl drawn on it, a lid shut —
+/// reads as inside, and a limit engaged only once it has been passed leaves
+/// it free for a whole step, in which the rest of the solve can spin it
+/// several degrees through. Solved ahead, the limit lets the joint close the
+/// gap this step and no further, as a speculative contact does. Past an end,
+/// the overlap is pushed out at the Baumgarte rate as before.
+///
+/// `None` for an empty range, which limits nothing.
+fn limit_bias(value: f32, min: f32, max: f32, soft: SoftParams) -> Option<(f32, f32)> {
+    if min > max {
+        return None;
+    }
+    let lower = value - min <= max - value;
+    let gap = if lower { value - min } else { value - max };
+    let past = if lower { gap < 0.0 } else { gap > 0.0 };
+    let bias = if past {
+        soft.bias_rate * gap
+    } else {
+        gap / soft.dt.max(f32::EPSILON)
+    };
+    let error = if lower {
+        gap.min(-f32::MIN_POSITIVE)
+    } else {
+        gap.max(f32::MIN_POSITIVE)
+    };
+    Some((error, bias))
+}
+
+/// The pseudo impulse that keeps a limited coordinate in its range through the
+/// position pass, or `None` when it needs none.
+///
+/// `value` is the coordinate at the start of the step; `real` and `pseudo` its
+/// rates on the real and the pseudo velocities, both of which move it by the
+/// end of the step. The pseudo rate may close what the real motion leaves of
+/// the range, and no more; past an end already, it may not add to the overlap
+/// — recovering that is the velocity pass's Baumgarte term, and doing it twice
+/// would kick.
+fn limit_position_lambda(
+    value: f32,
+    real: f32,
+    pseudo: f32,
+    limits: JointLimits,
+    inv_mass: f32,
+    dt: f32,
+) -> Option<f32> {
+    if inv_mass <= 0.0 || dt <= 0.0 || limits.min > limits.max {
+        return None;
+    }
+    let ahead = value + real * dt;
+    let floor = ((limits.min - ahead) / dt).min(0.0);
+    let ceiling = ((limits.max - ahead) / dt).max(0.0);
+    let want = pseudo.clamp(floor, ceiling);
+    (want != pseudo).then(|| (want - pseudo) / inv_mass)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -409,6 +475,7 @@ impl Solver {
         }
 
         for _ in 0..config.position_iterations {
+            self.solve_joint_limit_positions(joints, &joint_frames);
             self.solve_contact_positions(dt, config);
         }
 
@@ -741,6 +808,87 @@ impl Solver {
     }
 
     // ---- joints -----------------------------------------------------------
+
+    /// Joint limits, in the position pass.
+    ///
+    /// The position pass pushes overlapping bodies apart on pseudo velocities,
+    /// and joints take no part in it — so a part pressed into something is
+    /// pushed out whichever way is easiest, and for a light part on a hinge that
+    /// is round the hinge, through its stop. A pawl driven back against a tooth
+    /// is the case: the tooth and the stop between them should hold the
+    /// carriage, and instead every step's overlap was resolved by turning the
+    /// pawl a few more degrees past where its limit allows, until the carriage
+    /// walked straight through.
+    ///
+    /// So each limit is solved here too, before the contacts in every position
+    /// iteration: the pseudo velocities may close what is left of the range
+    /// after this step's real motion, and may not carry the joint any further
+    /// past an end it is already beyond. A real stop is not a suggestion to the
+    /// overlap correction.
+    fn solve_joint_limit_positions(&mut self, joints: &JointSet, frames: &[JointFrame]) {
+        for ((_, joint), frame) in joints.iter().zip(frames.iter()) {
+            if !joint.is_active() || !frame.valid {
+                continue;
+            }
+            let (ia, ib) = (frame.body_a, frame.body_b);
+            if ia >= self.bodies.len() || ib >= self.bodies.len() {
+                continue;
+            }
+            if !self.bodies[ia].movable && !self.bodies[ib].movable {
+                continue;
+            }
+            match &joint.kind {
+                JointKind::Revolute {
+                    limits: Some(l), ..
+                } => {
+                    let axis = frame.axis_a;
+                    let inv_mass = axis.dot(self.bodies[ia].inv_inertia.mul_vec(axis))
+                        + axis.dot(self.bodies[ib].inv_inertia.mul_vec(axis));
+                    let (a, b) = (self.bodies[ia], self.bodies[ib]);
+                    let real = (b.angular - a.angular).dot(axis);
+                    let pseudo = (b.pseudo_angular - a.pseudo_angular).dot(axis);
+                    let Some(lambda) = limit_position_lambda(
+                        frame.hinge_angle,
+                        real,
+                        pseudo,
+                        *l,
+                        inv_mass,
+                        frame.dt,
+                    ) else {
+                        continue;
+                    };
+                    let turn = axis * lambda;
+                    if let Some(x) = self.bodies.get_mut(ia) {
+                        x.pseudo_angular = x.pseudo_angular - x.inv_inertia.mul_vec(turn);
+                    }
+                    if let Some(x) = self.bodies.get_mut(ib) {
+                        x.pseudo_angular = x.pseudo_angular + x.inv_inertia.mul_vec(turn);
+                    }
+                }
+                JointKind::Prismatic {
+                    limits: Some(l), ..
+                } => {
+                    // Measured A relative to B, as `solve_linear_limit` does.
+                    let axis = frame.axis_a;
+                    let (a, b) = (self.bodies[ia], self.bodies[ib]);
+                    let inv_mass =
+                        a.effective_mass(frame.r_a, axis) + b.effective_mass(frame.r_b, axis);
+                    let value = (frame.anchor_a - frame.anchor_b).dot(axis);
+                    let real = (a.velocity_at(frame.r_a) - b.velocity_at(frame.r_b)).dot(axis);
+                    let pseudo = (a.pseudo_velocity_at(frame.r_a)
+                        - b.pseudo_velocity_at(frame.r_b))
+                    .dot(axis);
+                    let Some(lambda) =
+                        limit_position_lambda(value, real, pseudo, *l, inv_mass, frame.dt)
+                    else {
+                        continue;
+                    };
+                    self.apply_pseudo_pair(ia, ib, frame.r_a, frame.r_b, axis * lambda);
+                }
+                _ => {}
+            }
+        }
+    }
 
     fn solve_joint_velocities(
         &mut self,
@@ -1338,8 +1486,19 @@ impl Solver {
             return;
         }
         let relative = self.bodies[ib].angular - self.bodies[ia].angular;
-        // Drive the error toward zero: the target relative spin undoes it.
-        let impulse = inv_k.mul_vec(-(relative + error * soft.bias_rate)) * soft.mass_scale
+        // Velocity on the real spins, the orientation error on the pseudo ones
+        // — the split `solve_scalar_angular` and the point constraint make, and
+        // it matters here more than anywhere. A slider's anchor is rarely at
+        // its part's centre of mass, so every pseudo correction of the anchor
+        // turns the part a little; with the orientation corrected on the real
+        // spins instead, nothing in the pseudo pass ever turns it back, and a
+        // carriage settled on its rail tilted by degrees under its own weight.
+        let bias = if soft.is_soft() {
+            error * soft.bias_rate
+        } else {
+            Vector3::ZERO
+        };
+        let impulse = inv_k.mul_vec(-(relative + bias)) * soft.mass_scale
             - joint.angular_impulse * soft.impulse_scale;
         joint.angular_impulse = joint.angular_impulse + impulse;
         if let Some(x) = self.bodies.get_mut(ia) {
@@ -1347,6 +1506,18 @@ impl Solver {
         }
         if let Some(x) = self.bodies.get_mut(ib) {
             x.apply_angular_impulse(impulse);
+        }
+
+        if !soft.is_soft() && error != Vector3::ZERO && soft.bias_rate > 0.0 {
+            let pseudo_rel = self.bodies[ib].pseudo_angular - self.bodies[ia].pseudo_angular;
+            let correction =
+                inv_k.mul_vec(-(pseudo_rel + error * soft.bias_rate)) * soft.mass_scale;
+            if let Some(x) = self.bodies.get_mut(ia) {
+                x.pseudo_angular = x.pseudo_angular - x.inv_inertia.mul_vec(correction);
+            }
+            if let Some(x) = self.bodies.get_mut(ib) {
+                x.pseudo_angular = x.pseudo_angular + x.inv_inertia.mul_vec(correction);
+            }
         }
     }
 
@@ -1754,12 +1925,8 @@ impl Solver {
         angular: bool,
     ) -> f32 {
         debug_assert!(angular);
-        let error = if value < min {
-            value - min // negative: the angle must increase
-        } else if value > max {
-            value - max // positive: the angle must decrease
-        } else {
-            return 0.0; // inside the range — the limit is not engaged
+        let Some((error, bias)) = limit_bias(value, min, max, soft) else {
+            return 0.0;
         };
         let inv_mass = axis.dot(self.bodies[ia].inv_inertia.mul_vec(axis))
             + axis.dot(self.bodies[ib].inv_inertia.mul_vec(axis));
@@ -1767,7 +1934,7 @@ impl Solver {
             return accumulated;
         }
         let relative = (self.bodies[ib].angular - self.bodies[ia].angular).dot(axis);
-        let lambda = -(relative + soft.bias_rate * error) / inv_mass;
+        let lambda = -(relative + bias) / inv_mass;
         // A limit only ever pushes back toward the allowed range, so the
         // accumulated impulse is clamped to one sign.
         let new = if error < 0.0 {
@@ -1796,11 +1963,7 @@ impl Solver {
         accumulated: f32,
         soft: SoftParams,
     ) -> f32 {
-        let error = if value < min {
-            value - min
-        } else if value > max {
-            value - max
-        } else {
+        let Some((error, bias)) = limit_bias(value, min, max, soft) else {
             return 0.0;
         };
         let (ia, ib) = (frame.body_a, frame.body_b);
@@ -1812,7 +1975,7 @@ impl Solver {
         let relative = (self.bodies[ia].velocity_at(frame.r_a)
             - self.bodies[ib].velocity_at(frame.r_b))
         .dot(axis);
-        let lambda = -(relative + soft.bias_rate * error) / inv_mass;
+        let lambda = -(relative + bias) / inv_mass;
         let new = if error < 0.0 {
             (accumulated + lambda).max(0.0)
         } else {
@@ -2210,6 +2373,24 @@ impl JointFrame {
         frame.r_b = frame.anchor_b - b.world_center_of_mass();
         frame.rotation_a = a.rotation();
         frame.rotation_b = b.rotation();
+        if matches!(joint.kind, JointKind::Prismatic { .. }) {
+            // A slider's linear rows act through the moving part's centre of
+            // mass, not through its anchor. With the rotation locked, holding
+            // a body on a line is the same statement at any point of it, and
+            // the error is still measured between the anchors — but an anchor
+            // is usually at a corner of the part, and an impulse there turns
+            // it as well as moving it. Then the linear rows and the rotation
+            // lock spend every iteration undoing each other, and a carriage
+            // settles on its rail tilted by degrees under its own weight: a
+            // gate that drops three millimetres slides its catch clean under
+            // the hook that was meant to stop it. Through the centre, the
+            // rows move the part and the lock turns it, and neither disturbs
+            // the other.
+            let (ca, cb) = (a.world_center_of_mass(), b.world_center_of_mass());
+            let point = if b.is_fixed() { ca } else { cb };
+            frame.r_a = point - ca;
+            frame.r_b = point - cb;
+        }
 
         match &joint.kind {
             JointKind::Revolute {

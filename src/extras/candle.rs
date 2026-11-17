@@ -65,6 +65,10 @@ pub struct Candle {
     /// does). Off where shadow casters are costly — fur, hair, crowds: a
     /// point light draws every caster into six shadow views.
     pub cast_shadow: bool,
+    /// Whether there is a candle under the flame — wax, wick and the wax's
+    /// glow. Without one the flame burns on its own, its base just above
+    /// where the candle would stand.
+    pub body: bool,
 }
 
 impl Candle {
@@ -82,6 +86,7 @@ impl Candle {
             steps: 64,
             seed: 0.0,
             cast_shadow: style == FlameStyle::Realistic,
+            body: true,
         }
     }
 
@@ -100,6 +105,22 @@ impl Candle {
         self
     }
 
+    /// With or without the candle under the flame (see [`Candle::body`]).
+    pub fn with_body(mut self, body: bool) -> Self {
+        self.body = body;
+        self
+    }
+
+    /// How high above its foot the flame's base burns.
+    pub fn flame_base(&self) -> f32 {
+        let wick_h = self.flame_height * 0.24;
+        if self.body {
+            self.height - 0.004 + wick_h * 0.55
+        } else {
+            wick_h * 0.55
+        }
+    }
+
     /// Adds the candle to `scene`, standing on `position`. The handle
     /// animates it.
     pub fn add_to(&self, scene: &mut Scene, position: Vector3) -> CandleHandle {
@@ -109,54 +130,56 @@ impl Candle {
         let root = scene.add(root);
         let (h, r) = (self.height, self.radius);
 
-        // The body: a cylinder with a soft shoulder and a shallow melt pool.
-        let body = LatheGeometry::new(&wax_profile(h, r), 48, 0.0, std::f32::consts::TAU);
-        let mut wax =
-            StandardMaterial::new(self.wax).with_roughness(if realistic { 0.45 } else { 0.6 });
-        wax.emissive = self.wax;
-        wax.emissive_intensity = 0.02;
-        let mut body = Object3D::mesh(Mesh::new(body, wax.into()));
-        body.cast_shadow = true;
-        body.receive_shadow = true;
-        scene.add_to(root, body);
-
-        // The wick, leaning a little, and (realistic) its glowing tip.
         let wick_h = self.flame_height * 0.24;
-        let mut wick = Object3D::mesh(Mesh::new(
-            CylinderGeometry::new(
-                r * 0.045,
-                r * 0.05,
-                wick_h,
-                8,
-                1,
-                false,
-                0.0,
-                std::f32::consts::TAU,
-            ),
-            StandardMaterial::new(Color::from_hex(0x1c1610))
-                .with_roughness(0.9)
-                .into(),
-        ));
-        wick.position = Vector3::new(0.0, h - 0.004 + wick_h / 2.0, 0.0);
-        wick.quaternion = Euler::new(0.0, 0.0, 0.12).to_quaternion();
-        scene.add_to(root, wick);
-        let top = Vector3::new(-wick_h * 0.12, h - 0.004 + wick_h, 0.0);
-        if realistic {
-            let mut ember = StandardMaterial::new(Color::from_hex(0x2a1a10));
-            ember.emissive = Color::from_hex(0xff5a1a);
-            ember.emissive_intensity = 2.5;
-            let mut tip = Object3D::mesh(Mesh::new(
-                SphereGeometry::new(r * 0.06, 10, 6),
-                ember.into(),
+        if self.body {
+            // The body: a cylinder with a soft shoulder and a shallow melt pool.
+            let body = LatheGeometry::new(&wax_profile(h, r), 48, 0.0, std::f32::consts::TAU);
+            let mut wax =
+                StandardMaterial::new(self.wax).with_roughness(if realistic { 0.45 } else { 0.6 });
+            wax.emissive = self.wax;
+            wax.emissive_intensity = 0.02;
+            let mut body = Object3D::mesh(Mesh::new(body, wax.into()));
+            body.cast_shadow = true;
+            body.receive_shadow = true;
+            scene.add_to(root, body);
+
+            // The wick, leaning a little, and (realistic) its glowing tip.
+            let mut wick = Object3D::mesh(Mesh::new(
+                CylinderGeometry::new(
+                    r * 0.045,
+                    r * 0.05,
+                    wick_h,
+                    8,
+                    1,
+                    false,
+                    0.0,
+                    std::f32::consts::TAU,
+                ),
+                StandardMaterial::new(Color::from_hex(0x1c1610))
+                    .with_roughness(0.9)
+                    .into(),
             ));
-            tip.position = top;
-            scene.add_to(root, tip);
+            wick.position = Vector3::new(0.0, h - 0.004 + wick_h / 2.0, 0.0);
+            wick.quaternion = Euler::new(0.0, 0.0, 0.12).to_quaternion();
+            scene.add_to(root, wick);
+            let top = Vector3::new(-wick_h * 0.12, h - 0.004 + wick_h, 0.0);
+            if realistic {
+                let mut ember = StandardMaterial::new(Color::from_hex(0x2a1a10));
+                ember.emissive = Color::from_hex(0xff5a1a);
+                ember.emissive_intensity = 2.5;
+                let mut tip = Object3D::mesh(Mesh::new(
+                    SphereGeometry::new(r * 0.06, 10, 6),
+                    ember.into(),
+                ));
+                tip.position = top;
+                scene.add_to(root, tip);
+            }
         }
 
         // The flame, its base just above the wick's top.
         let fh = self.flame_height;
         let fw = fh * 0.25;
-        let base = h - 0.004 + wick_h * 0.55;
+        let base = self.flame_base();
         let mut data = vec![[0.0f32; 4]; 16];
         data[0] = [0.0, 1.0, self.seed, 0.0];
         data[1] = [fw, fh, self.steps as f32, 0.0];
@@ -168,13 +191,16 @@ impl Candle {
                     0.0,
                     std::f32::consts::TAU,
                 ),
-                SIMPLE_FLAME.to_owned(),
+                format!("{TINT}{SIMPLE_FLAME}"),
                 base,
             ),
             // A box around the volume, its middle at half the flame's height.
             FlameStyle::Realistic => (
                 BoxGeometry::new(fw * 2.2, fh * 1.25, fw * 2.2),
-                format!("{}{}", threers_math::flicker::FLAME_WGSL, REALISTIC_FLAME),
+                format!(
+                    "{}{TINT}{REALISTIC_FLAME}",
+                    threers_math::flicker::FLAME_WGSL
+                ),
                 base + fh * 1.25 / 2.0,
             ),
         };
@@ -189,11 +215,11 @@ impl Candle {
 
         // The wax lit from inside near the top (realistic): a shell over its
         // upper part, adding a warm glow that fades down the side.
-        let glow = realistic.then(|| {
+        let glow = (realistic && self.body).then(|| {
             let mut data = vec![[0.0f32; 4]; 16];
             data[0] = [0.0, 1.0, self.seed, 0.0];
             data[1] = [h, r, 0.0, 0.0];
-            let mut m = ShaderMaterial::new(WAX_GLOW)
+            let mut m = ShaderMaterial::new(format!("{TINT}{WAX_GLOW}"))
                 .with_data(data)
                 .with_transparent(true)
                 .with_depth_write(false);
@@ -233,6 +259,7 @@ impl Candle {
             style: self.style,
             seed: self.seed,
             intensity: self.light_intensity,
+            light_color: self.light_color,
             light_at,
             flame_at: at,
         }
@@ -251,6 +278,7 @@ pub struct CandleHandle {
     style: FlameStyle,
     seed: f32,
     intensity: f32,
+    light_color: Color,
     light_at: Vector3,
     flame_at: f32,
 }
@@ -279,6 +307,28 @@ impl CandleHandle {
             if let ObjectKind::Light(Light::Point(p)) = &mut o.kind {
                 p.intensity = self.intensity * (0.55 + 0.45 * f * f);
             }
+        }
+    }
+}
+
+impl CandleHandle {
+    /// Burn in `color` instead of the flame's own, `amount` of the way (0 the
+    /// natural flame, 1 all the way): the flame, the glow in the wax and the
+    /// light it throws. Kept until changed — call it as often as the colour
+    /// moves; it costs a uniform write and a light's colour.
+    pub fn set_flame_color(&self, scene: &mut Scene, color: Color, amount: f32) {
+        let amount = amount.clamp(0.0, 1.0);
+        let peak = color.r.max(color.g).max(color.b).max(1e-4);
+        let tint = [color.r / peak, color.g / peak, color.b / peak, amount];
+        self.material.set_uniform(3, tint);
+        if let Some(g) = &self.glow {
+            g.set_uniform(3, tint);
+        }
+        let toward = Color::new(tint[0], tint[1], tint[2]);
+        if let Some(o) = scene.get_mut(self.light)
+            && let ObjectKind::Light(Light::Point(p)) = &mut o.kind
+        {
+            p.color = self.light_color.lerp(toward, amount);
         }
     }
 }
@@ -331,6 +381,21 @@ fn flame_profile(h: f32, w: f32) -> Vec<Vector2> {
         .collect()
 }
 
+/// The flame's colour, when it has been given one: `data[3]` is the colour
+/// (its largest channel 1) and how far to move to it. The gas keeps its own
+/// light — its brightness, its shape, its flicker — and is recoloured at that
+/// brightness, with the hottest core still going to white, so a tinted flame
+/// reads as fire of that colour rather than as paint over one. Zero, the
+/// default, leaves the black body alone.
+const TINT: &str = r#"
+fn candle_tint(c: vec3<f32>) -> vec3<f32> {
+    let t = u_data.data[3];
+    let l = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let hue = t.rgb * l * 1.25 + vec3<f32>(max(l - 0.8, 0.0) * 0.6);
+    return mix(c, hue, clamp(t.w, 0.0, 1.0));
+}
+"#;
+
 /// The simple flame: a glow by how directly each point faces the eye.
 /// data[0]: time, flicker, seed; data[1]: width, height.
 const SIMPLE_FLAME: &str = r#"
@@ -348,7 +413,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     c = c * mix(0.35, 1.0, smoothstep(0.04, 0.28, y));
     c = c + vec3<f32>(0.18, 0.32, 1.0) * (1.0 - smoothstep(0.0, 0.3, y)) * (1.0 - core) * 0.8;
     let a = smoothstep(0.0, 0.55, facing) * (1.0 - 0.7 * smoothstep(0.75, 1.0, y));
-    return vec4<f32>(framebuffer_encode(apply_tone_mapping(c * 1.5 * flicker)), a);
+    return vec4<f32>(framebuffer_encode(apply_tone_mapping(candle_tint(c * 1.5 * flicker))), a);
 }
 "#;
 
@@ -389,7 +454,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // candlelight takes about half of it before its tone mapping.
     // As bright, so opaque: over a camera's picture (AR) the box round the
     // flame leaves it as it is.
-    let lit = apply_tone_mapping(c * flicker * 0.45);
+    let lit = apply_tone_mapping(candle_tint(c * flicker * 0.45));
     return vec4<f32>(framebuffer_encode(lit), clamp(max(lit.r, max(lit.g, lit.b)), 0.0, 1.0));
 }
 "#;
@@ -410,7 +475,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let grazing = 1.0 - abs(dot(n, v));
     let glow = exp(-below / (r * 0.55)) * (0.45 + 0.55 * grazing) * flicker * flicker;
     let c = vec3<f32>(1.0, 0.48, 0.16) * glow * 0.3;
-    return vec4<f32>(framebuffer_encode(apply_tone_mapping(c)), 1.0);
+    return vec4<f32>(framebuffer_encode(apply_tone_mapping(candle_tint(c))), 1.0);
 }
 "#;
 
@@ -447,24 +512,31 @@ mod tests {
     }
 
     #[test]
+    fn a_flame_without_its_candle_is_the_flame_and_its_light() {
+        for style in [FlameStyle::Simple, FlameStyle::Realistic] {
+            let mut scene = Scene::new();
+            let full = Candle::new(style).add_to(&mut scene, Vector3::ZERO);
+            let bare = Candle::new(style)
+                .with_body(false)
+                .add_to(&mut scene, Vector3::ZERO);
+            let parts = |root| scene.get(root).unwrap().children.len();
+            assert_eq!(parts(bare.root), 2, "{style:?}: the flame and its light");
+            assert!(parts(full.root) > 2, "{style:?}: wax and wick too");
+            let low = scene.get(bare.flame).unwrap().position.y;
+            let high = scene.get(full.flame).unwrap().position.y;
+            assert!(low < 0.05 && high > 0.1, "{style:?}: {low} vs {high}");
+            // Recolouring needs no glow in the wax.
+            bare.set_flame_color(&mut scene, Color::new(0.2, 0.4, 1.0), 1.0);
+            bare.update(&mut scene, 0.5);
+        }
+    }
+
+    #[test]
     fn the_profiles_close_at_the_axis() {
         let w = wax_profile(0.12, 0.024);
         assert_eq!(w.first().unwrap().x, 0.0);
         assert!(w.last().unwrap().x.abs() < 1e-6, "the pool meets the wick");
         let f = flame_profile(0.045, 0.007);
         assert!(f.first().unwrap().x.abs() < 1e-6 && f.last().unwrap().x.abs() < 1e-6);
-    }
-}
-
-#[cfg(all(test, feature = "render"))]
-mod msl_dump {
-    #[test]
-    #[ignore]
-    fn dump_realistic_flame_msl() {
-        let src = format!("{}{}", threers_math::flicker::FLAME_WGSL, super::REALISTIC_FLAME);
-        let msl = crate::materials::shared_shader::wgsl_material_to_msl(&src, None).unwrap();
-        #[cfg(metal_backend)]
-        let msl = format!("{}\n{msl}", crate::metal::shader_source());
-        std::fs::write("/tmp/rf.metal", msl).unwrap();
     }
 }

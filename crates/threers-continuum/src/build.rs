@@ -283,12 +283,15 @@ impl Continuum {
 
         let mut tendon = Tendon::new(points);
         let rest = tendon.length(world.bodies());
-        tendon.kind = if route.pretension > 0.0 {
-            TendonKind::Force {
-                tension: route.pretension,
-            }
-        } else {
-            TendonKind::rope(rest)
+        // Slack until it is driven, or pulling at its pretension. Not a rope at
+        // its built length: a cable nobody is reeling is one whose motor lets
+        // it run, and in a ring that matters. Bending toward the cable that is
+        // pulled lengthens the other two, so held at their built lengths they
+        // hold the rod straight — the pull bent it only as far as the solver's
+        // slop let the ropes stretch, a fraction of a millimetre, and the rod
+        // shuddered there instead of curling.
+        tendon.kind = TendonKind::Force {
+            tension: route.pretension.max(0.0),
         };
         let id = world.add_tendon(tendon);
         self.tendons.push(id);

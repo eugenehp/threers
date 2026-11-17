@@ -83,7 +83,7 @@ pub fn disclosure<S: 'static>(
 ) -> (NodeId, NodeId) {
     let head = ui.add_box(
         parent,
-        style! { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 4px 0; },
+        style! { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 4px 0; min-height: 24px; box-sizing: border-box; },
     );
     let arrow = ui.add_box(head, style! { width: 12px; });
     let arrow_text = ui.add_text(arrow, "▸");

@@ -121,6 +121,8 @@ struct WgpuWindow {
     /// The surface format's sRGB variant, for the overlay: fixed-function
     /// blending on a plain `Unorm` view mixes encodings rather than light.
     srgb_format: wgpu::TextureFormat,
+    /// What the surface can composite as (for [`WindowRenderer::set_transparent`]).
+    alpha_modes: Vec<wgpu::CompositeAlphaMode>,
     device: Arc<wgpu::Device>,
     renderer: Renderer,
 }
@@ -263,6 +265,34 @@ impl WindowRenderer {
                     log::error!("Metal surface resize: {e}");
                 }
             }
+        }
+    }
+
+    /// Composite what is drawn over whatever is behind the window (a camera
+    /// feed, for AR) where the scene's `background_alpha` leaves it clear;
+    /// `false` puts back the opaque default. Whether the surface can: wgpu
+    /// only, and only where the platform offers a see-through layer (Metal
+    /// does).
+    pub fn set_transparent(&mut self, on: bool) -> bool {
+        match &mut self.backend {
+            #[cfg(winit_window)]
+            Backend::Wgpu(w) => {
+                let want: &[wgpu::CompositeAlphaMode] = if on {
+                    &[wgpu::CompositeAlphaMode::PreMultiplied, wgpu::CompositeAlphaMode::PostMultiplied]
+                } else {
+                    &[wgpu::CompositeAlphaMode::Opaque, wgpu::CompositeAlphaMode::Auto]
+                };
+                let Some(mode) = want.iter().copied().find(|m| w.alpha_modes.contains(m)) else {
+                    return false;
+                };
+                if mode != w.config.alpha_mode {
+                    w.config.alpha_mode = mode;
+                    w.surface.configure(&w.device, &w.config);
+                }
+                true
+            }
+            #[cfg(metal_backend)]
+            Backend::Metal(_) => !on,
         }
     }
 
@@ -619,6 +649,7 @@ impl WgpuWindow {
             surface,
             config,
             srgb_format,
+            alpha_modes: caps.alpha_modes.clone(),
             device,
             renderer,
         })

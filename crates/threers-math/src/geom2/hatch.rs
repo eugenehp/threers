@@ -43,9 +43,9 @@ pub fn hatch_lines(polygons: &[Vec<P2>], angle: f64, spacing: f64) -> Vec<[P2; 2
 
         xs.sort_by(f64::total_cmp);
 
-        for pair in xs.chunks_exact(2) {
-            if pair[1] > pair[0] {
-                out.push([to_world([pair[0], y]), to_world([pair[1], y])]);
+        for &[a, b] in xs.as_chunks::<2>().0 {
+            if b > a {
+                out.push([to_world([a, y]), to_world([b, y])]);
             }
         }
 

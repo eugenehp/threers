@@ -41,15 +41,31 @@ module bar(p, q, r = 6, t = 7) {
 // The ground link is a real part like the others — it is the one that is fixed,
 // which is all that makes it "the frame". Set behind the linkage in y so the
 // bars swing past it.
+//
+// A hinge() holds the two ground bearings where they are; it does not put
+// anything through them. So each post carries a pin, out of its face and
+// through the eye of the bar it holds — thinner than the eye, and stopping
+// inside it, short of the coupler in front.
+PIN_R = 3;
+module ground_pin(p) {
+    translate([p[0], -8, p[2]]) rotate([-90, 0, 0]) cylinder(h = 11, r = PIN_R, $fn = 20);
+}
 part("frame", fixed = true)
-    color("slategray") translate([0, -16, 0]) {
-        cube([100, 8, 12]);
-        translate([A[0] - 7, 0, 0]) cube([14, 8, A[2]]);
-        translate([D[0] - 7, 0, 0]) cube([14, 8, D[2]]);
+    color("slategray") {
+        translate([0, -16, 0]) {
+            cube([100, 8, 12]);
+            translate([A[0] - 7, 0, 0]) cube([14, 8, A[2] + 7]);
+            translate([D[0] - 7, 0, 0]) cube([14, 8, D[2] + 7]);
+        }
+        color("dimgray") { ground_pin(A); ground_pin(D); }
     }
 
+// The links in two layers, as a real one is built: the crank and the rocker
+// behind, the coupler in front of both, lying against them at its two pins.
+// All in one plane, the coupler's sweep crosses the crank's own pin — at 131°
+// the crank stalls against it, however hard it is driven.
 part("crank", density = STEEL)   color("indianred") bar(A, B, 7);
-part("coupler", density = STEEL) color("goldenrod") bar(B, C, 5);
+part("coupler", density = STEEL) color("goldenrod") translate([0, 7, 0]) bar(B, C, 5);
 part("rocker", density = STEEL)  color("steelblue") bar(D, C, 6);
 
 hinge("crank_pin",  parts = ["crank",   "frame"],   at = A, axis = PIN);
@@ -58,4 +74,4 @@ hinge("rocker_pin",  parts = ["rocker",  "coupler"], at = C, axis = PIN);
 hinge("rocker_ground", parts = ["rocker", "frame"], at = D, axis = PIN);
 
 // One input. Everything else follows from the geometry.
-drive("crank_pin", speed = 150, torque = 200000);
+drive("crank_pin", speed = 150, torque = 30000000);

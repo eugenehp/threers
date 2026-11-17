@@ -153,6 +153,7 @@ Two static libraries with C headers carry the fluids to Swift:
 |---|---|---|
 | [`threers-fluid2d`](../crates/threers-fluid2d) | the 2D fluid, on the app's device, into the app's command buffer if it likes | Metal only |
 | [`threers-fluid-ios`](../crates/threers-fluid-ios) | the 3D volume, drawing into a `CAMetalLayer`, with orbit, pinch and paint | Metal only |
+| [`threers-candles`](../crates/threers-candles) | candles on a table — placed, picked, moved, recoloured — drawn by the Metal scene renderer | Metal (builds `render`) |
 
 Both can be linked from a Rust static library of the app's own as `rlib`
 dependencies; their `extern "C"` symbols come through.

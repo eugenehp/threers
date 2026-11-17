@@ -895,8 +895,13 @@ impl Ctx<'_> {
             let width = right - left;
             let visible = (rect.width - style.border.horizontal()).max(0.0);
             let ratio = self.ui.pixel_ratio;
-            let scrolled = style.scroll_left.clamp(0.0, (width - visible).max(0.0));
-            let scrolled = ((scrolled * ratio).round() / ratio).min((width - visible).max(0.0));
+            let end = (width - visible).max(0.0);
+            let scrolled = style.scroll_left.clamp(0.0, end);
+            let scrolled = if scrolled < end {
+                ((scrolled * ratio).round() / ratio).min(end)
+            } else {
+                end
+            };
             self.ui.nodes[id.0].scroll_width = width;
             self.ui.nodes[id.0].scrolled_x = scrolled;
             if scrolled != 0.0 {
@@ -921,12 +926,18 @@ impl Ctx<'_> {
                 + style.padding.bottom;
             let height = bottom - top;
             let visible = (rect.height - style.border.vertical()).max(0.0);
-            let scrolled = style.scroll_top.clamp(0.0, (height - visible).max(0.0));
+            let end = (height - visible).max(0.0);
+            let scrolled = style.scroll_top.clamp(0.0, end);
             // On whole device pixels: content between them rounds its text
             // and its boxes differently, and shimmers as it moves.
-            // Not past the end, though: there the end is the place.
+            // Not at the end, though: there the end is the place, even
+            // between pixels, or a page scrolled to its end stops short.
             let ratio = self.ui.pixel_ratio;
-            let scrolled = ((scrolled * ratio).round() / ratio).min((height - visible).max(0.0));
+            let scrolled = if scrolled < end {
+                ((scrolled * ratio).round() / ratio).min(end)
+            } else {
+                end
+            };
             self.ui.nodes[id.0].scroll_height = height;
             self.ui.nodes[id.0].scrolled = scrolled;
             if scrolled != 0.0 {

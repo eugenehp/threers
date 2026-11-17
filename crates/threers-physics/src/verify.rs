@@ -497,8 +497,13 @@ impl Verify {
                 continue;
             }
 
+            // A slide has a direction and no line: every line along it moves
+            // the part the same way, and the "axis" recovered from a carriage
+            // that turned by a hundred-thousandth of a radian on the way is
+            // wherever the rounding put it. Only a turn locates its axis.
+            let located = !matches!(mate.kind, crate::assembly::MateKind::Slider);
             let distance = point_to_line(recovered_point, declared_point, declared_axis);
-            if distance > self.axis_tolerance {
+            if located && distance > self.axis_tolerance {
                 report.findings.push(Finding::AxisOffset {
                     mate: name,
                     declared: declared_point.to_array(),
@@ -557,8 +562,11 @@ impl Verify {
                 .unwrap_or_else(|| format!("part {i}"))
         };
 
+        // Started together and ended apart — not merely "touched in some poses
+        // and not others", which is also a lid swinging onto its stop: that one
+        // has come together, and nothing about it is a fault.
         for e in engagement_with(&poses, &alignment, self.contact_tolerance as f64) {
-            if !e.persistent() {
+            if e.came_apart() {
                 report.findings.push(Finding::CameApart {
                     a: name(e.a),
                     b: name(e.b),

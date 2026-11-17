@@ -84,6 +84,8 @@ pub use mesh_bvh::*;
 // WebXR: the session, its frame loop, and both eyes drawn into it.
 #[cfg(feature = "xr")]
 mod xr;
+#[cfg(feature = "splats")]
+mod splats;
 #[cfg(feature = "xr")]
 pub use xr::*;
 
@@ -163,12 +165,21 @@ thread_local! {
 /// GPU readback of a render-target region into a tight byte vec.
 /// Hand control back to the browser for one turn of the event loop.
 async fn yield_to_event_loop() {
-    if let Some(window) = web_sys::window() {
-        let promise = js_sys::Promise::new(&mut |resolve, _reject| {
-            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 0);
-        });
-        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-    }
+    // The global scope's `setTimeout`, not `window`'s: in a worker (a
+    // renderer on an `OffscreenCanvas`) there is no window, and the yield
+    // would silently not happen.
+    use wasm_bindgen::JsCast;
+    let global = js_sys::global();
+    let Ok(set_timeout) = js_sys::Reflect::get(&global, &JsValue::from_str("setTimeout")) else {
+        return;
+    };
+    let Ok(set_timeout) = set_timeout.dyn_into::<js_sys::Function>() else {
+        return;
+    };
+    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+        let _ = set_timeout.call2(&global, &resolve, &JsValue::from(0));
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
 }
 
 /// Wait for a buffer mapping to complete without blocking the event loop.
@@ -387,6 +398,38 @@ thread_local! {
 pub async fn open_browser_gpu(
     canvas: &web_sys::HtmlCanvasElement,
 ) -> Result<(wgpu::Instance, wgpu::Surface<'static>, wgpu::Adapter), JsValue> {
+    open_browser_gpu_on(&BrowserCanvas::Html(canvas.clone())).await
+}
+
+/// A canvas a surface can be made on: a page's, or an `OffscreenCanvas` a
+/// worker was handed (`transferControlToOffscreen`), which takes WebGPU and
+/// WebGL2 contexts just the same.
+#[derive(Clone)]
+pub(crate) enum BrowserCanvas {
+    Html(web_sys::HtmlCanvasElement),
+    Offscreen(web_sys::OffscreenCanvas),
+}
+
+impl BrowserCanvas {
+    fn target(&self) -> wgpu::SurfaceTarget<'static> {
+        match self {
+            Self::Html(c) => wgpu::SurfaceTarget::Canvas(c.clone()),
+            Self::Offscreen(c) => wgpu::SurfaceTarget::OffscreenCanvas(c.clone()),
+        }
+    }
+
+    fn size(&self) -> (u32, u32) {
+        match self {
+            Self::Html(c) => (c.width(), c.height()),
+            Self::Offscreen(c) => (c.width(), c.height()),
+        }
+    }
+}
+
+/// [`open_browser_gpu`] on either kind of canvas.
+pub(crate) async fn open_browser_gpu_on(
+    canvas: &BrowserCanvas,
+) -> Result<(wgpu::Instance, wgpu::Surface<'static>, wgpu::Adapter), JsValue> {
     // A second canvas reuses the instance that already won — but only on
     // WebGPU, where an adapter is not tied to a canvas.
     //
@@ -404,7 +447,7 @@ pub async fn open_browser_gpu(
         SHARED_BROWSER_INSTANCE.with(|i| if shareable { i.borrow().clone() } else { None })
     {
         let surface = instance
-            .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
+            .create_surface(canvas.target())
             .map_err(|e| JsValue::from_str(&format!("surface: {e:?}")))?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -438,7 +481,7 @@ pub async fn open_browser_gpu(
         {
             Ok(adapter) => {
                 let surface = instance
-                    .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
+                    .create_surface(canvas.target())
                     .map_err(|e| JsValue::from_str(&format!("webgpu surface: {e:?}")))?;
                 SHARED_BROWSER_BACKEND.with(|b| *b.borrow_mut() = Some(adapter.get_info().backend));
                 SHARED_BROWSER_INSTANCE.with(|i| *i.borrow_mut() = Some(instance.clone()));
@@ -455,7 +498,7 @@ pub async fn open_browser_gpu(
         // GL is the other way round: a WebGL2 context *is* the canvas, so the
         // surface has to exist before there is an adapter to ask about.
         let surface = instance
-            .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
+            .create_surface(canvas.target())
             .map_err(|e| JsValue::from_str(&format!("{why}; webgl2 surface: {e:?}")))?;
         match instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -670,7 +713,7 @@ impl WebRenderer {
 impl WebRenderer {
     /// Async factory. Pass an HTMLCanvasElement and the renderer attaches to it.
     pub async fn new(canvas: web_sys::HtmlCanvasElement) -> Result<WebRenderer, JsValue> {
-        Self::create(canvas, false).await
+        Self::create(BrowserCanvas::Html(canvas), false).await
     }
 
     /// [`new`](Self::new) with the pipelines built on first use instead of in
@@ -679,7 +722,17 @@ impl WebRenderer {
     /// shows, or the first frames stall as the browser compiles.
     #[wasm_bindgen(js_name = newLazy)]
     pub async fn new_lazy(canvas: web_sys::HtmlCanvasElement) -> Result<WebRenderer, JsValue> {
-        Self::create(canvas, true).await
+        Self::create(BrowserCanvas::Html(canvas), true).await
+    }
+
+    /// [`new`](Self::new) on an `OffscreenCanvas` — in a Worker, from
+    /// `canvas.transferControlToOffscreen()`, so the page's own thread does
+    /// none of the rendering. WebGPU where the worker has it, WebGL2
+    /// otherwise. Size it with [`set_size`](Self::set_size): a worker has no
+    /// layout to read one from.
+    #[wasm_bindgen(js_name = newOffscreen)]
+    pub async fn new_offscreen(canvas: web_sys::OffscreenCanvas) -> Result<WebRenderer, JsValue> {
+        Self::create(BrowserCanvas::Offscreen(canvas), false).await
     }
 
     /// The pipelines a lazy renderer has not built yet, as a job. Awaiting
@@ -690,21 +743,18 @@ impl WebRenderer {
         WebWarmup(self.renderer.warm_up())
     }
 
-    async fn create(
-        canvas: web_sys::HtmlCanvasElement,
-        lazy: bool,
-    ) -> Result<WebRenderer, JsValue> {
+    async fn create(canvas: BrowserCanvas, lazy: bool) -> Result<WebRenderer, JsValue> {
         console_error_panic_hook::set_once();
         install_console_logger();
 
-        let width = canvas.width().max(1);
-        let height = canvas.height().max(1);
+        let (width, height) = canvas.size();
+        let (width, height) = (width.max(1), height.max(1));
 
         // The instance is not kept: `Surface` and `Device` hold their own handles
         // to the context, and the WebGPU instance that wins is cached in
         // `SHARED_BROWSER_INSTANCE` for the next canvas. Bound rather than
         // discarded so it outlives the device creation below.
-        let (_instance, surface, adapter) = open_browser_gpu(&canvas).await?;
+        let (_instance, surface, adapter) = open_browser_gpu_on(&canvas).await?;
         let (device, queue) = acquire_browser_gpu(&adapter).await?;
 
         let surface_caps = surface.get_capabilities(&adapter);
@@ -1550,6 +1600,11 @@ impl WebRenderer {
     }
 
     pub fn render(&mut self, scene: &mut WebScene, camera: &WebCamera) {
+        #[cfg(feature = "splats")]
+        match &camera.inner {
+            CameraInner::Perspective(c) => scene.sort_splats(c),
+            CameraInner::Orthographic(c) => scene.sort_splats(c),
+        }
         // Targets resized since the last frame: their sample views are new.
         for id in RESIZED_TARGETS.with(|r| std::mem::take(&mut *r.borrow_mut())) {
             if let Some(t) = ACTIVE_TARGETS.with(|m| m.borrow().get(&id).cloned()) {
@@ -1647,6 +1702,16 @@ pub struct WebScene {
     particle_animator: crate::particles::ParticleAnimator,
     /// Candles in this scene (`createCandle`), flickered by `stepCandles`.
     candles: Vec<crate::extras::candle::CandleHandle>,
+    /// Gaussian splats in this scene (`addSplats`), sorted for the camera by
+    /// every `WebRenderer::render`.
+    #[cfg(feature = "splats")]
+    /// Each with `splatFrame`'s centre and radius.
+    #[allow(clippy::type_complexity)]
+    splat_sorters: Vec<(ObjectId, crate::splats::SplatSorter, [f32; 4])>,
+    /// Splats sorted by the page (a sort worker, `WebSplatSort`) rather than
+    /// by every `render`.
+    #[cfg(feature = "splats")]
+    splats_sorted_elsewhere: bool,
 }
 
 #[wasm_bindgen]
@@ -1659,6 +1724,10 @@ impl WebScene {
             fur_animator: crate::fur::FurAnimator::new(),
             particle_animator: crate::particles::ParticleAnimator::new(),
             candles: Vec::new(),
+            #[cfg(feature = "splats")]
+            splat_sorters: Vec::new(),
+            #[cfg(feature = "splats")]
+            splats_sorted_elsewhere: false,
         }
     }
 

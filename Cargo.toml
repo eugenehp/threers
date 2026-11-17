@@ -11,6 +11,7 @@ members = [
     "crates/threers-ui-demo-visionos",
     "crates/threers-codec",
     "crates/threers-softbody",
+    "crates/threers-splat-sort",
     "crates/threers-probe",
     "crates/threers-physics",
     "crates/threers-fem",
@@ -28,6 +29,7 @@ members = [
     "crates/threers-node",
     "crates/threers-fluid-ios",
     "crates/threers-fluid2d",
+    "crates/threers-candles",
     "crates/threers-ios",
 ]
 # vendor/: local copies of upstream crates, patched in below
@@ -161,6 +163,11 @@ opt-level = 3
 [profile.release-wasm.package.threers-codec]
 opt-level = 3
 
+# The splat sort, run every frame the view turns: at `z` its loops stay scalar
+# and un-inlined, and with `SIMD=1` the key loop becomes simd128.
+[profile.release-wasm.package.threers-splat-sort]
+opt-level = 3
+
 [features]
 default = ["render", "audio", "captions", "sketch", "jpeg"]
 # Audio sources, listeners and positional audio as scene-graph nodes: the
@@ -202,6 +209,10 @@ fluid = ["render"]
 # Soft bodies that tear and regrow: the `threers-softbody` solver and its
 # creatures, with a WebGPU compute solver.
 softbody = ["render", "dep:threers-softbody"]
+# 3D Gaussian splats (`threers::splats`): the reference trainer's PLY (plain
+# and chunk-compressed), Niantic's `.spz` and the `.splat` format, drawn
+# sorted through a `ShaderMaterial`. Opt-in: most scenes have none.
+splats = ["dep:ruzstd", "dep:threers-splat-sort"]
 # Universal Scene Description — `.usda`, `.usdc` and `.usdz`, read and written.
 # Pure Rust with no dependencies of its own, so this costs compile time and
 # nothing else; it is opt-in because most scenes never touch USD.
@@ -367,6 +378,12 @@ rlx-geo = { version = "0.2.17", optional = true }
 manifold-rust = { version = "0.19", optional = true }
 # Pure Rust, no C: builds for wasm32 as for native (the `jpeg` feature).
 zune-jpeg = { version = "0.5", optional = true }
+# zstd decoding, pure Rust: `.spz` version 4 compresses each attribute with it
+# (the `splats` feature). Earlier versions are gzip, read by `loaders::deflate`.
+ruzstd = { version = "0.9", optional = true, default-features = false, features = ["std"] }
+# The splats' back-to-front sort (`splats`), on its own so the wasm build can
+# optimise it for speed (see `profile.release-wasm` below).
+threers-splat-sort = { path = "crates/threers-splat-sort", version = "0.1.0", optional = true }
 
 # Native-only deps (pollster only makes sense outside wasm).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -397,6 +414,8 @@ features = [
     "Document",
     "Element",
     "HtmlCanvasElement",
+    # `WebRenderer.newOffscreen`: rendering in a Worker.
+    "OffscreenCanvas",
     "HtmlElement",
     # WebGL2 video: a `VideoFrame` drawn into a 2D canvas to be copied.
     # (`ui::canvas` and `ui::a11y_dom` are `threers-ui`'s, with their own.)
@@ -420,6 +439,18 @@ features = [
     "HtmlVideoElement",
     "VideoFrame",
 ]
+
+[[example]]
+name = "splats"
+required-features = ["splats"]
+
+[[test]]
+name = "splats"
+required-features = ["splats"]
+
+[[test]]
+name = "splats_metal"
+required-features = ["metal", "splats"]
 
 [[example]]
 name = "gummy"

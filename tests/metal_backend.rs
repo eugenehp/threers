@@ -2396,3 +2396,88 @@ fn an_overlay_blends_over_the_frame_in_linear_light() {
         );
     }
 }
+
+/// `copy_frame` hands back the finished frame — the resolved image under
+/// MSAA — in a command buffer the caller commits: what a movie recorder
+/// copies before the frame goes on screen.
+#[test]
+fn copy_frame_hands_back_the_finished_frame() {
+    use threers::metal::objc::{get_sel, msg0};
+    let Ok(device) = MetalDevice::new() else {
+        eprintln!("skipping: no Metal device");
+        return;
+    };
+    let mut renderer = threers::metal::MetalRenderer::with_device(device.clone()).unwrap();
+    let format = threers::metal::enums::pixel_format::RGBA8_UNORM_SRGB;
+    let (w, h) = (SIZE, SIZE);
+    for msaa in [1, 4] {
+        let frame = MetalRenderTarget::new(&device, w, h, format, msaa).unwrap();
+        let copy = MetalRenderTarget::new(&device, w, h, format, 1).unwrap();
+        let mut scene = Scene::new();
+        scene.background = Color::from_hex(0xff0000);
+        renderer.render(&mut scene, &unit_camera(), &frame.attachments()).unwrap();
+        scene.background = Color::from_hex(0x00ff00);
+        renderer.render(&mut scene, &unit_camera(), &copy.attachments()).unwrap();
+
+        let cmd = unsafe { renderer.copy_frame(&frame.attachments(), copy.color_texture()) }.unwrap();
+        unsafe {
+            let _: () = msg0(cmd.id(), get_sel("commit\0"));
+            let _: () = msg0(cmd.id(), get_sel("waitUntilCompleted\0"));
+        }
+        let rgba = copy.read_rgba(&device).unwrap();
+        assert!(
+            close(center(&rgba), [255, 0, 0, 255], 1),
+            "msaa {msaa}: the copy holds the frame, not what was there: {:?}",
+            center(&rgba)
+        );
+    }
+}
+
+/// `render_over` marches a transparent volume over a finished frame: empty,
+/// it leaves the frame as it was; with dye in it, the dye shows over the
+/// scene and the scene shows round it.
+#[cfg(feature = "metal-fluid")]
+#[test]
+fn a_volume_renders_over_a_scene() {
+    use threers::cameras::PerspectiveCamera;
+    use threers::fluid::FluidConfig3d;
+    use threers::metal::MetalFluid3d;
+    let Ok(device) = MetalDevice::new() else {
+        eprintln!("skipping: no Metal device");
+        return;
+    };
+    let mut renderer = threers::metal::MetalRenderer::with_device(device.clone()).unwrap();
+    let format = threers::metal::enums::pixel_format::RGBA8_UNORM_SRGB;
+    let (w, h) = (SIZE, SIZE);
+    let target = MetalRenderTarget::new(&device, w, h, format, 4).unwrap();
+    let mut camera = PerspectiveCamera::new(45.0, 1.0, 0.1, 10.0);
+    camera.position = Vector3::new(0.0, 0.0, 2.2);
+    camera.look_at(Vector3::new(0.0, 0.0, 0.0));
+    let mut scene = Scene::new();
+    scene.background = Color::from_hex(0x2040a0);
+    let config = FluidConfig3d {
+        resolution: 32,
+        dye_resolution: 32,
+        transparent: true,
+        absorption: 60.0,
+        ..FluidConfig3d::default()
+    };
+    let mut fluid = MetalFluid3d::new(&device, config).unwrap();
+
+    renderer.render(&mut scene, &camera, &target.attachments()).unwrap();
+    let before = target.read_rgba(&device).unwrap();
+    renderer.render(&mut scene, &camera, &target.attachments()).unwrap();
+    fluid.render_over(&mut renderer, &camera, &target.attachments()).unwrap();
+    let empty = target.read_rgba(&device).unwrap();
+    let worst = before.iter().zip(&empty).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
+    assert!(worst <= 1, "an empty volume changed the frame by {worst}");
+
+    fluid.splat(&device, [0.5, 0.5, 0.5], [0.0; 3], [1.0, 0.6, 0.0]).unwrap();
+    fluid.step(&device, 1.0 / 60.0).unwrap();
+    renderer.render(&mut scene, &camera, &target.attachments()).unwrap();
+    fluid.render_over(&mut renderer, &camera, &target.attachments()).unwrap();
+    let dyed = target.read_rgba(&device).unwrap();
+    let (mid, corner) = (center(&dyed), pixel_at(&dyed, 0.02, 0.02));
+    assert!(mid[0] as i32 > center(&before)[0] as i32 + 40, "the dye shows in the middle: {mid:?}");
+    assert!(close(corner, pixel_at(&before, 0.02, 0.02), 1), "the scene round it is untouched: {corner:?}");
+}

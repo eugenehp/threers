@@ -29,7 +29,8 @@ PIN     = [0, 1, 0];
 DECK  = 10;              // top of the base, and the floor of every valley
 PITCH = 12;
 TALL  = 6;               // how far a tooth stands above the valley
-FIRST = 8;               // where the toothed section starts
+FIRST = 9.6;             // where the toothed section starts
+LEAN  = 3.05;            // how far a tooth's face leans back over its height
 TEETH = 10;
 
 // The rail the carriage runs on: a stalk down the back of the deck with a head
@@ -42,14 +43,25 @@ RAIL_Z = 26;             // the underside of the head
 P    = [49, 0, RAIL_Z];  // the pawl's pivot, carried by the carriage
 NOSE = [35, 0, 15.2];    // and its nose, sitting in a valley
 
-// A saw tooth: a ramp up towards +x, then a face straight down. Which of the
-// two is the ramp is the entire mechanism.
+// A saw tooth: a ramp up towards +x, then a face back down. Which of the two
+// is the ramp is the entire mechanism.
+//
+// The face leans back, 3 over 6, and the teeth start where they do, for one
+// reason: the nose has to be able to *fall in*. It swings on an arc about the
+// pivot, and dropping from a crest it passes the tip of the tooth it is
+// dropping behind. With the face straight up, that tip stood a millimetre
+// inside the arc the nose sweeps, so the nose came to rest perched on it,
+// lifted 14°, and the first pull back slid it a whole tooth before it caught.
+// Leant back, the tip is clear of the arc and the nose lands 0.6 from the face.
+// It still locks: a push on a face leaning 27° turns the pawl down onto its
+// stop as long as the lean is under 37°, which is where a pawl this shape
+// would start being lifted out instead.
 module rack() {
     translate([0, 9, 0]) rotate([90, 0, 0])
         linear_extrude(height = 18)
             for (i = [0 : TEETH - 1])
                 polygon([[FIRST + i * PITCH, DECK],
-                         [FIRST + (i + 1) * PITCH, DECK + TALL],
+                         [FIRST + (i + 1) * PITCH - LEAN, DECK + TALL],
                          [FIRST + (i + 1) * PITCH, DECK]]);
 }
 
@@ -57,12 +69,21 @@ module rack() {
 // a fixed part; it is written out here because it is the point.
 part("frame", fixed = true, collider = "mesh", friction = 0.2)
     color("slategray") {
-        translate([0, -18, 0]) cube([148, 36, DECK]);
+        translate([0, -18, 0]) cube([148, 36 + HEAD[1] - 18, DECK]);
         rack();
+        // The rail: the stalk, and the head on top of it.
+        translate([0, STALK[0], DECK]) cube([148, STALK[1] - STALK[0], RAIL_Z - DECK]);
+        translate([0, HEAD[0], RAIL_Z]) cube([148, HEAD[1] - HEAD[0], 4]);
     }
 
+// The block over the teeth that carries the pawl, an arm back over the rail's
+// head resting on it, and a lip down the back of the head, so it wraps it.
 part("carriage", density = PLASTIC, friction = 0.2)
-    color("steelblue") translate([40, -8, 28]) cube([36, 16, 16]);
+    color("steelblue") translate([40, 0, 0]) {
+        translate([0, -8, 28]) cube([36, 16, 16]);
+        translate([0, 8, RAIL_Z + 4]) cube([36, HEAD[1] - 8, 6]);
+        translate([0, HEAD[1], RAIL_Z - 2]) cube([36, 3, 12]);
+    }
 slider("feed", parts = ["carriage", "frame"], at = [40, 0, 28],
        axis = [1, 0, 0], range = [-4, 64]);
 

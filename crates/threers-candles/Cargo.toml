@@ -1,0 +1,28 @@
+[package]
+name = "threers-candles"
+version.workspace = true
+edition = "2024"
+authors = ["Eugene Hauptmann"]
+description = "threers candles on a table, on Metal, as a C ABI static library for iOS, iPadOS and macOS"
+license = "MIT"
+repository = "https://github.com/eugenehp/threers"
+readme = "README.md"
+keywords = ["candle", "flame", "ios", "metal", "graphics"]
+categories = ["graphics", "api-bindings"]
+# Linked into an app bundle, not published.
+publish = false
+
+[lib]
+name = "threers_candles"
+crate-type = ["staticlib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+# The scene renderer on Metal. `metal` builds on `render`, so this one does
+# compile wgpu's half of the crate; the drawing is Metal's.
+threers = { path = "../..", default-features = false, features = ["metal", "metal-fluid"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2 = "0.6"
+objc2-quartz-core = { version = "0.3", features = ["CALayer", "CAMetalLayer", "objc2-metal"] }
+objc2-core-foundation = { version = "0.3", features = ["CFCGTypes"] }

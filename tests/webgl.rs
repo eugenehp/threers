@@ -399,6 +399,11 @@ mod web_maps;
 #[path = "web_scenes/mod.rs"]
 mod web_scenes;
 
+// Gaussian splats through the JavaScript API — shared with the other backend.
+#[cfg(feature = "splats")]
+#[path = "web_splats/mod.rs"]
+mod web_splats;
+
 // Video: the browser's frames copied on the GPU, and the player on WebCodecs
 // — shared with the other backend.
 #[cfg(feature = "native-decode")]
@@ -463,6 +468,20 @@ async fn views_renderer() -> (SharedViews, web_sys::HtmlCanvasElement) {
     let v = (std::rc::Rc::new(std::cell::RefCell::new(renderer)), canvas);
     VIEWS.with(|slot| *slot.borrow_mut() = Some(v.clone()));
     v
+}
+
+/// Pull a render target back to the CPU, awaiting the promise it returns.
+async fn read_target(
+    renderer: &threers::wasm::WebRenderer,
+    target_id: u32,
+    w: u32,
+    h: u32,
+) -> Vec<u8> {
+    let promise = renderer.read_render_target_pixels(target_id, 0, 0, w, h);
+    let value = wasm_bindgen_futures::JsFuture::from(promise)
+        .await
+        .expect("read-back rejected");
+    js_sys::Uint8Array::new(&value).to_vec()
 }
 
 /// A renderer attached to a fresh canvas, for the two tests above.

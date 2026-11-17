@@ -1,20 +1,32 @@
-//! Real gamepads, through gilrs.
+//! Real gamepads, through gilrs; on iOS, through Apple's GameController
+//! framework, which also brings a hardware keyboard (`apple`).
 //!
 //! gilrs reports events per device; [`PadTracker`] does the combining. A window
 //! from the `window` module polls this for you. Any other host keeps a
 //! [`Gamepads`] and polls it before each [`App::frame`](crate::App::frame).
 
+// On iOS only the GameController backend is used; gilrs's helpers stay for
+// other hosts.
+#![cfg_attr(target_os = "ios", allow(dead_code, unused_imports))]
+
 use crate::input::{Input, PadAxis, PadButton, PadEvent, PadTracker, Rumble};
 use gilrs::ff::{BaseEffect, BaseEffectType, Effect, EffectBuilder, Repeat, Replay, Ticks};
 use gilrs::{Axis, Button, Event, EventType, Gilrs};
 
+#[cfg(target_os = "ios")]
+mod apple;
+#[cfg(target_os = "ios")]
+pub use apple::{Gamepads, NoPads};
+
 /// Every connected gamepad, feeding one [`Input`].
+#[cfg(not(target_os = "ios"))]
 pub struct Gamepads {
     gilrs: Gilrs,
     tracker: PadTracker,
     effect: Option<Effect>,
 }
 
+#[cfg(not(target_os = "ios"))]
 impl Gamepads {
     /// # Errors
     ///

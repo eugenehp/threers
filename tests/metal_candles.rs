@@ -22,37 +22,96 @@ fn camera() -> PerspectiveCamera {
     c
 }
 
-/// Warm, bright pixels in the upper middle, where the flame is.
-fn flame_pixels(rgba: &[u8], size: u32) -> usize {
-    let mut n = 0;
+/// Warm, bright pixels in the upper middle, where the flame is — and not
+/// white: a flame that renders as a saturated box has the right brightness
+/// and none of the gradient.
+fn flame_pixels(rgba: &[u8], size: u32) -> (usize, usize) {
+    let (mut warm, mut white) = (0, 0);
     for y in 0..size / 2 {
         for x in size / 3..2 * size / 3 {
             let i = ((y * size + x) * 4) as usize;
             let (r, g, b) = (rgba[i] as i32, rgba[i + 1] as i32, rgba[i + 2] as i32);
-            if r > 120 && r >= g && g > b {
-                n += 1;
+            if r > 120 && r >= g && g > b + 20 {
+                warm += 1;
+            }
+            if r > 245 && g > 245 && b > 245 {
+                white += 1;
             }
         }
     }
-    n
+    (warm, white)
 }
 
+/// Both flames burn on Metal, and look as they do on wgpu: the flame's WGSL
+/// goes through the material translator, which is where a reserved name or
+/// a split `++` turns a flame into a fallback colour or a white box.
 #[test]
-fn both_flames_burn_on_metal() {
+fn both_flames_burn_on_metal_as_on_wgpu() {
     let size = 128;
-    let mut r = match MetalHeadlessRenderer::builder().size(size, size).build() {
+    let mut metal = match MetalHeadlessRenderer::builder().size(size, size).build() {
         Ok(r) => r,
         Err(MetalError::NoDevice) => return,
         Err(e) => panic!("{e}"),
     };
+    let mut wgpu = HeadlessRenderer::builder().size(size, size).build().ok();
     for style in [FlameStyle::Simple, FlameStyle::Realistic] {
         let (mut scene, _) = scene(style);
-        let rgba = r.render_to_rgba(&mut scene, &camera()).unwrap();
-        let n = flame_pixels(&rgba, size);
-        if std::env::var_os("CANDLE_PNG").is_some() {
-            std::fs::create_dir_all("out").unwrap();
-            std::fs::write(format!("out/metal_candle_{style:?}.png"), threers::encode_png(size, size, &rgba)).unwrap();
+        let m = metal.render_to_rgba(&mut scene, &camera()).unwrap();
+        let (warm, white) = flame_pixels(&m, size);
+        assert!(warm > 20, "{style:?}: only {warm} warm flame pixels");
+        assert!(white < warm, "{style:?}: {white} white pixels against {warm} warm: a box, not a flame");
+        if let Some(r) = wgpu.as_mut() {
+            let (mut scene, _) = self::scene(style);
+            let w = r.render_to_rgba(&mut scene, &camera());
+            let mean = m.iter().zip(&w).map(|(a, b)| (*a as i32 - *b as i32).abs() as f64).sum::<f64>()
+                / m.len() as f64;
+            if std::env::var_os("CANDLE_PNG").is_some() {
+                std::fs::create_dir_all("out").unwrap();
+                std::fs::write(format!("out/metal_candle_{style:?}.png"), threers::encode_png(size, size, &m)).unwrap();
+                std::fs::write(format!("out/wgpu_candle_{style:?}.png"), threers::encode_png(size, size, &w)).unwrap();
+            }
+            // The realistic flame jitters its march start per pixel; the two
+            // backends' hashes agree, their rounding a little less.
+            assert!(mean < 3.0, "{style:?}: Metal and wgpu differ by {mean:.2}/255 on average");
         }
-        assert!(n > 20, "{style:?}: only {n} warm flame pixels");
+    }
+}
+
+/// A flame given a colour burns in it — blue here, which the black body never
+/// is above its base — on both backends, the light with it.
+#[test]
+fn a_tinted_flame_burns_in_its_colour() {
+    let size = 128;
+    let blue = |rgba: &[u8]| {
+        let mut n = 0;
+        for y in 0..size / 2 {
+            for x in size / 3..2 * size / 3 {
+                let i = ((y * size + x) * 4) as usize;
+                let (r, b) = (rgba[i] as i32, rgba[i + 2] as i32);
+                if b > 100 && b > r + 30 {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+    let mut metal = match MetalHeadlessRenderer::builder().size(size, size).build() {
+        Ok(r) => r,
+        Err(MetalError::NoDevice) => return,
+        Err(e) => panic!("{e}"),
+    };
+    let mut wgpu = HeadlessRenderer::builder().size(size, size).build().ok();
+    for style in [FlameStyle::Simple, FlameStyle::Realistic] {
+        let (mut scene, candle) = scene(style);
+        candle.set_flame_color(&mut scene, Color::new(0.2, 0.5, 1.0), 1.0);
+        let m = metal.render_to_rgba(&mut scene, &camera()).unwrap();
+        assert!(blue(&m) > 20, "{style:?} on Metal: only {} blue flame pixels", blue(&m));
+        if std::env::var_os("CANDLE_PNG").is_some() {
+            std::fs::write(format!("out/metal_candle_{style:?}_blue.png"), threers::encode_png(size, size, &m)).unwrap();
+        }
+        if let Some(r) = wgpu.as_mut() {
+            let w = r.render_to_rgba(&mut scene, &camera());
+            assert!(blue(&w) > 20, "{style:?} on wgpu: only {} blue flame pixels", blue(&w));
+        }
     }
 }

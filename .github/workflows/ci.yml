@@ -58,7 +58,9 @@ jobs:
       - run: cargo check -p threers --no-default-features --features metal-fluid
       - run: cargo check -p threers --no-default-features --features metal,fluid
       - run: cargo check -p threers-fluid2d -p threers-fluid-ios --target aarch64-apple-ios
-      - run: cargo test -p threers-fluid2d -p threers-fluid-ios
+      - run: cargo test -p threers-fluid2d -p threers-fluid-ios -p threers-candles
+      # Candles on Metal against the wgpu picture: the material translator's test.
+      - run: cargo test -p threers --no-default-features --features metal --test metal_candles
       # The volume's WGSL through naga into MSL, which needs no GPU, and the
       # parity with wgpu where there is one (the drawing tests skip without).
       # With `render` on because the crate's other unit tests assume it.

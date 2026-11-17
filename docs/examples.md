@@ -7,7 +7,7 @@ same code path a CI job or a server would use, no window and no display.
 Images are 640 px JPEGs regenerated from the examples themselves; they live
 in [`docs/images/`](images/) and are excluded from the published crate.
 
-74 of them. The rest of the examples are interactive (winit), export
+75 of them. The rest of the examples are interactive (winit), export
 video rather than a frame, or print numbers — see [`examples/`](../examples/).
 
 | | |
@@ -81,6 +81,7 @@ video rather than a frame, or print numbers — see [`examples/`](../examples/).
 | <a href="images/skinned_animation.jpg"><img src="images/skinned_animation.jpg" width="320"></a> | **`skinned_animation`**<br>Skinning and the animation mixer: three tentacles on chains of eight bones sway in one clip and cross-fade into a second that curls them.<br><br>`cargo run --release --example skinned_animation` |
 | <a href="images/snow.jpg"><img src="images/snow.jpg" width="320"></a> | **`snow`**<br>Snow settling on sheds and a post, sliding off roofs and drifted by the wind: a time-lapse at 7 s, 16 s and 50 s.<br><br>`cargo run --release --example snow` |
 | <a href="images/spacecraft_render.jpg"><img src="images/spacecraft_render.jpg" width="320"></a> | **`spacecraft_render`**<br>Headless PNG render of the same spacecraft as `spacecraft_materials`, for machines with no display (CI, servers, remote boxes).<br><br>`cargo run --release --example spacecraft_render` <br><sub>2 images; the largest is shown</sub> |
+| <a href="images/splats.jpg"><img src="images/splats.jpg" width="320"></a> | **`splats`**<br>A million generated Gaussian splats, a thin shell of small ones round a dense core, projected as the reference rasteriser does and sorted back to front; given a trained `.ply`, compressed `.ply`, `.spz` or `.splat` instead, it renders that from where its cameras were. `SPLATS_BENCH=<frames>` times the sort and the frame. See [Gaussian splats](splats.md).<br><br>`cargo run --release --features splats --example splats [scene.spz]` <br><sub>4 images; one is shown</sub> |
 | <a href="images/starfield_probe.jpg"><img src="images/starfield_probe.jpg" width="320"></a> | **`starfield_probe`**<br>What the sky sphere does to point sources.<br><br>`cargo run --release --features planet --example starfield_probe` <br><sub>10 images; the largest is shown</sub> |
 | <a href="images/svg_gallery.jpg"><img src="images/svg_gallery.jpg" width="320"></a> | **`svg_gallery`**<br>The cases that are hard for a vector renderer, as SVG: interpenetrating shapes, a camera inside the scene, a floor behind it, receding walls, an orthographic view.<br><br>`cargo run --example svg_gallery` <br><sub>9 SVGs, rasterized side by side</sub> |
 | <a href="images/time_smear.jpg"><img src="images/time_smear.jpg" width="320"></a> | **`time_smear`**<br>Echoes in time (`threers::time_smear`): a ball crossing the frame, an orbiting dot, and a box that is only there for frames 70–85 yet echoes before it appears; the backdrop never moves and comes back byte for byte. Rows: source, faithful, ghost, raw, echo. Drawn by the wgpu renderer or, with `--features metal -- --metal`, the Metal renderer — the same backdrop value from both. In the browser: `web/examples/time-smear.html`.<br><br>`cargo run --release --example time_smear` |

@@ -193,9 +193,14 @@ fn inflate_block(
                 return Err(DeflateError::BadDistance);
             }
             let start = out.len() - distance;
-            for k in 0..length {
-                let b = out[start + k % distance];
-                out.push(b);
+            if distance >= length {
+                out.extend_from_within(start..start + length);
+            } else {
+                // The copy overlaps what it writes: a run, byte by byte.
+                for k in 0..length {
+                    let b = out[start + k];
+                    out.push(b);
+                }
             }
         }
     }
@@ -214,14 +219,21 @@ fn inflate_block(
 /// consecutive integers assigned to symbols in order, so the code's offset from
 /// the first code of its length *is* its offset into that length's block of
 /// symbols. That is a subtraction and an index.
+///
+/// Codes up to [`FAST_BITS`] long, nearly all of them, are looked up whole in
+/// `fast` from the next bits of input; only longer ones walk the lengths.
 struct HuffmanTree {
     /// How many codes have each length, indexed by length (0 unused).
     counts: [u16; MAX_BITS + 1],
     /// Symbols ordered by (length, code).
     symbols: Vec<u16>,
+    /// Indexed by the next `FAST_BITS` bits of input (first bit lowest):
+    /// `symbol | length << 9` for a code of that length, 0 for none.
+    fast: Vec<u16>,
 }
 
 const MAX_BITS: usize = 15;
+const FAST_BITS: u32 = 10;
 
 fn build_huffman(lengths: &[u8]) -> Result<HuffmanTree, DeflateError> {
     let mut counts = [0u16; MAX_BITS + 1];
@@ -231,6 +243,16 @@ fn build_huffman(lengths: &[u8]) -> Result<HuffmanTree, DeflateError> {
         }
         if l > 0 {
             counts[l as usize] += 1;
+        }
+    }
+    // More codes of a length than the shorter ones leave room for is no
+    // prefix code (zlib refuses it too); fewer is allowed, and the codes
+    // left over decode as errors.
+    let mut room = 1i32;
+    for &count in &counts[1..] {
+        room = (room << 1) - count as i32;
+        if room < 0 {
+            return Err(DeflateError::BadCode);
         }
     }
     // Where each length's block of symbols starts.
@@ -246,10 +268,47 @@ fn build_huffman(lengths: &[u8]) -> Result<HuffmanTree, DeflateError> {
             next[l as usize] += 1;
         }
     }
-    Ok(HuffmanTree { counts, symbols })
+    // Codes are consecutive within a length, in symbol order, starting where
+    // the previous length's ended (shifted one bit longer). The stream holds
+    // them first bit first, so the table index is the code reversed.
+    let mut fast = vec![0u16; 1 << FAST_BITS];
+    let mut code = 0u32;
+    let mut sym_at = 0usize;
+    for len in 1..=MAX_BITS as u32 {
+        for _ in 0..counts[len as usize] {
+            if len <= FAST_BITS {
+                let reversed = code.reverse_bits() >> (32 - len);
+                let entry = symbols[sym_at] | (len as u16) << 9;
+                for high in 0..1u32 << (FAST_BITS - len) {
+                    fast[(reversed | high << len) as usize] = entry;
+                }
+            }
+            code += 1;
+            sym_at += 1;
+        }
+        code <<= 1;
+    }
+    Ok(HuffmanTree {
+        counts,
+        symbols,
+        fast,
+    })
 }
 
 fn decode_symbol(r: &mut BitReader, tree: &HuffmanTree) -> Result<u32, DeflateError> {
+    r.refill();
+    let entry = tree.fast[(r.bit_buf & ((1 << FAST_BITS) - 1)) as usize];
+    if entry != 0 {
+        let len = (entry >> 9) as u32;
+        // Past the end of the input the buffer is zero-padded: a code that
+        // only matched padding is a truncated stream.
+        if len > r.bit_count {
+            return Err(DeflateError::Truncated);
+        }
+        r.bit_buf >>= len;
+        r.bit_count -= len;
+        return Ok((entry & 0x1ff) as u32);
+    }
     // `code` is the bits read so far, `first` the first code of this length, and
     // `index` where this length's symbols begin. If the code is inside the
     // length's range, its distance from `first` indexes straight to the symbol.
@@ -295,6 +354,15 @@ impl<'a> BitReader<'a> {
             pos: 0,
             bit_buf: 0,
             bit_count: 0,
+        }
+    }
+
+    /// Top the buffer up to at least 25 bits, as far as the input goes.
+    fn refill(&mut self) {
+        while self.bit_count <= 24 && self.pos < self.data.len() {
+            self.bit_buf |= (self.data[self.pos] as u32) << self.bit_count;
+            self.pos += 1;
+            self.bit_count += 8;
         }
     }
 

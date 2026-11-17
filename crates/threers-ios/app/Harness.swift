@@ -74,6 +74,23 @@ func threers_ios_audio_time(_ t: Double, _ playing: Bool)
     pollQuickLook()
 }
 
+/// The controller to present a sheet from: the front window's top one.
+///
+/// On visionOS only a flat window's. A volume cannot hold a popover, and
+/// asking one to present a share sheet ends the app; with no flat window open
+/// there is nothing to present over, and the caller does without.
+@MainActor private func frontController() -> UIViewController? {
+    let active = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.filter { $0.activationState == .foregroundActive }
+    #if os(visionOS)
+    let scene = active.first { $0.session.role == .windowApplication }
+    #else
+    let scene = active.first
+    #endif
+    guard var top = scene?.windows.first(where: \.isKeyWindow)?.rootViewController ?? scene?.windows.first?.rootViewController else { return nil }
+    while let p = top.presentedViewController { top = p }
+    return top
+}
+
 /// A `.usdz` the app asked to show (`threers_ios::quick_look`): AR Quick
 /// Look on iOS (RealityKit drawing it, placed in the room), its own window
 /// in the shared space on visionOS.
@@ -82,9 +99,7 @@ func threers_ios_audio_time(_ t: Double, _ playing: Bool)
     #if os(visionOS)
     _ = PreviewApplication.open(urls: [url])
     #else
-    let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive }
-    guard var top = scene?.windows.first(where: \.isKeyWindow)?.rootViewController ?? scene?.windows.first?.rootViewController else { return }
-    while let p = top.presentedViewController { top = p }
+    guard let top = frontController() else { return }
     QuickLookSource.shared.url = url
     let preview = QLPreviewController()
     preview.dataSource = QuickLookSource.shared
@@ -125,9 +140,7 @@ func threers_ios_audio_time(_ t: Double, _ playing: Bool)
 
 @MainActor private func pollPick() {
     guard threers_ios_take_pick() else { return }
-    let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive }
-    guard var top = scene?.windows.first(where: \.isKeyWindow)?.rootViewController ?? scene?.windows.first?.rootViewController else { return }
-    while let p = top.presentedViewController { top = p }
+    guard let top = frontController() else { return }
     let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data, .folder, .zip], asCopy: false)
     picker.delegate = Picker.shared
     picker.allowsMultipleSelection = false
@@ -231,9 +244,7 @@ func threers_ios_audio_time(_ t: Double, _ playing: Bool)
 
 /// The share sheet for the file at `path`, over the front window.
 @MainActor private func presentShare(_ path: String) {
-    let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive }
-    guard var top = scene?.windows.first(where: \.isKeyWindow)?.rootViewController ?? scene?.windows.first?.rootViewController else { return }
-    while let p = top.presentedViewController { top = p }
+    guard let top = frontController() else { return }
     let sheet = UIActivityViewController(activityItems: [URL(fileURLWithPath: path)], applicationActivities: nil)
     // an iPad's (and visionOS's) sheet is a popover: from the window's middle
     if let pop = sheet.popoverPresentationController {

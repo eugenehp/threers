@@ -7,7 +7,7 @@ API, so existing three.js code runs with an import change.
 
 [![crates.io](https://img.shields.io/crates/v/threers.svg)](https://crates.io/crates/threers)
 [![docs.rs](https://docs.rs/threers/badge.svg)](https://docs.rs/threers)
-· **0.0.10** · [Changelog](CHANGELOG.md) · MIT
+· **0.1.0** · [Changelog](CHANGELOG.md) · MIT
 
 ## Quick start
 
@@ -75,6 +75,7 @@ self-contained subsystem, behind a Cargo feature where it says so.
 | [Materials](docs/materials.md) | Clearcoat, transmission, dispersion, anisotropy, sheen, iridescence; HDR pipeline, IBL, area lights |
 | [Fur and hair](docs/materials.md#fur) | Shell fur and strand hair, on static or skinned meshes: wind, drag and inertia, shadows, MSAA per strand, a hand that strokes them; `THREE.Fur` and `THREE.Hair` in the shim, demo in `web/examples/fur.html` |
 | [Particles, snow and sand](docs/particles.md) | Emitters with drag, turbulence and buoyancy; snow and sand that pile up at their angle of repose, drift and form dunes; lit, shadowed, black-body fire and smoke; GPU weather; dune seas shaded after Journey's sand; `THREE.Particles`, `THREE.SandBed` and `THREE.DesertSky` in the shim, demos in `web/examples/particles.html` and `dunes.html` |
+| [Gaussian splats](docs/splats.md) (`splats`) | Captured scenes as millions of splats, drawn with the scene on WebGPU, WebGL2 and Metal: the reference trainer's PLY, compressed PLY, Niantic's `.spz` and `.splat`; projection and colour checked against the reference rasteriser; a SIMD radix sort; `scene.addSplats` in the browser, viewer in `web/splats.html` |
 | [Soft bodies](docs/softbody.md) | Gummy creatures that tear and grow back: XPBD on tetrahedral lattices, built from SDF shapes, parts glued on, chains, goo; on the CPU (bit for bit the JavaScript original) or as WebGPU compute; `THREE.SoftBody` in the shim, demo in `web/examples/jelly.html` |
 | [Time smear](docs/time-smear.md) | Echoes in time over a rendered or decoded clip: moving things ghost at Gray-coded frames before and after themselves, still ones come back byte for byte; streams into the video exporters, any renderer (wgpu, Metal); `THREE.TimeSmear` in the shim, demo in `web/examples/time-smear.html` |
 | [Interactive effects](docs/fx.md) · [SDF](docs/sdf.md) | Glossy liquids that react to the pointer on buttons and any shape (`Venom`, `Gloss`), as components, effects and a stage you can add to; exact 2D/3D signed distance fields with smooth operators, ray marching and meshing, the same in WGSL |
@@ -107,8 +108,8 @@ The core builds on its own: `default-features = false` is math, the scene
 graph, geometry, materials and loaders, with no GPU stack, and `render` adds
 the renderer. The pieces that stand alone are crates of their own —
 [`threers-math`](crates/threers-math), [`threers-captions`](crates/threers-captions),
-[`threers-audio`](crates/threers-audio), [`threers-codec`](crates/threers-codec)
-and [`threers-ui`](crates/threers-ui) underneath, [`threers-video`](crates/threers-video), `threers-physics` and
+[`threers-audio`](crates/threers-audio), [`threers-codec`](crates/threers-codec),
+[`threers-splat-sort`](crates/threers-splat-sort) and [`threers-ui`](crates/threers-ui) underneath, [`threers-video`](crates/threers-video), `threers-physics` and
 `threers-animation` on top.
 
 ## Examples
@@ -116,7 +117,7 @@ and [`threers-ui`](crates/threers-ui) underneath, [`threers-video`](crates/three
 <a href="docs/lattices.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/lattice_foams.jpg" width="820" alt="Voronoi foams on six seed layouts, open, closed and wet"></a>
 <br><sub>Voronoi foams on random, Kelvin, Weaire–Phelan, C15, relaxed and two-size seeds — open, closed and wet (<code>lattice_foams</code>; see <a href="docs/lattices.md">docs/lattices.md</a>).</sub>
 
-77 examples render a picture; each is in [docs/examples.md](docs/examples.md)
+78 examples render a picture; each is in [docs/examples.md](docs/examples.md)
 with the command that makes it. They all run headless, so they work the same
 on a laptop and in CI.
 
@@ -141,11 +142,17 @@ on a laptop and in CI.
 | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/simcity_render.jpg" width="200" alt="simcity_render"></a><br><sub><code>simcity_render</code></sub> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/skinned_animation.jpg" width="200" alt="skinned_animation"></a><br><sub><code>skinned_animation</code></sub> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/snow.jpg" width="200" alt="snow"></a><br><sub><code>snow</code></sub> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/spacecraft_render.jpg" width="200" alt="spacecraft_render"></a><br><sub><code>spacecraft_render</code></sub> |
 | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/starfield_probe.jpg" width="200" alt="starfield_probe"></a><br><sub><code>starfield_probe</code></sub> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/svg_gallery.jpg" width="200" alt="svg_gallery"></a><br><sub><code>svg_gallery</code></sub> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/tower_collapse.jpg" width="200" alt="tower_collapse"></a><br><sub><code>tower_collapse</code></sub> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/ui_panel.jpg" width="200" alt="ui_panel"></a><br><sub><code>ui_panel</code></sub> |
 | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/usd_stage.jpg" width="200" alt="usd_stage"></a><br><sub><code>usd_stage</code></sub> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/venom_button.jpg" width="200" alt="venom_button"></a><br><sub><code>venom_button</code></sub> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/venom_gallery.jpg" width="200" alt="venom_gallery"></a><br><sub><code>venom_gallery</code></sub> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/viewport_path_trace.jpg" width="200" alt="viewport_path_trace"></a><br><sub><code>viewport_path_trace</code></sub> |
-| <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/volume_slices.jpg" width="200" alt="volume_slices"></a><br><sub><code>volume_slices</code></sub> |  |  |  |
+| <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/volume_slices.jpg" width="200" alt="volume_slices"></a><br><sub><code>volume_slices</code></sub> | <a href="docs/splats.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/splats.jpg" width="200" alt="splats"></a><br><sub><code>splats</code></sub> | <a href="docs/splats.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/splats_lizard.jpg" width="200" alt="Gaussian splats: a horned lizard statue"></a><br><sub><code>splats</code> · hornedlizard.spz</sub> | <a href="docs/splats.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/splats_raccoon.jpg" width="200" alt="Gaussian splats: raccoons carved in a stump"></a><br><sub><code>splats</code> · racoonfamily.spz</sub> |
 
 Interactive ones open a window, for example `cargo run --release --example
 map_demo --features captions`, `--example marks_map` or `--example venom_button`. The rest of
 [`examples/`](examples/) export video or print numbers.
+
+Gaussian splats (`--features splats`) load the trainer's PLY, compressed PLY,
+`.spz` and `.splat`, and [`web/splats.html`](web/splats.html) views them in the
+browser; the two captures above are Niantic's `.spz` samples (MIT, from
+[nianticlabs/spz](https://github.com/nianticlabs/spz)). See
+[docs/splats.md](docs/splats.md).
 
 In the browser, [`web/examples/jelly.html`](web/examples/jelly.html) is a set of
 gummy creatures you can pull apart: tentacles, arms, tails and ears tear off,
@@ -163,7 +170,7 @@ Start with [getting started](docs/getting-started.md). Every guide is in
 [`docs/`](docs/), and each one stands alone:
 [architecture](docs/architecture.md) · [controls](docs/controls.md) ·
 [interactive effects](docs/fx.md) · [signed distance fields](docs/sdf.md) ·
-[soft bodies](docs/softbody.md) ·
+[soft bodies](docs/softbody.md) · [Gaussian splats](docs/splats.md) ·
 [time smear](docs/time-smear.md) ·
 [animation](docs/animation.md) · [camera animation](docs/camera-animation.md) ·
 [scroll video](docs/scroll-video.md) · [parity with three.js](docs/parity.md) ·

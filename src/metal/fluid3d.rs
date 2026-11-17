@@ -383,6 +383,9 @@ pub struct MetalFluid3d {
     passes: std::cell::Cell<u32>,
     rng: Rng,
     paused: bool,
+    /// The frame [`render_over`](Self::render_over) marches into, and its size.
+    #[cfg_attr(not(metal_backend), allow(dead_code))]
+    over: Option<(Owned, u32, u32)>,
 }
 
 /// What a pass writes: one texture, or several at once.
@@ -466,6 +469,7 @@ impl MetalFluid3d {
             passes: std::cell::Cell::new(0),
             rng: Rng::new(config.seed),
             paused: false,
+            over: None,
             config,
             sim,
             dye_atlas,
@@ -615,7 +619,9 @@ impl MetalFluid3d {
         self.splat_batch(device, &batch)
     }
 
-    fn splat_batch(
+    /// Several splats — `(at, velocity, colour)` each, as [`splat`](Self::splat)
+    /// — in one command buffer: emitters that feed the volume every frame.
+    pub fn splat_batch(
         &mut self,
         device: &MetalDevice,
         splats: &[([f32; 3], [f32; 3], [f32; 3])],
@@ -1268,6 +1274,31 @@ impl MetalFluid3d {
         let out = unsafe { Owned::retain(p.id()) }.expect("a live pipeline");
         cache.push((format, p));
         Ok(out)
+    }
+
+    /// March the volume over a frame the scene renderer drew: into a
+    /// premultiplied frame of its own, blended over `pass` by `renderer`,
+    /// which then presents the drawable if `pass` has one. Render the scene
+    /// with [`without_drawable`](super::PassAttachments::without_drawable)
+    /// first. Wants [`FluidConfig3d::transparent`]; without it the volume's
+    /// background covers the scene. The volume is not depth-tested against
+    /// the scene: it is drawn over whatever is there.
+    #[cfg(metal_backend)]
+    pub fn render_over(
+        &mut self,
+        renderer: &mut super::MetalRenderer,
+        camera: &dyn Camera,
+        pass: &super::PassAttachments,
+    ) -> Result<(), MetalError> {
+        let (w, h) = pass.size();
+        let (w, h) = (w.max(1), h.max(1));
+        if !matches!(&self.over, Some((_, ow, oh)) if (*ow, *oh) == (w, h)) {
+            self.over = Some((texture(renderer.device(), w, h, pixel_format::RGBA16_FLOAT)?, w, h));
+        }
+        let target = self.over.as_ref().map(|(t, _, _)| t.id()).expect("made above");
+        let device = renderer.device().clone();
+        self.render(&device, camera, target, pixel_format::RGBA16_FLOAT, (w, h))?;
+        renderer.blend_texture(target, pass)
     }
 
     /// Render into a fresh RGBA8 texture and read it back, tightly packed.

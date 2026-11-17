@@ -694,6 +694,51 @@ impl MetalRenderer {
     }
 }
 
+impl MetalRenderer {
+    /// A copy of the finished frame in `pass` — its resolved colour — into
+    /// `dst`, an `MTLTexture` of the same size and pixel format on this
+    /// device: a movie's frame, say. Encoded in a command buffer of its own
+    /// that is *enqueued but not committed* and returned, so the caller can
+    /// add a completion handler before committing it; anything committed
+    /// after this call (a [`present`](Self::present)) runs after the copy.
+    /// The caller must commit it, or the queue stalls behind it.
+    ///
+    /// A layer's drawable can be copied from only when the layer is not
+    /// `framebufferOnly`.
+    ///
+    /// # Safety
+    /// `dst` is a live `MTLTexture` on this renderer's device, at least the
+    /// pass's size, in its colour format.
+    pub unsafe fn copy_frame(&self, pass: &PassAttachments, dst: Id) -> Result<Owned, MetalError> {
+        let _pool = AutoreleasePool::new();
+        let src = if pass.resolve.is_null() { pass.color } else { pass.resolve };
+        if src.is_null() || dst.is_null() {
+            return Err(MetalError::Unsupported("copy_frame: no frame or no destination".into()));
+        }
+        unsafe {
+            let cmd = self.device().command_buffer();
+            let cmd = Owned::retain(cmd).ok_or(MetalError::NoCommandQueue)?;
+            let _: () = msg0(cmd.id(), sel!("enqueue"));
+            let blit: Id = msg0(cmd.id(), sel!("blitCommandEncoder"));
+            let _: () = super::objc::msg9(
+                blit,
+                sel!("copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:"),
+                src,
+                0 as NSUInteger,
+                0 as NSUInteger,
+                MTLOrigin::default(),
+                MTLSize { width: pass.width as NSUInteger, height: pass.height as NSUInteger, depth: 1 },
+                dst,
+                0 as NSUInteger,
+                0 as NSUInteger,
+                MTLOrigin::default(),
+            );
+            let _: () = msg0(blit, sel!("endEncoding"));
+            Ok(cmd)
+        }
+    }
+}
+
 impl PassAttachments {
     /// The same attachments with no drawable, so a render does not present —
     /// for a frame drawn in several renders and presented once with

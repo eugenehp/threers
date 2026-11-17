@@ -1,0 +1,20 @@
+[package]
+name = "threers-splat-sort"
+version.workspace = true
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+authors = ["Eugene Hauptmann"]
+repository = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-splat-sort"
+readme = "README.md"
+description = "Back-to-front ordering of Gaussian splats by depth: a radix sort over SIMD-made keys; threers' splat sorter, on its own so the wasm build can optimise it for speed"
+keywords = ["gaussian-splatting", "radix-sort", "simd", "wasm"]
+categories = ["graphics", "algorithms", "wasm"]
+include = ["src/**", "Cargo.toml", "README.md", "LICENSE"]
+
+[dependencies]
+
+[dev-dependencies]
+# Thread CPU time for the timing test: wall clock misleads on a busy machine.
+libc = "0.2"

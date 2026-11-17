@@ -405,6 +405,9 @@ pub struct Input {
     pub scroll: f32,
     /// Fingers on the screen now.
     pub touches: Vec<Touch>,
+    /// Where each touch that began this frame came down, ended or not: a tap
+    /// quicker than a frame is still one.
+    pub touches_begun: Vec<Vector2>,
     /// Ask the host to capture the pointer, so `mouse_delta` keeps going past the
     /// edge of the window, as a first-person camera wants.
     pub lock_pointer: bool,
@@ -438,6 +441,7 @@ impl Default for Input {
             mouse_delta: Vector2::new(0.0, 0.0),
             scroll: 0.0,
             touches: Vec::new(),
+            touches_begun: Vec::new(),
             lock_pointer: false,
             pointer_locked: false,
             touch_stick: [0.0; 2 * TOUCH_STICKS],
@@ -705,6 +709,7 @@ impl Input {
     pub fn touch_start(&mut self, id: u64, position: Vector2) {
         self.note(|| crate::replay::InputEvent::TouchStart(id, position));
         self.touches.retain(|touch| touch.id != id);
+        self.touches_begun.push(position);
         self.touches.push(Touch {
             id,
             position,
@@ -790,5 +795,6 @@ impl Input {
         self.typed.clear();
         self.mouse_delta = Vector2::new(0.0, 0.0);
         self.scroll = 0.0;
+        self.touches_begun.clear();
     }
 }

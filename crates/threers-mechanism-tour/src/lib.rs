@@ -214,6 +214,23 @@ fn inside(point: Vector3, mesh: &[&[Vector3; 3]]) -> bool {
     crossings % 2 == 1
 }
 
+/// Whether the segment from `p` to `q` passes through the triangle.
+fn crosses(p: Vector3, q: Vector3, [a, b, c]: &[Vector3; 3]) -> bool {
+    let ray = q - p;
+    let (e1, e2) = (*b - *a, *c - *a);
+    let h = ray.cross(e2);
+    let det = e1.dot(h);
+    if det.abs() < 1e-9 {
+        return false;
+    }
+    let s = p - *a;
+    let u = s.dot(h) / det;
+    let r = s.cross(e1);
+    let v = ray.dot(r) / det;
+    let t = e2.dot(r) / det;
+    u >= 0.0 && v >= 0.0 && u + v <= 1.0 && (0.0..=1.0).contains(&t)
+}
+
 /// The closest approach of two parts near a line, and how far off it that was. A
 /// point inside the other part is touching it, whatever its distance to the surface:
 /// a pin lives inside both halves of the joint it makes.
@@ -227,6 +244,16 @@ fn closest_near(
     let near = |t: &&[Vector3; 3]| t.iter().any(|v| off_line(*v, origin, direction) <= reach);
     let targets: Vec<_> = to.iter().filter(near).collect();
     let whole: Vec<_> = to.iter().collect();
+    // Two solids can pass through each other with no corner of either inside
+    // the other — a shaft through a wheel, its corners above and below — and
+    // then an edge of one crosses a face of the other.
+    for [a, b, c] in from.iter().filter(near) {
+        for (p, q) in [(a, b), (b, c), (c, a)] {
+            if targets.iter().any(|t| crosses(*p, *q, t)) {
+                return (0.0, off_line((*p + *q) * 0.5, origin, direction));
+            }
+        }
+    }
     let mut best = (f32::MAX, 0.0);
     for point in from.iter().filter(near).flatten() {
         if inside(*point, &whole) {
@@ -423,7 +450,7 @@ impl Tour {
         let mut checked = build(&spec, frames, fps, units_per_metre, substeps)?;
         acts.push(Act {
             title: "verify".into(),
-            body: verify(&mut checked, &mut facts),
+            body: verify(&mut checked, units_per_metre, &mut facts),
         });
 
         // ---- 7. measure the parts themselves -------------------------------
@@ -491,6 +518,9 @@ impl Tour {
     }
 }
 
+/// Solver passes per substep, for every model in the tour.
+const ITERATIONS: usize = 32;
+
 fn build(
     spec: &MechanismSpec,
     frames: usize,
@@ -504,9 +534,17 @@ fn build(
         .fps(fps)
         .units(units_per_metre);
     // A fine thread is a stiff constraint — a millimetre of travel demands five
-    // radians of turn — and stiff constraints want a shorter step. This is the
-    // *cap*: `World::substeps` reports how many actually ran.
-    mech.world.max_substeps = substeps.max(1);
+    // radians of turn — and stiff constraints want a shorter step: each frame is
+    // solved as this many substeps. (`max_substeps` is something else, a cap on
+    // how many whole steps one call may catch up on, and setting it instead
+    // left every model running one step a frame whatever it asked for.)
+    mech.world.substeps = substeps.max(1);
+    // And more passes over each step than a pile of boxes needs. A mechanism's
+    // forces travel through chains: a tooth pushes a two-gram pawl, which leans
+    // on its stop, which holds a carriage forty times heavier against its
+    // drive. Each pass carries the push one link further, and a closed loop
+    // like the four-bar has to agree with itself all the way round.
+    mech.world.solver_config.velocity_iterations = ITERATIONS;
     Ok(mech)
 }
 
@@ -796,8 +834,14 @@ fn turned(part: &threers_physics::mechanism::TrackedPart) -> f32 {
     1.0 - first.rotation.dot(last.rotation).abs()
 }
 
-fn verify(mech: &mut ScadMechanism, facts: &mut Facts) -> String {
-    let found = Verify::new().run(mech);
+fn verify(mech: &mut ScadMechanism, units_per_metre: f32, facts: &mut Facts) -> String {
+    // How far a joint may sit from where it was declared while it works: the
+    // clearance a real pin runs in, five hundredths of a millimetre. The
+    // default is a thousandth of a *model unit*, which in a model drawn in
+    // millimetres is a micron — and a pawl leaning on its stop with the whole
+    // carriage drive behind it gives by more than that, as a real one would.
+    let fit = 5e-5 * units_per_metre.max(f32::MIN_POSITIVE);
+    let found = Verify::new().axis_tolerance(fit).run(mech);
     facts.confirmed = found.confirmed;
     facts.agrees = found.agrees();
 

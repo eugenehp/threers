@@ -311,6 +311,17 @@ impl ScadMechanism {
         self.world.solver_config.max_correction_velocity *= s;
         self.world.solver_config.restitution_threshold *= s;
         self.world.sleep.linear_threshold *= s;
+        // And the drives. One given no torque is sized to lift its own part
+        // against gravity, and it was sized when the mechanism was built — in
+        // metres. Left as it was, every such drive in a millimetre model is a
+        // thousand times too weak: a lid asked for 105° does not leave the
+        // deck, and a pawl's spring lets it be pushed anywhere. The bodies
+        // have not moved yet, so building again is building the same thing at
+        // the right weight.
+        self.world.clear();
+        if let Err(e) = self.assembly.build(&mut self.world) {
+            unreachable!("it was built once already: {e}");
+        }
         self
     }
 

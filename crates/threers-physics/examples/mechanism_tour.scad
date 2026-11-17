@@ -172,7 +172,9 @@ drive("thread", speed = 500, torque = 60000);
 // hinge() naming its back edge is a plate laid on a deck.
 part("lid", density = PLASTIC)
     color("sienna") {
-        translate([16, 51, 13]) cube([48, 35, 3]);
+        // Its front edge clear of the wheel's tooth tips, which reach y = 53:
+        // drawn from 51, the shut lid lay on the gear, and lifted off it.
+        translate([16, 54, 13]) cube([48, 32, 3]);
         translate([16, PIVOT[1], PIVOT[2]]) rotate([0, 90, 0])
             cylinder(h = 48, r = 3, $fn = 24);
     }

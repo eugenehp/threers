@@ -2155,6 +2155,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-game-controller"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1962c1882c5abcedb18e5f01acffeaad7b3cbd0a9d4cd8f5ca259ba8a64cb9a3"
+dependencies = [
+ "objc2 0.6.5",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-io-kit"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3244,6 +3255,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
+name = "ruzstd"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69e4ce4a039f42bf25920b95667e4d789e98749ab11bbb8d2c2936f788421bb5"
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3723,12 +3740,14 @@ dependencies = [
  "rayon",
  "rlx",
  "rlx-geo",
+ "ruzstd",
  "slotmap",
  "threers-audio",
  "threers-captions",
  "threers-codec",
  "threers-math",
  "threers-softbody",
+ "threers-splat-sort",
  "threers-ui",
  "threers-video",
  "tokio",
@@ -3756,6 +3775,16 @@ name = "threers-audio"
 version = "0.1.0"
 dependencies = [
  "threers-math",
+]
+
+[[package]]
+name = "threers-candles"
+version = "0.1.0"
+dependencies = [
+ "objc2 0.6.5",
+ "objc2-core-foundation",
+ "objc2-quartz-core 0.3.2",
+ "threers",
 ]
 
 [[package]]
@@ -3792,6 +3821,10 @@ dependencies = [
  "criterion",
  "gilrs",
  "js-sys",
+ "objc2 0.6.5",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "objc2-game-controller",
  "rayon",
  "slotmap",
  "symphonia",
@@ -3966,6 +3999,13 @@ dependencies = [
  "bytemuck",
  "libm",
  "wgpu",
+]
+
+[[package]]
+name = "threers-splat-sort"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
