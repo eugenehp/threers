@@ -10,7 +10,8 @@
 //! camera from others. Start it from a tap — iOS asks the user for the
 //! motion sensors then, and only then.
 //!
-//! ```no_run
+#![cfg_attr(target_arch = "wasm32", doc = "```no_run")]
+#![cfg_attr(not(target_arch = "wasm32"), doc = "```ignore")]
 //! # async fn f(canvas: web_sys::HtmlCanvasElement) {
 //! use threers::xr::phone::PhoneView;
 //! let view = PhoneView::start(canvas, true).await.unwrap();

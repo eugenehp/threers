@@ -875,6 +875,10 @@ name = "metal_threads"
 required-features = ["metal"]
 
 [[test]]
+name = "metal_candles"
+required-features = ["metal"]
+
+[[test]]
 name = "marks_metal"
 required-features = ["metal"]
 

@@ -363,6 +363,33 @@ pub fn waveform(frequency: f32, seconds: f32, volume: f32, harmonics: &[f32]) ->
     }
 }
 
+/// A sound made by a function of time, `seconds` long: `f(t)` is the
+/// sample at `t` seconds, from -1 to 1. For a thump, a rattle, an alarm,
+/// anything with no file behind it.
+///
+/// ```
+/// use threers_ecs::audio::{noise, synth};
+/// // A knock: a low thump and a little rattle, dying away.
+/// let knock = synth(0.3, |t| ((t * 70.0 * std::f32::consts::TAU).sin() + 0.3 * noise(t)) * (-t * 12.0).exp());
+/// ```
+pub fn synth(seconds: f32, f: impl Fn(f32) -> f32) -> Audio {
+    let rate = 44_100u32;
+    let count = (seconds.max(0.0) * rate as f32) as usize;
+    let samples: Vec<f32> = (0..count).map(|i| f(i as f32 / rate as f32).clamp(-1.0, 1.0)).collect();
+    Audio {
+        buffer: Some(Arc::new(samples)),
+        sample_rate: rate,
+        channels: 1,
+        ..Audio::default()
+    }
+}
+
+/// White noise from -1 to 1, the same for the same `t`: a hash of it, so a
+/// [`synth`]ed sound is the same every time it is made.
+pub fn noise(t: f32) -> f32 {
+    ((t * 12_345.678).sin() * 43_758.547).fract() * 2.0 - 1.0
+}
+
 /// A pure tone, for sound effects with no file behind them.
 pub fn tone(frequency: f32, seconds: f32, volume: f32) -> Audio {
     let rate = 44_100;

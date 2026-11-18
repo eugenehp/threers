@@ -29,7 +29,26 @@ fn f16_round_wgsl() -> &'static str {
     let start = source
         .find("fn f16_round(x: f32) -> f32 {")
         .expect("f16_round in postfx");
-    let end = start + source[start..].find("\n}\n").expect("end of f16_round") + 3;
+    // To the brace that closes the body, counted: the shader's source comes
+    // through `wgsl!` without its indentation, so an inner block's `}` sits
+    // at the start of a line just as the function's own does.
+    let mut depth = 0;
+    let end = source[start..]
+        .char_indices()
+        .find_map(|(i, c)| {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(start + i + 1);
+                    }
+                }
+                _ => {}
+            }
+            None
+        })
+        .expect("end of f16_round");
     &source[start..end]
 }
 

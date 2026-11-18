@@ -61,7 +61,11 @@ struct Inner {
     errors: Mutex<Vec<PipelineError>>,
     /// Told `(built, total)` after each pipeline, from whichever thread built it.
     listeners: Mutex<Vec<Progress>>,
-    /// Signalled when `done` reaches the total.
+    /// How many have been built *and* told to the listeners. Threads finish
+    /// out of order, so `done` can reach the total while another thread is
+    /// still telling its listeners about an earlier count.
+    reported: AtomicUsize,
+    /// Signalled when `reported` reaches the total.
     finished: (Mutex<()>, Condvar),
 }
 
@@ -74,6 +78,7 @@ impl PipelineWarmup {
                 done: AtomicUsize::new(0),
                 errors: Mutex::new(Vec::new()),
                 listeners: Mutex::new(Vec::new()),
+                reported: AtomicUsize::new(0),
                 finished: (Mutex::new(()), Condvar::new()),
             }),
         }
@@ -199,7 +204,7 @@ impl PipelineWarmup {
         }
         let done = self.inner.done.fetch_add(1, Ordering::AcqRel) + 1;
         self.notify(done);
-        if done == self.len() {
+        if self.inner.reported.fetch_add(1, Ordering::AcqRel) + 1 == self.len() {
             let (lock, cvar) = &self.inner.finished;
             let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
             cvar.notify_all();
@@ -218,13 +223,14 @@ impl PipelineWarmup {
     }
 
     /// Block until every pipeline is built — by whichever threads are
-    /// running the job. Returns at once when it is empty or done. Something
+    /// running the job — and every listener has heard about it. Returns at
+    /// once when it is empty or done. Something
     /// has to be calling [`run`](Self::run) or [`step`](Self::step), or this
     /// waits for ever.
     pub fn wait(&self) {
         let (lock, cvar) = &self.inner.finished;
         let mut held = lock.lock().unwrap_or_else(|e| e.into_inner());
-        while !self.is_ready() {
+        while self.inner.reported.load(Ordering::Acquire) < self.len() {
             held = cvar.wait(held).unwrap_or_else(|e| e.into_inner());
         }
     }

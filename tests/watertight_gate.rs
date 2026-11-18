@@ -25,7 +25,7 @@ use threers::openscad::animate::ScadAnimation;
 /// opens a mesh that arrived closed — see the known-issues entry in CHANGELOG.md
 /// for the measurements and for the fixes that were tried and did not work.
 #[cfg(not(feature = "manifold"))]
-const KNOWN_UNVERIFIED: usize = 4;
+const KNOWN_UNVERIFIED: usize = 3;
 
 /// With the Manifold backend there is nothing to fall back from — it guarantees
 /// manifold output by construction, so the count must be zero and stay there.

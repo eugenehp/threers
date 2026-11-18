@@ -457,7 +457,7 @@ pub(crate) fn wgsl() -> String {
     format!("{}\n{passes}\n{OVERLAY}", super::read_out::glyphs())
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "fluid", not(target_arch = "wasm32")))]
 mod tests {
     /// The generated module validates, and every entry point translates to
     /// GLSL ES 3.00 for WebGL2, where the fluid also runs: `vs`, `vs_blur`,

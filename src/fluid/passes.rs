@@ -486,7 +486,7 @@ mod wgpu_side {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "fluid"))]
 mod tests {
     use super::*;
 

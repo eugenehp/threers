@@ -4,7 +4,8 @@
 //! dissipated every frame. Drag a pointer across it and the ink follows the
 //! motion, curls into vortices behind it, and diffuses away.
 //!
-//! ```no_run
+#![cfg_attr(feature = "fluid", doc = "```no_run")]
+#![cfg_attr(not(feature = "fluid"), doc = "```ignore")]
 //! use threers::fluid::{FluidConfig, FluidSim};
 //! # fn demo(device: std::sync::Arc<wgpu::Device>, queue: std::sync::Arc<wgpu::Queue>,
 //! #         frame: &wgpu::Texture) -> Result<(), String> {

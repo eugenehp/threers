@@ -39,7 +39,9 @@ impl SaveSlots {
                 .or_else(|| {
                     std::env::var_os("HOME").map(|home| {
                         let home = std::path::PathBuf::from(home);
-                        if cfg!(target_os = "macos") {
+                        // An iOS app's HOME is its own container: only its
+                        // Library and Documents are its to write in.
+                        if cfg!(any(target_os = "macos", target_os = "ios")) {
                             home.join("Library/Application Support")
                         } else {
                             home.join(".local/share")
@@ -124,7 +126,7 @@ impl SaveSlots {
 
     /// Through a temporary file and a rename, so a crash half way through a write
     /// leaves the old save rather than half of a new one.
-    fn put(&self, slot: &str, text: &str) -> Result<(), String> {
+    pub(crate) fn put(&self, slot: &str, text: &str) -> Result<(), String> {
         let describe = |e: std::io::Error| format!("{}: {e}", self.dir.display());
         std::fs::create_dir_all(&self.dir).map_err(describe)?;
         let temporary = self.dir.join(format!("{slot}.tmp"));
@@ -132,7 +134,7 @@ impl SaveSlots {
         std::fs::rename(&temporary, self.path(slot)).map_err(describe)
     }
 
-    fn get(&self, slot: &str) -> Result<Option<String>, String> {
+    pub(crate) fn get(&self, slot: &str) -> Result<Option<String>, String> {
         match std::fs::read_to_string(self.path(slot)) {
             Ok(text) => Ok(Some(text)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -173,13 +175,13 @@ impl SaveSlots {
         format!("{}/save/{slot}", self.game)
     }
 
-    fn put(&self, slot: &str, text: &str) -> Result<(), String> {
+    pub(crate) fn put(&self, slot: &str, text: &str) -> Result<(), String> {
         self.storage()?
             .set_item(&self.key(slot), text)
             .map_err(|e| format!("storage refused the save: {e:?}"))
     }
 
-    fn get(&self, slot: &str) -> Result<Option<String>, String> {
+    pub(crate) fn get(&self, slot: &str) -> Result<Option<String>, String> {
         self.storage()?
             .get_item(&self.key(slot))
             .map_err(|e| format!("{e:?}"))

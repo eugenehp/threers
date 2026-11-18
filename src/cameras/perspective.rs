@@ -179,6 +179,24 @@ impl PerspectiveCamera {
         self
     }
 
+    /// Where `point` shows on a `width` × `height` screen, pixels from the
+    /// top left, and how far ahead of the camera it is; `None` behind the
+    /// camera (or nearer than `near`). Ignores any view offset.
+    pub fn to_screen(&self, point: Vector3, width: f32, height: f32) -> Option<(f32, f32, f32)> {
+        let forward = (self.target - self.position).normalize();
+        let right = forward.cross(self.up).normalize();
+        let up = right.cross(forward);
+        let d = point - self.position;
+        let depth = d.dot(forward);
+        if depth < self.near.max(1e-6) {
+            return None;
+        }
+        let half = (self.fov / 2.0).tan() * depth;
+        let x = d.dot(right) / (half * self.aspect);
+        let y = d.dot(up) / half;
+        Some(((x + 1.0) / 2.0 * width, (1.0 - y) / 2.0 * height, depth))
+    }
+
     pub fn look_at(&mut self, target: Vector3) -> &mut Self {
         self.target = target;
         self
@@ -259,5 +277,28 @@ impl Camera for PerspectiveCamera {
     }
     fn layers(&self) -> crate::core::Layers {
         self.layers
+    }
+}
+
+#[cfg(test)]
+mod to_screen_tests {
+    use super::*;
+
+    #[test]
+    fn a_point_ahead_lands_where_it_should() {
+        let mut camera = PerspectiveCamera::new(90.0, 2.0, 0.1, 100.0);
+        camera.position = Vector3::new(0.0, 0.0, 0.0);
+        camera.target = Vector3::new(0.0, 0.0, -1.0);
+        camera.up = Vector3::new(0.0, 1.0, 0.0);
+        // Dead ahead: the middle.
+        let (x, y, depth) = camera.to_screen(Vector3::new(0.0, 0.0, -5.0), 200.0, 100.0).unwrap();
+        assert!((x - 100.0).abs() < 1e-3 && (y - 50.0).abs() < 1e-3 && (depth - 5.0).abs() < 1e-5);
+        // 45° up, at a 90° field of view: the top edge.
+        let (_, y, _) = camera.to_screen(Vector3::new(0.0, 5.0, -5.0), 200.0, 100.0).unwrap();
+        assert!(y.abs() < 1e-3);
+        // Right, at twice as wide: the right edge.
+        let (x, _, _) = camera.to_screen(Vector3::new(10.0, 0.0, -5.0), 200.0, 100.0).unwrap();
+        assert!((x - 200.0).abs() < 1e-3);
+        assert!(camera.to_screen(Vector3::new(0.0, 0.0, 5.0), 200.0, 100.0).is_none());
     }
 }

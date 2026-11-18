@@ -607,15 +607,18 @@ fn no_object_is_autoreleased_without_a_pool() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "the rerun failed:\n{stderr}");
-    let ours: std::collections::HashSet<&str> = stderr
+    let named: Vec<&str> = stderr
         .lines()
         .filter_map(|l| l.strip_prefix("THREERS_THREAD "))
         .collect();
+    // Counted as reports, not distinct ids: a thread that has exited hands
+    // its pthread id to the next one.
     assert!(
-        ours.len() > 10,
+        named.len() > 10,
         "the rerun named too few threads: {}",
-        ours.len()
+        named.len()
     );
+    let ours: std::collections::HashSet<&str> = named.into_iter().collect();
     // `objc[pid]: MISSING POOLS: (0x16d42f000) Object …` — the thread is the
     // parenthesised `pthread_t`.
     let missing: Vec<_> = stderr

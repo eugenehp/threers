@@ -35,6 +35,10 @@ gamepad = ["dep:gilrs", "dep:objc2", "dep:objc2-foundation", "dep:objc2-game-con
 # window, the device's pose in the `Ar` resource. Elsewhere `Ar` is there
 # and says AR is not supported.
 ar = ["window", "dep:objc2", "dep:objc2-core-foundation"]
+# Two devices in one game, near each other, through Apple's
+# MultipeerConnectivity on macOS and iOS: `nearby::Nearby`, a `share::Link`.
+# Elsewhere it never starts.
+nearby = ["dep:objc2", "dep:block2"]
 # Sound: a mixer, spatial sources, and WAV, Ogg and MP3 decoding.
 audio = ["dep:symphonia", "dep:cpal"]
 # rayon: `World::par_each`, tasks on its pool, and the solver's parallel narrow phase.
@@ -141,8 +145,13 @@ tokio = { version = "1", optional = true, default-features = false, features = [
 
 # On iOS, pads and hardware keyboards come from Apple's GameController
 # framework: gilrs has no iOS backend.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+block2 = { version = "0.6", optional = true }
+
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2 = { version = "0.6", optional = true }
+block2 = { version = "0.6", optional = true }
 objc2-foundation = { version = "0.3", optional = true, default-features = false, features = ["std", "NSArray"] }
 objc2-core-foundation = { version = "0.3", optional = true, default-features = false, features = ["std", "CFCGTypes", "objc2"] }
 objc2-game-controller = { version = "0.3", optional = true, default-features = false, features = [

@@ -69,6 +69,8 @@
 //! | Follow something with the camera | [`camera`] |
 //! | A camera's picture on a monitor in the scene | [`offscreen`] |
 //! | The game over the camera, on iOS (ARKit) | [`ar`] |
+//! | Settings and bests kept between runs | [`prefs`] |
+//! | One game on two devices | [`share`], [`nearby`](nearby) with `nearby` |
 //! | Spawn and set up a node in one go | [`World::mesh`] |
 //! | Open a window | `window` module (`window` feature) |
 //! | Run in a browser | `web` module (`web` feature) |
@@ -113,17 +115,21 @@ pub mod gizmos;
 pub mod hot;
 pub mod hud;
 mod input;
+#[cfg(feature = "nearby")]
+pub mod nearby;
 pub mod offscreen;
 pub mod params;
 #[cfg(feature = "physics")]
 // Its own `World` and `Easing` hide the physics prelude's, on purpose.
 #[allow(hidden_glob_reexports)]
 pub mod physics;
+pub mod prefs;
 pub mod profile;
 mod query;
 pub mod registry;
 pub mod replay;
 pub mod saves;
+pub mod share;
 mod schedule;
 mod spawn;
 mod states;
@@ -167,7 +173,7 @@ pub mod prelude {
     pub use threers::prelude::*;
 
     pub use crate::batch::Static;
-    pub use crate::ar::{Ar, ArCamera};
+    pub use crate::ar::{Ar, ArCamera, ArData, ArPin};
     pub use crate::camera::{CameraTarget, ChaseCamera};
     pub use crate::gizmos::Gizmos;
     pub use crate::hud::{with_hud, Hud};

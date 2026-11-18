@@ -11,6 +11,12 @@
 //! tracking) [`Ar::supported`] stays `false` and nothing happens: a game
 //! offers AR only where it is.
 //!
+//! Two devices can share one room. Set [`Ar::collaborate`] on both, carry
+//! each one's [`Ar::outgoing`] to the other's [`Ar::incoming`] over any link
+//! (`share`, `nearby`), and their maps of the room merge: an anchor one
+//! [pins](Ar::pin) then shows in the other's [`Ar::pins`], where it is in the
+//! other's own world, so both can put the game in the same spot.
+//!
 //! The ARKit session is threers-ios' own (its `ar` module), the same
 //! source compiled in here, so a game on threers-ecs needs nothing of
 //! threers-ios' shell.
@@ -27,6 +33,30 @@ pub struct ArCamera {
     pub rotation: Quaternion,
     /// Its vertical field of view, radians, for the window's shape.
     pub fov: f32,
+}
+
+/// A named anchor in the world ARKit tracks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArPin {
+    /// What the app called it.
+    pub name: String,
+    /// Where it is, metres.
+    pub position: Vector3,
+    /// Which way it faces.
+    pub rotation: Quaternion,
+    /// Whether this device pinned it (else another sharing the room did).
+    pub mine: bool,
+}
+
+/// What one device tells another about the room, to share it: opaque bytes,
+/// and whether they must arrive (else newer will do, and they may be sent
+/// lossily).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArData {
+    /// ARKit's, archived.
+    pub bytes: Vec<u8>,
+    /// Whether it must arrive.
+    pub critical: bool,
 }
 
 /// The app's wish for AR, and what the device does about it. A resource.
@@ -47,6 +77,20 @@ pub struct Ar {
     /// of the screen this frame, in the same world as the camera: where to
     /// put something down. `None` while none is found.
     pub surface: Option<Vector3>,
+    /// Share the room with other devices (ARKit's collaborative session).
+    pub collaborate: bool,
+    /// What this device has to tell the others about the room: the app sends
+    /// it on, and empties it.
+    pub outgoing: Vec<ArData>,
+    /// What the others have told it: the app fills it, the window empties it.
+    pub incoming: Vec<Vec<u8>>,
+    /// An anchor to pin, in place of this device's last of its name: the
+    /// window takes it.
+    pub pin: Option<ArPin>,
+    /// The named anchors now, this device's and (sharing) the others'.
+    pub pins: Vec<ArPin>,
+    /// How many other devices share the room now.
+    pub others: usize,
 }
 
 impl Ar {
@@ -141,6 +185,47 @@ impl Driver {
             .filter(|_| ar.wanted)
             .and_then(|s| s.surface())
             .map(|[x, y, z]| Vector3::new(x, y, z));
+        if let Some(session) = self.session.as_mut().filter(|_| ar.wanted) {
+            session.collaborate(ar.collaborate);
+            ar.outgoing.extend(
+                session
+                    .take_collaboration()
+                    .into_iter()
+                    .map(|(bytes, critical)| ArData { bytes, critical }),
+            );
+            // Unsent, it must not pile up: drop what newer data replaces.
+            if ar.outgoing.len() > 128 {
+                ar.outgoing.retain(|d| d.critical);
+                let over = ar.outgoing.len().saturating_sub(128);
+                ar.outgoing.drain(..over);
+            }
+            for bytes in ar.incoming.drain(..) {
+                session.give_collaboration(&bytes);
+            }
+            if let Some(pin) = ar.pin.take() {
+                let m = threers::math::Matrix4::compose(pin.position, pin.rotation, Vector3::new(1.0, 1.0, 1.0));
+                session.pin(&pin.name, m.elements);
+            }
+            let (pins, others) = session.anchors();
+            ar.others = others;
+            ar.pins = pins
+                .into_iter()
+                .map(|p| {
+                    let (position, rotation, _) = threers::math::Matrix4 { elements: p.transform }.decompose();
+                    ArPin {
+                        name: p.name,
+                        position,
+                        rotation,
+                        mine: p.mine,
+                    }
+                })
+                .collect();
+        } else {
+            ar.incoming.clear();
+            ar.pin = None;
+            ar.pins.clear();
+            ar.others = 0;
+        }
         ar.camera = self.session.as_ref().filter(|_| ar.wanted).and_then(|session| {
             let (world, projection) = session.camera(view.size(), 0.01, 100.0)?;
             let world = threers::math::Matrix4 { elements: world };
