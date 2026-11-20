@@ -72,6 +72,7 @@
 //! | `brep-csg` | | Closed-form SSI fast paths in the CSG kernel (implies `brep` + `openscad`) | — |
 //! | `brep-kernel` | | True B-rep topology, boolean, fillets (implies `brep-csg`) | — |
 //! | `step` | | STEP AP203/214 import + export (implies `brep-kernel`) | — |
+//! | `iges` | | IGES 5.3 file syntax: sections, directory entries, parameters | — |
 //! | `assembly-check` | | Assembly motion checks (body correspondence, axis recovery, swept volume) | — |
 //! | `learned-denoise` | | Trained U-Net denoiser beside À-Trous (implies `raytrace`) | — |
 //! | `learned-denoise-metal`, `learned-denoise-gpu` | | The same network on Metal or wgpu (imply `learned-denoise`) | — |
@@ -85,7 +86,7 @@
 //! | `media` | `native-decode` + `native-codec` + `gif` + `captions` |
 //! | `gi` | `raytrace` + `learned-denoise` |
 //! | `apple` | `metal` + `videotoolbox` |
-//! | `full` | `cad` + `media` + `gi` + `planet` + `fluid` + `usd` + `rlx` + `rlx-geo` + `assembly-check` + `async` + `step` + `brep-kernel` |
+//! | `full` | `cad` + `media` + `gi` + `planet` + `fluid` + `usd` + `rlx` + `rlx-geo` + `assembly-check` + `async` + `step` + `iges` + `brep-kernel` |
 //! | `wasm-full` | Browser kitchen sink: `captions` + `openscad` + `native-codec` + `nurbs` + `planet` + `raytrace` + `fluid` + `usd` + `softbody` |
 //!
 //! ```toml
@@ -372,6 +373,8 @@ pub mod nurbs;
 #[cfg(feature = "brep")]
 pub mod brep;
 
+#[cfg(feature = "iges")]
+pub mod iges;
 #[cfg(feature = "step")]
 pub mod step;
 

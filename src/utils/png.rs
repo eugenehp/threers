@@ -2,9 +2,12 @@
 //!
 //! threers renders to RGBA and reads reference imagery back in for comparison,
 //! so both directions need to exist without pulling in an image crate. The
-//! encoder emits fixed-Huffman DEFLATE (line art and renders compress well);
-//! the decoder handles stored, fixed and dynamic Huffman blocks, all five PNG
-//! filters, and 8-bit grey / grey+alpha / RGB / RGBA / palette inputs.
+//! encoder writes each image in the smallest layout that holds it exactly
+//! (grey at 1 to 8 bits, a palette with transparency, RGB, RGBA, or 16 bits a
+//! channel from [`encode_png16`]), picks each row's filter as libpng does,
+//! and compresses with LZ77 and dynamic Huffman codes. The decoder takes every
+//! colour type, bit depth and filter, interlaced (Adam7) or not, with `tRNS`
+//! transparency; [`decode_png16`] keeps 16-bit precision.
 //!
 //! ```ignore
 //! use threers::{decode_png, encode_png};
@@ -12,9 +15,6 @@
 //! let img = decode_png(&std::fs::read("ref.png")?)?;
 //! let same = encode_png(img.width, img.height, &img.rgba);
 //! ```
-//!
-//! Not supported (returns `Err`): interlaced PNG, and 16-bit channels are
-//! truncated to their high byte.
 
 /// A decoded image, always 8-bit RGBA.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,8 +133,6 @@ const DIST_EXTRA: [u8; 30] = [
     13,
 ];
 
-/// LZ77 + fixed-Huffman DEFLATE. Good enough for renders and line art, and
-/// small enough to keep honest.
 /// What the LZ77 pass found, kept rather than emitted, because the Huffman
 /// code cannot be chosen until the symbol frequencies are known.
 enum Token {
@@ -446,7 +444,8 @@ fn deflate(data: &[u8]) -> Vec<u8> {
     w.finish()
 }
 
-fn zlib(data: &[u8]) -> Vec<u8> {
+/// `data` deflated in a zlib stream (RFC 1950), as PNG and PDF carry it.
+pub(crate) fn zlib(data: &[u8]) -> Vec<u8> {
     let mut out = vec![0x78, 0x01];
     out.extend_from_slice(&deflate(data));
     out.extend_from_slice(&adler32(data).to_be_bytes());
@@ -665,7 +664,11 @@ fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&crc32(&crc_in).to_be_bytes());
 }
 
-/// Encode 8-bit RGBA pixels as a PNG.
+/// Encode 8-bit RGBA pixels as a PNG, in the smallest layout that holds
+/// them exactly: grey (at 1, 2, 4 or 8 bits) when every pixel is grey and
+/// opaque, grey and alpha when grey, a palette (with `tRNS` for its
+/// transparent entries) when there are at most 256 colours and that comes
+/// out smaller, else RGB when opaque or RGBA. [`decode_png`] gives back the same pixels.
 ///
 /// Panics if `rgba.len() != width * height * 4`.
 pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
@@ -681,43 +684,164 @@ pub fn encode_png_with_dpi(width: u32, height: u32, rgba: &[u8], dpi: f64) -> Ve
     encode(width, height, rgba, Some((dpi / 0.0254).round().max(1.0) as u32))
 }
 
-fn encode(width: u32, height: u32, rgba: &[u8], pixels_per_metre: Option<u32>) -> Vec<u8> {
-    assert_eq!(
-        rgba.len(),
-        (width as usize) * (height as usize) * 4,
-        "rgba size mismatch"
-    );
-    // Filter each scanline with Sub or None, whichever has the smaller
-    // absolute sum — cheap, and a big win on flat artwork.
-    let stride = width as usize * 4;
-    let mut raw = Vec::with_capacity((stride + 1) * height as usize);
-    for y in 0..height as usize {
-        let row = &rgba[y * stride..(y + 1) * stride];
-        let mut sub = vec![0u8; stride];
-        for x in 0..stride {
-            let left = if x >= 4 { row[x - 4] } else { 0 };
-            sub[x] = row[x].wrapping_sub(left);
-        }
-        let score = |v: &[u8]| {
-            v.iter()
-                .map(|&b| (b as i8).unsigned_abs() as u32)
-                .sum::<u32>()
+/// Encode 16-bit RGBA pixels as a PNG: 16 bits a channel (grey, grey and
+/// alpha, RGB or RGBA, whichever holds them exactly), or [`encode_png`]'s
+/// 8-bit layouts when every sample is an 8-bit value widened (`v * 257`).
+///
+/// Panics if `rgba.len() != width * height * 4`.
+pub fn encode_png16(width: u32, height: u32, rgba: &[u16]) -> Vec<u8> {
+    assert_eq!(rgba.len(), (width as usize) * (height as usize) * 4, "rgba size mismatch");
+    if rgba.iter().all(|&v| v % 257 == 0) {
+        let narrow: Vec<u8> = rgba.iter().map(|&v| (v / 257) as u8).collect();
+        return encode(width, height, &narrow, None);
+    }
+    let px = rgba.as_chunks::<4>().0;
+    let grey = px.iter().all(|p| p[0] == p[1] && p[1] == p[2]);
+    let opaque = px.iter().all(|p| p[3] == u16::MAX);
+    let (colour, take): (u8, &[usize]) = match (grey, opaque) {
+        (true, true) => (0, &[0]),
+        (true, false) => (4, &[0, 3]),
+        (false, true) => (2, &[0, 1, 2]),
+        (false, false) => (6, &[0, 1, 2, 3]),
+    };
+    let w = width as usize;
+    let rows: Vec<Vec<u8>> = (0..height as usize)
+        .map(|y| px[y * w..(y + 1) * w].iter().flat_map(|p| take.iter().flat_map(move |&c| p[c].to_be_bytes())).collect())
+        .collect();
+    write_png(width, height, 16, colour, &[], &[], &rows, take.len() * 2, true, None)
+}
+
+/// The 8-bit layout [`encode_png`] picks for an image, and its rows packed.
+struct Layout {
+    depth: u8,
+    colour: u8,
+    palette: Vec<u8>,
+    trns: Vec<u8>,
+    rows: Vec<Vec<u8>>,
+    /// Bytes a pixel, which the filters step back by (1 for packed pixels).
+    bpp: usize,
+}
+
+fn layout(width: u32, height: u32, rgba: &[u8], allow_palette: bool) -> Layout {
+    let w = width as usize;
+    let px = rgba.as_chunks::<4>().0;
+    let grey = px.iter().all(|p| p[0] == p[1] && p[1] == p[2]);
+    let opaque = px.iter().all(|p| p[3] == 255);
+    let rows_of = |f: &dyn Fn(&[[u8; 4]]) -> Vec<u8>| (0..height as usize).map(|y| f(&px[y * w..(y + 1) * w])).collect::<Vec<_>>();
+    if grey && opaque {
+        // the smallest depth whose levels hit every grey exactly
+        let depth = [1u8, 2, 4].into_iter().find(|&d| {
+            let step = 255 / ((1u16 << d) - 1) as u8;
+            px.iter().all(|p| p[0] % step == 0)
+        });
+        return match depth {
+            Some(d) => {
+                let step = 255 / ((1u16 << d) - 1) as u8;
+                let rows = rows_of(&|r| pack(r.iter().map(|p| p[0] / step), d));
+                Layout { depth: d, colour: 0, palette: Vec::new(), trns: Vec::new(), rows, bpp: 1 }
+            }
+            None => Layout { depth: 8, colour: 0, palette: Vec::new(), trns: Vec::new(), rows: rows_of(&|r| r.iter().map(|p| p[0]).collect()), bpp: 1 },
         };
-        if score(&sub) < score(row) {
-            raw.push(1);
-            raw.extend_from_slice(&sub);
-        } else {
-            raw.push(0);
-            raw.extend_from_slice(row);
+    }
+    if let Some(colours) = palette_of(px).filter(|_| allow_palette) {
+        let index: std::collections::HashMap<[u8; 4], u8> = colours.iter().enumerate().map(|(k, c)| (*c, k as u8)).collect();
+        let depth = match colours.len() {
+            0..=2 => 1,
+            3..=4 => 2,
+            5..=16 => 4,
+            _ => 8,
+        };
+        let palette = colours.iter().flat_map(|c| [c[0], c[1], c[2]]).collect();
+        // transparent entries come first, so tRNS stops at the last of them
+        let trns: Vec<u8> = colours.iter().take_while(|c| c[3] < 255).map(|c| c[3]).collect();
+        let rows = rows_of(&|r| pack(r.iter().map(|p| index[p]), depth));
+        return Layout { depth, colour: 3, palette, trns, rows, bpp: 1 };
+    }
+    let (colour, take): (u8, &[usize]) = match (grey, opaque) {
+        (true, _) => (4, &[0, 3]),
+        (false, true) => (2, &[0, 1, 2]),
+        (false, false) => (6, &[0, 1, 2, 3]),
+    };
+    let rows = rows_of(&|r| r.iter().flat_map(|p| take.iter().map(move |&c| p[c])).collect());
+    Layout { depth: 8, colour, palette: Vec::new(), trns: Vec::new(), rows, bpp: take.len() }
+}
+
+/// The image's colours when there are at most 256: transparent ones first,
+/// each group in order of first appearance.
+fn palette_of(px: &[[u8; 4]]) -> Option<Vec<[u8; 4]>> {
+    let mut seen = std::collections::HashSet::new();
+    let mut order = Vec::new();
+    for p in px {
+        if seen.insert(*p) {
+            if order.len() == 256 {
+                return None;
+            }
+            order.push(*p);
         }
     }
+    let (mut colours, opaque): (Vec<_>, Vec<_>) = order.into_iter().partition(|c| c[3] < 255);
+    colours.extend(opaque);
+    Some(colours)
+}
+
+/// Samples of `depth` bits (1, 2, 4 or 8) packed into bytes, most
+/// significant first.
+fn pack(samples: impl Iterator<Item = u8>, depth: u8) -> Vec<u8> {
+    if depth == 8 {
+        return samples.collect();
+    }
+    let per = 8 / depth as usize;
+    let mut out = Vec::new();
+    for (k, s) in samples.enumerate() {
+        if k % per == 0 {
+            out.push(0);
+        }
+        *out.last_mut().unwrap() |= s << (8 - depth as usize * (k % per + 1));
+    }
+    out
+}
+
+fn encode(width: u32, height: u32, rgba: &[u8], pixels_per_metre: Option<u32>) -> Vec<u8> {
+    assert_eq!(rgba.len(), (width as usize) * (height as usize) * 4, "rgba size mismatch");
+    let write = |l: &Layout| {
+        // libpng's advice: palette and packed images compress best unfiltered
+        let adaptive = l.colour != 3 && l.depth >= 8;
+        write_png(width, height, l.depth, l.colour, &l.palette, &l.trns, &l.rows, l.bpp, adaptive, pixels_per_metre)
+    };
+    let l = layout(width, height, rgba, true);
+    let png = write(&l);
+    if l.colour != 3 {
+        return png;
+    }
+    // A palette is not always smaller: the indices of a smooth gradient go
+    // unfiltered, where its colours filter to almost nothing (580 bytes as
+    // RGB against 1341 as a palette, for a 37x23 swirl). So both, and the
+    // smaller; only images of 256 colours or fewer pay for the second try.
+    let truecolour = write(&layout(width, height, rgba, false));
+    if truecolour.len() < png.len() { truecolour } else { png }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_png(
+    width: u32,
+    height: u32,
+    depth: u8,
+    colour: u8,
+    palette: &[u8],
+    trns: &[u8],
+    rows: &[Vec<u8>],
+    bpp: usize,
+    adaptive: bool,
+    pixels_per_metre: Option<u32>,
+) -> Vec<u8> {
+    let raw = if adaptive { filtered(rows, bpp) } else { rows.iter().flat_map(|r| std::iter::once(0).chain(r.iter().copied())).collect() };
 
     let mut png = Vec::new();
     png.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
     let mut ihdr = Vec::new();
     ihdr.extend_from_slice(&width.to_be_bytes());
     ihdr.extend_from_slice(&height.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]); // 8-bit RGBA, deflate, adaptive filter, no interlace
+    ihdr.extend_from_slice(&[depth, colour, 0, 0, 0]); // deflate, adaptive filtering, no interlace
     chunk(&mut png, b"IHDR", &ihdr);
     if let Some(ppm) = pixels_per_metre {
         let mut phys = Vec::with_capacity(9);
@@ -726,13 +850,98 @@ fn encode(width: u32, height: u32, rgba: &[u8], pixels_per_metre: Option<u32>) -
         phys.push(1); // the unit: the metre
         chunk(&mut png, b"pHYs", &phys);
     }
+    if !palette.is_empty() {
+        chunk(&mut png, b"PLTE", palette);
+    }
+    if !trns.is_empty() {
+        chunk(&mut png, b"tRNS", trns);
+    }
     chunk(&mut png, b"IDAT", &zlib(&raw));
     chunk(&mut png, b"IEND", &[]);
     png
 }
 
-/// Decode a PNG into 8-bit RGBA.
+/// The rows filtered, each after its filter type: the filter libpng's
+/// heuristic picks, the one whose bytes, read as signed, sum smallest in
+/// magnitude.
+///
+/// Measured against Sub on every row (the previous encoder's usual pick),
+/// it wins on renders and photographs; on synthetic noise it can lose,
+/// as libpng's does. An entropy estimate to choose between the two per
+/// image picked wrong as often as right, so it is not here.
+fn filtered(rows: &[Vec<u8>], bpp: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(rows.iter().map(|r| r.len() + 1).sum());
+    let empty = Vec::new();
+    for (y, row) in rows.iter().enumerate() {
+        let prev = if y > 0 { &rows[y - 1] } else { &empty };
+        let mut score = [0u64; 5];
+        for x in 0..row.len() {
+            let (a, b, c) = neighbours(row, prev, bpp, x);
+            let v = row[x];
+            for (f, p) in [0, a, b, ((a as u16 + b as u16) / 2) as u8, paeth(a, b, c)].into_iter().enumerate() {
+                score[f] += (v.wrapping_sub(p) as i8).unsigned_abs() as u64;
+            }
+        }
+        let best = (0..5).min_by_key(|&f| score[f]).unwrap();
+        out.push(best as u8);
+        for x in 0..row.len() {
+            let (a, b, c) = neighbours(row, prev, bpp, x);
+            let p = match best {
+                0 => 0,
+                1 => a,
+                2 => b,
+                3 => ((a as u16 + b as u16) / 2) as u8,
+                _ => paeth(a, b, c),
+            };
+            out.push(row[x].wrapping_sub(p));
+        }
+    }
+    out
+}
+
+/// The bytes left, above and above-left of byte `x`, zero past the edges.
+fn neighbours(row: &[u8], prev: &[u8], bpp: usize, x: usize) -> (u8, u8, u8) {
+    let a = if x >= bpp { row[x - bpp] } else { 0 };
+    let b = prev.get(x).copied().unwrap_or(0);
+    let c = if x >= bpp { prev.get(x - bpp).copied().unwrap_or(0) } else { 0 };
+    (a, b, c)
+}
+
+fn paeth(a: u8, b: u8, c: u8) -> u8 {
+    let (pa, pb, pc) = (a as i16, b as i16, c as i16);
+    let p = pa + pb - pc;
+    let (da, db, dc) = ((p - pa).abs(), (p - pb).abs(), (p - pc).abs());
+    if da <= db && da <= dc {
+        a
+    } else if db <= dc {
+        b
+    } else {
+        c
+    }
+}
+
+/// A decoded image at 16 bits a channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PngImage16 {
+    pub width: u32,
+    pub height: u32,
+    /// `width * height * 4` samples, row-major from the top-left; a narrower
+    /// file's samples scaled to the full range (`v * 257` for 8 bits).
+    pub rgba: Vec<u16>,
+}
+
+/// Decode a PNG into 8-bit RGBA; 16-bit samples keep their high byte.
 pub fn decode_png(bytes: &[u8]) -> Result<PngImage, String> {
+    let img = decode_png16(bytes)?;
+    Ok(PngImage { width: img.width, height: img.height, rgba: img.rgba.iter().map(|&v| (v >> 8) as u8).collect() })
+}
+
+/// Decode a PNG into 16-bit RGBA, keeping a 16-bit file's precision.
+///
+/// Every colour type and bit depth the specification allows, interlaced
+/// (Adam7) or not, with `tRNS` transparency for palettes and for the one
+/// grey or RGB value it names.
+pub fn decode_png16(bytes: &[u8]) -> Result<PngImage16, String> {
     if bytes.len() < 8 || bytes[..8] != [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A] {
         return Err("not a PNG".into());
     }
@@ -744,25 +953,19 @@ pub fn decode_png(bytes: &[u8]) -> Result<PngImage, String> {
     while p + 8 <= bytes.len() {
         let len = u32::from_be_bytes([bytes[p], bytes[p + 1], bytes[p + 2], bytes[p + 3]]) as usize;
         let kind = &bytes[p + 4..p + 8];
-        let data = bytes
-            .get(p + 8..p + 8 + len)
-            .ok_or("PNG: truncated chunk")?;
+        let data = bytes.get(p + 8..p + 8 + len).ok_or("PNG: truncated chunk")?;
         match kind {
             b"IHDR" => {
+                if data.len() < 13 {
+                    return Err("PNG: short IHDR".into());
+                }
                 w = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
                 h = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
                 depth = data[8];
                 colour = data[9];
                 interlace = data[12];
             }
-            b"PLTE" => {
-                palette = data
-                    .as_chunks::<3>()
-                    .0
-                    .iter()
-                    .map(|c| [c[0], c[1], c[2]])
-                    .collect()
-            }
+            b"PLTE" => palette = data.as_chunks::<3>().0.iter().map(|c| [c[0], c[1], c[2]]).collect(),
             b"tRNS" => trns = data.to_vec(),
             b"IDAT" => idat.extend_from_slice(data),
             b"IEND" => break,
@@ -770,22 +973,6 @@ pub fn decode_png(bytes: &[u8]) -> Result<PngImage, String> {
         }
         p += 12 + len;
     }
-    if interlace != 0 {
-        return Err("PNG: interlaced images are not supported".into());
-    }
-    // 1, 2 and 4 bits only for grey and palette images, as the spec has it:
-    // what map tiles of open sea and other near-empty images come as.
-    let sub_byte = matches!(depth, 1 | 2 | 4);
-    if !(depth == 8 || depth == 16 || (sub_byte && (colour == 0 || colour == 3))) {
-        return Err(format!(
-            "PNG: unsupported bit depth {depth} for colour type {colour}"
-        ));
-    }
-    if idat.len() < 2 {
-        return Err("PNG: no image data".into());
-    }
-    let raw = inflate(&idat[2..])?; // skip the 2-byte zlib header
-
     let channels = match colour {
         0 => 1, // grey
         2 => 3, // rgb
@@ -794,122 +981,279 @@ pub fn decode_png(bytes: &[u8]) -> Result<PngImage, String> {
         6 => 4, // rgba
         _ => return Err(format!("PNG: unsupported colour type {colour}")),
     };
+    // the specification's table of allowed depths
+    let allowed = match colour {
+        0 => matches!(depth, 1 | 2 | 4 | 8 | 16),
+        3 => matches!(depth, 1 | 2 | 4 | 8),
+        _ => matches!(depth, 8 | 16),
+    };
+    if !allowed {
+        return Err(format!("PNG: unsupported bit depth {depth} for colour type {colour}"));
+    }
+    if interlace > 1 {
+        return Err(format!("PNG: unknown interlace method {interlace}"));
+    }
+    if idat.len() < 2 {
+        return Err("PNG: no image data".into());
+    }
+    let raw = inflate(&idat[2..])?; // skip the 2-byte zlib header
     let bits_per_px = channels * depth as usize;
     // The filters look one whole pixel back, or one byte for packed pixels.
-    let bytes_per_px = (bits_per_px / 8).max(1);
-    let stride = (w as usize * bits_per_px).div_ceil(8);
-    if raw.len() < (stride + 1) * h as usize {
-        return Err("PNG: short image data".into());
-    }
+    let bpp = (bits_per_px / 8).max(1);
+    let (wu, hu) = (w as usize, h as usize);
 
-    // Undo the per-scanline filters in place.
-    let mut lines: Vec<u8> = vec![0; stride * h as usize];
-    for y in 0..h as usize {
-        let ft = raw[y * (stride + 1)];
-        let src = &raw[y * (stride + 1) + 1..y * (stride + 1) + 1 + stride];
-        for x in 0..stride {
-            let a = if x >= bytes_per_px {
-                lines[y * stride + x - bytes_per_px]
-            } else {
-                0
-            };
-            let b = if y > 0 {
-                lines[(y - 1) * stride + x]
-            } else {
-                0
-            };
-            let c = if x >= bytes_per_px && y > 0 {
-                lines[(y - 1) * stride + x - bytes_per_px]
-            } else {
-                0
-            };
-            let v = match ft {
-                0 => src[x],
-                1 => src[x].wrapping_add(a),
-                2 => src[x].wrapping_add(b),
-                3 => src[x].wrapping_add(((a as u16 + b as u16) / 2) as u8),
-                4 => {
-                    let (pa, pb, pc) = (a as i16, b as i16, c as i16);
-                    let pp = pa + pb - pc;
-                    let (da, db, dc) = ((pp - pa).abs(), (pp - pb).abs(), (pp - pc).abs());
-                    let pred = if da <= db && da <= dc {
-                        a
-                    } else if db <= dc {
-                        b
-                    } else {
-                        c
-                    };
-                    src[x].wrapping_add(pred)
+    // tRNS for grey and RGB: the one sample value that is transparent
+    let key: Option<[u32; 3]> = match (colour, trns.len()) {
+        (0, 2..) => Some([u16::from_be_bytes([trns[0], trns[1]]) as u32; 3]),
+        (2, 6..) => Some([
+            u16::from_be_bytes([trns[0], trns[1]]) as u32,
+            u16::from_be_bytes([trns[2], trns[3]]) as u32,
+            u16::from_be_bytes([trns[4], trns[5]]) as u32,
+        ]),
+        _ => None,
+    };
+    let max = (1u32 << depth) - 1;
+    // a sample widened to 16 bits: 1, 2, 4 and 8-bit levels land exactly
+    let widen = |v: u32| (v * 65535 / max) as u16;
+
+    let mut rgba = vec![u16::MAX; wu * hu * 4];
+    // (x0, y0, dx, dy) per pass: Adam7's seven, or the whole image once
+    let passes: &[(usize, usize, usize, usize)] = if interlace == 1 {
+        &[(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)]
+    } else {
+        &[(0, 0, 1, 1)]
+    };
+    let mut at = 0usize;
+    for &(x0, y0, dx, dy) in passes {
+        let pw = if wu > x0 { (wu - x0).div_ceil(dx) } else { 0 };
+        let ph = if hu > y0 { (hu - y0).div_ceil(dy) } else { 0 };
+        if pw == 0 || ph == 0 {
+            continue;
+        }
+        let stride = (pw * bits_per_px).div_ceil(8);
+        let need = (stride + 1) * ph;
+        let src = raw.get(at..at + need).ok_or("PNG: short image data")?;
+        at += need;
+        let lines = unfilter(src, stride, ph, bpp)?;
+        // a sample: packed most significant first, or one or two bytes
+        let sample = |line: &[u8], k: usize| -> u32 {
+            match depth {
+                16 => u16::from_be_bytes([line[2 * k], line[2 * k + 1]]) as u32,
+                8 => line[k] as u32,
+                d => {
+                    let bit = k * d as usize;
+                    ((line[bit / 8] >> (8 - d as usize - bit % 8)) as u32) & max
                 }
+            }
+        };
+        for py in 0..ph {
+            let line = &lines[py * stride..(py + 1) * stride];
+            let y = y0 + py * dy;
+            for px in 0..pw {
+                let o = (y * wu + x0 + px * dx) * 4;
+                let s = px * channels;
+                let out = &mut rgba[o..o + 4];
+                match colour {
+                    0 => {
+                        let g = sample(line, s);
+                        out[..3].fill(widen(g));
+                        if key.is_some_and(|k| k[0] == g) {
+                            out[3] = 0;
+                        }
+                    }
+                    2 => {
+                        let c = [sample(line, s), sample(line, s + 1), sample(line, s + 2)];
+                        for (o, v) in out.iter_mut().zip(c) {
+                            *o = widen(v);
+                        }
+                        if key == Some(c) {
+                            out[3] = 0;
+                        }
+                    }
+                    3 => {
+                        let idx = sample(line, s) as usize;
+                        let c = palette.get(idx).copied().unwrap_or([0, 0, 0]);
+                        for k in 0..3 {
+                            out[k] = c[k] as u16 * 257;
+                        }
+                        out[3] = trns.get(idx).copied().unwrap_or(255) as u16 * 257;
+                    }
+                    4 => {
+                        out[..3].fill(widen(sample(line, s)));
+                        out[3] = widen(sample(line, s + 1));
+                    }
+                    _ => {
+                        for (k, o) in out.iter_mut().enumerate() {
+                            *o = widen(sample(line, s + k));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(PngImage16 { width: w, height: h, rgba })
+}
+
+/// `rows` scanlines of `stride` bytes, each after its filter type byte,
+/// with the filters undone.
+fn unfilter(src: &[u8], stride: usize, rows: usize, bpp: usize) -> Result<Vec<u8>, String> {
+    let mut lines: Vec<u8> = vec![0; stride * rows];
+    for y in 0..rows {
+        let ft = src[y * (stride + 1)];
+        let row = &src[y * (stride + 1) + 1..y * (stride + 1) + 1 + stride];
+        for x in 0..stride {
+            let a = if x >= bpp { lines[y * stride + x - bpp] } else { 0 };
+            let b = if y > 0 { lines[(y - 1) * stride + x] } else { 0 };
+            let c = if x >= bpp && y > 0 { lines[(y - 1) * stride + x - bpp] } else { 0 };
+            lines[y * stride + x] = match ft {
+                0 => row[x],
+                1 => row[x].wrapping_add(a),
+                2 => row[x].wrapping_add(b),
+                3 => row[x].wrapping_add(((a as u16 + b as u16) / 2) as u8),
+                4 => row[x].wrapping_add(paeth(a, b, c)),
                 _ => return Err(format!("PNG: bad filter type {ft}")),
             };
-            lines[y * stride + x] = v;
         }
     }
-
-    // Expand to RGBA.
-    let step = (depth as usize / 8).max(1); // 2 for 16-bit: take the high byte
-                                            // A packed sample, most significant bits first within each byte.
-    let packed = |i: usize| -> u8 {
-        let (y, x) = (i / w as usize, i % w as usize);
-        let bit = x * depth as usize;
-        let byte = lines[y * stride + bit / 8];
-        (byte >> (8 - depth as usize - bit % 8)) & ((1u16 << depth) - 1) as u8
-    };
-    let mut rgba = vec![255u8; (w as usize) * (h as usize) * 4];
-    for i in 0..(w as usize) * (h as usize) {
-        let s = i * bytes_per_px;
-        let o = i * 4;
-        match colour {
-            0 => {
-                let g = if sub_byte {
-                    // Scaled so the largest sample is white.
-                    (packed(i) as u32 * 255 / ((1u32 << depth) - 1)) as u8
-                } else {
-                    lines[s]
-                };
-                rgba[o] = g;
-                rgba[o + 1] = g;
-                rgba[o + 2] = g;
-            }
-            2 => {
-                rgba[o] = lines[s];
-                rgba[o + 1] = lines[s + step];
-                rgba[o + 2] = lines[s + 2 * step];
-            }
-            3 => {
-                let idx = if sub_byte { packed(i) } else { lines[s] } as usize;
-                let c = palette.get(idx).copied().unwrap_or([0, 0, 0]);
-                rgba[o] = c[0];
-                rgba[o + 1] = c[1];
-                rgba[o + 2] = c[2];
-                rgba[o + 3] = trns.get(idx).copied().unwrap_or(255);
-            }
-            4 => {
-                let g = lines[s];
-                rgba[o] = g;
-                rgba[o + 1] = g;
-                rgba[o + 2] = g;
-                rgba[o + 3] = lines[s + step];
-            }
-            6 => {
-                rgba[o] = lines[s];
-                rgba[o + 1] = lines[s + step];
-                rgba[o + 2] = lines[s + 2 * step];
-                rgba[o + 3] = lines[s + 3 * step];
-            }
-            _ => unreachable!(),
-        }
-    }
-    Ok(PngImage {
-        width: w,
-        height: h,
-        rgba,
-    })
+    Ok(lines)
 }
 
 #[cfg(test)]
 mod tests {
+
+    // 9x7 Adam7-interlaced PNGs and ImageMagick 7's own decode of each, as
+    // RGBA: `magick -size 9x7 gradient:red-blue -swirl 120 -strip
+    // -define png:color-type=2 -depth 8 -interlace PNG`, then that converted to
+    // 2-bit grey (`-colorspace gray -depth 2 -define png:bit-depth=2
+    // -define png:color-type=0`), and `magick f.png -depth 8 rgba:f.rgba`.
+    const FX_RGB_IL: [u8; 221] = [
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 9, 0, 0, 0, 7,
+        8, 2, 0, 0, 1, 34, 254, 192, 161, 0, 0, 0, 164, 73, 68, 65, 84, 8, 215, 53, 203, 177, 74, 66,
+        97, 24, 128, 225, 231, 247, 252, 21, 168, 5, 97, 132, 83, 152, 67, 139, 53, 119, 21, 45, 193, 185, 148, 110,
+        162, 75, 81, 112, 233, 38, 218, 203, 165, 65, 163, 73, 34, 9, 202, 19, 100, 231, 244, 181, 216, 250, 242, 188,
+        41, 128, 32, 149, 198, 67, 243, 7, 23, 105, 27, 111, 220, 94, 186, 79, 99, 229, 129, 143, 119, 135, 75, 253,
+        190, 37, 162, 165, 201, 126, 8, 226, 95, 131, 60, 117, 221, 181, 126, 114, 182, 231, 59, 223, 185, 26, 154, 63,
+        58, 127, 113, 130, 216, 177, 217, 62, 51, 35, 36, 191, 133, 166, 81, 108, 236, 134, 148, 213, 45, 145, 39, 202,
+        182, 170, 103, 149, 196, 179, 193, 194, 233, 151, 118, 215, 250, 216, 107, 26, 153, 21, 234, 125, 159, 29, 85, 45,
+        191, 57, 90, 233, 37, 209, 81, 253, 1, 44, 52, 57, 1, 88, 112, 120, 155, 0, 0, 0, 0, 73, 69, 78,
+        68, 174, 66, 96, 130,
+    ];
+    const FX_RGB_IL_RGBA: [u8; 252] = [
+        255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
+        255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 213, 0, 43, 255, 213, 0, 43, 255, 214, 0, 41, 255,
+        217, 0, 38, 255, 214, 0, 41, 255, 208, 0, 47, 255, 207, 0, 48, 255, 211, 0, 44, 255, 213, 0, 43, 255,
+        170, 0, 85, 255, 173, 0, 82, 255, 184, 0, 71, 255, 185, 0, 70, 255, 167, 0, 88, 255, 147, 0, 108, 255,
+        143, 0, 112, 255, 154, 0, 101, 255, 167, 0, 88, 255, 128, 0, 128, 255, 138, 0, 117, 255, 157, 0, 98, 255,
+        158, 0, 97, 255, 126, 0, 129, 255, 93, 0, 162, 255, 83, 0, 172, 255, 95, 0, 160, 255, 117, 0, 138, 255,
+        85, 0, 170, 255, 96, 0, 159, 255, 117, 0, 138, 255, 130, 0, 125, 255, 119, 0, 136, 255, 86, 0, 169, 255,
+        55, 0, 200, 255, 56, 0, 199, 255, 74, 0, 181, 255, 43, 0, 213, 255, 46, 0, 209, 255, 59, 0, 196, 255,
+        70, 0, 185, 255, 66, 0, 189, 255, 46, 0, 209, 255, 27, 0, 228, 255, 28, 0, 227, 255, 39, 0, 216, 255,
+        0, 0, 255, 255, 0, 0, 255, 255, 2, 0, 253, 255, 5, 0, 250, 255, 4, 0, 251, 255, 0, 0, 255, 255,
+        0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255,
+    ];
+
+    const FX_G2_IL: [u8; 87] = [
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 9, 0, 0, 0, 7,
+        2, 0, 0, 0, 1, 194, 71, 16, 139, 0, 0, 0, 30, 73, 68, 65, 84, 8, 215, 99, 8, 96, 112, 96,
+        96, 96, 8, 0, 98, 1, 6, 16, 8, 5, 179, 129, 116, 168, 3, 3, 20, 0, 0, 50, 204, 2, 128, 98,
+        150, 141, 20, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+    const FX_G2_IL_RGBA: [u8; 252] = [
+        85, 85, 85, 255, 85, 85, 85, 255, 85, 85, 85, 255, 85, 85, 85, 255, 85, 85, 85, 255, 85, 85, 85, 255,
+        85, 85, 85, 255, 85, 85, 85, 255, 85, 85, 85, 255, 85, 85, 85, 255, 85, 85, 85, 255, 85, 85, 85, 255,
+        85, 85, 85, 255, 85, 85, 85, 255, 85, 85, 85, 255, 85, 85, 85, 255, 85, 85, 85, 255, 85, 85, 85, 255,
+        0, 0, 0, 255, 85, 85, 85, 255, 85, 85, 85, 255, 85, 85, 85, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+        0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+        0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+        0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+        0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+        0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+        0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+        0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+    ];
+
+    #[test]
+    fn interlaced_images_decode_as_imagemagick_decodes_them() {
+        for (png, want) in [(&FX_RGB_IL[..], &FX_RGB_IL_RGBA[..]), (&FX_G2_IL[..], &FX_G2_IL_RGBA[..])] {
+            assert_eq!(png[28], 1, "the fixture is interlaced");
+            let img = decode_png(png).unwrap();
+            assert_eq!((img.width, img.height), (9, 7));
+            assert_eq!(img.rgba, want);
+        }
+    }
+
+    /// The colour type and bit depth an encoded PNG chose.
+    fn header(png: &[u8]) -> (u8, u8) {
+        (png[25], png[24])
+    }
+
+    #[test]
+    fn each_image_takes_the_smallest_exact_layout() {
+        let (w, h) = (16u32, 4u32);
+        let px = |f: &dyn Fn(u32) -> [u8; 4]| (0..w * h).flat_map(f).collect::<Vec<u8>>();
+        let cases: Vec<(&str, Vec<u8>, (u8, u8))> = vec![
+            ("black and white", px(&|i| if i % 3 == 0 { [255; 4] } else { [0, 0, 0, 255] }), (0, 1)),
+            ("four greys", px(&|i| { let g = [0, 85, 170, 255][(i % 4) as usize]; [g, g, g, 255] }), (0, 2)),
+            ("sixteen greys", px(&|i| { let g = (i % 16) as u8 * 17; [g, g, g, 255] }), (0, 4)),
+            ("grey", px(&|i| { let g = (i * 7) as u8 + 1; [g, g, g, 255] }), (0, 8)),
+        ];
+        for (name, rgba, want) in cases {
+            let png = encode_png(w, h, &rgba);
+            assert_eq!(header(&png), want, "{name}");
+            assert_eq!(decode_png(&png).unwrap().rgba, rgba, "{name} round trip");
+        }
+        // two colours, one clear, scattered over enough pixels that the
+        // palette's own chunks pay for themselves: 1-bit indices and tRNS
+        let (pw, ph) = (64u32, 32u32);
+        let two: Vec<u8> = (0..pw * ph).flat_map(|i| if (i * i / 3 + i / 5) % 7 < 3 { [1, 2, 3, 0] } else { [200, 0, 0, 255] }).collect();
+        let png = encode_png(pw, ph, &two);
+        assert_eq!(header(&png), (3, 1));
+        assert!(png.windows(4).any(|c| c == b"tRNS"));
+        assert_eq!(decode_png(&png).unwrap().rgba, two);
+        // 64 colours: a palette or grey and alpha, whichever deflates smaller
+        let few = px(&|i| [9, 9, 9, (i * 3) as u8]);
+        let png = encode_png(w, h, &few);
+        assert!(matches!(header(&png), (3, 8) | (4, 8)), "{:?}", header(&png));
+        assert_eq!(decode_png(&png).unwrap().rgba, few);
+        // more than 256 colours: RGB when opaque, RGBA when not, grey and alpha when grey
+        let (w, h) = (32u32, 16u32);
+        let many: Vec<u8> = (0..w * h).flat_map(|i| [(i % 251) as u8, (i / 7) as u8, (i % 13) as u8, 255]).collect();
+        let png = encode_png(w, h, &many);
+        assert_eq!(header(&png), (2, 8));
+        assert_eq!(decode_png(&png).unwrap().rgba, many);
+        let clear: Vec<u8> = many.chunks(4).enumerate().flat_map(|(k, p)| [p[0], p[1], p[2], (k % 200) as u8]).collect();
+        let png = encode_png(w, h, &clear);
+        assert_eq!(header(&png), (6, 8));
+        assert_eq!(decode_png(&png).unwrap().rgba, clear);
+        let grey_alpha: Vec<u8> = (0..w * h).flat_map(|i| { let g = (i % 256) as u8; [g, g, g, (i / 2 % 256) as u8] }).collect();
+        let png = encode_png(w, h, &grey_alpha);
+        assert_eq!(header(&png), (4, 8));
+        assert_eq!(decode_png(&png).unwrap().rgba, grey_alpha);
+    }
+
+    #[test]
+    fn sixteen_bits_survive_and_narrow_when_they_can() {
+        let rgba16: Vec<u16> = (0..24u32).flat_map(|i| [(i * 2741) as u16, 1000, (i * 97) as u16, if i % 2 == 0 { 65535 } else { 1234 }]).collect();
+        let png = encode_png16(6, 4, &rgba16);
+        assert_eq!(header(&png), (6, 16));
+        assert_eq!(decode_png16(&png).unwrap().rgba, rgba16);
+        assert_eq!(decode_png(&png).unwrap().rgba, rgba16.iter().map(|v| (v >> 8) as u8).collect::<Vec<_>>());
+        // 8-bit values widened go out as 8-bit
+        let wide: Vec<u16> = [10u16, 20, 30, 255].iter().map(|v| v * 257).collect();
+        assert_eq!(header(&encode_png16(1, 1, &wide)).1, 8);
+    }
+
+    #[test]
+    fn a_grey_or_rgb_colour_key_is_transparent() {
+        // 2x1 RGB, 8-bit, tRNS naming (1, 2, 3)
+        let mut png = Vec::new();
+        png.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+        chunk(&mut png, b"IHDR", &[0, 0, 0, 2, 0, 0, 0, 1, 8, 2, 0, 0, 0]);
+        chunk(&mut png, b"tRNS", &[0, 1, 0, 2, 0, 3]);
+        chunk(&mut png, b"IDAT", &zlib(&[0, 1, 2, 3, 4, 5, 6]));
+        chunk(&mut png, b"IEND", &[]);
+        assert_eq!(decode_png(&png).unwrap().rgba, vec![1, 2, 3, 0, 4, 5, 6, 255]);
+    }
 
     #[test]
     fn a_png_says_its_dpi() {

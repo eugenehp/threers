@@ -24,18 +24,23 @@
 //! [`write_dxf`]) are here too; the DXF reader is
 //! [`crate::loaders::parse_dxf`].
 //!
-//! 2D drawings go out as SVG too ([`SvgDocument`], [`write_svg`]), and
-//! polylines as G-code toolpaths ([`write_gcode`]); the G-code reader is
+//! 2D drawings go out as SVG too ([`SvgDocument`], [`write_svg`]), the
+//! same drawing as PDF ([`write_pdf`], [`write_pdf_pages`]) and as pixels
+//! ([`rasterize_svg`], [`svg_to_png`]), and polylines as G-code toolpaths ([`write_gcode`]); the G-code reader is
 //! [`crate::loaders::GcodeLoader`].
 //!
 //! glTF lives in [`crate::loaders::gltf_write`].
 
+mod drawing;
 mod dxf;
 mod fbx;
 mod gcode;
 mod number;
 mod obj;
+mod pdf;
+mod pdf_fonts;
 mod ply;
+mod raster;
 mod stl;
 mod svg;
 mod three_dm;
@@ -49,7 +54,9 @@ pub use fbx::{write_fbx_binary, FbxOptions};
 pub use gcode::{write_gcode, GcodeOptions, GcodePath, GcodeUnits};
 pub use number::js_number;
 pub use obj::{write_obj, ObjOptions};
+pub use pdf::{write_pdf, write_pdf_pages, write_pdf_pages_with, PdfOptions};
 pub use ply::{write_ply, PlyOptions};
+pub use raster::{rasterize_svg, svg_to_png, RasterOptions};
 pub use stl::{write_stl_ascii, write_stl_binary};
 pub use svg::{
     write_svg, xml_escape, PathCommand, SvgDocument, SvgFillRule, SvgLineCap, SvgLineJoin, SvgNode, SvgPaint, SvgPath,

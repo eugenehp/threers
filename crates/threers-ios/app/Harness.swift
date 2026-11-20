@@ -288,6 +288,8 @@ func threers_ios_immersive(_ open: Bool)
 func threers_ios_backdrop(_ open: Bool)
 @_silgen_name("threers_ios_backdrop_open")
 func threers_ios_backdrop_open() -> Bool
+@_silgen_name("threers_view_requests")
+func threers_view_requests(_ view: UnsafeMutableRawPointer?)
 @_silgen_name("threers_view_controls")
 func threers_view_controls(_ view: UnsafeMutableRawPointer?, _ len: UnsafeMutablePointer<Int>) -> UnsafePointer<UInt8>?
 @_silgen_name("threers_ios_press")
@@ -336,8 +338,20 @@ final class LayerView: UIView {
 final class Host: UIView {
     private let surface = LayerView()
     private var view: UnsafeMutableRawPointer?
-    private var link: CADisplayLink?
     private var finger: UITouch?
+    /// Frames are drawn on a thread of their own (`renderFrame`), so the
+    /// main thread — UIKit's, the keyboard's — never waits on one; every
+    /// call into the Rust view, from either thread, holds `lock`.
+    private let lock = NSLock()
+    private var rendering = false
+    /// the render thread's generation: one let go stops at its next frame
+    private var renderGen = 0
+    /// what the render thread left for the main one: the UI's controls
+    /// (as JSON), when they changed
+    private var pendingControls: Data?
+    /// the main thread's own light tick: the controls and the app's
+    /// requests (sheets, URLs, the room), which are UIKit's to act on
+    private var poll: CADisplayLink?
     /// What the app asked of the shell: 3 enter the room, 4 leave it.
     var onRequest: (UInt32) -> Void = { _ in }
     /// The UI's controls, for assistive technology (the layer is one
@@ -375,22 +389,27 @@ final class Host: UIView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         guard window != nil else {
-            link?.invalidate()
-            link = nil
+            poll?.invalidate()
+            poll = nil
+            locked { rendering = false }
             return
         }
         surface.layer.contentsScale = scale
-        (surface.layer as! CAMetalLayer).drawableSize = CGSize(width: Double(pixels.0), height: Double(pixels.1))
         threers_ios_set_dark(traitCollection.userInterfaceStyle == .dark)
-        if view == nil {
-            view = threers_view_create(Unmanaged.passUnretained(surface.layer).toOpaque(), pixels.0, pixels.1, 0)
-            sendInsets()
+        locked {
+            (surface.layer as! CAMetalLayer).drawableSize = CGSize(width: Double(pixels.0), height: Double(pixels.1))
+            if view == nil {
+                view = threers_view_create(Unmanaged.passUnretained(surface.layer).toOpaque(), pixels.0, pixels.1, 0)
+            }
         }
-        if link == nil {
+        sendInsets()
+        if poll == nil {
             let l = CADisplayLink(target: self, selector: #selector(tick))
+            l.preferredFrameRateRange = CAFrameRateRange(minimum: 10, maximum: 30, preferred: 30)
             l.add(to: .main, forMode: .common)
-            link = l
+            poll = l
         }
+        startRendering()
         // a hardware keyboard's keys come here (a text field's, to it)
         becomeFirstResponder()
     }
@@ -420,7 +439,7 @@ final class Host: UIView {
                 guard let c = (key.characters.isEmpty ? s : key.characters).unicodeScalars.first else { continue }
                 code = c.value
             }
-            threers_view_set(view, 6, Float(code), key.modifierFlags.contains(.shift) ? 1 : 0, 0)
+            locked { threers_view_set(view, 6, Float(code), key.modifierFlags.contains(.shift) ? 1 : 0, 0) }
             took = true
         }
         if !took { super.pressesBegan(presses, with: event) }
@@ -428,8 +447,10 @@ final class Host: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        (surface.layer as! CAMetalLayer).drawableSize = CGSize(width: Double(pixels.0), height: Double(pixels.1))
-        threers_view_set(view, 0, Float(pixels.0), Float(pixels.1), 0)
+        locked {
+            (surface.layer as! CAMetalLayer).drawableSize = CGSize(width: Double(pixels.0), height: Double(pixels.1))
+            threers_view_set(view, 0, Float(pixels.0), Float(pixels.1), 0)
+        }
         sendInsets()
     }
 
@@ -447,16 +468,114 @@ final class Host: UIView {
     /// The UI's points and the safe area, in pixels.
     private func sendInsets() {
         let i = safeAreaInsets
-        threers_view_set(view, 4, Float(scale), 0, 0)
-        threers_view_set(view, 5, Float(i.top * scale), Float(i.bottom * scale), Float(max(i.left, i.right) * scale))
+        let k = Float(scale)
+        locked {
+            threers_view_set(view, 4, k, 0, 0)
+            threers_view_set(view, 5, Float(i.top) * k, Float(i.bottom) * k, Float(max(i.left, i.right)) * k)
+        }
     }
 
-    @objc private func tick() {
+    /// A native text field over each of the UI's text controls (a search
+    /// box, a text area), by its key: a tap on it brings up the on-screen
+    /// keyboard, and what it holds goes to the control. Clear itself — the
+    /// UI draws the text, the caret and the focus.
+    private var fields: [String: ControlField] = [:]
+
+    /// The render thread's frame rate: up to 60.
+    static let frames = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+
+    private func placeFields(_ list: [UiControl]) {
+        let edits = list.filter { $0.edit }
+        for c in edits {
+            let f = fields[c.key] ?? {
+                let f = ControlField(key: c.key, multiline: c.role == "textbox")
+                f.addTarget(self, action: #selector(typed(_:)), for: .editingChanged)
+                f.delegate = self
+                addSubview(f)
+                fields[c.key] = f
+                return f
+            }()
+            // short of a button inside it (a search box's clear ✕): that
+            // stays the UI's to press
+            var right = c.x + c.w
+            for o in list where !o.edit && o.y >= c.y && o.y + o.h <= c.y + c.h && o.x > c.x && o.x < right {
+                right = o.x
+            }
+            f.frame = CGRect(x: c.x, y: c.y, width: max(1, right - c.x), height: c.h)
+            f.accessibilityLabel = c.label
+            // a text the UI changed itself (its clear button): the field follows
+            if !f.isFirstResponder { f.text = c.value ?? "" }
+        }
+        let keep = Set(edits.map { $0.key })
+        for (k, f) in fields where !keep.contains(k) {
+            f.removeFromSuperview()
+            fields[k] = nil
+        }
+    }
+
+    @objc private func typed(_ f: ControlField) {
+        guard let k = UInt64(f.key) else { return }
+        var bytes = Array((f.text ?? "").utf8)
+        threers_ios_text(k, &bytes, bytes.count)
+    }
+
+    /// `f` holding the lock every call into the Rust view holds.
+    private func locked<T>(_ f: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return f()
+    }
+
+    /// The render thread, its display link on its own run loop, once.
+    private func startRendering() {
+        let gen = locked { () -> Int? in
+            if rendering { return nil }
+            rendering = true
+            renderGen += 1
+            return renderGen
+        }
+        guard let gen else { return }
+        let target = RenderTarget(host: self, gen: gen)
+        let thread = Thread {
+            let l = CADisplayLink(target: target, selector: #selector(RenderTarget.tick(_:)))
+            l.preferredFrameRateRange = Host.frames
+            l.add(to: .current, forMode: .common)
+            RunLoop.current.run()
+        }
+        thread.name = "threers render"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+    }
+
+    /// One frame, on the render thread; the link let go once the view is.
+    fileprivate func renderFrame(_ l: CADisplayLink, _ gen: Int) {
+        lock.lock()
+        guard rendering, gen == renderGen, view != nil else {
+            lock.unlock()
+            l.invalidate()
+            CFRunLoopStop(CFRunLoopGetCurrent())
+            return
+        }
         _ = threers_view_frame(view)
         var len = 0
-        if let p = threers_view_controls(view, &len),
-           let list = try? JSONDecoder().decode([UiControl].self, from: Data(bytes: p, count: len)) {
+        if let p = threers_view_controls(view, &len) {
+            pendingControls = Data(bytes: p, count: len)
+        }
+        lock.unlock()
+    }
+
+    /// The main thread's tick: the UI's controls as native elements and
+    /// fields, and the app's requests.
+    @objc private func tick() {
+        let json = locked { () -> Data? in
+            // a change to AR or back: UIKit's, so here on the main thread
+            threers_view_requests(view)
+            defer { pendingControls = nil }
+            return pendingControls
+        }
+        if let json, let list = try? JSONDecoder().decode([UiControl].self, from: json) {
             controlElements = list.map { UiControlElement(container: self, control: $0) }
+            placeFields(list)
             UIAccessibility.post(notification: .layoutChanged, argument: nil)
         }
         let r = threers_ios_take_request()
@@ -466,7 +585,8 @@ final class Host: UIView {
 
     private func send(_ touch: UITouch, _ phase: Float) {
         let p = touch.location(in: self)
-        threers_view_set(view, 1, phase, Float(p.x * scale), Float(p.y * scale))
+        let k = scale
+        locked { threers_view_set(view, 1, phase, Float(p.x * k), Float(p.y * k)) }
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -492,19 +612,26 @@ final class Host: UIView {
     }
 
     @objc private func pinched(_ g: UIPinchGestureRecognizer) {
-        threers_view_set(view, 2, Float(g.scale), 0, 0)
+        let z = Float(g.scale)
+        locked { threers_view_set(view, 2, z, 0, 0) }
         g.scale = 1
     }
 
     @objc private func panned(_ g: UIPanGestureRecognizer) {
         let d = g.translation(in: self)
-        threers_view_set(view, 3, Float(d.x * scale), Float(d.y * scale), 0)
+        let k = scale
+        locked { threers_view_set(view, 3, Float(d.x * k), Float(d.y * k), 0) }
         g.setTranslation(.zero, in: self)
     }
 
     deinit {
-        link?.invalidate()
-        threers_view_destroy(view)
+        poll?.invalidate()
+        // the render thread stops at its next frame (no view)
+        locked {
+            rendering = false
+            threers_view_destroy(view)
+            view = nil
+        }
     }
 }
 
@@ -1147,3 +1274,64 @@ struct ScreenOverlay: UIViewRepresentable {
     }
 }
 #endif
+
+
+/// A native text field over one of the UI's text controls (`Host`'s).
+final class ControlField: UITextField {
+    let key: String
+    /// a text area's: Return is a line break, not the end
+    let multiline: Bool
+
+    init(key: String, multiline: Bool) {
+        self.key = key
+        self.multiline = multiline
+        super.init(frame: .zero)
+        textColor = .clear
+        tintColor = .clear
+        backgroundColor = .clear
+        borderStyle = .none
+        autocorrectionType = .no
+        autocapitalizationType = .none
+        spellCheckingType = .no
+        returnKeyType = multiline ? .default : .done
+    }
+
+    required init?(coder: NSCoder) { fatalError("made in code") }
+}
+
+extension Host: UITextFieldDelegate {
+    func textFieldShouldReturn(_ f: UITextField) -> Bool {
+        if let c = f as? ControlField, c.multiline {
+            c.text = (c.text ?? "") + "\n"
+            typed(c)
+            return false
+        }
+        f.resignFirstResponder()
+        return true
+    }
+
+    /// The keyboard put away: the view takes a hardware keyboard's keys again.
+    func textFieldDidEndEditing(_ f: UITextField) {
+        becomeFirstResponder()
+    }
+}
+
+
+/// The render thread's display link's target: the host, weakly (a display
+/// link holds its target), its frame drawn there.
+final class RenderTarget: NSObject {
+    weak var host: Host?
+    let gen: Int
+    init(host: Host, gen: Int) {
+        self.host = host
+        self.gen = gen
+    }
+    @objc func tick(_ l: CADisplayLink) {
+        guard let host else {
+            l.invalidate()
+            CFRunLoopStop(CFRunLoopGetCurrent())
+            return
+        }
+        host.renderFrame(l, gen)
+    }
+}

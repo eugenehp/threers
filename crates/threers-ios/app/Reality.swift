@@ -521,6 +521,9 @@ struct UiControl: Decodable, Identifiable {
     let label: String
     let x, y, w, h: CGFloat
     let on, toggle, disabled: Bool
+    /// Typed into (a search box, a text area): a native text field stands
+    /// over it, for the on-screen keyboard.
+    let edit: Bool
     let value: String?
     var id: String { key }
 }

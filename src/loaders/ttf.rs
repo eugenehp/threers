@@ -183,6 +183,24 @@ impl TtfFont {
             .collect()
     }
 
+    /// The glyph drawn for `c`: its own, else the font's `?`, as
+    /// [`create_paths`](Self::create_paths) picks.
+    pub(crate) fn glyph_id(&self, c: char) -> Option<u16> {
+        self.cmap.get(&(c as u32)).or_else(|| self.cmap.get(&('?' as u32))).copied()
+    }
+
+    /// Glyph `gid`'s advance, in font units.
+    pub(crate) fn advance(&self, gid: u16) -> u16 {
+        self.glyphs.get(gid as usize).map_or(0, |g| g.advance_width)
+    }
+
+    /// Glyph `gid`'s contours in font units, y up: for each piece, whether it
+    /// starts a contour, its start, its quadratic control if it is curved, and
+    /// its end.
+    pub(crate) fn outline_segments(&self, gid: u16) -> Vec<(bool, Vector2, Option<Vector2>, Vector2)> {
+        self.glyphs.get(gid as usize).map_or_else(Vec::new, |g| glyph_segments(&g.shape.outline))
+    }
+
     /// Parse a TTF byte slice into a usable font — a variable font at its
     /// default instance, which is whatever its designer put in `glyf` (for
     /// SF Compact, Black).

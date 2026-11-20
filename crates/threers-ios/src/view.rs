@@ -22,10 +22,13 @@
 //! it scrolls the UI, and neither turns the camera nor points into the
 //! scene.
 //!
-//! Everything here runs on the thread that calls it — the main thread, from
-//! a display link, is right (UIKit is touched when the mode changes):
-//! [`App::update`] is the app's per-frame work, and long work (downloads)
-//! belongs on threads of its own.
+//! A frame ([`View::frame`]) may run on a thread of its own (the iOS shell
+//! draws on a render thread, so the main one is free for UIKit and the
+//! keyboard); the shell keeps every call into the view under one lock. A
+//! change of mode touches UIKit (an AR session's camera view), so it is
+//! [`View::apply_requests`]'s, on the main thread. [`App::update`] is the
+//! app's per-frame work, and long work (downloads) belongs on threads of
+//! its own.
 
 use std::ffi::c_void;
 use std::time::Instant;
@@ -166,6 +169,10 @@ pub struct View<A: App> {
     native: Vec<Control>,
     native_sent: Option<u64>,
     native_json: String,
+    /// The text control last typed into through the shell's native field,
+    /// still focused: the next text goes straight to it (no click to focus
+    /// it again). A touch on the UI forgets it.
+    typing: Option<u64>,
 }
 
 impl<A: App> View<A> {
@@ -250,6 +257,7 @@ impl<A: App> View<A> {
             native: vec![],
             native_sent: None,
             native_json: String::new(),
+            typing: None,
         };
         crate::set_current_mode(Mode::Window);
         if mode == Mode::Ar && !view.set_mode(Mode::Ar) {
@@ -415,6 +423,8 @@ impl<A: App> View<A> {
 
     /// The finger to the UI, in its points. Whether the UI took it.
     fn touch_ui(&mut self, phase: TouchPhase, at: (f32, f32)) -> bool {
+        // the finger may move the focus: the next text clicks its control again
+        self.typing = None;
         let (x, y) = (at.0 / self.scale, at.1 / self.scale);
         let time = self.time();
         self.app.ui_event(
@@ -570,12 +580,17 @@ impl<A: App> View<A> {
 
     /// Update the app and draw one frame. `false` when nothing was drawn
     /// (no drawable, or no AR camera yet).
-    pub fn frame(&mut self) -> bool {
+    /// The app's requests for the window or AR: on the main thread (an AR
+    /// session puts its camera view in the window's).
+    pub fn apply_requests(&mut self) {
         match crate::take_view_request() {
             Some(Request::Window) => drop(self.set_mode(Mode::Window)),
             Some(Request::Ar) => drop(self.set_mode(Mode::Ar)),
             _ => {}
         }
+    }
+
+    pub fn frame(&mut self) -> bool {
         #[cfg(all(target_os = "ios", target_arch = "aarch64"))]
         if let Some(session) = &self.session {
             let lens = self.app.lens();
@@ -666,6 +681,30 @@ impl<A: App> View<A> {
                 .ui_event(Place::Screen, Event::PointerDown { x, y, button }, time);
             self.app
                 .ui_event(Place::Screen, Event::PointerUp { x, y, button }, time);
+        }
+        // typed into a native text field over a text control (the shell's,
+        // for the on-screen keyboard): the control focused (a click on it),
+        // then given the text — as a volume's surfaces do
+        // Keystrokes come faster than frames: only each control's last text
+        // counts, and a control still focused from the last is not clicked
+        // again (a click rebuilt the UI on every key).
+        let mut typed: Vec<(u64, String)> = vec![];
+        for (k, t) in crate::take_texts_for(|k| native::find(&self.native, k).is_some()) {
+            match typed.iter_mut().find(|e| e.0 == k) {
+                Some(e) => e.1 = t,
+                None => typed.push((k, t)),
+            }
+        }
+        for (k, text) in typed {
+            let Some((x, y)) = native::find(&self.native, k).map(|c| c.centre()) else { continue };
+            if self.typing != Some(k) {
+                let button = PointerButton::Primary;
+                self.app
+                    .ui_event(Place::Screen, Event::PointerDown { x, y, button }, time);
+                self.app
+                    .ui_event(Place::Screen, Event::PointerUp { x, y, button }, time);
+            }
+            self.typing = self.app.ui_text(Place::Screen, text).then_some(k);
         }
         let (shown, _) = self.ui.update(&mut self.app, &surface);
         self.native = match (shown, self.app.ui(&surface)) {
@@ -902,6 +941,17 @@ pub unsafe fn destroy<A: App>(view: *mut c_void) {
         drop(unsafe { Box::from_raw(view.cast::<View<A>>()) });
         // no view, no AR: the mode it left must not outlive it
         crate::set_current_mode(Mode::Window);
+    }
+}
+
+/// The view's mode requests applied ([`View::apply_requests`]): from the
+/// main thread.
+///
+/// # Safety
+/// `v` null or from `create`.
+pub unsafe fn requests<A: App>(v: *mut c_void) {
+    if let Some(v) = unsafe { view::<A>(v) } {
+        v.apply_requests();
     }
 }
 

@@ -111,6 +111,7 @@ features = [
     "raytrace",
     "assembly-check",
     "step",
+    "iges",
     "parallel",
     "async",
     "fluid",
@@ -299,6 +300,8 @@ brep-csg = ["brep", "openscad"]
 brep-kernel = ["brep-csg"]
 # STEP AP203/214 import + export (implies brep-kernel).
 step = ["brep-kernel"]
+# IGES 5.3 file syntax: read and write sections, entities, parameters.
+iges = []
 # Assembly motion checks (body correspondence, axis recovery, swept volume).
 assembly-check = []
 # WebGL2 in the browser, through wgpu's GL backend.
@@ -334,6 +337,7 @@ full = [
     "assembly-check",
     "async",
     "step",
+    "iges",
     "brep-kernel",
 ]
 # Browser / wasm kitchen sink — no native-only flags (video, metal, async, …).

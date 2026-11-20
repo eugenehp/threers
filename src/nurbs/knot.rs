@@ -195,6 +195,42 @@ pub fn elevate_degree(curve: &NurbsCurve, t: usize) -> NurbsCurve {
     if t == 0 {
         return curve.clone();
     }
+    let raw = elevated_segments(curve, t);
+    // Tolerance scaled to the control net, so a millimetre curve and a metre
+    // curve compact alike.
+    let scale = raw
+        .homogeneous()
+        .iter()
+        .flat_map(|c| c[..3].iter().map(|x| x.abs()))
+        .fold(1.0f64, f64::max);
+    compact(&raw, scale * 1e-12)
+}
+
+/// Elevate the degree by `t`, every knot kept: each multiplicity comes out
+/// `t` higher, as OpenCASCADE's `BSplCLib::IncreaseDegree` leaves them,
+/// even where a knot carries no shape and [`elevate_degree`] would drop it.
+///
+/// The Bézier pieces are elevated as there, then each interior knot is
+/// removed exactly the times its decomposition inserted it; those removals
+/// are exact, so they are not checked against a tolerance.
+pub fn elevate_degree_keeping_knots(curve: &NurbsCurve, t: usize) -> NurbsCurve {
+    if t == 0 {
+        return curve.clone();
+    }
+    let p = curve.degree();
+    let (u0, u1) = curve.domain();
+    let mut out = elevated_segments(curve, t);
+    for (value, mult) in distinct_knots(curve.knots()) {
+        if value > u0 && value < u1 && mult < p {
+            out = remove_knot(&out, value, p - mult, f64::INFINITY).0;
+        }
+    }
+    out
+}
+
+/// [`elevate_degree`]'s Bézier pieces, each elevated by `t` and joined back
+/// with every interior knot at the full multiplicity `p + t`.
+fn elevated_segments(curve: &NurbsCurve, t: usize) -> NurbsCurve {
     let p = curve.degree();
     let pn = p + t;
 
@@ -243,16 +279,7 @@ pub fn elevate_degree(curve: &NurbsCurve, t: usize) -> NurbsCurve {
     knots.extend(std::iter::repeat_n(*breaks.last().unwrap(), pn + 1));
 
     debug_assert_eq!(knots.len(), cw.len() + pn + 1);
-    let raw = NurbsCurve::from_homogeneous_unchecked(pn, knots, cw);
-
-    // Tolerance scaled to the control net, so a millimetre curve and a metre
-    // curve compact alike.
-    let scale = raw
-        .homogeneous()
-        .iter()
-        .flat_map(|c| c[..3].iter().map(|x| x.abs()))
-        .fold(1.0f64, f64::max);
-    compact(&raw, scale * 1e-12)
+    NurbsCurve::from_homogeneous_unchecked(pn, knots, cw)
 }
 
 /// Affinely reparameterize onto `[0, 1]`. The curve's shape is untouched; only
@@ -792,6 +819,39 @@ mod tests {
         );
         let (_, removed) = remove_knot(&bent, 0.5, 1, 1e-9);
         assert_eq!(removed, 0, "a load-bearing knot must survive");
+    }
+
+    #[test]
+    fn degree_elevation_keeping_knots_raises_every_multiplicity() {
+        // A cubic with one interior knot that carries no shape (a single
+        // Bézier with a knot inserted): compacting drops it, keeping it
+        // leaves it at 1 + 2.
+        let bezier = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            &[
+                [0.0, 0.0, 0.0],
+                [1.0, 2.0, 0.0],
+                [3.0, 2.0, 1.0],
+                [4.0, 0.0, 0.0],
+            ],
+            None,
+        )
+        .unwrap();
+        let split = insert_knot(&bezier, 0.4, 1);
+        let kept = elevate_degree_keeping_knots(&split, 2);
+        assert_eq!(kept.degree(), 5);
+        assert_eq!(multiplicity(kept.knots(), 0.4), 3);
+        assert_eq!(kept.n_control(), 6 + 3);
+        for k in 0..=20 {
+            let u = k as f64 / 20.0;
+            let (a, b) = (bezier.point(u), kept.point(u));
+            assert!(
+                (0..3).all(|c| (a[c] - b[c]).abs() < 1e-12),
+                "{u}: {a:?} {b:?}"
+            );
+        }
+        assert_eq!(multiplicity(elevate_degree(&split, 2).knots(), 0.4), 0);
     }
 
     #[test]

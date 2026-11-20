@@ -816,6 +816,15 @@ macro_rules! app {
             unsafe { $crate::view::controls::<$app>(view, len) }
         }
 
+        /// The view's mode requests (the window, AR): on the main thread.
+        ///
+        /// # Safety
+        /// `view` null or from `threers_view_create`.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn threers_view_requests(view: *mut ::core::ffi::c_void) {
+            unsafe { $crate::view::requests::<$app>(view) }
+        }
+
         #[unsafe(no_mangle)]
         pub extern "C" fn threers_vol_create() -> *mut ::core::ffi::c_void {
             $crate::volume::create::<$app>()
