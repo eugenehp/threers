@@ -24,6 +24,9 @@ pub enum FieldKey {
     Cancel,
     /// Tab, or Shift+Tab (`backward`).
     Tab { backward: bool },
+    /// The selection was copied to the clipboard
+    /// ([`text_shortcuts::Clipboard`](crate::text_shortcuts::Clipboard)).
+    Copied,
     /// A key the field does not use (a shortcut, say).
     Ignored,
 }
@@ -40,6 +43,8 @@ pub struct TextField {
     pub marked: Option<(usize, usize)>,
     /// What a press selected, while the pointer is down.
     pub(crate) pointer: Option<(usize, usize, crate::text_hit::Granularity)>,
+    /// The field's own undo and redo (⌘Z / Ctrl+Z inside it).
+    pub history: crate::text_shortcuts::EditHistory,
 }
 
 crate::ime::composition!(TextField);
@@ -56,6 +61,7 @@ impl TextField {
             caret: n,
             marked: None,
             pointer: None,
+            history: Default::default(),
         }
     }
 
@@ -105,10 +111,41 @@ impl TextField {
         }
     }
 
+    /// Pastes `text` (what a host read from the clipboard for a
+    /// [`Request::Paste`](crate::text_touch::Request::Paste)) as one undo step.
+    pub fn paste(&mut self, text: &str) {
+        crate::text_shortcuts::run_insert(self, text);
+    }
+
+    /// Runs a shortcut's command (an edit menu's Copy, say) as its key would.
+    pub fn command(
+        &mut self,
+        cmd: crate::text_shortcuts::TextCommand,
+        accept: impl Fn(char) -> bool,
+    ) -> FieldKey {
+        crate::text_shortcuts::run(self, cmd, &accept).field_key()
+    }
+
     /// A key (DOM `KeyboardEvent.key`) pressed in the field; characters
     /// `accept` refuses are dropped, as an `input` handler filtering them
-    /// would.
+    /// would. The platform's text shortcuts work (see
+    /// [`text_shortcuts`](crate::text_shortcuts)): select all, copy, cut,
+    /// paste, undo, redo, and moving and deleting by word and line. Keys it
+    /// has no use for, formatting among them, are [`FieldKey::Ignored`], for
+    /// the app.
     pub fn key(&mut self, key: &str, m: KeyModifiers, accept: impl Fn(char) -> bool) -> FieldKey {
+        if let Some(cmd) = crate::text_shortcuts::text_command(key, m) {
+            return self.command(cmd, accept);
+        }
+        let before = (self.text.clone(), self.anchor, self.caret);
+        let out = self.plain_key(key, m, accept);
+        if out == FieldKey::Edited {
+            crate::text_shortcuts::record_key(&mut self.history, before, key);
+        }
+        out
+    }
+
+    fn plain_key(&mut self, key: &str, m: KeyModifiers, accept: impl Fn(char) -> bool) -> FieldKey {
         let command = m.control || m.meta;
         let n = self.len();
         let (a, z) = self.selection();
@@ -140,10 +177,6 @@ impl TextField {
             }
             "End" | "ArrowDown" => {
                 self.move_to(n, m.shift);
-                FieldKey::Moved
-            }
-            "a" if command => {
-                self.select_all();
                 FieldKey::Moved
             }
             "Backspace" | "Delete" => {
@@ -182,6 +215,32 @@ impl TextField {
             chars[a..z].iter().collect(),
             chars[z..].iter().collect(),
         )
+    }
+}
+
+impl crate::text_shortcuts::Editable for TextField {
+    fn text(&self) -> &str {
+        &self.text
+    }
+    fn selection_ends(&self) -> (usize, usize) {
+        (self.anchor, self.caret)
+    }
+    fn set_selection(&mut self, anchor: usize, caret: usize) {
+        self.anchor = anchor;
+        self.caret = caret;
+    }
+    fn replace_all(&mut self, text: String, anchor: usize, caret: usize) {
+        self.text = text;
+        self.set_selection(anchor, caret);
+    }
+    fn insert_text(&mut self, s: &str) {
+        self.insert(s);
+    }
+    fn history(&mut self) -> &mut crate::text_shortcuts::EditHistory {
+        &mut self.history
+    }
+    fn line_bounds(&self, _at: usize) -> (usize, usize) {
+        (0, self.len())
     }
 }
 

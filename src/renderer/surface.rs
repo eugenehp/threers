@@ -108,6 +108,22 @@ impl SurfaceGpu {
     pub fn queue(&self) -> &Arc<wgpu::Queue> {
         &self.gpu.queue
     }
+
+    /// The gate every viewport on this device draws and reconfigures under:
+    /// give it to a [`ViewProducer`](super::ViewProducer) on the same device.
+    pub fn submit_gate(&self) -> super::SubmitGate {
+        super::SubmitGate(self.frames.clone())
+    }
+
+    /// This device and queue with [`submit_gate`](Self::submit_gate), for
+    /// views drawn on other threads ([`ViewProducer::on`](super::ViewProducer::on)).
+    pub fn shared_gpu(&self) -> super::SharedGpu {
+        super::SharedGpu {
+            device: self.gpu.device.clone(),
+            queue: self.gpu.queue.clone(),
+            gate: self.submit_gate(),
+        }
+    }
 }
 
 /// How a [`SurfaceRenderer`] draws.

@@ -736,6 +736,28 @@ impl<S> Input<S> {
         });
     }
 
+    /// Calls `f` for keys the keymap did not take while focus is in `node`,
+    /// before anything inside it hears them — a focused text input included,
+    /// which otherwise hears its own keys (typing, caret keys, its editing
+    /// shortcuts) ahead of the keymap. `f` returns whether it used the key;
+    /// a used key goes no further. For an app that wants keys a text field
+    /// would otherwise take: a search box's arrow keys driving a list, a
+    /// shortcut that must work inside fields too.
+    pub fn on_key_capture(
+        &mut self,
+        node: NodeId,
+        mut f: impl FnMut(&mut S, &mut Ui, &str, KeyModifiers, &mut EventCx) -> bool + 'static,
+    ) {
+        self.on(node, Phase::Capture, move |s, ui, e, cx| {
+            if let Event::Key { key, modifiers } = e
+                && f(s, ui, key, *modifiers, cx)
+            {
+                cx.stop_propagation();
+                cx.prevent_default();
+            }
+        });
+    }
+
     /// Handles actions of type `A` while focus is in `node`. The nearest
     /// handler to the focused node runs, and the action stops there unless
     /// it calls [`EventCx::propagate`].
@@ -1255,6 +1277,7 @@ impl<S> Input<S> {
                 "space" => " ".to_owned(),
                 "backspace" => "Backspace".to_owned(),
                 "delete" => "Delete".to_owned(),
+                "insert" => "Insert".to_owned(),
                 "up" | "down" | "left" | "right" => {
                     let mut d = stroke.key.clone();
                     d[..1].make_ascii_uppercase();
@@ -1519,6 +1542,21 @@ impl<S> Input<S> {
                 let t = self.key_target(ui);
                 out.target = Some(t);
                 let stroke = Keystroke::from_event(key, *modifiers);
+                // A focused text input hears its own keys first — typing,
+                // the caret keys and its editing shortcuts (⌘A, ⌘Z…) — so an
+                // app-wide binding of the same key doesn't take them from it.
+                // What it doesn't use goes on to the keymap.
+                let text_first = self.wants_ime(ui)
+                    && crate::text_shortcuts::text_input_owns(key, *modifiers);
+                if text_first {
+                    let cx = self.deliver(ui, state, t, &event);
+                    let prevented = cx.prevented;
+                    self.apply(ui, state, &cx, &mut out);
+                    if prevented {
+                        out.handled = true;
+                        return out;
+                    }
+                }
                 let contexts: Vec<String> = self
                     .key_contexts(ui)
                     .into_iter()
@@ -1540,9 +1578,13 @@ impl<S> Input<S> {
                     }
                     Match::None => {}
                 }
-                let cx = self.deliver(ui, state, t, &event);
-                let prevented = cx.prevented;
-                self.apply(ui, state, &cx, &mut out);
+                // (Already delivered when the text input heard it first.)
+                let prevented = !text_first && {
+                    let cx = self.deliver(ui, state, t, &event);
+                    let prevented = cx.prevented;
+                    self.apply(ui, state, &cx, &mut out);
+                    prevented
+                };
                 if !prevented {
                     self.key_default(ui, state, t, &stroke, &mut out);
                 }

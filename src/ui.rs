@@ -34,6 +34,19 @@ pub use threers_ui::*;
 // It draws with the headless GPU renderer, which wasm lacks.
 #[cfg(all(feature = "render", not(target_arch = "wasm32")))]
 pub mod model_view;
+#[cfg(feature = "render")]
+pub mod surface_view;
+// When the UI draws: continuously, or only when something changed.
+#[cfg(feature = "render")]
+pub mod redraw;
+// Text inputs' copy and paste through the system clipboard.
+#[cfg(all(
+    feature = "clipboard",
+    any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "freebsd")
+))]
+pub mod system_clipboard;
+// A UI recorded as a drawing: SVG, PDF and PNG with no GPU.
+pub mod vector;
 
 use crate::math::Color;
 use crate::overlay::Overlay;

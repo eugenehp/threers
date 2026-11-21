@@ -163,6 +163,7 @@ pub mod text_cache;
 #[cfg(feature = "text-touch")]
 pub mod text_editing;
 mod text_field;
+pub mod text_shortcuts;
 pub mod text_hit;
 #[cfg(feature = "text-touch")]
 pub mod text_touch;

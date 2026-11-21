@@ -188,6 +188,10 @@ captions = ["dep:threers-captions"]
 # A retained UI: CSS-subset styles, flexbox layout, painting and hit-testing
 # (implies captions, for text).
 ui = ["captions", "dep:threers-ui"]
+# The system clipboard for text inputs' copy, cut and paste (⌘/Ctrl+C, X, V)
+# on macOS, Windows and Linux: `threers::ui::system_clipboard`. Without it they
+# copy and paste between the app's own fields.
+clipboard = ["ui", "dep:arboard"]
 # No WGSL compiler at run time, for an app whose shaders were recorded ahead
 # (threers-ios's `precompiled-shaders`, on the patched wgpu in vendor/):
 # custom shaders are not validated or analysed, as in a WebGPU browser build.
@@ -398,6 +402,11 @@ pollster = { version = "1", optional = true }
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "tvos", target_os = "visionos")))'.dependencies]
 winit = { version = "0.30", optional = true }
 
+# `clipboard`: the desktops' clipboards (arboard has no mobile or browser
+# backend). Text only: no image support, which would bring in an image decoder.
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "freebsd"))'.dependencies]
+arboard = { version = "3", default-features = false, optional = true }
+
 # `xr-visionos`: the compositor's Metal textures and wgpu's command queue.
 [target.'cfg(target_vendor = "apple")'.dependencies]
 objc2 = { version = "0.6", optional = true }
@@ -447,6 +456,22 @@ features = [
 [[example]]
 name = "splats"
 required-features = ["splats"]
+
+[[test]]
+name = "surface_view"
+required-features = ["ui"]
+
+[[test]]
+name = "model_view"
+required-features = ["ui"]
+
+[[test]]
+name = "system_clipboard"
+required-features = ["clipboard"]
+
+[[test]]
+name = "ui_vector"
+required-features = ["ui"]
 
 [[test]]
 name = "splats"
@@ -540,6 +565,31 @@ required-features = ["native-codec"]
 name = "cube"
 path = "examples/cube.rs"
 required-features = ["sketch"]
+
+[[example]]
+name = "threaded_view"
+path = "examples/threaded_view.rs"
+required-features = ["sketch", "ui"]
+
+[[example]]
+name = "multi_view"
+path = "examples/multi_view.rs"
+required-features = ["sketch", "ui"]
+
+[[example]]
+name = "ui_thread"
+path = "examples/ui_thread.rs"
+required-features = ["sketch", "ui"]
+
+[[example]]
+name = "threaded_view_bench"
+path = "examples/threaded_view_bench.rs"
+required-features = ["ui"]
+
+[[example]]
+name = "vector_export"
+path = "examples/vector_export.rs"
+required-features = ["ui"]
 
 [[example]]
 name = "shader_material"

@@ -123,8 +123,14 @@ struct WgpuWindow {
     srgb_format: wgpu::TextureFormat,
     /// What the surface can composite as (for [`WindowRenderer::set_transparent`]).
     alpha_modes: Vec<wgpu::CompositeAlphaMode>,
+    /// What the surface can present with (for [`WindowRenderer::set_present_mode`]).
+    present_modes: Vec<wgpu::PresentMode>,
     device: Arc<wgpu::Device>,
     renderer: Renderer,
+    /// Held exclusively while reconfiguring, so a
+    /// [`ViewProducer`](super::ViewProducer) on another thread is never
+    /// submitting meanwhile.
+    gate: super::SubmitGate,
 }
 
 #[cfg(metal_backend)]
@@ -256,7 +262,7 @@ impl WindowRenderer {
             Backend::Wgpu(w) => {
                 w.config.width = size.0;
                 w.config.height = size.1;
-                w.surface.configure(&w.device, &w.config);
+                w.configure();
                 w.renderer.resize(size.0, size.1);
             }
             #[cfg(metal_backend)]
@@ -287,12 +293,88 @@ impl WindowRenderer {
                 };
                 if mode != w.config.alpha_mode {
                     w.config.alpha_mode = mode;
-                    w.surface.configure(&w.device, &w.config);
+                    w.configure();
                 }
                 true
             }
             #[cfg(metal_backend)]
             Backend::Metal(_) => !on,
+        }
+    }
+
+    /// How frames reach the screen. `Fifo` (the default) waits for vsync.
+    /// `Mailbox` replaces a queued frame with a newer one, so a frame is never
+    /// waited on. `Immediate` presents at once and may tear. Returns whether
+    /// the surface supports `mode`; nothing changes when it doesn't. wgpu only.
+    pub fn set_present_mode(&mut self, mode: wgpu::PresentMode) -> bool {
+        match &mut self.backend {
+            #[cfg(winit_window)]
+            Backend::Wgpu(w) => {
+                if !w.present_modes.contains(&mode) {
+                    return false;
+                }
+                if w.config.present_mode != mode {
+                    w.config.present_mode = mode;
+                    w.configure();
+                }
+                true
+            }
+            #[cfg(metal_backend)]
+            Backend::Metal(_) => mode == wgpu::PresentMode::Fifo,
+        }
+    }
+
+    /// How many frames may be queued ahead of the display: 2 by default. 1
+    /// shows input a frame sooner, but gives the GPU less slack. wgpu only;
+    /// the platform may not honour it exactly.
+    pub fn set_frame_latency(&mut self, frames: u32) {
+        match &mut self.backend {
+            #[cfg(winit_window)]
+            Backend::Wgpu(w) => {
+                let frames = frames.max(1);
+                if w.config.desired_maximum_frame_latency != frames {
+                    w.config.desired_maximum_frame_latency = frames;
+                    w.configure();
+                }
+            }
+            #[cfg(metal_backend)]
+            Backend::Metal(_) => {}
+        }
+    }
+
+    /// The window's device and queue with its [`SubmitGate`](super::SubmitGate),
+    /// for views drawn on other threads
+    /// ([`ViewProducer::on`](super::ViewProducer::on),
+    /// [`RenderThread`](super::RenderThread)). An error on the native Metal
+    /// backend, which has no wgpu device to share: unset `THREERS_BACKEND`, or
+    /// open the window with [`WindowBackend::Wgpu`].
+    pub fn shared_gpu(&self) -> Result<super::SharedGpu, String> {
+        match &self.backend {
+            #[cfg(winit_window)]
+            Backend::Wgpu(w) => Ok(super::SharedGpu {
+                device: w.device.clone(),
+                queue: w.renderer.queue_arc(),
+                gate: w.gate.clone(),
+            }),
+            #[cfg(metal_backend)]
+            Backend::Metal(_) => Err(
+                "views on other threads need the wgpu backend; this window draws with native Metal \
+                 (unset THREERS_BACKEND or open it with WindowBackend::Wgpu)"
+                    .into(),
+            ),
+        }
+    }
+
+    /// The gate this window reconfigures under. Give it to a
+    /// [`ViewProducer`](super::ViewProducer) drawing on this window's device
+    /// from another thread, so a resize never coincides with its submissions.
+    pub fn submit_gate(&self) -> super::SubmitGate {
+        match &self.backend {
+            #[cfg(winit_window)]
+            Backend::Wgpu(w) => w.gate.clone(),
+            // No wgpu device to share; a gate nothing else holds.
+            #[cfg(metal_backend)]
+            Backend::Metal(_) => super::SubmitGate::new(),
         }
     }
 
@@ -418,6 +500,30 @@ impl WindowRenderer {
                 tone_mapping: m.renderer.tone_mapping(),
                 reversed_z: false,
             },
+        }
+    }
+
+    /// Draws a frame with no scene: `draw(device, queue, target, size,
+    /// format)` fills `target`, an sRGB view of the next drawable, and the
+    /// frame is presented after it returns. This is for a window whose content
+    /// is all UI, e.g. a [`UiPass`](super::UiPass) compositing
+    /// [`ViewFrames`](super::ViewFrames) drawn on other threads. `false`, with
+    /// nothing called, for a frame to skip, or on the native Metal backend.
+    pub fn present_with(
+        &mut self,
+        draw: impl FnOnce(&wgpu::Device, &wgpu::Queue, &wgpu::TextureView, (u32, u32), wgpu::TextureFormat),
+    ) -> bool {
+        match &mut self.backend {
+            #[cfg(winit_window)]
+            Backend::Wgpu(w) => w.present_with(draw),
+            #[cfg(metal_backend)]
+            Backend::Metal(_) => {
+                static WARNED: std::sync::Once = std::sync::Once::new();
+                WARNED.call_once(|| {
+                    log::warn!("present_with draws nothing on the native Metal backend; use the wgpu backend")
+                });
+                false
+            }
         }
     }
 
@@ -650,9 +756,16 @@ impl WgpuWindow {
             config,
             srgb_format,
             alpha_modes: caps.alpha_modes.clone(),
+            present_modes: caps.present_modes.clone(),
             device,
             renderer,
+            gate: super::SubmitGate::new(),
         })
+    }
+
+    fn configure(&self) {
+        let _alone = self.gate.reconfigure();
+        self.surface.configure(&self.device, &self.config);
     }
 
     fn render(&mut self, scene: &mut Scene, camera: &dyn Camera) -> bool {
@@ -704,6 +817,29 @@ impl WgpuWindow {
         true
     }
 
+    fn present_with(
+        &mut self,
+        draw: impl FnOnce(&wgpu::Device, &wgpu::Queue, &wgpu::TextureView, (u32, u32), wgpu::TextureFormat),
+    ) -> bool {
+        let Some(frame) = self.acquire() else {
+            return false;
+        };
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.srgb_format),
+            ..Default::default()
+        });
+        let queue = self.renderer.queue_arc();
+        draw(
+            &self.device,
+            &queue,
+            &view,
+            (self.config.width, self.config.height),
+            self.srgb_format,
+        );
+        queue.present(frame);
+        true
+    }
+
     /// The next drawable, or `None` for a frame to skip (reconfiguring first
     /// when the surface asks for it).
     fn acquire(&mut self) -> Option<wgpu::SurfaceTexture> {
@@ -712,13 +848,13 @@ impl WgpuWindow {
             Acquired::Success(f) => Some(f),
             // Usable now; the window changed under it, so fit the next one.
             Acquired::Suboptimal(f) => {
-                self.surface.configure(&self.device, &self.config);
+                self.configure();
                 Some(f)
             }
             // Hidden, minimised, or every drawable in flight: try next frame.
             Acquired::Timeout | Acquired::Occluded => None,
             Acquired::Outdated | Acquired::Lost => {
-                self.surface.configure(&self.device, &self.config);
+                self.configure();
                 None
             }
             other => {

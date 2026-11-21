@@ -465,14 +465,28 @@ impl Renderer {
     }
 
     pub(super) fn ensure_msaa_targets(&mut self, w: u32, h: u32) {
-        if !take_sized(&mut self.msaa_targets, &mut self.msaa_targets_spare, w, h) {
-            return;
-        }
         // The colour also viewable as its `Unorm` twin when it is sRGB, for
         // the encoded-blend pass.
         let unorm = self.color_format.remove_srgb_suffix();
         let reinterpret =
             unorm != self.color_format && super::super::caps::supports_view_formats(&self.device);
+        let was = self.msaa_targets.as_ref().map(|t| (t.0, t.1));
+        if !take_sized(&mut self.msaa_targets, &mut self.msaa_targets_spare, w, h) {
+            // Taken back from the spares: the `Unorm` view has to follow, or
+            // the encoded-blend pass draws into the last size's texture.
+            if was != Some((w, h)) {
+                self.msaa_color_unorm = reinterpret
+                    .then_some(self.msaa_targets.as_ref())
+                    .flatten()
+                    .map(|(_, _, color, _)| {
+                        color.texture().create_view(&wgpu::TextureViewDescriptor {
+                            format: Some(unorm),
+                            ..Default::default()
+                        })
+                    });
+            }
+            return;
+        }
         let extra = [unorm];
         // The depth also sampled where the refraction pass resolves it.
         let sampled_depth = self.depth_resolve.is_some();

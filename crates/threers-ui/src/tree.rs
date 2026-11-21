@@ -190,6 +190,9 @@ pub struct Ui {
     pub(crate) layout_units: bool,
     /// Counts layouts, so a measurement knows which one it was taken in.
     pub(crate) pass: u64,
+    /// Text already broken into lines, across layouts (`layout::WrapMemo`):
+    /// a tree built again, or laid out again, wraps only what changed.
+    pub(crate) wrap_memo: crate::layout::WrapMemo,
     /// The viewport of the last layout.
     pub(crate) viewport: (f32, f32),
     /// Built on the first hit test after the boxes change.
@@ -247,12 +250,24 @@ impl Default for Ui {
 }
 
 impl Ui {
+    /// A new, empty tree, for an app that builds its UI again on every
+    /// change: it keeps what this one learned that a rebuild would only
+    /// work out again — its text already broken into lines (with an app's
+    /// whole sidebar of paragraphs, most of a layout) — and its layout units.
+    pub fn fresh(&mut self) -> Ui {
+        let mut ui = Ui::new();
+        ui.layout_units = self.layout_units;
+        ui.wrap_memo = std::mem::take(&mut self.wrap_memo);
+        ui
+    }
+
     pub fn new() -> Self {
         Self {
             nodes: vec![Node::new(Style::default(), NodeKind::Box, None, 0)],
             free: vec![],
             layout_units: false,
             pass: 0,
+            wrap_memo: Default::default(),
             viewport: (0.0, 0.0),
             hits: std::sync::OnceLock::new(),
             animations: vec![],

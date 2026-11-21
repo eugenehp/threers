@@ -18,6 +18,8 @@ pub struct TextArea {
     /// [`ime`](crate::ime)).
     pub marked: Option<(usize, usize)>,
     pub(crate) pointer: Option<(usize, usize, crate::text_hit::Granularity)>,
+    /// The editor's own undo and redo (⌘Z / Ctrl+Z inside it).
+    pub history: crate::text_shortcuts::EditHistory,
 }
 
 crate::ime::composition!(TextArea);
@@ -34,6 +36,7 @@ impl TextArea {
             indent_unit: 2,
             marked: None,
             pointer: None,
+            history: Default::default(),
         }
     }
 
@@ -146,8 +149,34 @@ impl TextArea {
         self.goal = keep;
     }
 
-    /// A key (DOM `KeyboardEvent.key`) pressed in the editor.
+    /// Pastes `text` (what a host read from the clipboard) as one undo step.
+    pub fn paste(&mut self, text: &str) {
+        crate::text_shortcuts::run_insert(self, text);
+        self.goal = None;
+    }
+
+    /// Runs a shortcut's command (an edit menu's Copy, say) as its key would.
+    pub fn command(&mut self, cmd: crate::text_shortcuts::TextCommand) -> FieldKey {
+        self.goal = None;
+        crate::text_shortcuts::run(self, cmd, &|_| true).field_key()
+    }
+
+    /// A key (DOM `KeyboardEvent.key`) pressed in the editor. The platform's
+    /// text shortcuts work as in a [`TextField`](crate::TextField), with
+    /// lines: ⌘← / Home go to the start of the caret's line.
     pub fn key(&mut self, key: &str, m: KeyModifiers) -> FieldKey {
+        if let Some(cmd) = crate::text_shortcuts::text_command(key, m) {
+            return self.command(cmd);
+        }
+        let before = (self.text.clone(), self.anchor, self.caret);
+        let out = self.plain_key(key, m);
+        if out == FieldKey::Edited {
+            crate::text_shortcuts::record_key(&mut self.history, before, key);
+        }
+        out
+    }
+
+    fn plain_key(&mut self, key: &str, m: KeyModifiers) -> FieldKey {
         let command = m.control || m.meta;
         let (a, z) = self.selection();
         if !matches!(key, "ArrowUp" | "ArrowDown" | "PageUp" | "PageDown") {
@@ -215,10 +244,6 @@ impl TextArea {
                 self.move_to(to, m.shift);
                 FieldKey::Moved
             }
-            "a" if command => {
-                self.select_all();
-                FieldKey::Moved
-            }
             "Backspace" | "Delete" => {
                 if a == z {
                     if key == "Backspace" && a > 0 {
@@ -238,6 +263,36 @@ impl TextArea {
             }
             _ => FieldKey::Ignored,
         }
+    }
+}
+
+impl crate::text_shortcuts::Editable for TextArea {
+    fn text(&self) -> &str {
+        &self.text
+    }
+    fn selection_ends(&self) -> (usize, usize) {
+        (self.anchor, self.caret)
+    }
+    fn set_selection(&mut self, anchor: usize, caret: usize) {
+        self.anchor = anchor;
+        self.caret = caret;
+    }
+    fn replace_all(&mut self, text: String, anchor: usize, caret: usize) {
+        self.text = text;
+        self.set_selection(anchor, caret);
+    }
+    fn insert_text(&mut self, s: &str) {
+        self.insert(s);
+    }
+    fn history(&mut self) -> &mut crate::text_shortcuts::EditHistory {
+        &mut self.history
+    }
+    fn line_bounds(&self, at: usize) -> (usize, usize) {
+        let chars: Vec<char> = self.text.chars().collect();
+        let at = at.min(chars.len());
+        let start = chars[..at].iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
+        let end = chars[at..].iter().position(|&c| c == '\n').map_or(chars.len(), |i| at + i);
+        (start, end)
     }
 }
 

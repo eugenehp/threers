@@ -1,6 +1,7 @@
 //! SVG drawings: an [`SvgDocument`] of paths, circles, rectangles, lines,
-//! polylines and text, nested in groups with their own transforms and
-//! styles, written as SVG 1.1 ([`write_svg`]).
+//! polylines, text and images, nested in groups with their own transforms
+//! and styles, painted in colours or gradients, clipped and made translucent
+//! as groups, written as SVG 1.1 ([`write_svg`]).
 //!
 //! The document is in user units with y down, as SVG has it; the page size
 //! carries a unit (`mm`, `in`, `px`…) and the view box maps user units onto
@@ -55,13 +56,53 @@ impl SvgUnit {
     }
 }
 
-/// How a shape is filled or stroked: not at all, or with a colour.
+/// How a shape is filled or stroked: not at all, with a colour, or with a
+/// gradient.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum SvgPaint {
     #[default]
     None,
     /// sRGB, 0–255 per channel.
     Color([u8; 3]),
+    /// [`SvgDocument::gradients`]`[k]`.
+    Gradient(usize),
+}
+
+/// A gradient's geometry, in the user space of the shape it paints
+/// (`gradientUnits="userSpaceOnUse"`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum SvgGradientKind {
+    /// Along the line from `start` to `end`.
+    Linear { start: [f64; 2], end: [f64; 2] },
+    /// From `focus` (the centre when `None`) out to the circle about `center`.
+    Radial { center: [f64; 2], radius: f64, focus: Option<[f64; 2]> },
+}
+
+/// A colour stop: where along the gradient (0 to 1), its colour, and its
+/// opacity (0 to 1).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SvgStop {
+    pub offset: f64,
+    pub color: [u8; 3],
+    pub opacity: f64,
+}
+
+/// A gradient, padded beyond its ends (`spreadMethod="pad"`), its colours
+/// interpolated in sRGB.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SvgGradient {
+    pub kind: SvgGradientKind,
+    pub stops: Vec<SvgStop>,
+    /// `gradientTransform`.
+    pub transform: Option<SvgTransform>,
+}
+
+/// A clipping path, in the user space of what it clips
+/// (`clipPathUnits="userSpaceOnUse"`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SvgClip {
+    pub path: SvgPath,
+    pub rule: SvgFillRule,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -99,9 +140,18 @@ pub struct SvgStyle {
     pub stroke_opacity: Option<f64>,
     pub line_cap: Option<SvgLineCap>,
     pub line_join: Option<SvgLineJoin>,
+    /// `stroke-miterlimit`: the longest miter, in stroke widths, before a
+    /// miter join is bevelled instead (4 when no group sets it).
+    pub miter_limit: Option<f64>,
     /// Dash and gap lengths, in user units; empty for solid.
     pub dash: Vec<f64>,
     pub fill_rule: Option<SvgFillRule>,
+    /// The element's or group's opacity as a whole, 0–1: a group is
+    /// composited once, at this opacity. Not inherited.
+    pub opacity: Option<f64>,
+    /// [`SvgDocument::clip_paths`]`[k]` clips the element or group. Not
+    /// inherited.
+    pub clip: Option<usize>,
 }
 
 impl SvgStyle {
@@ -243,6 +293,151 @@ impl SvgPath {
     }
 }
 
+impl SvgPath {
+    /// SVG path data (a `d` attribute) as a path of absolute commands: `M L
+    /// H V C S Q T A Z`, their relative forms, parameters repeated without
+    /// the letter, `S` and `T`'s reflected control points, and arc flags
+    /// written without separators (`a1 1 0 011 1`). `None` for data that does
+    /// not parse; a valid prefix is not returned on its own.
+    pub fn from_data(d: &str) -> Option<SvgPath> {
+        let b = d.as_bytes();
+        let mut i = 0;
+        let skip = |i: &mut usize| {
+            while *i < b.len() && (b[*i].is_ascii_whitespace() || b[*i] == b',') {
+                *i += 1;
+            }
+        };
+        let number = |i: &mut usize| -> Option<f64> {
+            skip(i);
+            let start = *i;
+            if *i < b.len() && (b[*i] == b'+' || b[*i] == b'-') {
+                *i += 1;
+            }
+            let mut dot = false;
+            let mut digits = false;
+            while *i < b.len() && (b[*i].is_ascii_digit() || (b[*i] == b'.' && !dot)) {
+                dot |= b[*i] == b'.';
+                digits |= b[*i].is_ascii_digit();
+                *i += 1;
+            }
+            if *i < b.len() && (b[*i] == b'e' || b[*i] == b'E') && digits {
+                let save = *i;
+                *i += 1;
+                if *i < b.len() && (b[*i] == b'+' || b[*i] == b'-') {
+                    *i += 1;
+                }
+                if *i < b.len() && b[*i].is_ascii_digit() {
+                    while *i < b.len() && b[*i].is_ascii_digit() {
+                        *i += 1;
+                    }
+                } else {
+                    *i = save;
+                }
+            }
+            if !digits {
+                return None;
+            }
+            d[start..*i].parse().ok()
+        };
+        let flag = |i: &mut usize| -> Option<bool> {
+            skip(i);
+            let f = match b.get(*i)? {
+                b'0' => false,
+                b'1' => true,
+                _ => return None,
+            };
+            *i += 1;
+            Some(f)
+        };
+        let mut path = SvgPath::new();
+        let (mut cur, mut start) = ([0.0f64; 2], [0.0f64; 2]);
+        // The last command's second control point, for S and T to reflect.
+        let mut last_cubic: Option<[f64; 2]> = None;
+        let mut last_quad: Option<[f64; 2]> = None;
+        let mut cmd: Option<u8> = None;
+        loop {
+            skip(&mut i);
+            if i >= b.len() {
+                break;
+            }
+            if b[i].is_ascii_alphabetic() {
+                cmd = Some(b[i]);
+                i += 1;
+            } else if cmd.is_none() {
+                return None;
+            }
+            let c = cmd?;
+            let rel = c.is_ascii_lowercase();
+            let at = |p: [f64; 2], cur: [f64; 2]| if rel { [p[0] + cur[0], p[1] + cur[1]] } else { p };
+            let pair = |i: &mut usize| -> Option<[f64; 2]> { Some([number(i)?, number(i)?]) };
+            let reflect = |p: Option<[f64; 2]>, cur: [f64; 2]| p.map_or(cur, |p| [2.0 * cur[0] - p[0], 2.0 * cur[1] - p[1]]);
+            let (mut cubic, mut quad) = (None, None);
+            match c.to_ascii_uppercase() {
+                b'M' => {
+                    let p = at(pair(&mut i)?, cur);
+                    path.move_to(p);
+                    (cur, start) = (p, p);
+                    // Pairs after the first are lines.
+                    cmd = Some(if rel { b'l' } else { b'L' });
+                }
+                b'L' => {
+                    cur = at(pair(&mut i)?, cur);
+                    path.line_to(cur);
+                }
+                b'H' => {
+                    let x = number(&mut i)?;
+                    cur = [if rel { cur[0] + x } else { x }, cur[1]];
+                    path.line_to(cur);
+                }
+                b'V' => {
+                    let y = number(&mut i)?;
+                    cur = [cur[0], if rel { cur[1] + y } else { y }];
+                    path.line_to(cur);
+                }
+                b'C' => {
+                    let (c1, c2, to) = (at(pair(&mut i)?, cur), at(pair(&mut i)?, cur), at(pair(&mut i)?, cur));
+                    path.cubic_to(c1, c2, to);
+                    (cur, cubic) = (to, Some(c2));
+                }
+                b'S' => {
+                    let c1 = reflect(last_cubic, cur);
+                    let (c2, to) = (at(pair(&mut i)?, cur), at(pair(&mut i)?, cur));
+                    path.cubic_to(c1, c2, to);
+                    (cur, cubic) = (to, Some(c2));
+                }
+                b'Q' => {
+                    let (q, to) = (at(pair(&mut i)?, cur), at(pair(&mut i)?, cur));
+                    path.quad_to(q, to);
+                    (cur, quad) = (to, Some(q));
+                }
+                b'T' => {
+                    let q = reflect(last_quad, cur);
+                    let to = at(pair(&mut i)?, cur);
+                    path.quad_to(q, to);
+                    (cur, quad) = (to, Some(q));
+                }
+                b'A' => {
+                    let radii = [number(&mut i)?, number(&mut i)?];
+                    let rotation = number(&mut i)?;
+                    let (large_arc, sweep) = (flag(&mut i)?, flag(&mut i)?);
+                    let to = at(pair(&mut i)?, cur);
+                    path.arc_to(radii, rotation, large_arc, sweep, to);
+                    cur = to;
+                }
+                b'Z' => {
+                    path.close();
+                    cur = start;
+                    // A command letter must follow.
+                    cmd = None;
+                }
+                _ => return None,
+            }
+            (last_cubic, last_quad) = (cubic, quad);
+        }
+        Some(path)
+    }
+}
+
 /// A 2D affine transform `[a, b, c, d, e, f]`: x' = a·x + c·y + e,
 /// y' = b·x + d·y + f, SVG's `matrix()`.
 pub type SvgTransform = [f64; 6];
@@ -266,6 +461,10 @@ pub enum SvgNode {
     Polyline { points: Vec<[f64; 2]>, closed: bool, style: SvgStyle },
     /// Font size in user units, rotation in degrees about the anchor.
     Text { pos: [f64; 2], text: String, size: f64, anchor: SvgTextAnchor, rotation: f64, font_family: Option<String>, style: SvgStyle },
+    /// RGBA pixels stretched over the rectangle at `origin` of `size`
+    /// (`preserveAspectRatio="none"`), the image's top row at `origin`'s y.
+    /// Its style's `opacity` and `clip` apply.
+    Image { origin: [f64; 2], size: [f64; 2], image: std::sync::Arc<crate::utils::png::PngImage>, style: SvgStyle },
     Group { id: Option<String>, transform: Option<SvgTransform>, style: SvgStyle, children: Vec<SvgNode> },
 }
 
@@ -287,11 +486,27 @@ pub struct SvgDocument {
     /// Decimals printed; shortest round-trip when `None`.
     pub precision: Option<usize>,
     pub children: Vec<SvgNode>,
+    /// What [`SvgPaint::Gradient`] refers to.
+    pub gradients: Vec<SvgGradient>,
+    /// What [`SvgStyle::clip`] refers to.
+    pub clip_paths: Vec<SvgClip>,
 }
 
 impl SvgDocument {
     pub fn new(width: f64, height: f64, unit: SvgUnit) -> Self {
-        SvgDocument { width, height, unit, view_box: None, y_up: false, title: None, description: None, precision: Some(4), children: Vec::new() }
+        SvgDocument {
+            width,
+            height,
+            unit,
+            view_box: None,
+            y_up: false,
+            title: None,
+            description: None,
+            precision: Some(4),
+            children: Vec::new(),
+            gradients: Vec::new(),
+            clip_paths: Vec::new(),
+        }
     }
 
     pub fn path(&mut self, path: SvgPath, style: SvgStyle) {
@@ -326,6 +541,18 @@ impl SvgDocument {
             Some(SvgNode::Group { children, .. }) => children,
             _ => unreachable!("just pushed a group"),
         }
+    }
+
+    /// Adds a gradient; its paint.
+    pub fn gradient(&mut self, g: SvgGradient) -> SvgPaint {
+        self.gradients.push(g);
+        SvgPaint::Gradient(self.gradients.len() - 1)
+    }
+
+    /// Adds a clipping path; its index, for [`SvgStyle::clip`].
+    pub fn clip_path(&mut self, path: SvgPath, rule: SvgFillRule) -> usize {
+        self.clip_paths.push(SvgClip { path, rule });
+        self.clip_paths.len() - 1
     }
 
     /// The view box, the page's own when none is set.
@@ -382,6 +609,7 @@ impl Writer {
         match p {
             SvgPaint::None => "none".into(),
             SvgPaint::Color([r, g, b]) => format!("#{r:02X}{g:02X}{b:02X}"),
+            SvgPaint::Gradient(k) => format!("url(#gradient{k})"),
         }
     }
 
@@ -431,9 +659,21 @@ impl Writer {
             });
         }
 
+        if let Some(m) = s.miter_limit {
+            let _ = write!(a, " stroke-miterlimit=\"{}\"", self.num(m));
+        }
+
         if !s.dash.is_empty() {
             let list: Vec<String> = s.dash.iter().map(|d| self.num(*d)).collect();
             let _ = write!(a, " stroke-dasharray=\"{}\"", list.join(","));
+        }
+
+        if let Some(o) = s.opacity {
+            let _ = write!(a, " opacity=\"{}\"", self.num(o));
+        }
+
+        if let Some(k) = s.clip {
+            let _ = write!(a, " clip-path=\"url(#clip{k})\"");
         }
 
         a
@@ -524,6 +764,18 @@ impl Writer {
                     xml_escape(text, false)
                 )
             }
+            SvgNode::Image { origin, size, image, style } => {
+                let png = crate::utils::png::encode_png(image.width, image.height, &image.rgba);
+                format!(
+                    "<image x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\"{} href=\"data:image/png;base64,{}\"/>",
+                    self.num(origin[0]),
+                    self.num(origin[1]),
+                    self.num(size[0]),
+                    self.num(size[1]),
+                    self.style(style),
+                    base64(&png)
+                )
+            }
             SvgNode::Group { id, transform, style, children } => {
                 let id = id.as_ref().map(|i| format!(" id=\"{}\"", xml_escape(i, true))).unwrap_or_default();
                 let tf = transform
@@ -573,6 +825,41 @@ pub fn write_svg(doc: &SvgDocument) -> String {
         let _ = writeln!(w.out, "  <desc>{}</desc>", xml_escape(d, false));
     }
 
+    if !doc.gradients.is_empty() || !doc.clip_paths.is_empty() {
+        w.out.push_str("  <defs>\n");
+        for (k, g) in doc.gradients.iter().enumerate() {
+            let tf = g
+                .transform
+                .map(|t| format!(" gradientTransform=\"matrix({})\"", t.iter().map(|x| w.num(*x)).collect::<Vec<_>>().join(" ")))
+                .unwrap_or_default();
+            let (tag, geometry) = match &g.kind {
+                SvgGradientKind::Linear { start, end } => (
+                    "linearGradient",
+                    format!("x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"", w.num(start[0]), w.num(start[1]), w.num(end[0]), w.num(end[1])),
+                ),
+                SvgGradientKind::Radial { center, radius, focus } => {
+                    let f = focus.map(|f| format!(" fx=\"{}\" fy=\"{}\"", w.num(f[0]), w.num(f[1]))).unwrap_or_default();
+                    ("radialGradient", format!("cx=\"{}\" cy=\"{}\" r=\"{}\"{f}", w.num(center[0]), w.num(center[1]), w.num(*radius)))
+                }
+            };
+            let _ = writeln!(w.out, "    <{tag} id=\"gradient{k}\" gradientUnits=\"userSpaceOnUse\" {geometry}{tf}>");
+            for st in &g.stops {
+                let [r, gg, b] = st.color;
+                let op = if st.opacity < 1.0 { format!(" stop-opacity=\"{}\"", w.num(st.opacity)) } else { String::new() };
+                let _ = writeln!(w.out, "      <stop offset=\"{}\" stop-color=\"#{r:02X}{gg:02X}{b:02X}\"{op}/>", w.num(st.offset));
+            }
+            let _ = writeln!(w.out, "    </{tag}>");
+        }
+        for (k, c) in doc.clip_paths.iter().enumerate() {
+            let rule = match c.rule {
+                SvgFillRule::NonZero => "",
+                SvgFillRule::EvenOdd => " clip-rule=\"evenodd\"",
+            };
+            let _ = writeln!(w.out, "    <clipPath id=\"clip{k}\"><path d=\"{}\"{rule}/></clipPath>", w.path_data(&c.path));
+        }
+        w.out.push_str("  </defs>\n");
+    }
+
     if doc.y_up {
         // y' = (top + bottom) - y
         let flip = [1.0, 0.0, 0.0, -1.0, 0.0, 2.0 * vb[1] + vb[3]];
@@ -588,8 +875,59 @@ pub fn write_svg(doc: &SvgDocument) -> String {
     w.out
 }
 
+/// Standard base64 with padding, for data URIs.
+pub(crate) fn base64(bytes: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut s = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for c in bytes.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for k in 0..4 {
+            if k <= c.len() {
+                s.push(A[(n >> (18 - 6 * k) & 63) as usize] as char);
+            } else {
+                s.push('=');
+            }
+        }
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn path_data_reads_every_command_absolute() {
+        use PathCommand::*;
+        let p = SvgPath::from_data("M10 20 l5,0 5 5 H40v-10 c1 2 3 4 5 6 s 1 1 2 2 Q50 50 60 60 t10 0 a5 5 0 011 1 z m1 1 1 1").unwrap();
+        assert_eq!(
+            p.commands,
+            vec![
+                MoveTo([10.0, 20.0]),
+                LineTo([15.0, 20.0]),
+                LineTo([20.0, 25.0]),
+                LineTo([40.0, 25.0]),
+                LineTo([40.0, 15.0]),
+                CubicTo { c1: [41.0, 17.0], c2: [43.0, 19.0], to: [45.0, 21.0] },
+                // reflected about (45, 21): the last control (43, 19) gives (47, 23)
+                CubicTo { c1: [47.0, 23.0], c2: [46.0, 22.0], to: [47.0, 23.0] },
+                QuadTo { c: [50.0, 50.0], to: [60.0, 60.0] },
+                QuadTo { c: [70.0, 70.0], to: [70.0, 60.0] },
+                // "011 1": large-arc 0, sweep 1, then x 1 (flags need no separators)
+                ArcTo { radii: [5.0, 5.0], rotation: 0.0, large_arc: false, sweep: true, to: [71.0, 61.0] },
+                Close,
+                MoveTo([11.0, 21.0]),
+                LineTo([12.0, 22.0]),
+            ]
+        );
+        // Numbers run together: an exponent, a sign, a second decimal point.
+        assert_eq!(
+            SvgPath::from_data("M1e2-3.5.5.5").unwrap().commands,
+            vec![MoveTo([100.0, -3.5]), LineTo([0.5, 0.5])]
+        );
+        assert!(SvgPath::from_data("10 10").is_none(), "no command");
+        assert!(SvgPath::from_data("M1 1 L2").is_none());
+        assert!(SvgPath::from_data("M0 0 X1 1").is_none());
+    }
+
     use super::*;
 
     #[test]
@@ -660,6 +998,29 @@ mod tests {
         assert!(text.contains("<g transform=\"matrix(1 0 0 -1 0 50)\">"));
         assert!(text.contains("    <g id=\"layer F.Cu\" fill=\"#C83434\" stroke=\"none\">"));
         assert!(text.contains("      <polygon points=\"0,0 10,0 10,5\"/>"));
+    }
+
+    #[test]
+    fn gradients_clips_opacity_and_images_go_in_defs_and_attributes() {
+        let mut doc = SvgDocument::new(10.0, 10.0, SvgUnit::None);
+        let paint = doc.gradient(SvgGradient {
+            kind: SvgGradientKind::Linear { start: [0.0, 0.0], end: [10.0, 0.0] },
+            stops: vec![SvgStop { offset: 0.0, color: [255, 0, 0], opacity: 1.0 }, SvgStop { offset: 1.0, color: [0, 0, 255], opacity: 0.5 }],
+            transform: None,
+        });
+        let clip = doc.clip_path(SvgPath::polygon(&[[0.0, 0.0], [5.0, 0.0], [5.0, 5.0]], true), SvgFillRule::EvenOdd);
+        doc.rect([0.0, 0.0], [10.0, 10.0], 0.0, SvgStyle { fill: Some(paint), opacity: Some(0.5), clip: Some(clip), ..Default::default() });
+        let img = crate::utils::png::PngImage { width: 1, height: 1, rgba: vec![1, 2, 3, 255] };
+        doc.children.push(SvgNode::Image { origin: [1.0, 1.0], size: [2.0, 2.0], image: std::sync::Arc::new(img), style: SvgStyle::default() });
+        let text = write_svg(&doc);
+        assert!(text.contains("<linearGradient id=\"gradient0\" gradientUnits=\"userSpaceOnUse\" x1=\"0\" y1=\"0\" x2=\"10\" y2=\"0\">"), "{text}");
+        assert!(text.contains("<stop offset=\"1\" stop-color=\"#0000FF\" stop-opacity=\"0.5\"/>"));
+        assert!(text.contains("<clipPath id=\"clip0\"><path d=\"M0,0 L5,0 L5,5 Z\" clip-rule=\"evenodd\"/></clipPath>"));
+        assert!(text.contains("fill=\"url(#gradient0)\" opacity=\"0.5\" clip-path=\"url(#clip0)\"/>"));
+        assert!(text.contains("preserveAspectRatio=\"none\" href=\"data:image/png;base64,iVBORw0KGgo"));
+        assert_eq!(base64(b"Man"), "TWFu");
+        assert_eq!(base64(b"Ma"), "TWE=");
+        assert_eq!(base64(b"M"), "TQ==");
     }
 
     #[test]

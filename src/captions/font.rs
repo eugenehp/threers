@@ -65,6 +65,56 @@ impl FontMetrics {
     }
 }
 
+/// Faces read from a font's bytes at a weight, most recently used first.
+/// Reading a variable font at a weight takes milliseconds (15 for SF Compact
+/// here), and UI text makes a font for every run it rasterises, so the same
+/// bytes come back again and again. Keyed by the bytes' identity: an entry
+/// holds its bytes, so the address cannot be reused while it is here. Only
+/// bytes that come back go through it (SF Compact's files, a family's
+/// styles), so it holds at most a few fonts.
+static VARIABLE_FACES: std::sync::Mutex<Vec<(FontBytes, u16, TtfFace)>> =
+    std::sync::Mutex::new(Vec::new());
+type FontBytes = std::sync::Arc<[u8]>;
+const VARIABLE_FACES_KEPT: usize = 16;
+
+/// SF Compact's upright and italic files, read once (macOS).
+#[cfg(target_os = "macos")]
+static SF_COMPACT_FILES: std::sync::OnceLock<Option<(FontBytes, Option<FontBytes>)>> =
+    std::sync::OnceLock::new();
+
+/// Faces [`CaptionFont::ui`] falls back to for characters the UI face
+/// lacks, in order: the app's ([`CaptionFont::add_ui_fallback`]), then the
+/// system's symbol fonts, then CJK if asked for
+/// ([`CaptionFont::use_system_cjk_fallback`]). `None` until first used.
+static UI_FALLBACKS: std::sync::Mutex<Option<UiFallbacks>> = std::sync::Mutex::new(None);
+
+#[derive(Default)]
+struct UiFallbacks {
+    app: Vec<std::sync::Arc<TtfFont>>,
+    system: Vec<std::sync::Arc<TtfFont>>,
+    cjk: Vec<std::sync::Arc<TtfFont>>,
+}
+
+impl UiFallbacks {
+    fn all(&self) -> impl Iterator<Item = &std::sync::Arc<TtfFont>> {
+        self.app.iter().chain(&self.system).chain(&self.cjk)
+    }
+}
+
+/// The UI fallbacks, the system's symbol fonts read on first use.
+fn ui_fallbacks<R>(f: impl FnOnce(&mut UiFallbacks) -> R) -> R {
+    let mut guard = UI_FALLBACKS.lock().unwrap_or_else(|e| e.into_inner());
+    let fb = guard.get_or_insert_with(|| UiFallbacks {
+        system: CaptionFont::system_fallback_paths(false)
+            .iter()
+            .filter_map(|p| std::fs::read(p).ok())
+            .filter_map(|b| TtfFont::parse(&b).ok().map(std::sync::Arc::new))
+            .collect(),
+        ..Default::default()
+    });
+    f(fb)
+}
+
 /// The face [`CaptionFont::set_ui`] chose for [`CaptionFont::ui`].
 static UI_FACE: std::sync::Mutex<Option<std::sync::Arc<TtfFont>>> = std::sync::Mutex::new(None);
 /// The UI face's other files, set with [`CaptionFont::set_ui_style`]:
@@ -81,6 +131,7 @@ enum Face {
 
 /// A TrueType face; for a variable font, also the bytes to read it again at
 /// another optical size or weight.
+#[derive(Clone)]
 struct TtfFace {
     base: std::sync::Arc<TtfFont>,
     source: Option<VariableSource>,
@@ -384,6 +435,7 @@ impl VerticalWarp {
     }
 }
 
+#[derive(Clone)]
 struct VariableSource {
     bytes: std::sync::Arc<[u8]>,
     /// The `wght` it resolved to, when the font has the axis.
@@ -391,7 +443,7 @@ struct VariableSource {
     /// The `opsz` axis's range, when the font has one.
     opsz: Option<(f32, f32)>,
     /// The face at each optical size used so far, by `opsz × 4`.
-    sized: std::sync::Mutex<HashMap<u32, std::sync::Arc<TtfFont>>>,
+    sized: std::sync::Arc<std::sync::Mutex<HashMap<u32, std::sync::Arc<TtfFont>>>>,
 }
 
 impl TtfFace {
@@ -437,7 +489,7 @@ impl TtfFace {
         }
         .unwrap_or_else(|| (family.upright.clone(), false, false));
         let mut face = match file {
-            FamilyFile::Bytes(bytes) => Self::variable(bytes, weight)?,
+            FamilyFile::Bytes(bytes) => Self::variable_cached(bytes, weight)?,
             FamilyFile::Parsed(font) => Self {
                 base: font,
                 source: None,
@@ -471,6 +523,27 @@ impl TtfFace {
     }
 
     /// `bytes` at CSS `weight`, its optical size following the type size.
+    /// [`variable`](Self::variable), kept for bytes that come back: a
+    /// family's files, SF Compact's.
+    fn variable_cached(bytes: std::sync::Arc<[u8]>, weight: u16) -> Result<Self, TtfError> {
+        let mut cache = VARIABLE_FACES.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = cache
+            .iter()
+            .position(|(b, w, _)| *w == weight && std::sync::Arc::ptr_eq(b, &bytes))
+        {
+            let entry = cache.remove(i);
+            let face = entry.2.clone();
+            cache.insert(0, entry);
+            return Ok(face);
+        }
+        drop(cache);
+        let face = Self::variable(bytes.clone(), weight)?;
+        let mut cache = VARIABLE_FACES.lock().unwrap_or_else(|e| e.into_inner());
+        cache.insert(0, (bytes, weight, face.clone()));
+        cache.truncate(VARIABLE_FACES_KEPT);
+        Ok(face)
+    }
+
     fn variable(bytes: std::sync::Arc<[u8]>, weight: u16) -> Result<Self, TtfError> {
         let (axes, instances) = TtfFont::variation_info(&bytes);
         if axes.is_empty() {
@@ -915,9 +988,109 @@ impl CaptionFont {
                 face.family.bold,
                 face.family.bold_italic,
             ) = (italic, bold, bold_italic);
-            return Self::from_face(Face::Ttf(Box::new(face)));
+            return Self::from_face(Face::Ttf(Box::new(face))).with_ui_fallbacks_only();
         }
-        Self::try_sf_compact().unwrap_or_else(Self::builtin)
+        Self::try_sf_compact()
+            .map(Self::with_ui_fallbacks_only)
+            .unwrap_or_else(Self::builtin)
+    }
+
+    /// This face, then the UI fallbacks (not the UI face itself).
+    fn with_ui_fallbacks_only(mut self) -> Self {
+        ui_fallbacks(|fb| {
+            for f in fb.all() {
+                self.fallbacks.push(Self::from_shared_face(f.clone()));
+            }
+        });
+        self.layouts.clear();
+        self
+    }
+
+    /// This face, falling back to the UI face and then the UI fallbacks:
+    /// a monospace or display face that still draws every symbol and script
+    /// the UI can. ([`with_fallback`](Self::with_fallback)`(ui())` would
+    /// drop the UI's own fallbacks.)
+    pub fn with_ui_fallbacks(self) -> Self {
+        let mut ui = Self::ui();
+        let rest = std::mem::take(&mut ui.fallbacks);
+        let mut me = self.with_fallback(ui);
+        me.fallbacks.extend(rest);
+        me
+    }
+
+    /// Fall back to the font in `bytes` for characters the UI face (and the
+    /// fallbacks added before) lack: a symbol font, a script the UI face
+    /// doesn't cover. Process-wide, for faces made by [`ui`](Self::ui) from
+    /// now on; ahead of the system's fallbacks.
+    pub fn add_ui_fallback(bytes: &[u8]) -> Result<(), TtfError> {
+        let font = std::sync::Arc::new(TtfFont::parse(bytes)?);
+        ui_fallbacks(|fb| fb.app.push(font));
+        Ok(())
+    }
+
+    /// [`add_ui_fallback`](Self::add_ui_fallback) from a file (a `.ttc`
+    /// gives its first face).
+    pub fn add_ui_fallback_file(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        let bytes = std::fs::read(path)?;
+        Self::add_ui_fallback(&bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e:?}")))
+    }
+
+    /// Also fall back to the system's Chinese, Japanese and Korean fonts.
+    /// Not by default: they are tens of megabytes each. Returns how many
+    /// were found; calling it again does nothing.
+    pub fn use_system_cjk_fallback() -> usize {
+        if let Some(n) = ui_fallbacks(|fb| (!fb.cjk.is_empty()).then(|| fb.cjk.len())) {
+            return n;
+        }
+        let fonts: Vec<_> = Self::system_fallback_paths(true)
+            .into_iter()
+            .skip(Self::system_fallback_paths(false).len())
+            .filter_map(|p| std::fs::read(p).ok())
+            .filter_map(|b| TtfFont::parse(&b).ok().map(std::sync::Arc::new))
+            .collect();
+        ui_fallbacks(|fb| {
+            fb.cjk = fonts;
+            fb.cjk.len()
+        })
+    }
+
+    /// The system's fallback font files that exist here: symbol fonts
+    /// (arrows, dingbats, technical and math symbols), then with `cjk`
+    /// the Chinese, Japanese and Korean ones. Apple platforms only (on the
+    /// iOS simulator, inside its runtime); empty elsewhere.
+    pub fn system_fallback_paths(cjk: bool) -> Vec<std::path::PathBuf> {
+        let mut roots = Vec::new();
+        if cfg!(target_os = "macos") {
+            roots.push(std::path::PathBuf::from("/System/Library/Fonts"));
+        } else if cfg!(any(target_os = "ios", target_os = "visionos", target_os = "tvos")) {
+            let base = std::env::var("IPHONE_SIMULATOR_ROOT")
+                .or_else(|_| std::env::var("SIMULATOR_ROOT"))
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| "/".into())
+                .join("System/Library/Fonts");
+            roots.push(base.join("Core"));
+            roots.push(base.join("CoreAddition"));
+            roots.push(base.join("LanguageSupport"));
+        }
+        let symbols = ["Apple Symbols.ttf", "AppleSymbols.ttf", "CJKSymbolsFallback.ttc"];
+        let east = [
+            "Hiragino Sans GB.ttc",
+            "HiraginoKakuGothic.ttc",
+            "ヒラギノ角ゴシック W3.ttc",
+            "AppleSDGothicNeo.ttc",
+        ];
+        let names: Vec<&str> = if cjk { symbols.iter().chain(&east).copied().collect() } else { symbols.to_vec() };
+        let mut out = Vec::new();
+        for name in names {
+            if let Some(p) = roots.iter().map(|r| r.join(name)).find(|p| p.is_file()) {
+                // one file per script: the first family found of each
+                if name.starts_with("Hiragino") && out.iter().any(|q: &std::path::PathBuf| q.to_string_lossy().contains("Hiragino")) {
+                    continue;
+                }
+                out.push(p);
+            }
+        }
+        out
     }
 
     /// Make the TrueType or OpenType font in `bytes` what [`ui`](Self::ui)
@@ -961,20 +1134,23 @@ impl CaptionFont {
                 "/System/Library/Fonts/SFCompact.ttf",
                 "/System/Library/Fonts/SFCompactRounded.ttf",
             ];
-            for path in PATHS {
-                let Ok(bytes) = std::fs::read(path) else {
-                    continue;
-                };
-                if let Ok(mut font) = Self::from_ttf_bytes_weight(&bytes, weight) {
+            // Read once: UI text asks for this font for every run it rasterises.
+            let files = SF_COMPACT_FILES.get_or_init(|| {
+                PATHS.iter().find_map(|path| {
+                    let bytes: std::sync::Arc<[u8]> = std::fs::read(path).ok()?.into();
+                    TtfFace::variable_cached(bytes.clone(), 400).ok()?;
                     // Its italic is a file of its own.
-                    if let (Face::Ttf(face), Ok(italic)) = (
-                        &mut font.face,
-                        std::fs::read(path.replace(".ttf", "Italic.ttf")),
-                    ) {
-                        face.family.italic = Some(italic.into());
-                    }
-                    return Some(font);
-                }
+                    let italic = std::fs::read(path.replace(".ttf", "Italic.ttf"))
+                        .ok()
+                        .map(Into::into);
+                    Some((bytes, italic))
+                })
+            });
+            if let Some((bytes, italic)) = files
+                && let Ok(mut face) = TtfFace::variable_cached(bytes.clone(), weight)
+            {
+                face.family.italic = italic.clone();
+                return Some(Self::from_face(Face::Ttf(Box::new(face))));
             }
         }
         #[cfg(not(target_os = "macos"))]
@@ -2412,6 +2588,33 @@ fn close_contour(points: &mut Vec<(f32, f32)>) {
 
 #[cfg(test)]
 mod tests {
+    /// UI text makes a font for every run it rasterises: SF Compact must be
+    /// read and instanced once per weight, not each time (that cost 15 ms a
+    /// new string), and its bold and italic likewise.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sf_compact_is_read_and_instanced_once() {
+        use super::*;
+        let face = |f: &CaptionFont| match &f.face {
+            Face::Ttf(t) => t.base.clone(),
+            _ => panic!("not a TrueType face"),
+        };
+        let (Some(a), Some(b)) = (
+            CaptionFont::try_sf_compact_weight(400),
+            CaptionFont::try_sf_compact_weight(400),
+        ) else {
+            return eprintln!("skipping: no SF Compact");
+        };
+        assert!(std::sync::Arc::ptr_eq(&face(&a), &face(&b)));
+        let other = CaptionFont::try_sf_compact_weight(700).expect("bold");
+        assert!(!std::sync::Arc::ptr_eq(&face(&a), &face(&other)));
+        for (weight, italic) in [(700, false), (400, true), (700, true)] {
+            let one = a.styled(weight, italic).expect("styled");
+            let two = b.styled(weight, italic).expect("styled");
+            assert!(std::sync::Arc::ptr_eq(&face(&one), &face(&two)), "{weight} {italic}");
+        }
+    }
+
     /// A kerned pair measures narrower than its glyphs do apart.
     ///
     /// And the built-in face, which is fixed-width, measures the same either

@@ -65,6 +65,57 @@ fn border_box(style: &Style, len: Length, base: Option<f32>, horizontal: bool) -
     })
 }
 
+/// Wrapped text kept from layout to layout: two generations of up to
+/// `KEEP` (when the newer fills, the older goes, so what is still in use
+/// stays — a cache cleared whole at its limit starts over when busiest).
+#[derive(Debug, Default, Clone)]
+pub(crate) struct WrapMemo {
+    new: std::collections::HashMap<u64, Vec<String>>,
+    old: std::collections::HashMap<u64, Vec<String>>,
+}
+
+impl WrapMemo {
+    const KEEP: usize = 4096;
+
+    fn get(&mut self, key: u64) -> Option<Vec<String>> {
+        if let Some(l) = self.new.get(&key) {
+            return Some(l.clone());
+        }
+        let l = self.old.remove(&key)?;
+        self.new.insert(key, l.clone());
+        Some(l)
+    }
+
+    fn put(&mut self, key: u64, lines: Vec<String>) {
+        if self.new.len() >= Self::KEEP {
+            self.old = std::mem::take(&mut self.new);
+        }
+        self.new.insert(key, lines);
+    }
+}
+
+/// What a wrap depends on: the text, what its measure reads of the style,
+/// the width, its natural width and the layout units. FNV-1a.
+fn wrap_key(text: &str, style: &Style, width: f32, natural: f32, units: bool) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |bytes: &[u8]| {
+        for &b in bytes {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    };
+    eat(text.as_bytes());
+    eat(&[0xff]);
+    eat(style.font_family.as_bytes());
+    eat(&style.font_size.to_bits().to_le_bytes());
+    eat(&crate::paint::TextStyle::of(style).weight().to_le_bytes());
+    eat(&[style.italic as u8, style.vertical as u8, units as u8]);
+    eat(&style.line_height.unwrap_or(-1.0).to_bits().to_le_bytes());
+    eat(&width.to_bits().to_le_bytes());
+    eat(&natural.to_bits().to_le_bytes());
+    h
+}
+
 struct Ctx<'a> {
     ui: &'a mut Ui,
     text: &'a mut dyn TextMeasure,
@@ -501,8 +552,29 @@ impl Ctx<'_> {
     }
 
     /// `text` broken into lines no wider than `width`: at spaces and
-    /// zero-width spaces where they fit, else within a word.
+    /// zero-width spaces where they fit, else within a word. Kept across
+    /// layouts ([`WrapMemo`]) for text in one style: a paragraph wraps by
+    /// measuring each line with all the text before it, a string of its own
+    /// each time, so a sidebar of them measured tens of thousands of strings
+    /// a layout — every key typed into a search box, every frame it scrolled.
     fn wrap(&mut self, node: usize, text: &str, style: &Style, width: f32) -> Vec<String> {
+        if self.ui.nodes[node].runs.is_some() {
+            return self.wrap_now(node, text, style, width);
+        }
+        // its own width keys it too: another measurer (another scale, a
+        // fixed-width one) breaks it elsewhere
+        let natural = self.text.measure(text, style).0;
+        let key = wrap_key(text, style, width, natural, self.ui.layout_units);
+        if let Some(lines) = self.ui.wrap_memo.get(key) {
+            return lines;
+        }
+        let lines = self.wrap_now(node, text, style, width);
+        self.ui.wrap_memo.put(key, lines.clone());
+        lines
+    }
+
+    /// [`wrap`](Self::wrap), done now.
+    fn wrap_now(&mut self, node: usize, text: &str, style: &Style, width: f32) -> Vec<String> {
         // Pieces: each ends just after a break opportunity.
         let mut pieces: Vec<String> = vec![];
         let mut cur = String::new();
@@ -1995,6 +2067,44 @@ mod tests {
                 .filter(|p| matches!(p, ['A', 'V'] | [' ', 'T']))
                 .count();
             (c.len() as f32 * 7.0 - kerns as f32, 16.0)
+        }
+    }
+
+    /// [`Kerned`], counting what it measures.
+    struct Counted(usize);
+
+    impl TextMeasure for Counted {
+        fn measure(&mut self, text: &str, style: &Style) -> (f32, f32) {
+            self.0 += 1;
+            Kerned.measure(text, style)
+        }
+    }
+
+    #[test]
+    fn a_paragraph_laid_out_again_is_not_wrapped_again() {
+        let text = "A paragraph long enough to wrap over several lines of a narrow box, as a sidebar's hint does, Tea AV VAT".repeat(3);
+        for units in [false, true] {
+            let mut ui = Ui::new();
+            ui.set_layout_units(units);
+            let root = ui.root();
+            let b = ui.add_box(root, Style { width: px(160.0), wrap: true, ..Style::default() });
+            ui.add_text(b, &text);
+            let mut first = Counted(0);
+            ui.layout(400.0, 800.0, &mut first);
+            let lines = ui.rect(b).height;
+            // the tree built again, as an app rebuilds it on every change
+            let mut ui2 = ui.fresh();
+            let root = ui2.root();
+            let b2 = ui2.add_box(root, Style { width: px(160.0), wrap: true, ..Style::default() });
+            ui2.add_text(b2, &text);
+            let mut again = Counted(0);
+            ui2.layout(400.0, 800.0, &mut again);
+            assert_eq!(ui2.rect(b2).height, lines, "the same lines");
+            assert!(again.0 * 10 < first.0, "units {units}: {} measures again, {} the first time", again.0, first.0);
+            // narrower: wrapped anew
+            ui2.update_style(b2, |s| s.width = px(120.0));
+            ui2.layout(400.0, 800.0, &mut Kerned);
+            assert!(ui2.rect(b2).height > lines);
         }
     }
 

@@ -68,7 +68,9 @@ impl<T: Any + Clone + fmt::Debug> Action for T {
 /// `Arrow` dropped and a few spelled out: `left`, `enter`, `escape`,
 /// `backspace`, `space`. Modifiers are `ctrl`, `alt` (or `option`), `shift`
 /// and `cmd` (or `meta`, `super`, `win`); `secondary` is `cmd` on macOS and
-/// `ctrl` elsewhere, for the shortcuts that differ only by that.
+/// `ctrl` elsewhere, for the shortcuts that differ only by that (the platform
+/// of [`text_shortcuts::Platform::current`](crate::text_shortcuts::Platform::current)
+/// when the binding is made).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Keystroke {
     pub key: String,
@@ -186,7 +188,9 @@ impl Keystroke {
                 "shift" => modifiers.shift = true,
                 "cmd" | "meta" | "super" | "win" | "command" => modifiers.meta = true,
                 "secondary" => {
-                    if cfg!(target_os = "macos") {
+                    // As text inputs read it: settable for a browser build
+                    // (`text_shortcuts::set_platform`, before binding).
+                    if crate::text_shortcuts::Platform::current() == crate::text_shortcuts::Platform::Mac {
                         modifiers.meta = true
                     } else {
                         modifiers.control = true

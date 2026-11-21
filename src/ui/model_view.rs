@@ -5,6 +5,13 @@
 //! same one [`model_view`](crate::ui::model3d::model_view) uses: keep it in
 //! the state and turn it from the pointer, a finger or the keys.
 //!
+//! Each [`render`](ModelView::render) waits for its frame to come back from
+//! the GPU. Set [`pipelined`](ModelView::pipelined) to show the frame before
+//! instead, so the wait overlaps the next frame. Under the GPU
+//! [`UiPass`](crate::renderer::UiPass) there is no copy to wait for:
+//! [`SurfaceView`](crate::ui::surface_view::SurfaceView) shows a view
+//! drawn on a thread of its own, straight from its texture.
+//!
 //! ```no_run
 //! use threers::prelude::*;
 //! use threers::ui::model3d::Orbit;
@@ -35,6 +42,11 @@ pub struct ModelView {
     size: (u32, u32),
     /// The vertical field of view, in degrees.
     pub fov: f32,
+    /// Show the frame before the one just drawn, read back while this one
+    /// draws, rather than wait for this one. The box lags a frame, and the
+    /// first render after a resize leaves the last picture in place. Off by
+    /// default.
+    pub pipelined: bool,
 }
 
 impl ModelView {
@@ -47,6 +59,7 @@ impl ModelView {
             renderer: None,
             size: (0, 0),
             fov: 40.0,
+            pipelined: false,
         }
     }
 
@@ -84,8 +97,17 @@ impl ModelView {
         }
         let camera = self.camera(orbit, target, size.0 as f32 / size.1 as f32);
         let hr = self.renderer.as_mut().expect("made above");
-        let rgba = hr.render_to_rgba(scene, &camera as &dyn Camera);
-        ui.set_image(self.node, Image::new(size.0, size.1, rgba)?);
+        if self.pipelined {
+            hr.render(scene, &camera as &dyn Camera);
+            // The frame before this one, at the size it was drawn at: a
+            // resize remakes the renderer, so nothing older is pending.
+            if let Some(rgba) = hr.read_rgba_pipelined() {
+                ui.set_image(self.node, Image::new(size.0, size.1, rgba)?);
+            }
+        } else {
+            let rgba = hr.render_to_rgba(scene, &camera as &dyn Camera);
+            ui.set_image(self.node, Image::new(size.0, size.1, rgba)?);
+        }
         Ok(())
     }
 }

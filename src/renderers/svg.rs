@@ -19,6 +19,9 @@
 use crate::cameras::Camera;
 use crate::core::{BufferGeometry, ObjectKind};
 use crate::curves::{segments_to_path_data, PathSegment};
+use crate::exporters::{
+    SvgDocument, SvgLineCap, SvgLineJoin, SvgPaint, SvgPath, SvgStyle, SvgUnit,
+};
 use crate::lights::Light;
 use crate::materials::Material;
 use crate::math::ToneMapping;
@@ -261,6 +264,46 @@ impl SvgRenderer {
 
     /// The SVG document, as markup.
     pub fn render_to_string(&self, scene: &mut Scene, camera: &dyn Camera) -> String {
+        let items = self.items(scene, camera);
+        self.document(scene, &items)
+    }
+
+    /// The same picture as an [`SvgDocument`]: the drawing every vector
+    /// exporter reads, so a scene goes to PDF ([`render_to_pdf`]) and, drawn
+    /// on the CPU, to PNG ([`render_to_png`]) as well as SVG
+    /// ([`write_svg`](crate::exporters::write_svg)). No GPU is involved
+    /// anywhere.
+    ///
+    /// One pixel of the canvas is one CSS pixel of the page, so at 96 dpi
+    /// the PNG is `width × height`, and the PDF page is that size in points
+    /// times ¾.
+    ///
+    /// [`render_to_pdf`]: Self::render_to_pdf
+    /// [`render_to_png`]: Self::render_to_png
+    pub fn render_to_document(&self, scene: &mut Scene, camera: &dyn Camera) -> SvgDocument {
+        let items = self.items(scene, camera);
+        self.drawing(scene, &items)
+    }
+
+    /// The picture as a one-page PDF, vector throughout
+    /// ([`write_pdf`](crate::exporters::write_pdf)).
+    pub fn render_to_pdf(&self, scene: &mut Scene, camera: &dyn Camera) -> Vec<u8> {
+        crate::exporters::write_pdf(&self.render_to_document(scene, camera))
+    }
+
+    /// The picture drawn into pixels on the CPU and encoded as PNG
+    /// ([`svg_to_png`](crate::exporters::svg_to_png)): `width × height` at
+    /// `scale` 1, larger or smaller in proportion, sharp at any scale.
+    pub fn render_to_png(&self, scene: &mut Scene, camera: &dyn Camera, scale: f64) -> Vec<u8> {
+        let options = crate::exporters::RasterOptions {
+            dpi: 96.0 * scale,
+            ..Default::default()
+        };
+        crate::exporters::svg_to_png(&self.render_to_document(scene, camera), &options)
+    }
+
+    /// What is drawn, in painting order.
+    fn items(&self, scene: &mut Scene, camera: &dyn Camera) -> Vec<Item> {
         scene.update_world();
         let opt = &self.options;
         let view = camera.view_matrix();
@@ -297,8 +340,7 @@ impl SvgRenderer {
                 )
             });
         }
-
-        self.document(scene, &items)
+        items
     }
 
     /// Render straight to a `.svg` file.
@@ -327,6 +369,73 @@ impl SvgRenderer {
     }
 
     // ---- document assembly ----
+
+    /// [`document`](Self::document) as a drawing: the same elements, styles
+    /// and order.
+    fn drawing(&self, scene: &Scene, items: &[Item]) -> SvgDocument {
+        let opt = &self.options;
+        let (w, h) = (self.width as f64, self.height as f64);
+        let mut doc = SvgDocument::new(w, h, SvgUnit::Pixels);
+        doc.precision = Some(opt.precision);
+        let clear = opt.clear_color.unwrap_or(scene.background);
+        let clear_alpha = opt.clear_alpha.unwrap_or(scene.background_alpha);
+        let below_one = |v: f32| (v < 1.0).then(|| v.max(0.0) as f64);
+        if opt.background && clear_alpha > 0.0 {
+            let bg = encode([clear.r, clear.g, clear.b], opt.tone_mapping, opt.exposure);
+            let mut style = SvgStyle::fill(bg);
+            style.stroke = None;
+            style.fill_opacity = below_one(clear_alpha);
+            doc.rect([0.0, 0.0], [w, h], 0.0, style);
+        }
+        for it in items {
+            match &it.prim {
+                Prim::Face { outline, fill, opacity, stroke } => {
+                    let mut style = SvgStyle {
+                        fill: Some(SvgPaint::Color(*fill)),
+                        opacity: below_one(*opacity),
+                        ..SvgStyle::default()
+                    };
+                    if *stroke > 0.0 {
+                        style.stroke = Some(SvgPaint::Color(*fill));
+                        style.stroke_width = Some(*stroke as f64);
+                        style.line_join = Some(SvgLineJoin::Round);
+                    }
+                    doc.path(outline.to_path(), style);
+                }
+                Prim::Wire { outline, stroke, width, opacity } => {
+                    let style = SvgStyle {
+                        fill: Some(SvgPaint::None),
+                        stroke: Some(SvgPaint::Color(*stroke)),
+                        stroke_width: Some(*width as f64),
+                        stroke_opacity: below_one(*opacity),
+                        ..SvgStyle::default()
+                    };
+                    doc.path(outline.to_path(), style);
+                }
+                Prim::Line { a, b, stroke, width, opacity, dash } => {
+                    let style = SvgStyle {
+                        stroke: Some(SvgPaint::Color(*stroke)),
+                        stroke_width: Some(*width as f64),
+                        line_cap: Some(SvgLineCap::Round),
+                        stroke_opacity: below_one(*opacity),
+                        dash: dash.map_or(vec![], |(d, g)| vec![d as f64, g as f64]),
+                        ..SvgStyle::default()
+                    };
+                    let p = |v: [f32; 2]| [v[0] as f64, v[1] as f64];
+                    doc.line(p(*a), p(*b), style);
+                }
+                Prim::Dot { c, r, fill, opacity } => {
+                    let style = SvgStyle {
+                        fill: Some(SvgPaint::Color(*fill)),
+                        fill_opacity: below_one(*opacity),
+                        ..SvgStyle::default()
+                    };
+                    doc.circle([c[0] as f64, c[1] as f64], *r as f64, style);
+                }
+            }
+        }
+        doc
+    }
 
     fn document(&self, scene: &Scene, items: &[Item]) -> String {
         let opt = &self.options;
@@ -861,6 +970,25 @@ impl Outline {
 
     fn to_path_data(&self, precision: usize) -> String {
         segments_to_path_data(self.start, &self.edges, precision, true)
+    }
+
+    /// The same closed outline, as a drawing's path.
+    fn to_path(&self) -> SvgPath {
+        let p = |v: Vector2| [v.x as f64, v.y as f64];
+        let mut path = SvgPath::new();
+        path.move_to(p(self.start));
+        for e in &self.edges {
+            match *e {
+                PathSegment::Line { to } => path.line_to(p(to)),
+                PathSegment::Quadratic { control, to } => path.quad_to(p(control), p(to)),
+                PathSegment::Cubic { c1, c2, to } => path.cubic_to(p(c1), p(c2), p(to)),
+                PathSegment::Arc { radii, x_rotation, large_arc, sweep, to } => {
+                    path.arc_to(p(radii), (x_rotation as f64).to_degrees(), large_arc, sweep, p(to))
+                }
+            };
+        }
+        path.close();
+        path
     }
 }
 

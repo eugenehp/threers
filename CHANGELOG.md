@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **PDF and PNG from 2D drawings.** `write_pdf` and `write_pdf_pages` write
+  an `SvgDocument` as vector PDF with its text embedded as a font subset;
+  `rasterize_svg` and `svg_to_png` draw it on the CPU. Drawings gained
+  gradients, images, clip paths, group opacity, font families
+  (`DrawingFonts`) and `SvgPath::from_data`. `tests/drawing_oracles.rs`
+  checks all three formats against librsvg, Ghostscript, poppler, qpdf and
+  pdftotext.
+- **3D scenes to PDF and PNG without a GPU.** `SvgRenderer::render_to_document`,
+  `render_to_pdf` and `render_to_png`.
+- **A UI to SVG, PDF and PNG without a GPU.** `threers::ui::vector`
+  (`VectorPainter`, `ui_to_document`, `ui_to_svg`, `ui_to_pdf`, `ui_to_png`).
+- **3D views on their own thread.** `ViewProducer` renders into textures on
+  any thread and `ViewFrames` hands the UI the newest finished frame, each
+  side at its own rate (`FramePacer`), with a limit on frames queued on the
+  GPU and an optional `AdaptiveScale`. One producer draws several views
+  (`add_view`) with one renderer, so meshes and pipelines are shared; each
+  view is timed on the GPU on its own, reports `ViewStats`, can be hidden
+  (`set_visible`, not drawn) or prioritised, and keeps four textures so a UI
+  that asks for a frame before submitting the last never has one drawn over.
+  `RenderLoop` schedules a producer's views (per-view frame rate,
+  `Redraw::Continuous` or `OnDemand`, pausing, a shared GPU budget traded by
+  priority) and `RenderThread` runs it on a thread, with `update`/`query`
+  commands from the UI and a panic reported through `failure` rather than a
+  frozen view; in a browser `RenderLoop::step` runs from the animation frame.
+  `SharedGpu` carries a device, queue and `SubmitGate` (`WindowRenderer`,
+  `SurfaceGpu` and `LayerGpu` give one; the native Metal window says why it
+  can't). `SurfaceView` shows a view in a UI box and tells it when the box is
+  scrolled away, clipped or hidden. `WindowRenderer` gained `present_with`,
+  `set_present_mode`, `set_frame_latency` and `shared_gpu`.
+  `examples/threaded_view.rs`, `examples/multi_view.rs` (four views of one
+  scene) and `examples/threaded_view_bench.rs`. `ModelView.pipelined` reads
+  each frame back while the next draws, rather than stalling the UI thread
+  on it.
+- **A UI that draws only when it changes.** `threers::ui::redraw::UiRedraw`
+  draws continuously or `RedrawMode::OnChange` (the tree changed or
+  animates, input, a view's new frame), capped, and tells the event loop
+  when to wake.
+- **Text inputs answer to the platform's shortcuts.** `TextField` and
+  `TextArea` handle select all, copy, cut, paste, undo and redo (their own
+  history, typing undone a word at a time), and moving and deleting by word
+  and by line, with ⌘ on macOS and Ctrl on Windows and Linux
+  (`threers_ui::text_shortcuts`); formatting keys (⌘/Ctrl+B, I, U) come back
+  as `TextCommand`s for a rich-text editor and are otherwise the app's. A
+  focused text input hears its keys before the keymap, so an app-wide
+  binding of ⌘A or ⌘Z no longer takes them from it; `Input::on_key_capture`
+  hears keys before the field. Copy and paste go through a `Clipboard`: in
+  memory by default, the system's with the new `clipboard` feature
+  (`threers::ui::system_clipboard`, via arboard).
+- **A UI on its own thread.** `WindowThread` moves a window's renderer to a
+  thread that builds, lays out, draws and presents (a `Ui` is built there,
+  since it can't move between threads); the event loop stays on the main
+  thread and forwards events without waiting. `ThreadControl` tracks the
+  window's size and scale and when to draw next; `ThreadWaker` wakes it
+  from other threads. `examples/ui_thread.rs`.
+
+### Fixed
+
+- A multisampled renderer drawing transparent objects into render targets
+  of two sizes in turn (an adaptive resolution, a resize back and forth)
+  failed wgpu validation on the switch back: the encoded-blend pass kept a
+  view of the other size's multisampled colour. It now follows the target
+  taken back, and up to three earlier sizes are kept rather than one
+  (`tests/msaa_size_switch.rs`).
+- The keymap's `secondary` modifier follows `text_shortcuts::set_platform`,
+  so a browser build can bind ⌘ or Ctrl by the user's platform.
+- UI text rasterised by `UiPass` re-read and re-instanced the system font
+  for every new string, about 15 ms each; faces are now kept.
+
 ## [0.1.0] — 2026-11-16
 
 ### Added

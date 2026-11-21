@@ -33,6 +33,7 @@
 
 mod drawing;
 mod dxf;
+mod fonts;
 mod fbx;
 mod gcode;
 mod number;
@@ -54,13 +55,14 @@ pub use fbx::{write_fbx_binary, FbxOptions};
 pub use gcode::{write_gcode, GcodeOptions, GcodePath, GcodeUnits};
 pub use number::js_number;
 pub use obj::{write_obj, ObjOptions};
-pub use pdf::{write_pdf, write_pdf_pages, write_pdf_pages_with, PdfOptions};
+pub use fonts::{DrawingFonts, Face};
+pub use pdf::{write_pdf, write_pdf_pages, write_pdf_pages_with, PdfOptions, PdfText};
 pub use ply::{write_ply, PlyOptions};
 pub use raster::{rasterize_svg, svg_to_png, RasterOptions};
 pub use stl::{write_stl_ascii, write_stl_binary};
 pub use svg::{
-    write_svg, xml_escape, PathCommand, SvgDocument, SvgFillRule, SvgLineCap, SvgLineJoin, SvgNode, SvgPaint, SvgPath,
-    SvgStyle, SvgTextAnchor, SvgTransform, SvgUnit,
+    write_svg, xml_escape, PathCommand, SvgClip, SvgDocument, SvgFillRule, SvgGradient, SvgGradientKind, SvgLineCap, SvgLineJoin,
+    SvgNode, SvgPaint, SvgPath, SvgStop, SvgStyle, SvgTextAnchor, SvgTransform, SvgUnit,
 };
 pub use three_dm::{write_3dm, ThreeDmOptions, ThreeDmUnits};
 

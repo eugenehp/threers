@@ -90,6 +90,22 @@ impl LayerGpu {
     pub fn queue(&self) -> &Arc<wgpu::Queue> {
         &self.queue
     }
+
+    /// The gate every layer on this device draws and reconfigures under:
+    /// give it to a [`ViewProducer`](super::ViewProducer) on the same device.
+    pub fn submit_gate(&self) -> super::SubmitGate {
+        super::SubmitGate(self.frames.clone())
+    }
+
+    /// This device and queue with [`submit_gate`](Self::submit_gate), for
+    /// views drawn on other threads ([`ViewProducer::on`](super::ViewProducer::on)).
+    pub fn shared_gpu(&self) -> super::SharedGpu {
+        super::SharedGpu {
+            device: Arc::clone(&self.device),
+            queue: Arc::clone(&self.queue),
+            gate: self.submit_gate(),
+        }
+    }
 }
 
 /// A [`Renderer`] presenting to one `CAMetalLayer`.

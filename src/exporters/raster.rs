@@ -13,8 +13,9 @@
 //! stroke thickens the way SVG's does. Colours are composited source-over
 //! in sRGB, as browsers and librsvg do.
 //!
-//! Text is drawn from glyph outlines in DejaVu Sans, which threers carries,
-//! whatever the family asks for, with its kerning.
+//! Text is drawn from the glyph outlines of the face [`RasterOptions::fonts`]
+//! gives its family (DejaVu Sans, which threers carries, unless told
+//! otherwise), laid out as `fonts.rs` lays it out for every format.
 //!
 //! ```
 //! use threers::exporters::{rasterize_svg, RasterOptions, SvgDocument, SvgStyle, SvgUnit};
@@ -27,8 +28,9 @@
 //! assert_eq!(img.pixel(30, 5), [0, 0, 0, 0]);
 //! ```
 
-use super::drawing::{self, Affine, Item, Resolved, Seg};
-use super::svg::{SvgDocument, SvgFillRule, SvgLineCap, SvgLineJoin, SvgTextAnchor};
+use super::drawing::{self, Affine, Item, Paint, Resolved, Seg};
+use super::fonts::{self, DrawingFonts, Face};
+use super::svg::{SvgDocument, SvgFillRule, SvgGradient, SvgGradientKind, SvgLineCap, SvgLineJoin, SvgStop, SvgTextAnchor};
 use crate::utils::png::PngImage;
 
 /// How [`rasterize_svg`] draws.
@@ -38,11 +40,13 @@ pub struct RasterOptions {
     pub dpi: f64,
     /// What is under the drawing; transparent when `None`.
     pub background: Option<[u8; 4]>,
+    /// The faces text is drawn in.
+    pub fonts: DrawingFonts,
 }
 
 impl Default for RasterOptions {
     fn default() -> Self {
-        RasterOptions { dpi: 96.0, background: None }
+        RasterOptions { dpi: 96.0, background: None, fonts: DrawingFonts::new() }
     }
 }
 
@@ -55,11 +59,14 @@ pub fn rasterize_svg(doc: &SvgDocument, options: &RasterOptions) -> PngImage {
     let mut canvas = Canvas::new(w, h, options.background);
     if let Some(view) = drawing::viewport(doc, [w as f64, h as f64]) {
         drawing::walk(doc, &mut |item| match item {
-            Item::Shape { ctm, style, segs } => canvas.shape(&drawing::compose(&view, &ctm), &style, &segs),
-            Item::Text { ctm, style, pos, text, size, anchor, rotation, .. } => {
-                let segs = text_outline(pos, text, size, anchor, rotation);
-                canvas.shape(&drawing::compose(&view, &ctm), &Resolved { fill_rule: SvgFillRule::NonZero, ..style }, &segs);
+            Item::Shape { ctm, style, segs } => canvas.shape(doc, &drawing::compose(&view, &ctm), &style, &segs),
+            Item::Text { ctm, style, pos, text, size, anchor, rotation, font_family } => {
+                let segs = text_outline(&options.fonts.face(font_family), pos, text, size, anchor, rotation);
+                canvas.shape(doc, &drawing::compose(&view, &ctm), &Resolved { fill_rule: SvgFillRule::NonZero, ..style }, &segs);
             }
+            Item::Image { ctm, origin, size, image } => canvas.image(&drawing::compose(&view, &ctm), origin, size, image),
+            Item::Push { ctm, opacity, clip } => canvas.push(&drawing::compose(&view, &ctm), opacity, clip),
+            Item::Pop => canvas.pop(),
         });
     }
     canvas.finish()
@@ -77,29 +84,98 @@ const TOLERANCE: f64 = 0.1;
 const SUBSAMPLES: usize = 16;
 
 /// Premultiplied RGBA, 0 to 1.
+type Px = [f32; 4];
+
+/// The pixels being drawn into, and the layers under them: each with the
+/// opacity and clip coverage it is composited with when it ends.
 struct Canvas {
     w: usize,
     h: usize,
-    px: Vec<[f32; 4]>,
+    px: Vec<Px>,
+    stack: Vec<(Vec<Px>, f32, Option<Mask>)>,
+}
+
+/// Coverage, 0 to 1, over the rows and columns a shape touches.
+struct Mask {
+    row0: usize,
+    col0: usize,
+    cols: usize,
+    cover: Vec<f32>,
+}
+
+impl Mask {
+    fn rows(&self) -> usize {
+        self.cover.len().checked_div(self.cols).unwrap_or(0)
+    }
+
+    /// Coverage at a pixel of the canvas, 0 outside.
+    fn at(&self, x: usize, y: usize) -> f32 {
+        if x < self.col0 || y < self.row0 || x >= self.col0 + self.cols || y >= self.row0 + self.rows() {
+            return 0.0;
+        }
+        self.cover[(y - self.row0) * self.cols + x - self.col0]
+    }
+}
+
+/// What a covered pixel is painted with: premultiplied colour at its centre.
+enum Shader<'a> {
+    Solid(Px),
+    Gradient {
+        /// From the canvas to the gradient's own coordinates.
+        inverse: Affine,
+        gradient: &'a SvgGradient,
+        stops: Vec<SvgStop>,
+    },
+    Image {
+        /// From the canvas to the image's pixels.
+        inverse: Affine,
+        image: &'a PngImage,
+    },
+}
+
+impl Shader<'_> {
+    fn at(&self, x: usize, y: usize) -> Px {
+        let p = [x as f64 + 0.5, y as f64 + 0.5];
+        match self {
+            Shader::Solid(c) => *c,
+            Shader::Gradient { inverse, gradient, stops } => {
+                let q = drawing::apply(inverse, p);
+                stop_color(stops, gradient_t(&gradient.kind, q))
+            }
+            Shader::Image { inverse, image } => sample(image, drawing::apply(inverse, p)),
+        }
+    }
 }
 
 impl Canvas {
     fn new(w: usize, h: usize, background: Option<[u8; 4]>) -> Self {
-        let bg = background.map_or([0.0; 4], |c| {
-            let a = c[3] as f32 / 255.0;
-            [c[0] as f32 / 255.0 * a, c[1] as f32 / 255.0 * a, c[2] as f32 / 255.0 * a, a]
-        });
-        Canvas { w, h, px: vec![bg; w * h] }
+        let bg = background.map_or([0.0; 4], |c| premultiply(c[0..3].try_into().unwrap(), c[3] as f32 / 255.0));
+        Canvas { w, h, px: vec![bg; w * h], stack: Vec::new() }
     }
 
-    fn shape(&mut self, m: &Affine, style: &Resolved, segs: &[Seg]) {
+    /// A paint's shader under `m` (user space to canvas).
+    fn shader<'a>(&self, doc: &'a SvgDocument, paint: Paint, m: &Affine) -> Option<Shader<'a>> {
+        match paint {
+            Paint::Color(c) => Some(Shader::Solid(premultiply(c, 1.0))),
+            Paint::Gradient(k) => {
+                let gradient = doc.gradients.get(k)?;
+                let to_canvas = match &gradient.transform {
+                    Some(t) => drawing::compose(m, t),
+                    None => *m,
+                };
+                Some(Shader::Gradient { inverse: drawing::invert(&to_canvas)?, gradient, stops: drawing::stops(&gradient.stops) })
+            }
+        }
+    }
+
+    fn shape(&mut self, doc: &SvgDocument, m: &Affine, style: &Resolved, segs: &[Seg]) {
         let tol = TOLERANCE / drawing::max_scale(m).max(1e-12);
         let subpaths = flatten(segs, tol);
         if style.fills() {
             let polys: Vec<Vec<[f64; 2]>> =
                 subpaths.iter().filter(|s| s.points.len() > 2).map(|s| s.points.iter().map(|p| drawing::apply(m, *p)).collect()).collect();
-            if let Some(c) = style.fill {
-                self.fill(&polys, style.fill_rule, c, style.fill_opacity);
+            if let (Some(mask), Some(shader)) = (self.coverage(&polys, style.fill_rule), style.fill.and_then(|p| self.shader(doc, p, m))) {
+                self.paint(&mask, &shader, style.fill_opacity as f32);
             }
         }
         if style.strokes() {
@@ -115,14 +191,57 @@ impl Canvas {
                 }
             }
             let polys: Vec<Vec<[f64; 2]>> = pieces.iter().map(|p| p.iter().map(|q| drawing::apply(m, *q)).collect()).collect();
-            if let Some(c) = style.stroke {
-                self.fill(&polys, SvgFillRule::NonZero, c, style.stroke_opacity);
+            if let (Some(mask), Some(shader)) = (self.coverage(&polys, SvgFillRule::NonZero), style.stroke.and_then(|p| self.shader(doc, p, m))) {
+                self.paint(&mask, &shader, style.stroke_opacity as f32);
             }
         }
     }
 
-    /// Polygons (closed implicitly) scan-converted and composited in `color`.
-    fn fill(&mut self, polys: &[Vec<[f64; 2]>], rule: SvgFillRule, color: [u8; 3], opacity: f64) {
+    /// An image stretched over the rectangle at `origin` of `size`, under `m`.
+    fn image(&mut self, m: &Affine, origin: [f64; 2], size: [f64; 2], image: &PngImage) {
+        // image pixels to user space, then to the canvas
+        let place = [size[0] / image.width as f64, 0.0, 0.0, size[1] / image.height as f64, origin[0], origin[1]];
+        let to_canvas = drawing::compose(m, &place);
+        let Some(inverse) = drawing::invert(&to_canvas) else { return };
+        let (w, h) = (image.width as f64, image.height as f64);
+        let quad: Vec<[f64; 2]> = [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]].iter().map(|p| drawing::apply(&to_canvas, *p)).collect();
+        if let Some(mask) = self.coverage(&[quad], SvgFillRule::NonZero) {
+            self.paint(&mask, &Shader::Image { inverse, image }, 1.0);
+        }
+    }
+
+    /// A layer begins: drawing goes to fresh pixels until [`Canvas::pop`].
+    fn push(&mut self, m: &Affine, opacity: f64, clip: Option<(Vec<Seg>, SvgFillRule)>) {
+        let mask = clip.map(|(segs, rule)| {
+            let tol = TOLERANCE / drawing::max_scale(m).max(1e-12);
+            let polys: Vec<Vec<[f64; 2]>> = flatten(&segs, tol)
+                .into_iter()
+                .filter(|s| s.points.len() > 2)
+                .map(|s| s.points.iter().map(|p| drawing::apply(m, *p)).collect())
+                .collect();
+            // a clip that covers nothing hides everything
+            self.coverage(&polys, rule).unwrap_or(Mask { row0: 0, col0: 0, cols: 0, cover: Vec::new() })
+        });
+        let under = std::mem::replace(&mut self.px, vec![[0.0; 4]; self.w * self.h]);
+        self.stack.push((under, opacity as f32, mask));
+    }
+
+    /// A layer ends: composited onto what was under it.
+    fn pop(&mut self) {
+        let Some((under, opacity, mask)) = self.stack.pop() else { return };
+        let layer = std::mem::replace(&mut self.px, under);
+        for (k, (d, s)) in self.px.iter_mut().zip(&layer).enumerate() {
+            let a = opacity * mask.as_ref().map_or(1.0, |m| m.at(k % self.w, k / self.w));
+            if a <= 0.0 || s[3] <= 0.0 {
+                continue;
+            }
+            let k = 1.0 - s[3] * a;
+            *d = [s[0] * a + d[0] * k, s[1] * a + d[1] * k, s[2] * a + d[2] * k, s[3] * a + d[3] * k];
+        }
+    }
+
+    /// Polygons (closed implicitly) scan-converted to coverage.
+    fn coverage(&self, polys: &[Vec<[f64; 2]>], rule: SvgFillRule) -> Option<Mask> {
         let mut edges: Vec<Edge> = Vec::new();
         let (mut ymin, mut ymax, mut xmin, mut xmax) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
         for poly in polys {
@@ -145,7 +264,7 @@ impl Canvas {
             }
         }
         if edges.is_empty() {
-            return;
+            return None;
         }
         edges.sort_by(|a, b| a.y0.total_cmp(&b.y0));
         let row0 = ymin.floor().max(0.0) as usize;
@@ -153,18 +272,16 @@ impl Canvas {
         let col0 = xmin.floor().max(0.0) as usize;
         let col1 = (xmax.ceil().min(self.w as f64)).max(0.0) as usize;
         if row0 >= row1 || col0 >= col1 {
-            return;
+            return None;
         }
-        let span = col1 - col0;
-        let mut cover = vec![0f32; span];
+        let cols = col1 - col0;
+        let mut cover = vec![0f32; cols * (row1 - row0)];
         let mut active: Vec<usize> = Vec::new();
         let mut next = 0;
         let mut xs: Vec<(f64, i32)> = Vec::new();
         let weight = 1.0 / SUBSAMPLES as f64;
-        let alpha = opacity as f32;
-        let src = [color[0] as f32 / 255.0, color[1] as f32 / 255.0, color[2] as f32 / 255.0];
         for row in row0..row1 {
-            cover.iter_mut().for_each(|c| *c = 0.0);
+            let line = &mut cover[(row - row0) * cols..(row - row0 + 1) * cols];
             for sub in 0..SUBSAMPLES {
                 let y = row as f64 + (sub as f64 + 0.5) / SUBSAMPLES as f64;
                 while next < edges.len() && edges[next].y0 <= y {
@@ -188,23 +305,39 @@ impl Canvas {
                         SvgFillRule::EvenOdd => winding % 2 != 0,
                     };
                     if inside {
-                        add_span(&mut cover, col0, xs[k].0, xs[k + 1].0, weight);
+                        add_span(line, col0, xs[k].0, xs[k + 1].0, weight);
                     }
                 }
             }
-            let line = &mut self.px[row * self.w + col0..row * self.w + col1];
-            for (p, c) in line.iter_mut().zip(&cover) {
-                let a = c.min(1.0) * alpha;
-                if a <= 0.0 {
+            for c in line.iter_mut() {
+                *c = c.min(1.0);
+            }
+        }
+        Some(Mask { row0, col0, cols, cover })
+    }
+
+    /// `shader` composited source-over where `mask` covers, at `opacity`.
+    fn paint(&mut self, mask: &Mask, shader: &Shader, opacity: f32) {
+        for r in 0..mask.rows() {
+            let y = mask.row0 + r;
+            for c in 0..mask.cols {
+                let cov = mask.cover[r * mask.cols + c] * opacity;
+                if cov <= 0.0 {
                     continue;
                 }
-                let k = 1.0 - a;
-                *p = [src[0] * a + p[0] * k, src[1] * a + p[1] * k, src[2] * a + p[2] * k, a + p[3] * k];
+                let x = mask.col0 + c;
+                let s = shader.at(x, y);
+                let d = &mut self.px[y * self.w + x];
+                let k = 1.0 - s[3] * cov;
+                *d = [s[0] * cov + d[0] * k, s[1] * cov + d[1] * k, s[2] * cov + d[2] * k, s[3] * cov + d[3] * k];
             }
         }
     }
 
-    fn finish(self) -> PngImage {
+    fn finish(mut self) -> PngImage {
+        while !self.stack.is_empty() {
+            self.pop();
+        }
         let mut rgba = Vec::with_capacity(self.px.len() * 4);
         for p in &self.px {
             let a = p[3].clamp(0.0, 1.0);
@@ -219,6 +352,97 @@ impl Canvas {
         }
         PngImage { width: self.w as u32, height: self.h as u32, rgba }
     }
+}
+
+/// An sRGB colour at `alpha`, premultiplied.
+fn premultiply(c: [u8; 3], alpha: f32) -> Px {
+    [c[0] as f32 / 255.0 * alpha, c[1] as f32 / 255.0 * alpha, c[2] as f32 / 255.0 * alpha, alpha]
+}
+
+/// Where `p` falls along a gradient, padded to 0 to 1.
+fn gradient_t(kind: &SvgGradientKind, p: [f64; 2]) -> f64 {
+    let t = match kind {
+        SvgGradientKind::Linear { start, end } => {
+            let d = [end[0] - start[0], end[1] - start[1]];
+            let len2 = d[0] * d[0] + d[1] * d[1];
+            if len2 == 0.0 {
+                // SVG: a zero-length vector paints the last stop
+                1.0
+            } else {
+                ((p[0] - start[0]) * d[0] + (p[1] - start[1]) * d[1]) / len2
+            }
+        }
+        SvgGradientKind::Radial { center, radius, focus } => {
+            if *radius <= 0.0 {
+                1.0
+            } else {
+                let f = drawing::radial_focus(*center, *radius, *focus);
+                // the t whose circle, from the focus (radius 0) to the outer
+                // circle (radius r), passes through p: |p - f - t(c - f)| = t r
+                let (cd, pd) = ([center[0] - f[0], center[1] - f[1]], [p[0] - f[0], p[1] - f[1]]);
+                let a = cd[0] * cd[0] + cd[1] * cd[1] - radius * radius;
+                let b = pd[0] * cd[0] + pd[1] * cd[1];
+                let c = pd[0] * pd[0] + pd[1] * pd[1];
+                if a.abs() < 1e-12 {
+                    if b.abs() < 1e-12 { 0.0 } else { c / (2.0 * b) }
+                } else {
+                    // the focus is inside the circle, so a < 0 and the larger
+                    // root is the one circle of the family through p
+                    let disc = (b * b - a * c).max(0.0).sqrt();
+                    ((b + disc) / a).max((b - disc) / a)
+                }
+            }
+        }
+    };
+    t.clamp(0.0, 1.0)
+}
+
+/// The colour at `t` of stops in order, interpolated in sRGB with alpha
+/// alongside (not premultiplied, as PDF interpolates a shading and its soft
+/// mask), then premultiplied.
+fn stop_color(stops: &[SvgStop], t: f64) -> Px {
+    let Some(first) = stops.first() else { return [0.0; 4] };
+    let last = stops.last().unwrap();
+    let pick = |s: &SvgStop| ([s.color[0] as f64, s.color[1] as f64, s.color[2] as f64], s.opacity);
+    let (c, a) = if t <= first.offset {
+        pick(first)
+    } else if t >= last.offset {
+        pick(last)
+    } else {
+        let k = stops.windows(2).position(|w| t >= w[0].offset && t <= w[1].offset).unwrap_or(0);
+        let (s0, s1) = (&stops[k], &stops[k + 1]);
+        let span = s1.offset - s0.offset;
+        let u = if span > 0.0 { (t - s0.offset) / span } else { 1.0 };
+        let (c0, a0) = pick(s0);
+        let (c1, a1) = pick(s1);
+        ([c0[0] + (c1[0] - c0[0]) * u, c0[1] + (c1[1] - c0[1]) * u, c0[2] + (c1[2] - c0[2]) * u], a0 + (a1 - a0) * u)
+    };
+    let a = a.clamp(0.0, 1.0) as f32;
+    [c[0] as f32 / 255.0 * a, c[1] as f32 / 255.0 * a, c[2] as f32 / 255.0 * a, a]
+}
+
+/// An image sampled bilinearly at `p` (in pixels, the first pixel's centre
+/// at (0.5, 0.5)), edges clamped, premultiplied.
+fn sample(image: &PngImage, p: [f64; 2]) -> Px {
+    let (w, h) = (image.width as i64, image.height as i64);
+    let fx = p[0] - 0.5;
+    let fy = p[1] - 0.5;
+    let (x0, y0) = (fx.floor() as i64, fy.floor() as i64);
+    let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
+    let px = |x: i64, y: i64| -> Px {
+        let (x, y) = (x.clamp(0, w - 1) as usize, y.clamp(0, h - 1) as usize);
+        let o = (y * image.width as usize + x) * 4;
+        let c = &image.rgba[o..o + 4];
+        premultiply([c[0], c[1], c[2]], c[3] as f32 / 255.0)
+    };
+    let (a, b, c, d) = (px(x0, y0), px(x0 + 1, y0), px(x0, y0 + 1), px(x0 + 1, y0 + 1));
+    let mut out = [0.0; 4];
+    for k in 0..4 {
+        let top = a[k] + (b[k] - a[k]) * tx;
+        let bottom = c[k] + (d[k] - c[k]) * tx;
+        out[k] = top + (bottom - top) * ty;
+    }
+    out
 }
 
 struct Edge {
@@ -491,30 +715,14 @@ fn push_oriented(out: &mut Vec<Vec<[f64; 2]>>, mut poly: Vec<[f64; 2]>) {
     }
 }
 
-/// DejaVu Sans, parsed once.
-fn font() -> &'static crate::loaders::TtfFont {
-    static FONT: std::sync::OnceLock<crate::loaders::TtfFont> = std::sync::OnceLock::new();
-    FONT.get_or_init(|| crate::loaders::TtfFont::parse(include_bytes!("../openscad/DejaVuSans.ttf")).expect("the bundled DejaVu Sans parses"))
-}
-
 /// A text run's glyph outlines as one path in user units: the baseline at
 /// `pos`, `size` units to the em, shifted for its anchor, then SVG's
 /// `rotate(rotation pos)`.
-fn text_outline(pos: [f64; 2], text: &str, size: f64, anchor: SvgTextAnchor, rotation: f64) -> Vec<Seg> {
-    let f = font();
-    let scale = size / f.units_per_em.max(1) as f64;
-    let mut placed = Vec::new();
-    let mut x = 0.0;
-    let mut prev: Option<u16> = None;
-    for c in text.chars() {
-        let Some(g) = f.glyph_id(c) else { continue };
-        if let Some(p) = prev {
-            x += f.kern(p, g) as f64 * scale;
-        }
-        placed.push((g, x));
-        x += f.advance(g) as f64 * scale;
-        prev = Some(g);
-    }
+fn text_outline(face: &Face, pos: [f64; 2], text: &str, size: f64, anchor: SvgTextAnchor, rotation: f64) -> Vec<Seg> {
+    let f = &face.ttf;
+    let scale = size / face.units_per_em();
+    let run = fonts::layout(face, text);
+    let x = run.advance * scale;
     let shift = match anchor {
         SvgTextAnchor::Start => 0.0,
         SvgTextAnchor::Middle => -x / 2.0,
@@ -527,7 +735,8 @@ fn text_outline(pos: [f64; 2], text: &str, size: f64, anchor: SvgTextAnchor, rot
         [pos[0] + cos * u - sin * v, pos[1] + sin * u + cos * v]
     };
     let mut segs = Vec::new();
-    for (g, x0) in placed {
+    for (g, _, x0) in run.glyphs {
+        let x0 = x0 * scale;
         for (starts, a, control, b) in f.outline_segments(g) {
             if starts {
                 if !segs.is_empty() {
@@ -664,7 +873,7 @@ mod tests {
     #[test]
     fn dpi_scales_the_page() {
         let doc = SvgDocument::new(1.0, 0.5, SvgUnit::Inches);
-        let img = rasterize_svg(&doc, &RasterOptions { dpi: 300.0, background: None });
+        let img = rasterize_svg(&doc, &RasterOptions { dpi: 300.0, ..Default::default() });
         assert_eq!((img.width, img.height), (300, 150));
     }
 }

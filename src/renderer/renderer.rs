@@ -192,22 +192,35 @@ fn make_sampler(device: &wgpu::Device, i: usize) -> wgpu::Sampler {
 
 /// A draw's index (or vertex) range: its span, clamped to `count`, or all of
 /// it.
-/// Make `current` the `w × h` pair if it or `spare` already is (swapping
-/// them), and say whether a new one has to be made. When it does, the old
-/// current one is kept as the spare.
+/// Sized targets kept aside for a renderer drawing at several sizes in turn
+/// (an adaptive resolution, several views on one renderer): with the current
+/// one, enough for a four-way split.
+const SPARE_SIZES: usize = 3;
+
+/// Make `current` the `w × h` pair, taking it back from `spare` if it is
+/// there, and say whether a new one has to be made. The old current one goes
+/// to the front of `spare`, which keeps the [`SPARE_SIZES`] most recent.
+/// Whether `current` changed is for the caller to tell (anything derived
+/// from it, such as another view of the same texture, has to follow).
 fn take_sized<T>(
     current: &mut Option<(u32, u32, T, T)>,
-    spare: &mut Option<(u32, u32, T, T)>,
+    spare: &mut Vec<(u32, u32, T, T)>,
     w: u32,
     h: u32,
 ) -> bool {
-    let fits =
-        |t: &Option<(u32, u32, T, T)>| matches!(t, Some((cw, ch, ..)) if *cw == w && *ch == h);
-    if fits(current) {
+    if matches!(current, Some((cw, ch, ..)) if *cw == w && *ch == h) {
         return false;
     }
-    std::mem::swap(current, spare);
-    !fits(current)
+    let found = spare.iter().position(|(sw, sh, ..)| *sw == w && *sh == h);
+    let old = match found {
+        Some(i) => current.replace(spare.remove(i)),
+        None => current.take(),
+    };
+    if let Some(old) = old {
+        spare.insert(0, old);
+        spare.truncate(SPARE_SIZES);
+    }
+    found.is_none()
 }
 
 fn draw_span(range: Option<(u32, u32)>, count: u32) -> std::ops::Range<u32> {
@@ -1021,7 +1034,7 @@ pub struct Renderer {
     pipeline_oit_msaa: Vec<Pipeline>,
     oit_msaa_targets: Option<(u32, u32, wgpu::TextureView, wgpu::TextureView)>,
     /// As `msaa_targets_spare`, for these.
-    oit_msaa_targets_spare: Option<(u32, u32, wgpu::TextureView, wgpu::TextureView)>,
+    oit_msaa_targets_spare: Vec<(u32, u32, wgpu::TextureView, wgpu::TextureView)>,
     /// The multisampled opaque depth to the single-sampled one, for the
     /// refraction pass under MSAA (`DEPTH_RESOLVE_SHADER`). `None` where a
     /// shader cannot read a multisampled texture.
@@ -1080,10 +1093,11 @@ pub struct Renderer {
     exposure: f32,
     /// Lazily-created multisampled color + depth targets, keyed by size.
     msaa_targets: Option<(u32, u32, wgpu::TextureView, wgpu::TextureView)>,
-    /// The previous size's, kept for a frame that alternates two sizes — a
-    /// multisampled canvas and a multisampled render target — rather than
-    /// reallocating both every frame.
-    msaa_targets_spare: Option<(u32, u32, wgpu::TextureView, wgpu::TextureView)>,
+    /// Earlier sizes' targets, most recent first, kept for a renderer that
+    /// draws at several sizes in turn — a multisampled canvas and a
+    /// multisampled render target, an adaptive resolution, several views on
+    /// one renderer — rather than reallocating every frame. See `take_sized`.
+    msaa_targets_spare: Vec<(u32, u32, wgpu::TextureView, wgpu::TextureView)>,
     /// Whether the last frame's main pass drew into `msaa_targets` — which
     /// attachments [`overlay_attachments`](Self::overlay_attachments) hands out.
     overlay_msaa: bool,
@@ -3212,6 +3226,14 @@ impl Renderer {
     /// at 18, 31 and 35 ms.
     pub fn gpu_frame_ms(&self) -> f32 {
         self.timer.as_ref().map(|t| t.last_ms()).unwrap_or(0.0)
+    }
+
+    /// Swaps the renderer's main-pass and shadow timers for `timers`, so a
+    /// caller drawing several views on one renderer times each on its own
+    /// (see [`ViewProducer`](super::ViewProducer)).
+    pub(crate) fn swap_gpu_timers(&mut self, timers: &mut (Option<GpuTimer>, Option<GpuTimer>)) {
+        std::mem::swap(&mut self.timer, &mut timers.0);
+        std::mem::swap(&mut self.shadow_timer, &mut timers.1);
     }
 
     /// GPU milliseconds from the start of the first shadow pass to the end of

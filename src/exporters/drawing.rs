@@ -11,8 +11,15 @@
 //! cubic Béziers in the order SVG draws it, which is where a dash pattern
 //! starts. Arcs are converted as SVG's implementation notes (F.6) say,
 //! radii scaled up when too small to reach.
+//!
+//! An element or group with an `opacity` below 1 or a `clip` is a layer:
+//! [`Item::Push`] before it and [`Item::Pop`] after, the clip in the user
+//! space of the element (its own transform applied, as `userSpaceOnUse`
+//! has it). Neither is inherited. Opacity 0 skips the element; a gradient or
+//! clip index the document does not have is no paint and no clip.
 
-use super::svg::{PathCommand, SvgDocument, SvgFillRule, SvgLineCap, SvgLineJoin, SvgNode, SvgPaint, SvgStyle, SvgTextAnchor, SvgUnit};
+use super::svg::{PathCommand, SvgDocument, SvgFillRule, SvgLineCap, SvgLineJoin, SvgNode, SvgPaint, SvgPath, SvgStyle, SvgTextAnchor, SvgUnit};
+use crate::utils::png::PngImage;
 
 /// An affine transform `[a, b, c, d, e, f]` as [`SvgTransform`](super::SvgTransform):
 /// x' = a·x + c·y + e, y' = b·x + d·y + f.
@@ -36,6 +43,43 @@ pub(crate) fn apply(m: &Affine, p: [f64; 2]) -> [f64; 2] {
     [m[0] * p[0] + m[2] * p[1] + m[4], m[1] * p[0] + m[3] * p[1] + m[5]]
 }
 
+/// `m`'s inverse, when it has one.
+pub(crate) fn invert(m: &Affine) -> Option<Affine> {
+    let det = m[0] * m[3] - m[1] * m[2];
+    if det == 0.0 || !det.is_finite() {
+        return None;
+    }
+    let (a, b, c, d) = (m[3] / det, -m[1] / det, -m[2] / det, m[0] / det);
+    Some([a, b, c, d, -(a * m[4] + c * m[5]), -(b * m[4] + d * m[5])])
+}
+
+/// A gradient's stops as SVG reads them: offsets clamped to 0 to 1 and
+/// each at least the one before, opacities clamped.
+pub(crate) fn stops(stops: &[super::svg::SvgStop]) -> Vec<super::svg::SvgStop> {
+    let mut last = 0.0f64;
+    stops
+        .iter()
+        .map(|s| {
+            last = s.offset.clamp(0.0, 1.0).max(last);
+            super::svg::SvgStop { offset: last, color: s.color, opacity: s.opacity.clamp(0.0, 1.0) }
+        })
+        .collect()
+}
+
+/// A radial gradient's focus as SVG 1.1 places it: the centre when none is
+/// given, moved onto the circle (just inside) when outside it.
+pub(crate) fn radial_focus(center: [f64; 2], radius: f64, focus: Option<[f64; 2]>) -> [f64; 2] {
+    let Some(f) = focus else { return center };
+    let d = [f[0] - center[0], f[1] - center[1]];
+    let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
+    let max = radius * 0.999;
+    if len > max && len > 0.0 {
+        [center[0] + d[0] / len * max, center[1] + d[1] / len * max]
+    } else {
+        f
+    }
+}
+
 /// How much `m` can stretch a length: the larger singular value.
 pub(crate) fn max_scale(m: &Affine) -> f64 {
     let (a, b, c, d) = (m[0], m[1], m[2], m[3]);
@@ -54,11 +98,19 @@ pub(crate) enum Seg {
     Close,
 }
 
+/// What a shape is painted with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Paint {
+    Color([u8; 3]),
+    /// The document's gradient `k`.
+    Gradient(usize),
+}
+
 /// A style with every property decided.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Resolved {
-    pub fill: Option<[u8; 3]>,
-    pub stroke: Option<[u8; 3]>,
+    pub fill: Option<Paint>,
+    pub stroke: Option<Paint>,
     pub stroke_width: f64,
     pub fill_opacity: f64,
     pub stroke_opacity: f64,
@@ -74,7 +126,7 @@ impl Default for Resolved {
     /// SVG's initial values.
     fn default() -> Self {
         Resolved {
-            fill: Some([0, 0, 0]),
+            fill: Some(Paint::Color([0, 0, 0])),
             stroke: None,
             stroke_width: 1.0,
             fill_opacity: 1.0,
@@ -89,12 +141,14 @@ impl Default for Resolved {
 }
 
 impl Resolved {
-    /// `style` over `self`, which it inherits from.
-    pub fn with(&self, style: &SvgStyle) -> Resolved {
-        let paint = |p: Option<SvgPaint>, inherited: Option<[u8; 3]>| match p {
+    /// `style` over `self`, which it inherits from, in a document of
+    /// `gradients` gradients.
+    pub fn with(&self, style: &SvgStyle, gradients: usize) -> Resolved {
+        let paint = |p: Option<SvgPaint>, inherited: Option<Paint>| match p {
             None => inherited,
             Some(SvgPaint::None) => None,
-            Some(SvgPaint::Color(c)) => Some(c),
+            Some(SvgPaint::Color(c)) => Some(Paint::Color(c)),
+            Some(SvgPaint::Gradient(k)) => (k < gradients).then_some(Paint::Gradient(k)),
         };
         let mut r = self.clone();
         r.fill = paint(style.fill, self.fill);
@@ -116,6 +170,10 @@ impl Resolved {
         }
         if let Some(f) = style.fill_rule {
             r.fill_rule = f;
+        }
+        // SVG: a limit below 1 is an error, ignored here
+        if let Some(m) = style.miter_limit.filter(|m| *m >= 1.0) {
+            r.miter_limit = m;
         }
         if !style.dash.is_empty() {
             r.dash = dash_array(&style.dash);
@@ -146,9 +204,16 @@ fn dash_array(d: &[f64]) -> Vec<f64> {
     }
 }
 
-/// What [`walk`] hands over: a shape or a run of text, with the transform
-/// from its coordinates to the view box's and its style.
+/// What [`walk`] hands over: a shape, a run of text or an image, with the
+/// transform from its coordinates to the view box's and its style, and
+/// where layers begin and end.
 pub(crate) enum Item<'a> {
+    /// A layer begins: what follows until its [`Item::Pop`] is composited
+    /// as one, at `opacity`, inside `clip` (in `ctm`'s coordinates).
+    Push { ctm: Affine, opacity: f64, clip: Option<(Vec<Seg>, SvgFillRule)> },
+    Pop,
+    /// RGBA pixels over the rectangle at `origin` of `size`, top row first.
+    Image { ctm: Affine, origin: [f64; 2], size: [f64; 2], image: &'a PngImage },
     Shape { ctm: Affine, style: Resolved, segs: Vec<Seg> },
     Text {
         ctm: Affine,
@@ -164,6 +229,7 @@ pub(crate) enum Item<'a> {
 
 /// Every shape and text of `doc` in painting order, in user units.
 pub(crate) fn walk<'a>(doc: &'a SvgDocument, f: &mut dyn FnMut(Item<'a>)) {
+    let cx = Context { gradients: doc.gradients.len(), clips: &doc.clip_paths };
     let root = Resolved::default();
     let ctm = if doc.y_up {
         // write_svg's wrapper: y' = (top + bottom) - y
@@ -173,20 +239,61 @@ pub(crate) fn walk<'a>(doc: &'a SvgDocument, f: &mut dyn FnMut(Item<'a>)) {
         IDENTITY
     };
     for n in &doc.children {
-        walk_node(n, &ctm, &root, f);
+        walk_node(&cx, n, &ctm, &root, f);
     }
 }
 
-fn walk_node<'a>(n: &'a SvgNode, ctm: &Affine, inherited: &Resolved, f: &mut dyn FnMut(Item<'a>)) {
+/// What a node needs of its document.
+struct Context<'a> {
+    gradients: usize,
+    clips: &'a [super::svg::SvgClip],
+}
+
+fn node_style(n: &SvgNode) -> &SvgStyle {
+    match n {
+        SvgNode::Path { style, .. }
+        | SvgNode::Circle { style, .. }
+        | SvgNode::Rect { style, .. }
+        | SvgNode::Line { style, .. }
+        | SvgNode::Polyline { style, .. }
+        | SvgNode::Text { style, .. }
+        | SvgNode::Image { style, .. }
+        | SvgNode::Group { style, .. } => style,
+    }
+}
+
+fn walk_node<'a>(cx: &Context<'a>, n: &'a SvgNode, ctm: &Affine, inherited: &Resolved, f: &mut dyn FnMut(Item<'a>)) {
+    let own = node_style(n);
+    let opacity = own.opacity.map_or(1.0, |o| o.clamp(0.0, 1.0));
+    if opacity <= 0.0 {
+        return;
+    }
+    // a layer's clip is in the element's own user space: a group's transform applies
+    let inner = match n {
+        SvgNode::Group { transform: Some(t), .. } => compose(ctm, t),
+        _ => *ctm,
+    };
+    let clip = own.clip.and_then(|k| cx.clips.get(k)).map(|c| (path_segs(&c.path), c.rule));
+    let layer = opacity < 1.0 || clip.is_some();
+    if layer {
+        f(Item::Push { ctm: inner, opacity, clip });
+    }
+    walk_content(cx, n, ctm, inherited, f);
+    if layer {
+        f(Item::Pop);
+    }
+}
+
+fn walk_content<'a>(cx: &Context<'a>, n: &'a SvgNode, ctm: &Affine, inherited: &Resolved, f: &mut dyn FnMut(Item<'a>)) {
     match n {
         SvgNode::Group { transform, style, children, .. } => {
             let ctm = match transform {
                 Some(t) => compose(ctm, t),
                 None => *ctm,
             };
-            let style = inherited.with(style);
+            let style = inherited.with(style, cx.gradients);
             for c in children {
-                walk_node(c, &ctm, &style, f);
+                walk_node(cx, c, &ctm, &style, f);
             }
         }
         SvgNode::Text { pos, text, size, anchor, rotation, font_family, style } => {
@@ -195,7 +302,7 @@ fn walk_node<'a>(n: &'a SvgNode, ctm: &Affine, inherited: &Resolved, f: &mut dyn
             }
             f(Item::Text {
                 ctm: *ctm,
-                style: inherited.with(style),
+                style: inherited.with(style, cx.gradients),
                 pos: *pos,
                 text,
                 size: *size,
@@ -204,10 +311,15 @@ fn walk_node<'a>(n: &'a SvgNode, ctm: &Affine, inherited: &Resolved, f: &mut dyn
                 font_family: font_family.as_deref(),
             });
         }
+        SvgNode::Image { origin, size, image, .. } => {
+            if size[0] > 0.0 && size[1] > 0.0 && image.width > 0 && image.height > 0 {
+                f(Item::Image { ctm: *ctm, origin: *origin, size: *size, image });
+            }
+        }
         other => {
             let (segs, style) = shape_segs(other);
             if !segs.is_empty() {
-                f(Item::Shape { ctm: *ctm, style: inherited.with(style), segs });
+                f(Item::Shape { ctm: *ctm, style: inherited.with(style, cx.gradients), segs });
             }
         }
     }
@@ -219,45 +331,7 @@ fn walk_node<'a>(n: &'a SvgNode, ctm: &Affine, inherited: &Resolved, f: &mut dyn
 fn shape_segs(n: &SvgNode) -> (Vec<Seg>, &SvgStyle) {
     let mut s = Vec::new();
     match n {
-        SvgNode::Path { path, style } => {
-            let mut start = [0.0, 0.0];
-            let mut cur: Option<[f64; 2]> = None;
-            for c in &path.commands {
-                match *c {
-                    PathCommand::MoveTo(p) => {
-                        s.push(Seg::Move(p));
-                        start = p;
-                        cur = Some(p);
-                    }
-                    // path data must begin with a moveto; SVG renders up to the first error
-                    _ if cur.is_none() => break,
-                    PathCommand::LineTo(p) => {
-                        s.push(Seg::Line(p));
-                        cur = Some(p);
-                    }
-                    PathCommand::CubicTo { c1, c2, to } => {
-                        s.push(Seg::Cubic(c1, c2, to));
-                        cur = Some(to);
-                    }
-                    PathCommand::QuadTo { c, to } => {
-                        let p0 = cur.unwrap_or(start);
-                        let c1 = [p0[0] + 2.0 / 3.0 * (c[0] - p0[0]), p0[1] + 2.0 / 3.0 * (c[1] - p0[1])];
-                        let c2 = [to[0] + 2.0 / 3.0 * (c[0] - to[0]), to[1] + 2.0 / 3.0 * (c[1] - to[1])];
-                        s.push(Seg::Cubic(c1, c2, to));
-                        cur = Some(to);
-                    }
-                    PathCommand::ArcTo { radii, rotation, large_arc, sweep, to } => {
-                        arc_to_cubics(cur.unwrap_or(start), radii, rotation, large_arc, sweep, to, &mut s);
-                        cur = Some(to);
-                    }
-                    PathCommand::Close => {
-                        s.push(Seg::Close);
-                        cur = Some(start);
-                    }
-                }
-            }
-            (s, style)
-        }
+        SvgNode::Path { path, style } => (path_segs(path), style),
         SvgNode::Circle { center, radius, style } => {
             if *radius > 0.0 {
                 ellipse(*center, *radius, *radius, &mut s);
@@ -288,8 +362,50 @@ fn shape_segs(n: &SvgNode) -> (Vec<Seg>, &SvgStyle) {
             }
             (s, style)
         }
-        SvgNode::Group { style, .. } | SvgNode::Text { style, .. } => (s, style),
+        SvgNode::Group { style, .. } | SvgNode::Text { style, .. } | SvgNode::Image { style, .. } => (s, style),
     }
+}
+
+/// A path's commands as segments.
+fn path_segs(path: &SvgPath) -> Vec<Seg> {
+    let mut s = Vec::new();
+    let mut start = [0.0, 0.0];
+    let mut cur: Option<[f64; 2]> = None;
+    for c in &path.commands {
+        match *c {
+            PathCommand::MoveTo(p) => {
+                s.push(Seg::Move(p));
+                start = p;
+                cur = Some(p);
+            }
+            // path data must begin with a moveto; SVG renders up to the first error
+            _ if cur.is_none() => break,
+            PathCommand::LineTo(p) => {
+                s.push(Seg::Line(p));
+                cur = Some(p);
+            }
+            PathCommand::CubicTo { c1, c2, to } => {
+                s.push(Seg::Cubic(c1, c2, to));
+                cur = Some(to);
+            }
+            PathCommand::QuadTo { c, to } => {
+                let p0 = cur.unwrap_or(start);
+                let c1 = [p0[0] + 2.0 / 3.0 * (c[0] - p0[0]), p0[1] + 2.0 / 3.0 * (c[1] - p0[1])];
+                let c2 = [to[0] + 2.0 / 3.0 * (c[0] - to[0]), to[1] + 2.0 / 3.0 * (c[1] - to[1])];
+                s.push(Seg::Cubic(c1, c2, to));
+                cur = Some(to);
+            }
+            PathCommand::ArcTo { radii, rotation, large_arc, sweep, to } => {
+                arc_to_cubics(cur.unwrap_or(start), radii, rotation, large_arc, sweep, to, &mut s);
+                cur = Some(to);
+            }
+            PathCommand::Close => {
+                s.push(Seg::Close);
+                cur = Some(start);
+            }
+        }
+    }
+    s
 }
 
 /// Bézier circles: the control distance that puts each quarter's midpoint on
@@ -461,13 +577,17 @@ mod tests {
 
     #[test]
     fn styles_inherit_and_none_turns_paint_off() {
-        let group = Resolved::default().with(&SvgStyle::stroke([1, 2, 3], 0.5).with_dash(&[1.0]));
+        let group = Resolved::default().with(&SvgStyle::stroke([1, 2, 3], 0.5).with_dash(&[1.0]), 0);
         assert_eq!(group.fill, None);
-        assert_eq!(group.stroke, Some([1, 2, 3]));
+        assert_eq!(group.stroke, Some(Paint::Color([1, 2, 3])));
         assert_eq!(group.dash, vec![1.0, 1.0], "an odd dash list is repeated");
-        let child = group.with(&SvgStyle { stroke_width: Some(2.0), ..Default::default() });
-        assert_eq!((child.stroke, child.stroke_width, child.line_cap), (Some([1, 2, 3]), 2.0, SvgLineCap::Round));
-        assert!(Resolved::default().with(&SvgStyle::default().with_dash(&[1.0, -1.0])).dash.is_empty());
+        let child = group.with(&SvgStyle { stroke_width: Some(2.0), ..Default::default() }, 0);
+        assert_eq!((child.stroke, child.stroke_width, child.line_cap), (Some(Paint::Color([1, 2, 3])), 2.0, SvgLineCap::Round));
+        assert!(Resolved::default().with(&SvgStyle::default().with_dash(&[1.0, -1.0]), 0).dash.is_empty());
+        // a gradient the document does not have paints nothing
+        let missing = SvgStyle { fill: Some(SvgPaint::Gradient(3)), ..Default::default() };
+        assert_eq!(Resolved::default().with(&missing, 3).fill, None);
+        assert_eq!(Resolved::default().with(&missing, 4).fill, Some(Paint::Gradient(3)));
     }
 
     #[test]
@@ -482,6 +602,25 @@ mod tests {
             }
         });
         assert_eq!(got, Some([1.0, 0.0, 0.0, -1.0, 0.0, 50.0]));
+    }
+
+    #[test]
+    fn opacity_and_clips_make_layers_in_the_elements_own_space() {
+        let mut doc = SvgDocument::new(10.0, 10.0, SvgUnit::None);
+        let clip = doc.clip_path(SvgPath::polygon(&[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]], true), SvgFillRule::NonZero);
+        let g = doc.group(None, Some([2.0, 0.0, 0.0, 2.0, 0.0, 0.0]), SvgStyle { opacity: Some(0.5), clip: Some(clip), ..Default::default() });
+        g.push(SvgNode::Circle { center: [1.0, 1.0], radius: 1.0, style: SvgStyle::default() });
+        doc.circle([1.0, 1.0], 1.0, SvgStyle { opacity: Some(0.0), ..Default::default() });
+        let mut seen = Vec::new();
+        walk(&doc, &mut |i| {
+            seen.push(match i {
+                Item::Push { ctm, opacity, clip } => format!("push {ctm:?} {opacity} {}", clip.is_some()),
+                Item::Pop => "pop".into(),
+                Item::Shape { .. } => "shape".into(),
+                _ => "other".into(),
+            })
+        });
+        assert_eq!(seen, ["push [2.0, 0.0, 0.0, 2.0, 0.0, 0.0] 0.5 true", "shape", "pop"]);
     }
 
     #[test]

@@ -222,7 +222,57 @@ fn compare(
         .with_options(options)
         .render_to_string(scene, camera);
     let paths = parse_paths(&svg);
+    let painted = |x: f32, y: f32| painted_at(&paths, x, y).map(str::to_string);
+    compare_with(scene, camera, perspective, w, h, &painted)
+}
 
+/// [`compare`] for the PNG the same renderer draws on the CPU
+/// ([`SvgRenderer::render_to_png`], through `render_to_document`): the colour
+/// of the pixel under each sample.
+fn compare_png(
+    scene: &mut Scene,
+    camera: &dyn Camera,
+    perspective: bool,
+    w: u32,
+    h: u32,
+    options: SvgOptions,
+) -> Report {
+    let png = SvgRenderer::new(w, h)
+        .with_options(options)
+        .render_to_png(scene, camera, 1.0);
+    let img = threers::utils::png::decode_png(&png).expect("a PNG");
+    assert_eq!((img.width, img.height), (w, h));
+    // Which surface a pixel shows: the scene colour it is nearest. Inside a
+    // surface its pixels are off its colour by a few levels where two of its
+    // faces meet, each edge anti-aliased against what is under it (as every
+    // SVG renderer draws abutting shapes).
+    let mut palette = vec![hex_of(scene.background)];
+    scene.arena.traverse_visible(scene.root, &mut |_, obj| {
+        if let ObjectKind::Mesh(m) = &obj.kind {
+            palette.push(hex_of(m.material.color()));
+        }
+    });
+    let rgb = |hex: &str| [1, 3, 5].map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap() as i32);
+    let painted = |x: f32, y: f32| {
+        let p = img.pixel(x as u32, y as u32);
+        let got = [p[0] as i32, p[1] as i32, p[2] as i32];
+        let off = |hex: &String| rgb(hex).iter().zip(&got).map(|(a, b)| (a - b).abs()).max().unwrap();
+        let nearest = palette.iter().min_by_key(|h| off(h)).unwrap();
+        Some(if off(nearest) <= 24 { nearest.clone() } else { format!("#{:02x}{:02x}{:02x}", p[0], p[1], p[2]) })
+    };
+    compare_with(scene, camera, perspective, w, h, &painted)
+}
+
+/// The sampling behind [`compare`] and [`compare_png`]: `painted(x, y)` is
+/// what the output shows at a pixel, `None` for nothing.
+fn compare_with(
+    scene: &mut Scene,
+    camera: &dyn Camera,
+    perspective: bool,
+    w: u32,
+    h: u32,
+    painted: &dyn Fn(f32, f32) -> Option<String>,
+) -> Report {
     let background = hex_of(scene.background);
     let mut keys: HashMap<ObjectId, String> = HashMap::new();
     scene.arena.traverse_visible(scene.root, &mut |id, obj| {
@@ -263,9 +313,9 @@ fn compare(
             }
             report.tested += 1;
             let want = want.unwrap_or_else(|| background.clone());
-            let got = painted_at(&paths, x, y).unwrap_or(&background);
+            let got = painted(x, y).unwrap_or_else(|| background.clone());
             if got != want {
-                report.mismatches.push((x, y, want, got.to_string()));
+                report.mismatches.push((x, y, want, got));
             }
             x += step;
         }
@@ -795,3 +845,53 @@ fn wireframe_draws_the_mesh_and_not_the_split() {
         "a two-triangle floor drew {drawn} wireframe paths"
     );
 }
+
+// ----------------------------------------------------------------------
+// The same scenes drawn into pixels on the CPU (`render_to_png`), the
+// drawing `render_to_document` builds: what the SVG paints, the PNG shows.
+
+#[test]
+fn png_ground_plane_with_objects_on_it() {
+    let mut scene = Scene::new();
+    scene.background = Color::from_hex(BG);
+    scene.add(ground(80.0, 0x336699, 0.0));
+    scene.add(mesh_at(BoxGeometry::new(2.0, 2.0, 2.0), 0xcc3311, Vector3::new(-2.0, 1.0, 0.0)));
+    scene.add(mesh_at(SphereGeometry::new(1.0, 24, 16), 0x22aa55, Vector3::new(1.6, 1.0, 0.5)));
+    let camera = look(Vector3::new(0.0, 3.0, 9.0), Vector3::new(0.0, 1.0, 0.0), 4.0 / 3.0);
+    compare_png(&mut scene, &camera, true, 320, 240, opts()).assert_clean("png ground plane");
+}
+
+#[test]
+fn png_self_occluding_knot() {
+    let mut scene = Scene::new();
+    scene.background = Color::from_hex(BG);
+    scene.add(mesh_at(TorusKnotGeometry::new(1.0, 0.35, 128, 16, 2, 3), 0xd08030, Vector3::ZERO));
+    let camera = look(Vector3::new(0.0, 0.5, 4.5), Vector3::ZERO, 1.0);
+    compare_png(&mut scene, &camera, true, 240, 240, opts()).assert_clean("png knot");
+}
+
+/// The PDF is the same drawing, vector: one page of the canvas's size, and
+/// every face a filled path with the material's colour.
+#[test]
+fn pdf_is_one_page_of_the_canvas_with_each_colour() {
+    let mut scene = Scene::new();
+    scene.background = Color::from_hex(BG);
+    scene.add(mesh_at(BoxGeometry::new(2.0, 2.0, 2.0), 0xcc3311, Vector3::new(-1.5, 0.0, 0.0)));
+    scene.add(mesh_at(SphereGeometry::new(1.0, 16, 12), 0x22aa55, Vector3::new(1.5, 0.0, 0.0)));
+    let camera = look(Vector3::new(0.0, 1.0, 7.0), Vector3::ZERO, 4.0 / 3.0);
+    let renderer = SvgRenderer::new(400, 300).with_options(opts());
+    let doc = renderer.render_to_document(&mut scene, &camera);
+    assert_eq!((doc.width, doc.height), (400.0, 300.0));
+    let pdf = renderer.render_to_pdf(&mut scene, &camera);
+    let text = String::from_utf8_lossy(&pdf);
+    // 400 × 300 CSS pixels are 300 × 225 points.
+    assert!(text.contains("/MediaBox [0 0 300 225]"), "media box");
+    // The same document written as SVG is the renderer's own markup, element
+    // for element.
+    let own = renderer.render_to_string(&mut scene, &camera);
+    let written = threers::exporters::write_svg(&doc);
+    let count = |svg: &str, tag: &str| svg.matches(tag).count();
+    assert_eq!(count(&own, "<path "), count(&written, "<path "));
+    assert!(count(&own, "<path ") > 50);
+}
+

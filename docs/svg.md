@@ -28,6 +28,21 @@ renderer.render_to_file(&mut scene, &camera, "out/frame.svg")?;
 let markup = renderer.render_to_string(&mut scene, &camera);
 ```
 
+The same picture goes to PDF and PNG without a GPU. `render_to_document`
+builds it as an `SvgDocument`, the drawing every vector exporter reads (see
+[Drawings](#drawings-svg-pdf-and-png) below):
+
+```rust
+let pdf = renderer.render_to_pdf(&mut scene, &camera);        // vector, one page
+let png = renderer.render_to_png(&mut scene, &camera, 2.0);   // 2400 × 1800, drawn on the CPU
+let doc = renderer.render_to_document(&mut scene, &camera);   // to add a title block, or more pages
+```
+
+`tests/svg_render.rs` checks the PNG against the same ray-cast ground truth
+as the SVG, and `tests/drawing_oracles.rs` checks that librsvg reading the
+renderer's markup sees what the PNG shows (0.07% RMS apart), and Ghostscript
+and poppler reading the PDF likewise.
+
 Shading tracks `Renderer` rather than inventing its own look: the same
 Lambert/Phong accumulation, the same punctual attenuation, the same
 tone-mapping curves, and the same linear→sRGB encode on the way out. Set
@@ -143,6 +158,74 @@ path.
 thing running: a live `<svg>`, the options as controls, and a download button.
 Note what the page does *not* contain — no canvas, no adapter request. The
 renderer is CPU-side wasm, so it works where WebGPU is unavailable.
+
+# Drawings: SVG, PDF and PNG
+
+`threers::exporters::SvgDocument` is a 2D drawing: paths, rectangles,
+circles, lines, text, images and groups, with fills, strokes (caps, joins,
+miter limits, dashes), opacity, linear and radial gradients (stop opacity,
+focal points, gradient transforms), clip paths and transforms, on a page
+measured in pixels, millimetres, inches or points, y-down or y-up. One
+drawing goes out three ways:
+
+```rust
+use threers::exporters::*;
+
+let mut doc = SvgDocument::new(210.0, 297.0, SvgUnit::Millimeters);
+doc.circle([105.0, 100.0], 40.0, SvgStyle::fill([200, 52, 52]));
+doc.text([105.0, 170.0], "Section A–A", 8.0, SvgTextAnchor::Middle, SvgStyle::fill([0, 0, 0]));
+
+let svg = write_svg(&doc);                              // markup
+let pdf = write_pdf(&doc);                              // vector PDF; write_pdf_pages for several
+let png = svg_to_png(&doc, &RasterOptions::default());  // pixels, drawn on the CPU
+```
+
+- **PDF** stays vector: curves stay curves, strokes are stroked by the
+  viewer. Text is set in DejaVu Sans (which threers carries) or a face you
+  register with `DrawingFonts`, embedded as a subset of the glyphs used,
+  with a Unicode map so it copies and searches as text. `PdfText::Standard`
+  uses Helvetica, Times and Courier instead, embedding nothing. The same
+  drawing is always the same bytes.
+- **PNG** is drawn by `rasterize_svg`: anti-aliased, both fill rules, the
+  same text glyph for glyph as the PDF, at any `dpi`.
+- `SvgPath::from_data` reads SVG path data (`M L H V C S Q T A Z`, relative
+  and repeated forms) into a drawing's path.
+- `DrawingFonts::advance` and `vertical_metrics` measure text the way every
+  format draws it, for laying out labels and tables.
+
+All three are checked against tools that read them independently
+(`tests/drawing_oracles.rs`): the SVG through librsvg, the PDF through
+Ghostscript and poppler, each compared with our PNG, plus `qpdf --check` and
+`pdftotext`. On the shapes, gradients, images, clips and groups the PNG is
+within 0.33% RMS of librsvg; text, compared blurred past each reader's own
+edge anti-aliasing, is within 1.5% of Ghostscript and poppler. The test
+skips a reader that is not installed.
+
+# A UI as SVG, PDF and PNG
+
+`threers::ui::vector` draws a `Ui` (the `ui` feature) the same way, with no
+GPU and no window: `VectorPainter` records what it paints as an
+`SvgDocument`.
+
+```rust
+use threers::exporters::DrawingFonts;
+use threers::ui::vector::{ui_to_pdf, ui_to_png, ui_to_svg};
+
+let fonts = DrawingFonts::new();
+let pdf = ui_to_pdf(&mut ui, 1280.0, 800.0, &fonts);        // text stays text
+let png = ui_to_png(&mut ui, 1280.0, 800.0, 2.0, &fonts);   // 2560 × 1600
+let svg = ui_to_svg(&mut ui, 1280.0, 800.0, &fonts);
+```
+
+Layout measures text in the face the output draws it in, so lines break
+where the drawing puts them. Boxes, borders, rounded corners and clips,
+linear, radial and conic gradients, shadows, transforms, images, icons and
+underlines come through. Bold and italic are made from the regular face, as
+browsers do for a family without them; a blurred shadow is drawn as layered
+rounded rectangles; gradient blur, backdrop blur, custom shaders and GPU
+surfaces are left out. `tests/ui_vector.rs` checks that boxes land where
+layout put them, that text measured is text drawn, and that Ghostscript,
+poppler and librsvg see what the PNG shows.
 
 # SVG path data (`Path`, `Shape`)
 

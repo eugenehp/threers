@@ -75,6 +75,19 @@ pub use pipeline_cache::{
 pub mod surface;
 #[cfg(not(target_arch = "wasm32"))]
 pub use surface::{SurfaceGpu, SurfaceOptions, SurfaceRenderer};
+// A 3D view drawn on a thread of its own and shown by another (the UI), each
+// at its own rate.
+pub mod view_thread;
+pub use view_thread::{
+    AdaptiveScale, FramePacer, SharedGpu, SubmitGate, ViewFrame, ViewFrames, ViewId, ViewMut,
+    ViewOptions, ViewProducer, ViewStats,
+};
+// The loop that draws a producer's views: schedules, commands from the UI,
+// and a thread to run it on.
+pub mod render_loop;
+#[cfg(not(target_arch = "wasm32"))]
+pub use render_loop::RenderThread;
+pub use render_loop::{Redraw, RenderLoop, ViewDraw};
 // A scene in a window, on wgpu or the native Metal backend: a winit window
 // wherever winit runs, and an app's own view or layer on every Apple
 // platform with the `metal` feature (tvOS and visionOS have no winit).
@@ -82,6 +95,12 @@ pub use surface::{SurfaceGpu, SurfaceOptions, SurfaceRenderer};
 pub mod window;
 #[cfg(any(winit_window, all(not(target_arch = "wasm32"), metal_backend)))]
 pub use window::{MarksFrame, WindowBackend, WindowRenderer};
+// A winit window drawn and presented on a thread of its own, with the event
+// loop forwarding to it.
+#[cfg(winit_window)]
+pub mod window_thread;
+#[cfg(winit_window)]
+pub use window_thread::{ThreadControl, ThreadEvent, ThreadWaker, WindowThread};
 
 // `THREERS_BACKEND=metal`: the headless renderer on the native Metal backend.
 cfg_metal! {
