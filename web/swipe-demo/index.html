@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Swipe and next word</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; background: #f2f2f7; overflow: hidden; overscroll-behavior: none; }
+  body { position: fixed; inset: 0; display: grid; place-items: center; }
+  /* A phone's width on a desktop, the whole screen on a phone. */
+  #view { width: min(100vw, 430px); height: min(100vh, 900px); touch-action: none; outline: none;
+          -webkit-user-select: none; user-select: none; box-shadow: 0 0 0 1px #d1d1d6; }
+</style>
+</head>
+<body>
+<canvas id="view" aria-label="Swipe and next word"></canvas>
+<script type="module">
+import init, { SwipeDemo } from "../pkg-swipe-demo/threers_swipe_web.js";
+
+await init();
+const canvas = document.getElementById("view");
+const demo = new SwipeDemo(canvas);
+window.demo = demo;
+
+function size() {
+  const r = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const [w, h] = [Math.round(r.width * dpr), Math.round(r.height * dpr)];
+  if (canvas.width !== w) canvas.width = w;
+  if (canvas.height !== h) canvas.height = h;
+  return [r.width, r.height, dpr];
+}
+let pending = false;
+function tick(time) {
+  pending = false;
+  const [w, h, dpr] = size();
+  if (demo.frame(time, w, h, dpr)) kick();
+}
+function kick() {
+  if (!pending) { pending = true; requestAnimationFrame(tick); }
+}
+const at = (e) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+// A mouse as a pointer; a finger as a touch (each its own id).
+canvas.addEventListener("pointerdown", (e) => {
+  if (e.pointerType === "touch") return;
+  canvas.setPointerCapture(e.pointerId);
+  demo.pointer("down", ...at(e)); kick();
+});
+canvas.addEventListener("pointermove", (e) => { if (e.pointerType !== "touch") { demo.pointer("move", ...at(e)); kick(); } });
+canvas.addEventListener("pointerup", (e) => { if (e.pointerType !== "touch") { demo.pointer("up", ...at(e)); kick(); } });
+for (const [type, phase] of [["touchstart", "start"], ["touchmove", "move"], ["touchend", "end"], ["touchcancel", "cancel"]]) {
+  canvas.addEventListener(type, (e) => {
+    e.preventDefault();
+    for (const t of e.changedTouches) demo.touch(t.identifier, phase, ...at(t), e.timeStamp);
+    kick();
+  }, { passive: false });
+}
+addEventListener("resize", kick);
+kick();
+
+// The models (web/swipe-demo/models/): decoding and predictions once they
+// are in. The next words mix three models, the shares chosen on held-out
+// sentences of both kinds; ?neural=0 leaves the neural one out.
+const NEXT_WORDS = [
+  { file: "en.ngram", kind: "ngram", weight: 0.4 },             // FUTO's sentences
+  { file: "en-chat.ngram", kind: "ngram", weight: 0.4 },        // Tatoeba's everyday ones
+  { file: "en.next.safetensors", kind: "neural", weight: 0.2 }, // RLX, FUTO's sentences
+].filter((m) => m.kind !== "neural" || new URLSearchParams(location.search).get("neural") !== "0");
+const fetched = (f, as) => fetch("models/" + f).then((r) => (r.ok ? r[as]() : null));
+const [swipe, words, ...next] = await Promise.all([
+  fetched("swipe.safetensors", "arrayBuffer"),
+  fetched("words_en.txt", "text"),
+  ...NEXT_WORDS.map((m) => fetched(m.file, "arrayBuffer")),
+]);
+const t0 = performance.now();
+demo.load_swipe(new Uint8Array(swipe), words);
+NEXT_WORDS.forEach((m, i) => {
+  if (!next[i]) return console.warn(`models/${m.file} is missing`);
+  if (m.kind === "ngram") demo.add_ngram(new Uint8Array(next[i]), m.weight);
+  else demo.add_neural(new Uint8Array(next[i]), m.weight);
+});
+// What this person typed before, learnt: kept in localStorage, saved as it
+// grows and when the page goes; ?forget=1 starts afresh.
+const KEPT = "threers-swipe-demo.user";
+if (new URLSearchParams(location.search).get("forget") === "1") localStorage.removeItem(KEPT);
+const kept = localStorage.getItem(KEPT);
+if (kept) {
+  try { demo.load_user(kept); } catch (e) { console.warn("the kept user model is unreadable:", e); }
+}
+console.log(demo.start(), `(${Math.round(performance.now() - t0)} ms)`);
+let savedWords = demo.user_words();
+const save = () => {
+  if (demo.user_words() === savedWords) return;
+  savedWords = demo.user_words();
+  try { localStorage.setItem(KEPT, demo.user_text()); } catch (e) { console.warn("not saved:", e); }
+};
+setInterval(save, 5000);
+addEventListener("pagehide", save);
+document.addEventListener("visibilitychange", () => { if (document.hidden) save(); });
+kick();
+</script>
+</body>
+</html>

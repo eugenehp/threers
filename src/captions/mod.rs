@@ -47,6 +47,7 @@
 //! [`Renderer::draw_caption_overlay`](crate::renderer::Renderer::draw_caption_overlay).
 
 pub mod bidi;
+pub mod color_emoji;
 pub mod compose;
 mod compose_tables;
 pub mod font;

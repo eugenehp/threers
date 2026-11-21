@@ -6,7 +6,11 @@
 //! hypothesis is the start of a real word and the suggestions while the
 //! finger is still down are too. A word's score is its CTC
 //! log-probability plus [`DecodeConfig::lm_weight`] times its log
-//! frequency: "of" over "if" when the swipe cannot tell.
+//! frequency: "of" over "if" when the swipe cannot tell. Given the words
+//! before it and a [`WordModel`], the log-probability of the word after
+//! them instead (for a word the model does not know, its share by
+//! frequency of the model's probability of an unknown word): "to" over
+//! "too" after "I'm going".
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -14,6 +18,7 @@ use std::path::Path;
 use crate::ctc::log_softmax;
 use crate::geometry::KeyboardGeometry;
 use crate::model::Model;
+use crate::next_word::WordModel;
 use crate::trace::{features, TouchPoint};
 
 /// Words and how common they are.
@@ -111,7 +116,9 @@ impl Default for DecodeConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
     pub word: String,
-    /// What it was ranked by: `ctc + lm_weight · log frequency`.
+    /// What it was ranked by: `ctc + lm_weight · log p(word)`, `p` the
+    /// word's frequency or, with a [`WordModel`], its probability after
+    /// the words before.
     pub score: f32,
     /// log p(swipe ↦ the word's keys).
     pub ctc: f32,
@@ -221,8 +228,72 @@ impl Decoder {
         Some(self.decode_logits(&model.logits(&x, &keys), n))
     }
 
+    /// As [`decode_on`](Self::decode_on), the words ranked by how likely
+    /// `words` thinks each after `context` (oldest first, as
+    /// [`split_context`](crate::next_word::split_context) gives it).
+    pub fn decode_on_after(
+        &self,
+        model: &Model,
+        keyboard: &KeyboardGeometry,
+        points: &[TouchPoint],
+        words: &dyn WordModel,
+        context: &[&str],
+        n: usize,
+    ) -> Option<Vec<Candidate>> {
+        if keyboard.keys.len() != self.keys.len() {
+            return None;
+        }
+        let keys: Vec<(f32, f32)> = keyboard.keys.iter().map(|k| (k.x, k.y)).collect();
+        let x = features(points);
+        Some(self.decode_logits_after(&model.logits(&x, &keys), words, context, n))
+    }
+
     /// As [`decode`](Self::decode), from the model's logits.
     pub fn decode_logits(&self, logits: &[f32], n: usize) -> Vec<Candidate> {
+        let hits = self.search(logits);
+        let freq: Vec<f32> = hits.iter().map(|&(w, _)| self.words[w as usize].1).collect();
+        self.rank(hits, &freq, n)
+    }
+
+    /// As [`decode_logits`](Self::decode_logits), each word's frequency
+    /// replaced by its log-probability after `context` under `words`.
+    pub fn decode_logits_after(
+        &self,
+        logits: &[f32],
+        words: &dyn WordModel,
+        context: &[&str],
+        n: usize,
+    ) -> Vec<Candidate> {
+        let hits = self.search(logits);
+        let spelled: Vec<&str> = hits
+            .iter()
+            .map(|&(w, _)| self.words[w as usize].0.as_str())
+            .collect();
+        let freq: HashMap<&str, f32> = hits
+            .iter()
+            .map(|&(w, _)| (self.words[w as usize].0.as_str(), self.words[w as usize].1))
+            .collect();
+        let lm = crate::next_word::log_probs_or(words, context, &spelled, |w| freq[w]);
+        self.rank(hits, &lm, n)
+    }
+
+    fn rank(&self, hits: Vec<(u32, f32)>, lm: &[f32], n: usize) -> Vec<Candidate> {
+        let mut out: Vec<Candidate> = hits
+            .into_iter()
+            .zip(lm)
+            .map(|((w, ctc), lp)| Candidate {
+                word: self.words[w as usize].0.clone(),
+                score: ctc + self.config.lm_weight * lp,
+                ctc,
+            })
+            .collect();
+        out.sort_by(|a, b| b.score.total_cmp(&a.score));
+        out.truncate(n);
+        out
+    }
+
+    /// The beam's words and their CTC log-probabilities.
+    fn search(&self, logits: &[f32]) -> Vec<(u32, f32)> {
         let classes = self.keys.len() + 1;
         let lp = log_softmax(logits, classes);
         let ninf = f64::NEG_INFINITY;
@@ -256,24 +327,13 @@ impl Decoder {
             beams.sort_by(|a, b| lse(b.1, b.2).total_cmp(&lse(a.1, a.2)));
             beams.truncate(self.config.beam);
         }
-        let mut out: Vec<Candidate> = beams
+        beams
             .iter()
             .flat_map(|&(id, pb, pnb)| {
                 let ctc = lse(pb, pnb) as f32;
                 self.nodes[id as usize].words.iter().map(move |&w| (w, ctc))
             })
-            .map(|(w, ctc)| {
-                let (word, freq) = &self.words[w as usize];
-                Candidate {
-                    word: word.clone(),
-                    score: ctc + self.config.lm_weight * freq,
-                    ctc,
-                }
-            })
-            .collect();
-        out.sort_by(|a, b| b.score.total_cmp(&a.score));
-        out.truncate(n);
-        out
+            .collect()
     }
 }
 
@@ -315,6 +375,40 @@ mod tests {
         assert_eq!(got[0].word, "hello");
         assert_eq!(got[1].word, "helo");
         assert!(got.iter().all(|c| c.word != "world"));
+    }
+
+    #[test]
+    fn the_words_before_settle_it() {
+        use crate::next_word::WordModel;
+        // Knows "to" after "going", "too" after "me".
+        struct After;
+        impl WordModel for After {
+            fn context_len(&self) -> usize {
+                1
+            }
+            fn log_probs(&self, context: &[&str], words: &[&str]) -> Vec<Option<f32>> {
+                let likely = if context.last() == Some(&"going") { "to" } else { "too" };
+                words
+                    .iter()
+                    .map(|w| match *w {
+                        "to" | "too" => Some(if *w == likely { -0.1 } else { -5.0 }),
+                        _ => None,
+                    })
+                    .collect()
+            }
+            fn predict(&self, _: &[&str], _: &str, _: usize) -> Vec<(String, f32)> {
+                vec![]
+            }
+        }
+        let g = keyboard();
+        let d = Decoder::new(&g, &Lexicon::parse("to 100\ntoo 50\n"));
+        // A swipe that cannot tell them apart: "too" is "to" on the keys.
+        let path: Vec<usize> = g.word_path("to").unwrap().iter().map(|k| k + 1).collect();
+        assert_eq!(g.word_path("to"), g.word_path("too"));
+        let z = spelled(27, &path);
+        assert_eq!(d.decode_logits(&z, 1)[0].word, "to", "the commoner alone");
+        assert_eq!(d.decode_logits_after(&z, &After, &["going"], 1)[0].word, "to");
+        assert_eq!(d.decode_logits_after(&z, &After, &["me"], 1)[0].word, "too");
     }
 
     #[test]

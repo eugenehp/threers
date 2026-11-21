@@ -81,8 +81,8 @@ mod swipe;
 mod types;
 
 pub use config::{
-    keys, Align, Key, KeyAction, KeyColor, KeyLook, KeySize, KeyboardConfig, KeyboardTheme, Page,
-    Placement, ReturnKey,
+    keys, Align, Key, KeyAction, KeyColor, KeyLook, KeySize, KeyboardConfig, KeyboardTheme, Modifier,
+    Page, Placement, ReturnKey,
 };
 pub use context::{current_word, period_shortcut, wants_capital, AutoCapitalize};
 pub use feedback::{Haptic, KeyFeedback, KeyPress, KeySound, PressStyle};
@@ -134,10 +134,9 @@ fn upper(text: &str) -> String {
     }
 }
 
-/// Holding a key this long offers its alternates; Backspace starts
-/// repeating then, this often.
+/// Holding a key this long offers its alternates (a repeating key's
+/// timing is its config's: `repeat_delay`, `repeat_interval`).
 const HOLD: f64 = 0.45;
-const REPEAT: f64 = 0.09;
 /// Backspace held this many repeats deletes words.
 const WORDS_AFTER: u32 = 12;
 /// Pixels the finger moves on the space bar's trackpad per caret step.
@@ -179,6 +178,8 @@ type FeedbackListener = Rc<dyn Fn(&KeyPress)>;
 type ActionListener = Rc<dyn Fn(&str, &mut Ui)>;
 /// Words for the one being typed.
 type Suggester = Rc<dyn Fn(&str) -> Vec<String>>;
+/// Words from the language and the text before the caret.
+type Predictor = Rc<dyn Fn(&str, &str) -> Vec<String>>;
 /// Words a swipe may be, best first.
 #[cfg(feature = "swipe")]
 type SwipeDecoder = Rc<dyn Fn(&Swipe) -> Vec<String>>;
@@ -229,6 +230,19 @@ struct Press {
     swiping: bool,
 }
 
+/// Seconds of a swipe's path its trail shows.
+#[cfg(feature = "swipe")]
+pub const TRAIL_SECONDS: f64 = 1.2;
+/// Points of a swipe's path its trail shows at most.
+#[cfg(feature = "swipe")]
+const TRAIL_POINTS: usize = 240;
+/// Strokes a trail is drawn in, stacked toward the finger.
+#[cfg(feature = "swipe")]
+const TRAIL_BANDS: usize = 8;
+/// Seconds a trail takes to fade once the finger lifts.
+#[cfg(feature = "swipe")]
+pub const TRAIL_FADE: f64 = 0.3;
+
 /// Alternates a held key can offer at once.
 const MOST_ALTERNATES: usize = 10;
 /// Words offered at once.
@@ -262,6 +276,8 @@ struct Board {
     layouts: Vec<KeyboardLayout>,
     current: usize,
     shift: Shift,
+    /// Control, Alt, Meta pressed: held for the next key typed.
+    mods: KeyModifiers,
     page: Page,
     /// Counts changes to the config or the placement.
     generation: u64,
@@ -293,6 +309,8 @@ struct Board {
     recent: String,
     /// Words offered for the one being typed.
     suggest: Option<Suggester>,
+    /// Words offered from the text before the caret, ahead of `suggest`.
+    predict: Option<Predictor>,
     /// The word they were offered for, and them.
     offered: (String, Vec<String>),
     /// The generation whose config was checked.
@@ -314,6 +332,13 @@ struct Board {
     /// in the bar while that word is the one being typed.
     #[cfg(feature = "swipe")]
     swiped: Option<(String, Vec<String>)>,
+    /// The space after a swiped word was the keyboard's own: punctuation
+    /// typed next takes its place ("word." rather than "word .").
+    #[cfg(feature = "swipe")]
+    auto_space: bool,
+    /// The last swipe's path and when the finger lifted, its trail fading.
+    #[cfg(feature = "swipe")]
+    trail: Option<(Vec<SwipePoint>, f64)>,
 }
 
 /// A field's own keyboard: a type for the device, or a config as given.
@@ -378,6 +403,9 @@ pub struct VirtualKeyboard {
     /// Keys pressed, waiting to be typed (pressed in listeners, which
     /// cannot dispatch; the input types them after).
     queue: Rc<RefCell<Vec<(String, KeyModifiers)>>>,
+    /// A swipe decoder is set: letters type when lifted (a stroke across
+    /// them is a word), even on a keyboard whose keys repeat.
+    swiping: Rc<Cell<bool>>,
 }
 
 /// Gives `node` `color` for `property` (`background` or `color`).
@@ -544,6 +572,7 @@ impl VirtualKeyboard {
             layouts,
             current: 0,
             shift: Shift::Off,
+            mods: KeyModifiers::default(),
             page: Page::Letters,
             generation: 0,
             built: None,
@@ -562,6 +591,7 @@ impl VirtualKeyboard {
             auto_shift: false,
             recent: String::new(),
             suggest: None,
+            predict: None,
             offered: (String::new(), vec![]),
             checked: None,
             focused: None,
@@ -573,7 +603,11 @@ impl VirtualKeyboard {
             #[cfg(feature = "swipe")]
             clock: 0.0,
             #[cfg(feature = "swipe")]
+            trail: None,
+            #[cfg(feature = "swipe")]
             swiped: None,
+            #[cfg(feature = "swipe")]
+            auto_space: false,
         }));
         let kb = Self {
             panel,
@@ -591,6 +625,7 @@ impl VirtualKeyboard {
             summoned: Rc::default(),
             board,
             queue: Rc::default(),
+            swiping: Rc::default(),
         };
         {
             let b = kb.board.clone();
@@ -773,20 +808,54 @@ impl VirtualKeyboard {
     /// The bar's suggestions for `word`, from the app's
     /// [`set_suggestions`](Self::set_suggestions), in its three chips.
     fn offer_words(&self, ui: &mut Ui, word: &str) {
+        // What a chip replaces: the word being typed, or a swiped word
+        // and the space after it.
+        let mut replaces = word.to_owned();
         #[cfg(feature = "swipe")]
         let swiped = {
             let mut b = self.board.borrow_mut();
-            // A swipe's other words while its word is the one being typed.
-            if b.swiped.as_ref().is_some_and(|(w, _)| w != word) {
-                b.swiped = None;
+            // A swipe's other words while its word is the one being typed,
+            // or the one just before the caret and its space.
+            let before = b.before.clone().unwrap_or_else(|| b.recent.clone());
+            let keep = b.swiped.as_ref().map(|(w, _)| {
+                if w == word {
+                    Some(w.clone())
+                } else if word.is_empty() && before.ends_with(&format!("{w} ")) {
+                    Some(format!("{w} "))
+                } else {
+                    None
+                }
+            });
+            match keep.flatten() {
+                Some(r) => {
+                    replaces = r;
+                    b.swiped.clone().map(|(_, others)| others)
+                }
+                None => {
+                    b.swiped = None;
+                    None
+                }
             }
-            b.swiped.clone().map(|(_, others)| others)
         };
         #[cfg(not(feature = "swipe"))]
         let swiped: Option<Vec<String>> = None;
-        let suggest = self.board.borrow().suggest.clone();
+        let (suggest, predict) = {
+            let b = self.board.borrow();
+            (b.suggest.clone(), b.predict.clone())
+        };
         let words = match (&swiped, &suggest) {
             (Some(others), _) => others.iter().take(SUGGESTIONS).cloned().collect(),
+            (None, _) if predict.is_some() => {
+                let f = predict.as_ref().expect("checked");
+                let (language, before) = {
+                    let b = self.board.borrow();
+                    let before = b.before.clone().unwrap_or_else(|| b.recent.clone());
+                    (b.layout().language, before)
+                };
+                let mut w = f(&language, &before);
+                w.truncate(SUGGESTIONS);
+                w
+            }
             (None, Some(f)) if !word.is_empty() => {
                 let mut w = f(word);
                 w.truncate(SUGGESTIONS);
@@ -832,12 +901,16 @@ impl VirtualKeyboard {
                 );
             }
         }
-        self.board.borrow_mut().offered = (word.to_owned(), words);
+        self.board.borrow_mut().offered = (replaces, words);
     }
 
     /// `word` in place of the `typed` characters before the caret, and a
     /// space after it.
     fn take_suggestion(&self, ui: &mut Ui, typed: usize, word: &str) {
+        #[cfg(feature = "swipe")]
+        {
+            self.board.borrow_mut().auto_space = false;
+        }
         let mut keys = vec!["Backspace".to_owned(); typed];
         keys.extend(word.chars().map(|c| c.to_string()));
         keys.push(" ".into());
@@ -860,12 +933,17 @@ impl VirtualKeyboard {
                         .keys
                         .get(i)
                         .is_some_and(|k| k.key.repeats);
+                    // as the config has it (a terminal's faster, say)
+                    let (hold, every) = {
+                        let b = self.board.borrow();
+                        (b.active.repeat_delay.max(0.05), b.active.repeat_interval.max(0.01))
+                    };
                     let id = if repeats {
-                        // Every REPEAT, from HOLD on.
+                        // Every `every`, from `hold` on.
                         let mut waited = 0.0;
-                        input.every(REPEAT, move |_, _| {
-                            waited += REPEAT;
-                            if waited + 1e-6 < HOLD {
+                        input.every(every, move |_, _| {
+                            waited += every;
+                            if waited + 1e-6 < hold {
                                 return;
                             }
                             let held = {
@@ -880,7 +958,7 @@ impl VirtualKeyboard {
                             if let Some((key, typed)) = held {
                                 // Held a second, Backspace deletes words,
                                 // a little slower, as Apple's does.
-                                let repeats = ((waited - HOLD) / REPEAT).round() as u32;
+                                let repeats = ((waited - hold) / every).round() as u32;
                                 if key.action == KeyAction::Named("Backspace".into())
                                     && repeats >= WORDS_AFTER
                                 {
@@ -1309,6 +1387,14 @@ impl VirtualKeyboard {
             ui.update_style(text, |s| s.pointer_events = false);
             (b, text)
         });
+        // a terminal's keyboard: every key that types goes on while held
+        // (but letters, while a swipe decoder reads strokes across them)
+        let letter = matches!(&key.action, KeyAction::Text(t) if t.chars().count() == 1 && t.chars().all(char::is_alphabetic));
+        let key = if cfg.repeat_typing && matches!(key.action, KeyAction::Text(_)) && !(letter && self.swiping.get()) {
+            Key { repeats: true, alternates: Vec::new(), ..key }
+        } else {
+            key
+        };
         let index = built.len();
         let me = self.clone();
         input.on(cell, Phase::Bubble, move |_, ui, e, cx| {
@@ -1399,7 +1485,8 @@ impl VirtualKeyboard {
         paint(ui, self.sheet, "background", theme.background, appearance);
         paint(ui, self.sheet, "color", theme.key_text, appearance);
         ui.update_style(self.bar, |s| {
-            s.display = if cfg.bar || self.board.borrow().suggest.is_some() {
+            let b = self.board.borrow();
+            s.display = if cfg.bar || b.suggest.is_some() || b.predict.is_some() {
                 Display::Flex
             } else {
                 Display::None
@@ -1421,7 +1508,7 @@ impl VirtualKeyboard {
         let mut b = self.board.borrow_mut();
         let theme = b.active.theme;
         let accent_return = b.active.return_key.accent();
-        let (page, shift) = (b.page, b.shift);
+        let (page, shift, mods) = (b.page, b.shift, b.mods);
         let up = page == Page::Letters && shift != Shift::Off;
         for k in b.keys.iter_mut() {
             if k.page.is_some_and(|p| p != page) {
@@ -1430,6 +1517,9 @@ impl VirtualKeyboard {
             let lit = match k.key.action {
                 KeyAction::Shift => shift != Shift::Off,
                 KeyAction::CapsLock => shift == Shift::Locked,
+                KeyAction::Modifier(Modifier::Control) => mods.control,
+                KeyAction::Modifier(Modifier::Alt) => mods.alt,
+                KeyAction::Modifier(Modifier::Meta) => mods.meta,
                 _ => false,
             };
             let label = match &k.key.action {
@@ -1501,10 +1591,12 @@ impl VirtualKeyboard {
     }
 
     /// Queues `keys` to type, unmodified.
-    fn send(&self, keys: impl IntoIterator<Item = String>) {
-        self.queue
-            .borrow_mut()
-            .extend(keys.into_iter().map(|k| (k, KeyModifiers::default())));
+    /// Queues `keys`, with Control/Alt/Meta if they were pressed for them
+    /// (then let go); true when they were.
+    fn send(&self, keys: impl IntoIterator<Item = String>) -> bool {
+        let mods = std::mem::take(&mut self.board.borrow_mut().mods);
+        self.queue.borrow_mut().extend(keys.into_iter().map(|k| (k, mods)));
+        mods != KeyModifiers::default()
     }
 
     /// Types `key`: two spaces after a word as “. ”, back to the letters
@@ -1517,6 +1609,14 @@ impl VirtualKeyboard {
         }
         let once = {
             let mut b = self.board.borrow_mut();
+            #[cfg(feature = "swipe")]
+            if std::mem::take(&mut b.auto_space)
+                && typed.len() == 1
+                && typed[0].chars().count() == 1
+                && ".,!?;:".contains(typed[0].as_str())
+            {
+                typed.insert(0, "Backspace".into());
+            }
             if typed == [" "] && b.active.period_shortcut {
                 // The field's text if the app tells it, else what this
                 // keyboard typed.
@@ -1549,8 +1649,8 @@ impl VirtualKeyboard {
             }
             once
         };
-        self.send(typed);
-        if once {
+        let modified = self.send(typed);
+        if once || modified {
             self.relabel(ui);
         }
     }
@@ -1591,6 +1691,9 @@ impl VirtualKeyboard {
                 // The focus stays in the field.
                 cx.prevent_default();
                 cx.capture_pointer();
+                // the key where it lands: another finger's key may hold the
+                // pointer (typing with two thumbs)
+                let index = self.index_at(ui, *x, *y).unwrap_or(index);
                 self.down(ui, index, *x, *y);
             }
             Event::PointerMove { x, y } => {
@@ -1610,7 +1713,20 @@ impl VirtualKeyboard {
     }
 
     fn down(&self, ui: &mut Ui, index: usize, x: f32, y: f32) {
-        self.release(ui);
+        // rollover: a key still down when the next comes down is typed now
+        // (fast two-thumb typing lands the next finger before the last
+        // lifts); anything else held (alternates, the trackpad) is let go
+        let rolled = self
+            .board
+            .borrow()
+            .press
+            .as_ref()
+            .filter(|p| p.types && p.popup.is_none() && p.trackpad.is_none())
+            .map(|p| p.at);
+        match rolled {
+            Some((px, py)) => self.up(ui, px, py),
+            None => self.release(ui),
+        }
         let Some(key) = self.board.borrow().keys.get(index).map(|k| k.key.clone()) else {
             return;
         };
@@ -1637,6 +1753,15 @@ impl VirtualKeyboard {
                     } else {
                         Shift::Locked
                     };
+                    relabel = true;
+                }
+                KeyAction::Modifier(m) => {
+                    let on = match m {
+                        Modifier::Control => &mut b.mods.control,
+                        Modifier::Alt => &mut b.mods.alt,
+                        Modifier::Meta => &mut b.mods.meta,
+                    };
+                    *on = !*on;
                     relabel = true;
                 }
                 KeyAction::Page(p) => b.page = *p,
@@ -1700,6 +1825,14 @@ impl VirtualKeyboard {
 
     /// The pointer moved while pressed: along a held key's alternates, or
     /// from key to key (the one under the finger types).
+    /// The key on the page showing at (x, y).
+    fn index_at(&self, ui: &Ui, x: f32, y: f32) -> Option<usize> {
+        let b = self.board.borrow();
+        b.keys
+            .iter()
+            .position(|k| k.page.is_none_or(|p| p == b.page) && ui.rect(k.cell).contains(x, y))
+    }
+
     fn slide(&self, ui: &mut Ui, x: f32, y: f32) {
         let mut b = self.board.borrow_mut();
         let Some(press) = b.press.as_mut() else {
@@ -1802,6 +1935,7 @@ impl VirtualKeyboard {
         {
             let t = self.board.borrow().clock;
             path.push(SwipePoint { x, y, t });
+            self.board.borrow_mut().trail = Some((path.clone(), t));
             self.type_swipe(ui, path);
             return;
         }
@@ -1860,8 +1994,9 @@ impl VirtualKeyboard {
     }
 
     #[cfg(feature = "swipe")]
-    /// A finished swipe: the decoder's best word typed, a space before it
-    /// after a word, capitals as Shift says; its other words in the bar.
+    /// A finished swipe: the decoder's best word typed with a space after
+    /// it (and one before it after a word typed by tapping), capitals as
+    /// Shift says; its other words in the bar.
     fn type_swipe(&self, ui: &mut Ui, points: Vec<SwipePoint>) {
         let (decoder, swipe, shift, before) = {
             let b = self.board.borrow();
@@ -1886,12 +2021,13 @@ impl VirtualKeyboard {
                     _ => None,
                 })
                 .collect();
+            let before = b.before.clone().unwrap_or_else(|| b.recent.clone());
             let swipe = Swipe {
                 points,
                 keys,
                 language: b.layout().language,
+                before: before.clone(),
             };
-            let before = b.before.clone().unwrap_or_else(|| b.recent.clone());
             (decoder, swipe, b.shift, before)
         };
         let words = decoder(&swipe);
@@ -1916,10 +2052,17 @@ impl VirtualKeyboard {
             keys.push(" ".into());
         }
         keys.extend(word.chars().map(|c| c.to_string()));
+        keys.push(" ".into());
         let relabel = {
             let mut b = self.board.borrow_mut();
+            b.auto_space = true;
             for k in &keys {
                 b.recent.push_str(k);
+            }
+            // The text before the caret as it will be once the keys are
+            // in, so the bar can offer the word's alternatives now.
+            if let Some(before) = b.before.as_mut() {
+                before.push_str(&keys.concat());
             }
             let excess = b.recent.chars().count().saturating_sub(16);
             if excess > 0 {
@@ -1938,7 +2081,9 @@ impl VirtualKeyboard {
         if relabel {
             self.relabel(ui);
         }
-        self.offer_words(ui, &word);
+        // The caret is past the word's space: no word being typed, the
+        // swiped one and its space what a chip replaces.
+        self.offer_words(ui, "");
     }
 
     /// Lets go of any key held, its preview and alternates closed, its
@@ -2340,11 +2485,112 @@ impl VirtualKeyboard {
         b.built = None;
     }
 
+    /// Words for the bar from the text before the caret, as a next-word
+    /// model reads it: `f(language, before)` gives completions of the word
+    /// being typed, or the next word after a space, up to three, best
+    /// first. Asked ahead of [`set_suggestions`](Self::set_suggestions);
+    /// the layout's language tag (`en`, `de`, …) comes first. Without
+    /// [`set_context`](Self::set_context), `before` is what the keyboard
+    /// typed lately. `threers-swipe` makes such a predictor from its
+    /// next-word models.
+    ///
+    /// ```
+    /// # use threers_ui::{input::Input, TextField, Ui};
+    /// # use threers_ui::virtual_keyboard::VirtualKeyboard;
+    /// # let (mut ui, mut input) = (Ui::new(), Input::<TextField>::new());
+    /// let kb = VirtualKeyboard::new(&mut ui, &mut input);
+    /// kb.set_context(|f: &TextField, _| Some(f.before_caret()));
+    /// kb.set_predictions(|_language, before| {
+    ///     if before.ends_with("going ") { vec!["to".into()] } else { vec![] }
+    /// });
+    /// ```
+    pub fn set_predictions(&self, f: impl Fn(&str, &str) -> Vec<String> + 'static) {
+        let mut b = self.board.borrow_mut();
+        b.predict = Some(Rc::new(f));
+        b.before = None;
+        b.built = None;
+    }
+
+    /// Stops [`set_predictions`](Self::set_predictions)' words.
+    pub fn clear_predictions(&self) {
+        let mut b = self.board.borrow_mut();
+        b.predict = None;
+        b.before = None;
+        b.built = None;
+    }
+
+    /// The finger's trail across the keys while it swipes, painted over
+    /// what [`Ui::paint`] drew: a ribbon thickening and strengthening toward
+    /// the finger (strokes stacked, each from further along), its last [`TRAIL_SECONDS`] showing, fading out over
+    /// [`TRAIL_FADE`] once the finger lifts. `now` is the input's clock
+    /// (what [`Input::tick`] was given). Whether it is still to be seen
+    /// changing: frames are wanted while it is.
+    ///
+    /// ```ignore
+    /// ui.paint(&mut painter);
+    /// let fading = keyboard.paint_swipe_trail(&mut painter, now);
+    /// ```
+    #[cfg(feature = "swipe")]
+    pub fn paint_swipe_trail(&self, painter: &mut dyn crate::Painter, now: f64) -> bool {
+        let b = self.board.borrow();
+        let live = b
+            .press
+            .as_ref()
+            .filter(|p| p.swiping)
+            .and_then(|p| p.path.as_ref())
+            .map(|(path, _)| path.as_slice());
+        let (path, fade) = match (live, &b.trail) {
+            (Some(path), _) => (path, 1.0),
+            (None, Some((path, lifted))) if now - lifted < TRAIL_FADE => {
+                (path.as_slice(), 1.0 - ((now - lifted) / TRAIL_FADE) as f32)
+            }
+            _ => return false,
+        };
+        let newest = path.last().map_or(0.0, |p| p.t);
+        let from = path
+            .iter()
+            .position(|p| newest - p.t <= TRAIL_SECONDS)
+            .unwrap_or(0)
+            .max(path.len().saturating_sub(TRAIL_POINTS));
+        let pts = &path[from..];
+        if pts.len() < 2 {
+            return fade < 1.0;
+        }
+        // Layers, each one stroke from further along to the finger: they
+        // stack, so the newest stretch is under all of them (widest,
+        // strongest) and the oldest under one; each is continuous, so no
+        // seams where translucent ends would overlap.
+        let segments = pts.len() - 1;
+        let layers = TRAIL_BANDS.min(segments);
+        let alpha = 1.0 - (1.0 - 0.8 * fade).powf(1.0 / layers as f32);
+        for k in 0..layers {
+            let lo = k * segments / layers;
+            let width = 2.0 + 6.0 * (k + 1) as f32 / layers as f32;
+            let colour: crate::Rgba = [0.0, 0.48, 1.0, alpha];
+            let layer = &pts[lo..];
+            let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            let mut d = String::with_capacity(layer.len() * 16);
+            for (i, p) in layer.iter().enumerate() {
+                (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y));
+                d.push_str(&format!("{}{:.1} {:.1} ", if i == 0 { 'M' } else { 'L' }, p.x, p.y));
+            }
+            let rect = crate::Rect {
+                x: x0 - width,
+                y: y0 - width,
+                width: x1 - x0 + 2.0 * width,
+                height: y1 - y0 + 2.0 * width,
+            };
+            let view = [rect.x, rect.y, rect.width, rect.height];
+            painter.path(rect, &[d], view, Some(width), false, colour);
+        }
+        true
+    }
+
     #[cfg(feature = "swipe")]
     /// Turns on gesture typing: a word drawn across the letter keys
     /// without lifting is handed to `f` (the path, and the keys as drawn),
-    /// and the first word it gives is typed, the next ones offered in the
-    /// bar. `threers-swipe` makes such a decoder from a trained model.
+    /// and the first word it gives is typed with a space after it, the
+    /// next ones offered in the bar. `threers-swipe` makes such a decoder from a trained model.
     ///
     /// ```
     /// use threers_ui::input::Input;
@@ -2361,13 +2607,20 @@ impl VirtualKeyboard {
     /// });
     /// ```
     pub fn set_swipe_decoder(&self, f: impl Fn(&Swipe) -> Vec<String> + 'static) {
-        self.board.borrow_mut().swipe = Some(Rc::new(f));
+        let mut b = self.board.borrow_mut();
+        b.swipe = Some(Rc::new(f));
+        self.swiping.set(true);
+        // the letters made again: for strokes, not repeats
+        b.generation += 1;
     }
 
     /// Turns gesture typing off: a slide types the key it ends on again.
     #[cfg(feature = "swipe")]
     pub fn clear_swipe_decoder(&self) {
-        self.board.borrow_mut().swipe = None;
+        let mut b = self.board.borrow_mut();
+        b.swipe = None;
+        self.swiping.set(false);
+        b.generation += 1;
     }
 
     /// Shows `page` (the letters, if the keyboard has no such page), as
@@ -2459,6 +2712,14 @@ impl VirtualKeyboard {
     /// field's keyboard button does).
     pub fn summon(&self) {
         self.summoned.set(true);
+    }
+
+    /// Puts it away, focus or not, until it's turned on (`set_enabled`) or
+    /// summoned again: at the next dispatch or tick it goes, any key held
+    /// let go (a held key stops repeating) and the room it took given back.
+    pub fn dismiss(&self) {
+        self.enabled.set(false);
+        self.summoned.set(false);
     }
 
     /// Presses `key` (a character, `"Backspace"`, `"Enter"`, `" "`) as its

@@ -65,6 +65,9 @@ pub struct CaptionPainter {
     pub style: CaptionStyle,
     /// Rows the last draw wrote to. See [`CaptionPainter::last_rows`].
     last_rows: Option<(u32, u32)>,
+    /// Colour glyphs (emoji) of the block being drawn: premultiplied RGBA
+    /// the size of its mask, drawn over the fill as they are.
+    color_layer: Option<Vec<u8>>,
 }
 
 impl Default for CaptionPainter {
@@ -85,6 +88,7 @@ impl CaptionPainter {
             font,
             style: CaptionStyle::default(),
             last_rows: None,
+            color_layer: None,
         }
     }
 
@@ -405,6 +409,7 @@ impl CaptionPainter {
             }
             Some(mask)
         };
+        self.color_layer = None;
         let mask = fill_mask(self, None).unwrap_or_default();
 
         // 1. Background box behind the whole block.
@@ -467,6 +472,11 @@ impl CaptionPainter {
             mask_y,
             style.color,
         );
+
+        // 5. Colour glyphs (emoji), as they are, at the text's opacity.
+        if let Some(layer) = self.color_layer.take() {
+            blend_color_layer(frame, width, height, &layer, mask_w, mask_h, mask_x, mask_y, style.color[3]);
+        }
 
         // The band everything above was written into: the mask, the shadow at
         // its offset, and the background box, whichever reaches furthest.
@@ -614,6 +624,16 @@ impl CaptionPainter {
             }
             let gx = origin + glyph.offset_x;
             let gy = baseline.round() as i32 + glyph.offset_y;
+            // an emoji: its own colours, kept apart from the mask (grown,
+            // for an outline, it has none)
+            if let Some(px) = glyph.color.clone() {
+                let (w, h) = (glyph.width, glyph.height);
+                if grow.is_none() {
+                    let layer = self.color_layer.get_or_insert_with(|| vec![0u8; (mask_w * mask_h * 4) as usize]);
+                    paint_color_glyph(layer, mask_w, mask_h, gx, gy, w, h, &px);
+                }
+                continue;
+            }
             for row in 0..glyph.height {
                 let y = gy + row as i32;
                 if y < 0 || y >= mask_h as i32 {
@@ -870,6 +890,59 @@ fn blend_mask(
             }
             let alpha = (color[3] as u32 * coverage as u32) / 255;
             blend_pixel(frame, width, x as u32, y as u32, color, alpha as u8);
+        }
+    }
+}
+
+/// A colour glyph's premultiplied pixels laid over `layer` (premultiplied,
+/// `mask_w` × `mask_h`) at `(gx, gy)`.
+#[allow(clippy::too_many_arguments)]
+fn paint_color_glyph(layer: &mut [u8], mask_w: u32, mask_h: u32, gx: i32, gy: i32, w: u32, h: u32, px: &[u8]) {
+    for row in 0..h {
+        let y = gy + row as i32;
+        if y < 0 || y >= mask_h as i32 {
+            continue;
+        }
+        for col in 0..w {
+            let x = gx + col as i32;
+            if x < 0 || x >= mask_w as i32 {
+                continue;
+            }
+            let s = ((row * w + col) * 4) as usize;
+            let a = px[s + 3] as u32;
+            if a == 0 {
+                continue;
+            }
+            let d = ((y as u32 * mask_w + x as u32) * 4) as usize;
+            for c in 0..4 {
+                layer[d + c] = (px[s + c] as u32 + layer[d + c] as u32 * (255 - a) / 255).min(255) as u8;
+            }
+        }
+    }
+}
+
+/// A block's colour glyphs (premultiplied RGBA, the mask's size) over an
+/// RGBA8 frame at `(ox, oy)`, at `opacity`.
+#[allow(clippy::too_many_arguments)]
+fn blend_color_layer(frame: &mut [u8], width: u32, height: u32, layer: &[u8], mask_w: u32, mask_h: u32, ox: i32, oy: i32, opacity: u8) {
+    for my in 0..mask_h as i32 {
+        let y = oy + my;
+        if y < 0 || y >= height as i32 {
+            continue;
+        }
+        for mx in 0..mask_w as i32 {
+            let x = ox + mx;
+            if x < 0 || x >= width as i32 {
+                continue;
+            }
+            let i = ((my as u32 * mask_w + mx as u32) * 4) as usize;
+            let a = layer[i + 3] as u32;
+            if a == 0 {
+                continue;
+            }
+            let straight = |c: u8| ((c as u32 * 255 + a / 2) / a).min(255) as u8;
+            let color = [straight(layer[i]), straight(layer[i + 1]), straight(layer[i + 2]), 255];
+            blend_pixel(frame, width, x as u32, y as u32, color, (a * opacity as u32 / 255) as u8);
         }
     }
 }

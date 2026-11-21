@@ -9,7 +9,7 @@ dependencies beyond `threers` itself (without its renderer).
 
 ```toml
 [dependencies]
-threers-fem = "0.1.0"
+threers-fem = "0.1.1"
 ```
 
 ```rust

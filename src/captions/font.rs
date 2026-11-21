@@ -38,6 +38,10 @@ pub struct GlyphBitmap {
     pub offset_y: i32,
     /// How far to advance the pen after drawing, in pixels.
     pub advance: f32,
+    /// A colour glyph's own pixels (an emoji), premultiplied RGBA the
+    /// mask's size, drawn as they are rather than in the text's colour;
+    /// `coverage` is then its alpha.
+    pub color: Option<std::sync::Arc<Vec<u8>>>,
 }
 
 impl GlyphBitmap {
@@ -90,6 +94,9 @@ static UI_FALLBACKS: std::sync::Mutex<Option<UiFallbacks>> = std::sync::Mutex::n
 
 #[derive(Default)]
 struct UiFallbacks {
+    /// Colour emoji, ahead of every other fallback (see
+    /// [`CaptionFont::use_color_emoji`]).
+    color: Option<std::sync::Arc<super::color_emoji::ColorGlyphs>>,
     app: Vec<std::sync::Arc<TtfFont>>,
     system: Vec<std::sync::Arc<TtfFont>>,
     cjk: Vec<std::sync::Arc<TtfFont>>,
@@ -127,6 +134,8 @@ enum Face {
     Ttf(Box<TtfFace>),
     Sdf(std::sync::Arc<SdfGlyphs>),
     Bitmap(std::sync::Arc<super::glyphs::BitmapGlyphs>),
+    /// Colour emoji, by codepoint.
+    Color(std::sync::Arc<super::color_emoji::ColorGlyphs>),
 }
 
 /// A TrueType face; for a variable font, also the bytes to read it again at
@@ -653,6 +662,7 @@ fn raster_sdf(set: &SdfGlyphs, c: char, size: f32, shift: f32) -> GlyphBitmap {
         offset_x: 0,
         offset_y: 0,
         advance,
+        color: None,
     };
     let Some(g) = set.glyphs.get(&(c as u32)) else {
         return blank(0.0);
@@ -706,6 +716,7 @@ fn raster_sdf(set: &SdfGlyphs, c: char, size: f32, shift: f32) -> GlyphBitmap {
         offset_x: x0,
         offset_y: y0,
         advance,
+        color: None,
     }
 }
 
@@ -764,6 +775,7 @@ impl std::fmt::Debug for CaptionFont {
                     Face::Ttf(_) => "truetype",
                     Face::Sdf(_) => "distance fields",
                     Face::Bitmap(_) => "bitmaps",
+                    Face::Color(_) => "colour emoji",
                 },
             )
             .field("cached_glyphs", &self.cache.len())
@@ -998,6 +1010,9 @@ impl CaptionFont {
     /// This face, then the UI fallbacks (not the UI face itself).
     fn with_ui_fallbacks_only(mut self) -> Self {
         ui_fallbacks(|fb| {
+            if let Some(e) = &fb.color {
+                self.fallbacks.push(Self::from_face(Face::Color(e.clone())));
+            }
             for f in fb.all() {
                 self.fallbacks.push(Self::from_shared_face(f.clone()));
             }
@@ -1033,6 +1048,28 @@ impl CaptionFont {
     pub fn add_ui_fallback_file(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
         let bytes = std::fs::read(path)?;
         Self::add_ui_fallback(&bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e:?}")))
+    }
+
+    /// Draw emoji in colour, from the system's colour emoji font (Apple
+    /// Color Emoji), for faces made by [`ui`](Self::ui) from now on: ahead
+    /// of every fallback, for the characters shown as emoji by default (a
+    /// monochrome emoji fallback is then only for the rest). Returns
+    /// whether there is one; calling it again does nothing.
+    pub fn use_color_emoji() -> bool {
+        if ui_fallbacks(|fb| fb.color.is_some()) {
+            return true;
+        }
+        let Some(e) = super::color_emoji::ColorGlyphs::system() else { return false };
+        ui_fallbacks(|fb| fb.color = Some(std::sync::Arc::new(e)));
+        true
+    }
+
+    /// [`use_color_emoji`](Self::use_color_emoji) from a given `sbix`
+    /// font file (a `.ttc` gives its first face).
+    pub fn use_color_emoji_file(path: impl AsRef<std::path::Path>) -> Result<(), String> {
+        let e = super::color_emoji::ColorGlyphs::open(path.as_ref())?;
+        ui_fallbacks(|fb| fb.color = Some(std::sync::Arc::new(e)));
+        Ok(())
     }
 
     /// Also fall back to the system's Chinese, Japanese and Korean fonts.
@@ -1259,6 +1296,10 @@ impl CaptionFont {
                     line_gap: 0.0,
                 }
             }
+            Face::Color(e) => {
+                let (ascent, descent) = e.metrics(size);
+                FontMetrics { ascent, descent, line_gap: 0.0 }
+            }
             Face::Ttf(face) => {
                 let font = &face.base;
                 let upem = font.units_per_em.max(1) as f32;
@@ -1375,6 +1416,7 @@ impl CaptionFont {
                 ),
                 Face::Sdf(set) => raster_sdf(set, c, size, shift),
                 Face::Bitmap(set) => set.raster(c, size, shift),
+                Face::Color(set) => set.raster_of(gid, size, shift),
             };
             self.cache.insert(key, bitmap);
         }
@@ -1484,7 +1526,7 @@ impl CaptionFont {
     fn own_gid(&self, c: char) -> u32 {
         match &self.face {
             Face::Ttf(face) => u32::from(face.base.cmap.get(&(c as u32)).copied().unwrap_or(0)),
-            Face::Builtin | Face::Sdf(_) | Face::Bitmap(_) => c as u32,
+            Face::Builtin | Face::Sdf(_) | Face::Bitmap(_) | Face::Color(_) => c as u32,
         }
     }
 
@@ -1545,6 +1587,7 @@ impl CaptionFont {
             )),
             Face::Sdf(set) => Face::Sdf(set.clone()),
             Face::Bitmap(set) => Face::Bitmap(set.clone()),
+            Face::Color(set) => Face::Color(set.clone()),
         };
         Some(Self {
             face,
@@ -1649,9 +1692,15 @@ impl CaptionFont {
         let mut out = Vec::with_capacity(chars.len());
         let mut start = 0;
         while start < chars.len() {
+            // an emoji sequence (👨‍👩‍👧, 👍🏽, 🇯🇵, ❤️): one glyph of the colour face
+            if let Some((tag, len, g)) = self.emoji_sequence(&chars[start..]) {
+                out.push(((tag as u32) << FACE_SHIFT | g, start));
+                start += len;
+                continue;
+            }
             let tag = self.face_for(chars[start]);
-            let end = (start..chars.len())
-                .find(|&i| self.face_for(chars[i]) != tag)
+            let end = (start + 1..chars.len())
+                .find(|&i| self.face_for(chars[i]) != tag || self.emoji_sequence(&chars[i..]).is_some())
                 .unwrap_or(chars.len());
             let face = if tag == 0 {
                 self
@@ -1666,6 +1715,32 @@ impl CaptionFont {
             start = end;
         }
         out
+    }
+
+    /// The emoji sequence `chars` start with (👨‍👩‍👧, 👍🏽, 🇯🇵, ❤️), if a
+    /// colour fallback draws it: how many characters it is, and its glyph
+    /// index (for [`glyph_of`](Self::glyph_of) and
+    /// [`advance_of`](Self::advance_of)).
+    pub fn emoji_sequence_gid(&self, chars: &[char]) -> Option<(usize, u32)> {
+        self.emoji_sequence(chars).map(|(tag, len, g)| (len, (tag as u32) << FACE_SHIFT | g))
+    }
+
+    /// The emoji sequence `chars` start with, if a colour fallback draws
+    /// it: (that fallback's tag, how many characters, its glyph).
+    fn emoji_sequence(&self, chars: &[char]) -> Option<(usize, usize, u32)> {
+        let first = *chars.first()?;
+        // most text: no emoji, and nothing after it to make one
+        if (first as u32) < 0xA9 && !matches!(first, '0'..='9' | '#' | '*') {
+            return None;
+        }
+        let len = super::color_emoji::sequence_len(chars);
+        if len == 0 {
+            return None;
+        }
+        self.fallbacks.iter().enumerate().find_map(|(i, f)| match &f.face {
+            Face::Color(e) => e.sequence_glyph(&chars[..len]).map(|g| (i + 1, len, g)),
+            _ => None,
+        })
     }
 
     fn shape_own(&self, chars: &[char], script: &[u8; 4], size: f32) -> Vec<(u32, usize)> {
@@ -1710,7 +1785,7 @@ impl CaptionFont {
         match &self.face {
             Face::Ttf(f) => f.base.composites_run,
             // The built-in face is Latin, and an SDF or bitmap face has no table to ask.
-            Face::Builtin | Face::Sdf(_) | Face::Bitmap(_) => false,
+            Face::Builtin | Face::Sdf(_) | Face::Bitmap(_) | Face::Color(_) => false,
         }
     }
 
@@ -1743,6 +1818,7 @@ impl CaptionFont {
                 .glyphs
                 .get(&gid)
                 .map_or(0.0, |g| g.advance * size / set.size.max(1e-6)),
+            Face::Color(set) => set.advance_of(gid, size),
         }
     }
 
@@ -1785,6 +1861,7 @@ impl CaptionFont {
             Face::Ttf(face) => face.base.cmap.contains_key(&(c as u32)),
             Face::Sdf(set) => set.glyphs.contains_key(&(c as u32)),
             Face::Bitmap(set) => set.glyphs.contains_key(&(c as u32)),
+            Face::Color(set) => set.has(c),
         }
     }
 
@@ -1988,6 +2065,7 @@ fn raster_builtin(c: char, size: f32, shift: f32) -> GlyphBitmap {
         // The baseline sits BUILTIN_ASCENT_ROWS down the cell.
         offset_y: py0 - (BUILTIN_ASCENT_ROWS as f32 * scale).round() as i32,
         advance,
+        color: None,
     }
 }
 
@@ -2287,6 +2365,7 @@ fn raster_ttf(
         offset_x: px0,
         offset_y: py0,
         advance,
+        color: None,
     }
 }
 
@@ -2394,6 +2473,7 @@ fn raster_grown(
         offset_x: x0,
         offset_y: y0,
         advance,
+        color: None,
     }
 }
 

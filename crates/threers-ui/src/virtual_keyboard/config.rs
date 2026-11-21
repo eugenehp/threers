@@ -65,6 +65,9 @@ pub enum KeyAction {
     Dismiss,
     /// Moves the keyboard (one-handed, docked, floating…).
     Place(Placement),
+    /// Control, Alt or Meta for the next key (a terminal's ⌃C): pressed
+    /// once it's held for the next key typed, pressed again let go.
+    Modifier(Modifier),
     /// Calls [`VirtualKeyboard::on_action`](super::VirtualKeyboard::on_action)
     /// with this id when the finger lifts: an emoji page, a voice button, a
     /// macro.
@@ -235,6 +238,21 @@ impl Key {
     /// 🌐: the next language.
     pub fn globe() -> Self {
         Self::new(KeyAction::NextLayout, "🌐", KeyLook::Function).name("Next keyboard")
+    }
+
+    /// Control held for the next key (`ctrl`).
+    pub fn control() -> Self {
+        Self::new(KeyAction::Modifier(Modifier::Control), "ctrl", KeyLook::Function)
+    }
+
+    /// Alt (Option) held for the next key (`alt`).
+    pub fn alt() -> Self {
+        Self::new(KeyAction::Modifier(Modifier::Alt), "alt", KeyLook::Function)
+    }
+
+    /// Escape (`esc`).
+    pub fn escape() -> Self {
+        Self::named("Escape", "esc").look(KeyLook::Function)
     }
 
     /// Puts the keyboard away (an iPad's ⌨).
@@ -599,6 +617,22 @@ pub struct KeyboardConfig {
     /// Holding the space bar makes the keyboard a trackpad: sliding moves
     /// the caret.
     pub space_trackpad: bool,
+    /// Every key that types repeats while it's held (a terminal's: held
+    /// letters, digits and space go on, as on a hardware keyboard), not
+    /// only Backspace and the arrows; holding offers no alternates then.
+    pub repeat_typing: bool,
+    /// How long a repeating key is held before it repeats (seconds)…
+    pub repeat_delay: f64,
+    /// … and how often it repeats then.
+    pub repeat_interval: f64,
+}
+
+/// A modifier a key holds for the next one ([`KeyAction::Modifier`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Modifier {
+    Control,
+    Alt,
+    Meta,
 }
 
 impl Default for KeyboardConfig {
@@ -653,6 +687,15 @@ fn phone_bottom(page: Key) -> Vec<Key> {
     ]
 }
 
+/// A terminal phone's third row on its symbol pages: `page`, five wide
+/// keys of a shell's punctuation, Backspace.
+fn shell_punctuation(page: Key, chars: &str) -> Vec<Key> {
+    let mut row = vec![page.units(1.3), Key::gap(0.2)];
+    row.extend(keys(chars).into_iter().map(|k| k.units(1.4)));
+    row.extend([Key::gap(0.2), Key::backspace().units(1.3)]);
+    row
+}
+
 /// An iPhone's third row on the symbol pages: `page`, five wide
 /// punctuation keys, Backspace.
 fn phone_punctuation(page: Key) -> Vec<Key> {
@@ -681,6 +724,129 @@ impl KeyboardConfig {
     /// An iPhone's, portrait: ten letters across, Shift and Backspace by
     /// the third row, `123`, 🌐, space and return under them; the digits
     /// and `#+=` pages as iOS has them; the pressed letter shown large.
+    /// A terminal's, for a phone: an iPhone's letters, with a row over
+    /// every page of what a shell needs that a phone's keyboard hides
+    /// (esc, tab, ctrl, alt, the arrows, `| ~ / -`); symbol pages of a
+    /// shell's punctuation (`\ | & $ " '`, `_ = * < >`, `` ` ``) rather
+    /// than prose's; every key repeating while held; no capitals at the
+    /// start of a sentence, no ". " for two spaces. A tablet's:
+    /// [`terminal_tablet`](Self::terminal_tablet).
+    pub fn terminal() -> Self {
+        let mut c = Self::iphone();
+        c.top_rows = vec![vec![
+            Key::escape(),
+            Key::tab().look(KeyLook::Function),
+            Key::control(),
+            Key::alt(),
+            Key::named("ArrowLeft", "←").look(KeyLook::Function),
+            Key::named("ArrowUp", "↑").look(KeyLook::Function),
+            Key::named("ArrowDown", "↓").look(KeyLook::Function),
+            Key::named("ArrowRight", "→").look(KeyLook::Function),
+            Key::text("|"),
+            Key::text("~"),
+            Key::text("/"),
+            Key::text("-"),
+        ]];
+        // the whole width, edge to edge (a phone's is capped for prose)
+        c.placement = Placement::docked();
+        c.symbols = vec![
+            keys("1234567890"),
+            keys("-/\\:;|&$\"'"),
+            shell_punctuation(Key::more_symbols(), "._=*?"),
+            phone_bottom(Key::letters_page()),
+        ];
+        c.more = vec![
+            keys("[]{}()<>#%"),
+            keys("`~^+@!,'\"\\"),
+            shell_punctuation(Key::symbols(), "._=*;"),
+            phone_bottom(Key::letters_page()),
+        ];
+        c.terminal_behaviour()
+    }
+
+    /// A terminal's, for a tablet: a laptop's keys across the whole width.
+    /// The number row with its shifted symbols, tab before `q`, ctrl where
+    /// caps lock is (as on a Unix keyboard), `[ ] \ ; ' , . /` in their
+    /// places, and esc, alt, the arrows along the bottom: everything a
+    /// shell needs on the one page. Every key repeats while held.
+    pub fn terminal_tablet() -> Self {
+        let mut c = Self::ipad_pro();
+        let number_row = [
+            ("`", "~"), ("1", "!"), ("2", "@"), ("3", "#"), ("4", "$"), ("5", "%"), ("6", "^"),
+            ("7", "&"), ("8", "*"), ("9", "("), ("0", ")"), ("-", "_"), ("=", "+"),
+        ];
+        let mut numbers: Vec<Key> = number_row.iter().map(|(a, b)| Key::dual(a, b)).collect();
+        numbers.push(Key::backspace().fill(1.5));
+        let arrow = |name: &str, label: &str| Key::named(name, label).look(KeyLook::Function);
+        c.letters = vec![
+            numbers,
+            vec![
+                Key::tab().units(1.5),
+                Key::letters(0),
+                Key::dual("[", "{"),
+                Key::dual("]", "}"),
+                Key::dual("\\", "|"),
+            ],
+            vec![
+                Key::control().units(1.75),
+                Key::letters(1),
+                Key::dual(";", ":"),
+                Key::dual("'", "\""),
+                Key::enter().fill(1.75),
+            ],
+            vec![
+                Key::shift().units(2.25),
+                Key::letters(2),
+                Key::dual(",", "<"),
+                Key::dual(".", ">"),
+                Key::dual("/", "?"),
+                Key::shift().fill(2.25),
+            ],
+            vec![
+                Key::escape().units(1.25),
+                Key::alt().units(1.25),
+                Key::symbols().label(".?123").units(1.5),
+                Key::space(),
+                arrow("ArrowLeft", "←"),
+                arrow("ArrowUp", "↑"),
+                arrow("ArrowDown", "↓"),
+                arrow("ArrowRight", "→"),
+            ],
+        ];
+        // its symbols page: the same keys' other halves, and the rest
+        c.symbols = vec![
+            keys("1234567890-="),
+            [vec![Key::tab().units(1.5)], keys("[]{}#%^*+=\\|~")].concat(),
+            [vec![Key::control().units(1.75)], keys("-/:;()$&@\"'"), vec![Key::enter().fill(1.75)]].concat(),
+            [vec![Key::shift().units(2.25)], keys("._,?!`<>"), vec![Key::backspace().fill(2.25)]].concat(),
+            vec![
+                Key::escape().units(1.25),
+                Key::alt().units(1.25),
+                Key::letters_page().label("ABC").units(1.5),
+                Key::space(),
+                arrow("ArrowLeft", "←"),
+                arrow("ArrowUp", "↑"),
+                arrow("ArrowDown", "↓"),
+                arrow("ArrowRight", "→"),
+            ],
+        ];
+        c.more = c.symbols.clone();
+        c.top_rows = vec![];
+        c.placement = Placement::docked();
+        c.terminal_behaviour()
+    }
+
+    /// What makes a keyboard a terminal's: keys repeat, no accents on
+    /// holding, nothing capitalised or turned into ". " for it.
+    fn terminal_behaviour(mut self) -> Self {
+        self.repeat_typing = true;
+        self.alternates = false;
+        self.auto_capitalize = AutoCapitalize::None;
+        self.period_shortcut = false;
+        self.return_to_letters = false;
+        self
+    }
+
     pub fn iphone() -> Self {
         let mut shift_row = vec![Key::shift().units(1.3), Key::gap(0.2), Key::letters(2)];
         shift_row.extend([Key::gap(0.2), Key::backspace().units(1.3)]);
@@ -720,6 +886,9 @@ impl KeyboardConfig {
             period_shortcut: true,
             return_to_letters: true,
             space_trackpad: true,
+            repeat_typing: false,
+            repeat_delay: 0.45,
+            repeat_interval: 0.09,
         }
     }
 
@@ -806,6 +975,9 @@ impl KeyboardConfig {
             period_shortcut: true,
             return_to_letters: true,
             space_trackpad: true,
+            repeat_typing: false,
+            repeat_delay: 0.45,
+            repeat_interval: 0.09,
         }
     }
 
@@ -968,6 +1140,9 @@ impl KeyboardConfig {
             period_shortcut: false,
             return_to_letters: false,
             space_trackpad: false,
+            repeat_typing: false,
+            repeat_delay: 0.45,
+            repeat_interval: 0.09,
         }
     }
 

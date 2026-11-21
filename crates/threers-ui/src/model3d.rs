@@ -1075,6 +1075,8 @@ mod tests {
         }
     }
 
+    // Worker threads exist natively only (`jobs::Threads`).
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn on_threads_the_view_lands_later_and_follows_the_newest_turn() {
         use crate::{binding, FixedWidthText};
@@ -1140,6 +1142,7 @@ mod tests {
         assert_eq!(pixels(&ui), want);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_dense_model_is_drawn_in_bands_on_threads_as_on_the_spot() {
         use crate::binding;
@@ -1252,6 +1255,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_view_it_cannot_compare_is_still_drawn_once() {
         use crate::{binding, depth::Light};

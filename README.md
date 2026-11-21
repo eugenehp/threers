@@ -110,7 +110,9 @@ the renderer. The pieces that stand alone are crates of their own —
 [`threers-math`](crates/threers-math), [`threers-captions`](crates/threers-captions),
 [`threers-audio`](crates/threers-audio), [`threers-codec`](crates/threers-codec),
 [`threers-splat-sort`](crates/threers-splat-sort) and [`threers-ui`](crates/threers-ui) underneath, [`threers-video`](crates/threers-video), `threers-physics` and
-`threers-animation` on top.
+`threers-animation` on top, and [`threers-swipe`](crates/threers-swipe) beside `threers-ui`:
+gesture typing for its on-screen keyboard (opt-in, the `swipe` feature),
+trained here on FUTO's MIT swipe corpus, English weights included.
 
 ## Examples
 
@@ -143,10 +145,17 @@ on a laptop and in CI.
 | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/starfield_probe.jpg" width="200" alt="starfield_probe"></a><br><sub><code>starfield_probe</code></sub> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/svg_gallery.jpg" width="200" alt="svg_gallery"></a><br><sub><code>svg_gallery</code></sub> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/tower_collapse.jpg" width="200" alt="tower_collapse"></a><br><sub><code>tower_collapse</code></sub> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/ui_panel.jpg" width="200" alt="ui_panel"></a><br><sub><code>ui_panel</code></sub> |
 | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/usd_stage.jpg" width="200" alt="usd_stage"></a><br><sub><code>usd_stage</code></sub> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/venom_button.jpg" width="200" alt="venom_button"></a><br><sub><code>venom_button</code></sub> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/venom_gallery.jpg" width="200" alt="venom_gallery"></a><br><sub><code>venom_gallery</code></sub> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/viewport_path_trace.jpg" width="200" alt="viewport_path_trace"></a><br><sub><code>viewport_path_trace</code></sub> |
 | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/volume_slices.jpg" width="200" alt="volume_slices"></a><br><sub><code>volume_slices</code></sub> | <a href="docs/splats.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/splats.jpg" width="200" alt="splats"></a><br><sub><code>splats</code></sub> | <a href="docs/splats.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/splats_lizard.jpg" width="200" alt="Gaussian splats: a horned lizard statue"></a><br><sub><code>splats</code> · hornedlizard.spz</sub> | <a href="docs/splats.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/splats_raccoon.jpg" width="200" alt="Gaussian splats: raccoons carved in a stump"></a><br><sub><code>splats</code> · racoonfamily.spz</sub> |
+| <a href="crates/threers-swipe"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/swipe_typing.gif" width="200" alt="Gesture typing on the on-screen keyboard: Hello how are you today, each word drawn across the keys"></a><br><sub><code>swipe-demo</code> · gesture typing</sub> | | | |
 
 Interactive ones open a window, for example `cargo run --release --example
 map_demo --features captions`, `--example marks_map` or `--example venom_button`. The rest of
 [`examples/`](examples/) export video or print numbers.
+
+Gesture typing runs in the browser: `SERVE=1 web/swipe-demo/build.sh`, then
+open `http://localhost:8787/swipe-demo/` and draw words across the keys
+([`threers-swipe`](crates/threers-swipe), the opt-in `swipe` feature of the
+keyboard; the GIF above is that page, swiped by
+[`scripts/swipe-demo-gif.mjs`](scripts/swipe-demo-gif.mjs)).
 
 Gaussian splats (`--features splats`) load the trainer's PLY, compressed PLY,
 `.spz` and `.splat`, and [`web/splats.html`](web/splats.html) views them in the

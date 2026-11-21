@@ -528,6 +528,125 @@ pub fn search_field<S: 'static>(
     b
 }
 
+/// A text box of several lines (HTML's `<textarea>`): `rows` lines tall,
+/// the text wrapped as written (its own line breaks kept), the placeholder
+/// shown while it is empty. Typed into from the keyboard ([`TextArea`](crate::TextArea)'s
+/// keys: Enter breaks the line) or a host's own text input (a phone's
+/// keyboard, a native field over it); its text lives in the state at
+/// `text`.
+///
+/// ```
+/// use threers_ui::binding::Binding;
+/// use threers_ui::input::Input;
+/// use threers_ui::pickers::text_area;
+/// use threers_ui::{FixedWidthText, Role, Ui};
+///
+/// let mut ui = Ui::new();
+/// let mut input: Input<String> = Input::new();
+/// let mut text = String::new();
+/// let root = ui.root();
+/// let all = Binding::new(|s: &String| s.clone(), |s: &mut String, v| *s = v);
+/// let b = text_area(&mut ui, &mut input, &text, root, "region,value", all, 4);
+/// ui.layout(300.0, 200.0, &mut FixedWidthText(7.0));
+/// input.set_focus(&mut ui, &mut text, Some(b));
+/// input.simulate_keystrokes(&mut ui, &mut text, "a enter b").unwrap();
+/// assert_eq!(text, "a\nb");
+/// assert_eq!(ui.semantics(b).map(|s| s.role), Some(Role::TextArea));
+/// // a line each
+/// ui.layout(300.0, 200.0, &mut FixedWidthText(7.0));
+/// assert_eq!(ui.children(ui.children(b)[0]).len(), 2);
+/// ```
+pub fn text_area<S: 'static>(
+    ui: &mut Ui,
+    input: &mut Input<S>,
+    state: &S,
+    parent: NodeId,
+    placeholder: &str,
+    text: Binding<S, String>,
+    rows: u32,
+) -> NodeId {
+    let b = ui.add_box(parent, style! { display: flex; padding: 7px 8px; border-radius: 7px; cursor: text; overflow-y: auto; });
+    let line = 12.0 * 1.4;
+    ui.update_style(b, |s| {
+        s.min_height = Length::Px(rows.max(1) as f32 * line + 14.0)
+    });
+    ui.token_style(b, &[("background", Token::Separator)]);
+    ui.focus_style(b, "box-shadow: 0 0 0 2px #2563eb");
+    ui.set_semantics(b, Semantics::new(Role::TextArea).label(placeholder));
+    // a box per line, each wrapping (the layout breaks lines at spaces, not
+    // at the text's own line breaks)
+    let shown = ui.add_box(b, style! { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; font-size: 12px; line-height: 1.4; });
+    let field = Rc::new(std::cell::RefCell::new(crate::text_area::TextArea::new(
+        text.get(state),
+    )));
+    let (f, t) = (field.clone(), text.clone());
+    input.on_key(b, move |s, _, key, m, _| {
+        // Tab moves on, as a form's would
+        if key == "Tab" {
+            return false;
+        }
+        let mut field = f.borrow_mut();
+        let now = t.get(s);
+        if field.text != now {
+            *field = crate::text_area::TextArea::new(now.clone());
+            field.move_to(now.chars().count(), false);
+        }
+        let used = !matches!(field.key(key, m), FieldKey::Ignored | FieldKey::Tab { .. });
+        if field.text != now {
+            t.set(s, field.text.clone());
+        }
+        used
+    });
+    let (f, t) = (field.clone(), text.clone());
+    let (f2, t2) = (field, text.clone());
+    input.register_text(
+        b,
+        move |s| {
+            let field = f.borrow();
+            let now = t.get(s);
+            if field.text == now {
+                (now, field.anchor, field.caret)
+            } else {
+                let n = now.chars().count();
+                (now, n, n)
+            }
+        },
+        move |s, _, new, anchor, caret| {
+            let mut field = f2.borrow_mut();
+            *field = crate::text_area::TextArea::new(new.clone());
+            let n = new.chars().count();
+            (field.anchor, field.caret) = (anchor.min(n), caret.min(n));
+            t2.set(s, new);
+        },
+    );
+    let placeholder = placeholder.to_owned();
+    follow(ui, input, state, b, text, move |ui, now: &String| {
+        ui.clear_children(shown);
+        let lines: Vec<&str> = if now.is_empty() {
+            placeholder.split('\n').collect()
+        } else {
+            now.split('\n').collect()
+        };
+        for l in lines {
+            // (each its size: a box's font size does not reach the text of
+            // a box inside it)
+            let row = ui.add_box(
+                shown,
+                style! { min-height: 16.8px; font-size: 12px; line-height: 1.4; },
+            );
+            ui.add_text(row, l);
+        }
+        let color = if now.is_empty() {
+            Token::SecondaryText
+        } else {
+            Token::Text
+        };
+        ui.token_style(shown, &[("color", color)]);
+        ui.semantics_mut(b).value = Some(now.clone());
+    });
+    b
+}
+
 #[cfg(test)]
 mod slider_touch {
     use super::*;
@@ -649,123 +768,4 @@ mod slider_touch {
         touch(&mut ui, &mut input, &mut s, &[(track.x + 10.0, y)]);
         assert!(s.0 < 0.05, "a tap at its start: {}", s.0);
     }
-}
-
-/// A text box of several lines (HTML's `<textarea>`): `rows` lines tall,
-/// the text wrapped as written (its own line breaks kept), the placeholder
-/// shown while it is empty. Typed into from the keyboard ([`TextArea`]'s
-/// keys: Enter breaks the line) or a host's own text input (a phone's
-/// keyboard, a native field over it); its text lives in the state at
-/// `text`.
-///
-/// ```
-/// use threers_ui::binding::Binding;
-/// use threers_ui::input::Input;
-/// use threers_ui::pickers::text_area;
-/// use threers_ui::{FixedWidthText, Role, Ui};
-///
-/// let mut ui = Ui::new();
-/// let mut input: Input<String> = Input::new();
-/// let mut text = String::new();
-/// let root = ui.root();
-/// let all = Binding::new(|s: &String| s.clone(), |s: &mut String, v| *s = v);
-/// let b = text_area(&mut ui, &mut input, &text, root, "region,value", all, 4);
-/// ui.layout(300.0, 200.0, &mut FixedWidthText(7.0));
-/// input.set_focus(&mut ui, &mut text, Some(b));
-/// input.simulate_keystrokes(&mut ui, &mut text, "a enter b").unwrap();
-/// assert_eq!(text, "a\nb");
-/// assert_eq!(ui.semantics(b).map(|s| s.role), Some(Role::TextArea));
-/// // a line each
-/// ui.layout(300.0, 200.0, &mut FixedWidthText(7.0));
-/// assert_eq!(ui.children(ui.children(b)[0]).len(), 2);
-/// ```
-pub fn text_area<S: 'static>(
-    ui: &mut Ui,
-    input: &mut Input<S>,
-    state: &S,
-    parent: NodeId,
-    placeholder: &str,
-    text: Binding<S, String>,
-    rows: u32,
-) -> NodeId {
-    let b = ui.add_box(parent, style! { display: flex; padding: 7px 8px; border-radius: 7px; cursor: text; overflow-y: auto; });
-    let line = 12.0 * 1.4;
-    ui.update_style(b, |s| {
-        s.min_height = Length::Px(rows.max(1) as f32 * line + 14.0)
-    });
-    ui.token_style(b, &[("background", Token::Separator)]);
-    ui.focus_style(b, "box-shadow: 0 0 0 2px #2563eb");
-    ui.set_semantics(b, Semantics::new(Role::TextArea).label(placeholder));
-    // a box per line, each wrapping (the layout breaks lines at spaces, not
-    // at the text's own line breaks)
-    let shown = ui.add_box(b, style! { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; font-size: 12px; line-height: 1.4; });
-    let field = Rc::new(std::cell::RefCell::new(crate::text_area::TextArea::new(
-        text.get(state),
-    )));
-    let (f, t) = (field.clone(), text.clone());
-    input.on_key(b, move |s, _, key, m, _| {
-        // Tab moves on, as a form's would
-        if key == "Tab" {
-            return false;
-        }
-        let mut field = f.borrow_mut();
-        let now = t.get(s);
-        if field.text != now {
-            *field = crate::text_area::TextArea::new(now.clone());
-            field.move_to(now.chars().count(), false);
-        }
-        let used = !matches!(field.key(key, m), FieldKey::Ignored | FieldKey::Tab { .. });
-        if field.text != now {
-            t.set(s, field.text.clone());
-        }
-        used
-    });
-    let (f, t) = (field.clone(), text.clone());
-    let (f2, t2) = (field, text.clone());
-    input.register_text(
-        b,
-        move |s| {
-            let field = f.borrow();
-            let now = t.get(s);
-            if field.text == now {
-                (now, field.anchor, field.caret)
-            } else {
-                let n = now.chars().count();
-                (now, n, n)
-            }
-        },
-        move |s, _, new, anchor, caret| {
-            let mut field = f2.borrow_mut();
-            *field = crate::text_area::TextArea::new(new.clone());
-            let n = new.chars().count();
-            (field.anchor, field.caret) = (anchor.min(n), caret.min(n));
-            t2.set(s, new);
-        },
-    );
-    let placeholder = placeholder.to_owned();
-    follow(ui, input, state, b, text, move |ui, now: &String| {
-        ui.clear_children(shown);
-        let lines: Vec<&str> = if now.is_empty() {
-            placeholder.split('\n').collect()
-        } else {
-            now.split('\n').collect()
-        };
-        for l in lines {
-            // (each its size: a box's font size does not reach the text of
-            // a box inside it)
-            let row = ui.add_box(
-                shown,
-                style! { min-height: 16.8px; font-size: 12px; line-height: 1.4; },
-            );
-            ui.add_text(row, l);
-        }
-        let color = if now.is_empty() {
-            Token::SecondaryText
-        } else {
-            Token::Text
-        };
-        ui.token_style(shown, &[("color", color)]);
-        ui.semantics_mut(b).value = Some(now.clone());
-    });
-    b
 }

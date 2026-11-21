@@ -1,0 +1,14 @@
+[package]
+name = "threers-spell"
+version.workspace = true
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+authors = ["Eugene Hauptmann"]
+repository = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-spell"
+description = "Spellcheck and autocorrect for threers' text input: an English word list with its inflections, words of the app's own, and fixes ranked by edits, transpositions and neighbouring keys"
+keywords = ["spellcheck", "autocorrect", "keyboard", "wasm"]
+categories = ["text-processing"]
+
+[dependencies]

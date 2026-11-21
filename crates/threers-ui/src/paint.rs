@@ -656,17 +656,53 @@ impl Ui {
                 .unwrap_or(0.0)
                 .min(r.height / 2.0),
         );
+        // A rounded uniform border that is not wholly opaque — the box
+        // faded (`opacity`), its background or border see-through, or no
+        // background at all — is drawn as a ring: the background inset with
+        // the inner radii, then the corners as arcs and the sides as bars,
+        // nothing painted twice. The fast path below lays the border colour
+        // over the whole box and the background over that, which shows the
+        // border through anything translucent (a faded button kept ~70 % of
+        // its colour at `opacity: 0.45`); and a rounded border with no
+        // background used to get square corners.
+        let w = b.top;
+        let opaque = |c: Rgba| fade(c)[3] >= 1.0;
+        let ring = uniform
+            && w > 0.0
+            && orx >= w
+            && (orx - ory).abs() < 0.01
+            && s.border_color[3] > 0.0
+            && !s.border_dashed
+            && !s.background_clip_content
+            && !(s.background.is_some_and(opaque) && opaque(s.border_color));
         // A rounded box with a uniform border over a background: the border
         // colour over the whole rounded box, the background inset from it
         // with the inner radii (`radius − border`).
-        let rounded_border = uniform
+        let rounded_border = !ring
+            && uniform
             && orx > 0.0
             && ory > 0.0
             && s.border_color[3] > 0.0
             && s.background.is_some()
             && !s.background_clip_content
             && !s.border_dashed;
-        if rounded_border {
+        if ring {
+            if let Some(bg) = s.background {
+                let inner = Rect {
+                    x: r.x + w,
+                    y: r.y + w,
+                    width: (r.width - 2.0 * w).max(0.0),
+                    height: (r.height - 2.0 * w).max(0.0),
+                };
+                let ir = orx - w;
+                if ir > 0.0 {
+                    painter.fill_rounded_rect(inner, ir, ir, fade(bg));
+                } else {
+                    painter.fill_rect(inner, fade(bg));
+                }
+            }
+            rounded_ring(painter, r, orx, w, fade(s.border_color));
+        } else if rounded_border {
             painter.fill_rounded_rect(r, orx, ory, fade(s.border_color));
             let inner = Rect {
                 x: r.x + b.left,
@@ -718,6 +754,7 @@ impl Ui {
         if s.border_dashed && uniform && s.border_color[3] > 0.0 {
             dashes(painter, r, orx.min(ory), b.top, fade(s.border_color));
         } else if !rounded_border
+            && !ring
             && s.border_color[3] > 0.0
             && (b.top > 0.0 || b.right > 0.0 || b.bottom > 0.0 || b.left > 0.0)
         {
@@ -1123,6 +1160,43 @@ const EVERYWHERE: Rect = Rect {
     width: 2e9,
     height: 2e9,
 };
+
+/// A rounded rectangle's border, `width` wide inside `r`, corners of radius
+/// `radius`: four quarter arcs and four straight sides, none overlapping
+/// (the sides stop half a border short of each arc, whose round cap covers
+/// the rest), so a translucent colour is laid down once everywhere.
+fn rounded_ring(painter: &mut dyn Painter, r: Rect, radius: f32, width: f32, color: Rgba) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let (half, mid) = (width / 2.0, radius - width / 2.0);
+    let (l, t, rt, bt) = (r.x + radius, r.y + radius, r.x + r.width - radius, r.y + r.height - radius);
+    // Clockwise from straight up: top-left from the left, top-right from the
+    // top, and on round.
+    for (cx, cy, start) in [(l, t, 1.5 * PI), (rt, t, 0.0), (rt, bt, FRAC_PI_2), (l, bt, PI)] {
+        painter.stroke_arc(
+            ArcShape {
+                cx,
+                cy,
+                radius: mid,
+                start,
+                sweep: FRAC_PI_2,
+            },
+            width,
+            color,
+        );
+    }
+    let across = (r.width - 2.0 * radius - width).max(0.0);
+    let down = (r.height - 2.0 * radius - width).max(0.0);
+    for side in [
+        Rect { x: l + half, y: r.y, width: across, height: width },
+        Rect { x: l + half, y: r.y + r.height - width, width: across, height: width },
+        Rect { x: r.x, y: t + half, width, height: down },
+        Rect { x: r.x + r.width - width, y: t + half, width, height: down },
+    ] {
+        if side.width > 0.0 && side.height > 0.0 {
+            painter.fill_rect(side, color);
+        }
+    }
+}
 
 /// A dashed border `width` wide round `r` (its corners of `radius`):
 /// dashes three widths long, as long apart, walked along the outline's

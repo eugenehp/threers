@@ -34,10 +34,10 @@ animation = ["dep:threers-animation"]
 usd = ["threers/usd"]
 
 [dependencies]
-threers = { path = "../..", version = "0.1.0" }
-threers-physics = { path = "../threers-physics", version = "0.1.0", optional = true }
-threers-fem = { path = "../threers-fem", version = "0.1.0", optional = true }
-threers-animation = { path = "../threers-animation", version = "0.1.0", optional = true, default-features = false }
+threers = { path = "../..", version = "0.1.1" }
+threers-physics = { path = "../threers-physics", version = "0.1.1", optional = true }
+threers-fem = { path = "../threers-fem", version = "0.1.1", optional = true }
+threers-animation = { path = "../threers-animation", version = "0.1.1", optional = true, default-features = false }
 # `generate-import-lib`: a Windows wheel links against python3.dll, and with
 # this pyo3 writes the import library itself, so the wheel cross-builds from
 # macOS or Linux with no Windows Python (scripts/release-all.sh, PLATFORMS=all).

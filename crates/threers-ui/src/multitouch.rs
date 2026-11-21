@@ -124,10 +124,10 @@ impl TapTracker {
                 None
             }
             TouchPhase::Moved => {
-                if let (Some(f), Some(g)) = (self.fingers.get(&id), self.group.as_mut()) {
-                    if (x - f.start.0).hypot(y - f.start.1) > self.config.slop {
-                        g.tap = false;
-                    }
+                if let (Some(f), Some(g)) = (self.fingers.get(&id), self.group.as_mut())
+                    && (x - f.start.0).hypot(y - f.start.1) > self.config.slop
+                {
+                    g.tap = false;
                 }
                 None
             }

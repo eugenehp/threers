@@ -12,6 +12,12 @@
 //! typing.attach(&kb());
 //! ```
 //!
+//! With a next-word model for a language
+//! ([`next_words`](SwipeTyping::next_words): an n-gram, the neural one or
+//! both [`Interpolated`](crate::Interpolated)), a swipe is read after the
+//! words before it, and the bar offers the next word as the
+//! iPhone's does.
+//!
 //! The keys come with each swipe as they are drawn, so a keyboard
 //! resized, split or floating decodes as it shows; the word trie is made
 //! once per language and set of keys and kept.
@@ -25,15 +31,25 @@ use threers_ui::virtual_keyboard::{Swipe, VirtualKeyboard};
 use crate::decode::{DecodeConfig, Decoder, Lexicon};
 use crate::geometry::KeyboardGeometry;
 use crate::model::Model;
+use crate::next_word::{self, WordModel};
+use crate::user::{finished_words, UserModel, WithUser};
 use crate::trace::TouchPoint;
 
 /// Words offered for a swipe: the one typed and the bar's.
 const WORDS: usize = 4;
+/// Words in the bar.
+const BAR: usize = 3;
 
 /// A model and a lexicon per language, decoding the keyboard's swipes.
 pub struct SwipeTyping {
     model: Model,
     lexicons: HashMap<String, Lexicon>,
+    next_words: HashMap<String, Box<dyn WordModel>>,
+    /// Each language's learner of what is typed, and its share.
+    users: HashMap<String, (Rc<UserModel>, f32)>,
+    /// The text before the caret last seen, by language, to tell which
+    /// words were finished since.
+    seen: RefCell<HashMap<String, String>>,
     config: DecodeConfig,
     /// Decoders by language and the keys' letters in order.
     decoders: RefCell<HashMap<String, Rc<Decoder>>>,
@@ -44,6 +60,9 @@ impl SwipeTyping {
         Self {
             model,
             lexicons: HashMap::new(),
+            next_words: HashMap::new(),
+            users: HashMap::new(),
+            seen: RefCell::default(),
             config: DecodeConfig::default(),
             decoders: RefCell::default(),
         }
@@ -54,6 +73,63 @@ impl SwipeTyping {
         self.lexicons.insert(language.to_owned(), lexicon);
         self.decoders.borrow_mut().clear();
         self
+    }
+
+    /// What follows what in `language`: swipes are read after the words
+    /// before them, and the bar offers the next word.
+    pub fn next_words(mut self, language: &str, model: impl WordModel + 'static) -> Self {
+        self.next_words.insert(language.to_owned(), Box::new(model));
+        self
+    }
+
+    /// Learns what is typed in `language` into `model` (each word as it is
+    /// finished), which gets `weight` of the next-word mix: the bar and the
+    /// swipes come to know the person's own words. Keep the `Rc` to save
+    /// it ([`UserModel::to_text`]).
+    pub fn user(mut self, language: &str, model: Rc<UserModel>, weight: f32) -> Self {
+        self.users.insert(language.to_owned(), (model, weight));
+        self
+    }
+
+    /// The language's next-word model with the user's mixed in, for `f`.
+    fn with_words<T>(&self, language: &str, f: impl FnOnce(Option<&dyn WordModel>) -> T) -> T {
+        match (self.next_words.get(language), self.users.get(language)) {
+            (Some(base), Some((user, weight))) => f(Some(&WithUser {
+                base: base.as_ref(),
+                user,
+                weight: *weight,
+            })),
+            (Some(base), None) => f(Some(base.as_ref())),
+            (None, Some((user, _))) => f(Some(user.as_ref())),
+            (None, None) => f(None),
+        }
+    }
+
+    /// The words finished since the text before the caret was last seen,
+    /// learnt.
+    fn learn(&self, language: &str, before: &str) {
+        let Some((user, _)) = self.users.get(language) else {
+            return;
+        };
+        let mut seen = self.seen.borrow_mut();
+        let was = seen.entry(language.to_owned()).or_default();
+        for (ctx, word) in finished_words(was, before) {
+            let ctx: Vec<&str> = ctx.iter().map(String::as_str).collect();
+            user.learn(&ctx, &word);
+        }
+        was.clear();
+        was.push_str(before);
+    }
+
+    /// The bar's words for the text `before` the caret in `language`:
+    /// completions of the word being typed, or the next one after a space;
+    /// none without a next-word model for it. Words just finished are
+    /// learnt first, with a user model.
+    pub fn suggest(&self, language: &str, before: &str) -> Vec<String> {
+        self.learn(language, before);
+        self.with_words(language, |m| {
+            m.map_or_else(Vec::new, |m| next_word::suggest(m, before, BAR))
+        })
     }
 
     pub fn decode_config(mut self, config: DecodeConfig) -> Self {
@@ -101,17 +177,34 @@ impl SwipeTyping {
                 TouchPoint::new(x, y, (p.t - t0) as f32)
             })
             .collect();
-        decoder
-            .decode_on(&self.model, &keyboard, &points, WORDS)
+        let found = self.with_words(&swipe.language, |lm| match lm {
+            Some(lm) => {
+                // The keyboard puts a space after a word before the swiped
+                // one, so a word half-typed is a word before it.
+                let before = format!("{} ", swipe.before);
+                let (context, _) = next_word::split_context(&before, lm.context_len());
+                let context: Vec<&str> = context.iter().map(String::as_str).collect();
+                decoder.decode_on_after(&self.model, &keyboard, &points, lm, &context, WORDS)
+            }
+            None => decoder.decode_on(&self.model, &keyboard, &points, WORDS),
+        });
+        // "i" is "I" wherever it comes; the keyboard's Shift does the rest.
+        found
             .unwrap_or_default()
             .into_iter()
-            .map(|c| c.word)
+            .map(|c| next_word::cased(&c.word, "", false))
             .collect()
     }
 
-    /// Makes this `keyboard`'s swipe decoder.
+    /// Makes this `keyboard`'s swipe decoder, and with next-word models
+    /// its bar's predictions.
     pub fn attach(self, keyboard: &VirtualKeyboard) {
-        keyboard.set_swipe_decoder(move |s| self.decode(s));
+        let me = Rc::new(self);
+        if !me.next_words.is_empty() || !me.users.is_empty() {
+            let m = me.clone();
+            keyboard.set_predictions(move |language, before| m.suggest(language, before));
+        }
+        keyboard.set_swipe_decoder(move |s| me.decode(s));
     }
 }
 
@@ -163,6 +256,7 @@ mod tests {
                 points,
                 keys,
                 language: "en".into(),
+                before: String::new(),
             },
             g,
         )

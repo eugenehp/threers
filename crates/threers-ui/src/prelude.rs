@@ -1,6 +1,7 @@
 //! One import for what nearly every UI uses: the tree and its styles, input
-//! and bindings, meaning for assistive technology, the theme's colours,
-//! painters, and the gauges and charts.
+//! (pointers, touches, keys) and bindings, a text field's editing, meaning
+//! for assistive technology, the theme's colours, painters, and the gauges
+//! and charts.
 //!
 //! ```
 //! use threers_ui::prelude::*;
@@ -35,7 +36,7 @@ pub use crate::charts::{
     bar_chart, gauge, gauge_styled, line_chart, Gauge, GaugeKind, GaugeStyle, GaugeTint,
 };
 pub use crate::environment::Token;
-pub use crate::input::{Event, Input, Phase};
+pub use crate::input::{Event, Input, Phase, PointerButton, TouchPhase};
 pub use crate::spatial::{HoverRegion, SPATIAL_MIN_TARGET};
 pub use crate::states::{Appearance, Theme};
 pub use crate::theme::theme_picker;
@@ -45,3 +46,4 @@ pub use crate::{
     JustifyContent, Length, NodeId, NodeKind, Painter, Position, Rect, Rgba, Role, Semantics,
     Style, TextAlign, TextMeasure, TextStyle, Ui,
 };
+pub use crate::{FieldKey, KeyModifiers, TextField};

@@ -1,24 +1,30 @@
 # Releasing
 
-Eleven crates publish to **crates.io**. Language packages publish to npm and
+Seventeen crates publish to **crates.io**. Language packages publish to npm and
 PyPI (not crates.io). See also [`docs/bindings.md`](bindings.md).
 
-| Artifact | Version | Registry | On the index (2026-11-10) |
+| Artifact | Version | Registry | On the index (2026-11-20) |
 |---|---|---|---|
-| `threers-math` | 0.1.0 | crates.io | not yet: its first publish; `threers::math`, with no dependencies |
-| `threers-captions` | 0.1.0 | crates.io | not yet: its first publish; the caption data model, with no dependencies |
-| `threers-ui` | 0.1.0 | crates.io | not yet: its first publish; `threers::ui` without the overlay painter, on `threers-math` and `threers-captions` |
-| `threers-audio` | 0.1.0 | crates.io | not yet: its first publish; `threers::audio`, on `threers-math` |
-| `threers-codec` | 0.1.0 | crates.io | 0.0.10 |
-| `threers-softbody` | 0.1.0 | crates.io | 0.0.10; the soft-body lattice and solver (`gpu` feature: WebGPU compute) |
-| `threers` | 0.1.0 | crates.io | 0.0.10 |
-| `threers-physics` | 0.1.0 | crates.io | 0.0.10 |
-| `threers-animation` | 0.1.0 | crates.io | 0.0.1 |
-| `threers-probe` | 0.1.0 | crates.io | 0.0.2 |
-| `threers-video` | 0.1.0 | crates.io | not yet: its first publish; video export, sequences and `VideoPlayer`, on top of `threers` |
-| `@threers/threers` (npm ESM) | 0.1.0 | npm / Deno | not yet; **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
-| `threers-node` | 0.1.0 | npm | not yet; per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
-| `threers` (PyPI) | 0.1.0 | PyPI | not yet; per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
+| `threers-math` | 0.1.1 | crates.io | 0.1.0; `threers::math`, with no dependencies |
+| `threers-captions` | 0.1.1 | crates.io | 0.1.0; the caption data model, with no dependencies |
+| `threers-ui` | 0.1.1 | crates.io | 0.1.0; `threers::ui` without the overlay painter, on `threers-math` and `threers-captions` |
+| `threers-swipe` | 0.1.1 | crates.io | not yet: its first publish; gesture typing for `threers-ui`'s keyboard (training, decoding, next words, English weights in `weights/`), on `threers-ui` — publish after it |
+| `threers-font` | 0.1.1 | crates.io | 0.1.0; TrueType fonts rendered and shaped as FreeType and HarfBuzz do |
+| `threers-spell` | 0.1.1 | crates.io | not yet: its first publish; spellcheck and autocorrect for text input |
+| `threers-audio` | 0.1.1 | crates.io | 0.1.0; `threers::audio`, on `threers-math` |
+| `threers-codec` | 0.1.1 | crates.io | 0.1.0 |
+| `threers-softbody` | 0.1.1 | crates.io | 0.1.0; the soft-body lattice and solver (`gpu` feature: WebGPU compute) |
+| `threers-splat-sort` | 0.1.1 | crates.io | 0.1.0; the SIMD radix sort for Gaussian splats |
+| `threers` | 0.1.1 | crates.io | 0.1.0 |
+| `threers-physics` | 0.1.1 | crates.io | 0.1.0 |
+| `threers-animation` | 0.1.1 | crates.io | 0.1.0 |
+| `threers-probe` | 0.1.1 | crates.io | 0.1.0 |
+| `threers-fem` | 0.1.1 | crates.io | 0.1.0; finite and boundary element analysis |
+| `threers-ios` | 0.1.1 | crates.io | 0.1.0; threers apps on iPhone, iPad, Vision Pro and the Mac |
+| `threers-video` | 0.1.1 | crates.io | 0.1.0; video export, sequences and `VideoPlayer`, on top of `threers` |
+| `@threers/threers` (npm ESM) | 0.1.1 | npm / Deno | not yet; **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
+| `threers-node` | 0.1.1 | npm | not yet; per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
+| `threers` (PyPI) | 0.1.1 | PyPI | not yet; per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
 
 Everything else under `crates/` is a demo, a bench, a binding or not ready
 for the index, and says `publish = false`: `threers-ocean`,
@@ -39,7 +45,7 @@ the same way:
 
 ```toml
 # crates/threers-physics/Cargo.toml
-threers = { path = "../..", version = "0.1.0", features = ["mesh-bvh"] }
+threers = { path = "../..", version = "0.1.1", features = ["mesh-bvh"] }
 ```
 
 A path dependency is what the workspace builds against; the `version` is what the
@@ -132,7 +138,7 @@ cargo test -p threers-codec --release --all-features
 cargo test -p threers-codec --release --no-default-features
 # Every crate declares edition 2024 and `rust-version = "1.99"`; check the
 # published ones on exactly that, with every feature.
-for c in threers-math threers-captions threers-ui threers-audio threers-codec threers-softbody threers threers-physics threers-animation threers-probe threers-video; do
+for c in threers-math threers-captions threers-ui threers-swipe threers-audio threers-codec threers-softbody threers threers-physics threers-animation threers-probe threers-video; do
   cargo +1.99 check -p "$c" --all-targets --all-features || break
 done
 cargo clippy -p threers-codec --all-targets --features vaapi,nvidia,parallel --target x86_64-unknown-linux-gnu
@@ -170,6 +176,7 @@ scripts/browser-smoke.sh
 #    one, and it persists until it is cleaned.
 cargo doc --no-deps --all-features -p threers -p threers-physics -p threers-probe
 cargo doc --no-deps --all-features -p threers-codec
+cargo doc --no-deps --all-features -p threers-ui -p threers-swipe
 # docs.rs builds the codec crate for Linux, where its NVIDIA and VAAPI modules
 # exist and the VideoToolbox ones do not; links must hold there too.
 cargo doc --no-deps -p threers-codec --features vaapi,nvidia,gif,parallel --target x86_64-unknown-linux-gnu
@@ -185,6 +192,7 @@ cargo package -p threers-softbody --features gpu   # and the new crates, from th
 cargo package -p threers-math
 cargo package -p threers-captions
 cargo package -p threers-ui
+cargo package -p threers-swipe              # after threers-ui is up: it builds against its new API
 cargo package -p threers-audio
 cargo package -p threers-codec
 
@@ -193,6 +201,7 @@ cargo package -p threers-codec
 cargo publish -p threers-math
 cargo publish -p threers-captions
 cargo publish -p threers-ui                  # after math and captions
+cargo publish -p threers-swipe               # after threers-ui
 cargo publish -p threers-audio
 cargo publish -p threers-codec
 cargo publish -p threers-softbody
@@ -201,7 +210,7 @@ cargo publish -p threers-physics             # only after the first is on the in
 cargo publish -p threers-probe               # likewise
 cargo publish -p threers-animation           # after threers-physics, which it depends on
 cargo publish -p threers-video               # after threers and threers-codec
-git tag -a v0.1.0 -m 'threers 0.1.0' && git push --tags
+git tag -a v0.1.1 -m 'threers 0.1.1' && git push --tags
 
 # 7. Language packages — one script locally; CI on tag push.
 ./scripts/release-versions.sh                    # versions aligned?
@@ -209,7 +218,7 @@ git tag -a v0.1.0 -m 'threers 0.1.0' && git push --tags
 PUBLISH=1 ./scripts/release-all.sh publish     # upload (or push tag → CI)
 
 # Multi-arch npm-node + PyPI: push v* tag → .github/workflows/release-language-packages.yml
-git tag -a v0.1.0 -m 'threers 0.1.0' && git push --tags
+git tag -a v0.1.1 -m 'threers 0.1.1' && git push --tags
 ```
 
 ## One command (`scripts/release-all.sh`)
@@ -249,7 +258,7 @@ without one installs on that platform and then cannot load.
 
 ```bash
 # After crates.io publish + version bump:
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.1.1 && git push origin v0.1.1
 ```
 
 ## npm ESM (`crates/threers-js`)
@@ -353,6 +362,19 @@ Targeted wheels (examples):
 maturin build --release --features headless,physics,animation --target aarch64-apple-darwin
 maturin build --release --features headless,physics,animation --target x86_64-unknown-linux-gnu
 ```
+
+## `threers-swipe`
+
+- It depends on `threers-ui` by path and version, and on API added after
+  `threers-ui` 0.1.0 (`KeyboardConfig::key_boxes`, the `swipe` feature,
+  `Input::now`): `cargo package -p threers-swipe` cannot compile until the
+  bumped `threers-ui` is on the index.
+- The package carries `weights/swipe-en-small.safetensors` (897 KB) and its
+  README; `tests/bundled_weights.rs` loads it, so a package without it fails.
+- Its features: `parallel` (default), `keyboard`, `ngram`, `rlx`. `rlx` pulls
+  the published RLX crates at the version the workspace pins; check
+  `cargo build -p threers-swipe --no-default-features --features rlx --lib`
+  against the index, not a local RLX.
 
 ## What to check in the package
 

@@ -24,17 +24,36 @@ parallel = ["dep:rayon"]
 # swipe decoder (turns on threers-ui's `swipe`). Training and decoding do
 # not need it.
 keyboard = ["threers-ui/swipe"]
+# `ngram`: an n-gram next-word model (Kneser–Ney), for the bar's next
+# words and the words before a swipe.
+ngram = ["dep:libc"]
+# `neural`: a small neural next-word model, trained and run by RLX. Not
+# the swipe model; either next-word model works alone or both together.
+rlx = ["dep:rlx", "dep:half", "dep:libc"]
 
 [dependencies]
-threers-ui = { path = "../threers-ui", version = "0.1.0", default-features = false }
+threers-ui = { path = "../threers-ui", version = "0.1.1", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 safetensors = "0.7"
 rayon = { version = "1", optional = true }
+# Pinned as the workspace pins it: the published 0.2.18 does not build.
+rlx = { version = "0.2.17", optional = true, default-features = false, features = ["cpu", "tensor"] }
+# The neural next-word model's weights saved as f16, half the size.
+half = { version = "2", optional = true }
+
+# `threers-next-word bench` (with either next-word model) times on this
+# thread's CPU clock: other work on the machine does not count.
+[target.'cfg(all(unix, not(target_arch = "wasm32")))'.dependencies]
+libc = { version = "0.2", optional = true }
 
 [[bin]]
 name = "threers-swipe"
 path = "src/bin/threers_swipe.rs"
+
+[[bin]]
+name = "threers-next-word"
+path = "src/bin/threers_next_word.rs"
 
 [[example]]
 name = "swipe_train_synth"

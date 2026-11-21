@@ -172,6 +172,46 @@ fn contains(outer: Rect, inner: Rect) -> bool {
         && inner.y + inner.height <= outer.y + outer.height
 }
 
+/// Where nodes changed, old place and new, in whole pixels; `None` when the
+/// tree's shape changed (everything is damaged).
+fn changed(prev: &[Node], next: &[Node], width: f32, height: f32) -> Option<Vec<Rect>> {
+    if prev.len() != next.len() || prev.iter().zip(next).any(|(a, b)| a.children != b.children) {
+        return None;
+    }
+    let mut rects: Vec<Rect> = Vec::new();
+    for (a, b) in prev.iter().zip(next) {
+        if a != b {
+            for r in [a.visible, b.visible] {
+                let r = snap(r, width, height);
+                if r.width > 0.0 && r.height > 0.0 {
+                    rects.push(r);
+                }
+            }
+        }
+    }
+    Some(rects)
+}
+
+/// [`diff`] for a painter that draws every node reaching a rectangle whole,
+/// then keeps only the rectangle's pixels (as `MetalUi` repaints): nothing
+/// is cut by a clip, so the rectangles needn't grow to hold nodes whole.
+/// That growth is what costs: in a staggered grid (a keyboard's rows) a
+/// small change grown to the keys it touches reaches their neighbours,
+/// and theirs, until it covers the grid. Overlapping pieces are joined.
+pub fn diff_cropped(prev: &[Node], next: &[Node], width: f32, height: f32) -> Damage {
+    let mut rects = match changed(prev, next, width, height) {
+        Some(r) if r.is_empty() => return Damage::None,
+        Some(r) => r,
+        None => return Damage::Full,
+    };
+    merge(&mut rects);
+    if rects.len() > MOST_PIECES {
+        let whole = rects.iter().copied().reduce(union).unwrap_or(Rect { x: 0.0, y: 0.0, width, height });
+        return Damage::Regions(vec![whole]);
+    }
+    Damage::Regions(rects)
+}
+
 /// A pixel of margin on every side of a damaged rectangle: the edge of a rounded shape or a stroke is
 /// anti-aliased, and its faint pixels fall just outside the box it was laid out in.
 const MARGIN: f32 = 1.0;
@@ -227,23 +267,11 @@ const MOST_PIECES: usize = 48;
 
 /// The damage between the last frame's nodes and this frame's, in a window `width` by `height`.
 pub fn diff(prev: &[Node], next: &[Node], width: f32, height: f32) -> Damage {
-    if prev.len() != next.len() || prev.iter().zip(next).any(|(a, b)| a.children != b.children) {
-        return Damage::Full;
-    }
-    let mut rects: Vec<Rect> = Vec::new();
-    for (a, b) in prev.iter().zip(next) {
-        if a != b {
-            for r in [a.visible, b.visible] {
-                let r = snap(r, width, height);
-                if r.width > 0.0 && r.height > 0.0 {
-                    rects.push(r);
-                }
-            }
-        }
-    }
-    if rects.is_empty() {
-        return Damage::None;
-    }
+    let mut rects = match changed(prev, next, width, height) {
+        Some(r) if r.is_empty() => return Damage::None,
+        Some(r) => r,
+        None => return Damage::Full,
+    };
     // Widen a piece until nothing that needs to be whole is cut by its edge, and join pieces that meet.
     for _ in 0..32 {
         merge(&mut rects);

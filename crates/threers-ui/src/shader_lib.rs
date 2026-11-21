@@ -13,7 +13,7 @@
 //!   vec4` — the [`Fill::Custom`](crate::indicators::Fill::Custom)
 //!   signature, so a custom fill can start from one.
 //!
-//! Put them in front of a shader with [`with`], [`Shader::with_libraries`],
+//! Put them in front of a shader with [`with`], [`Shader::with_libraries`](crate::shader::Shader::with_libraries),
 //! or the macro's `use` form:
 //!
 //! ```

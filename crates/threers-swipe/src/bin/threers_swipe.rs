@@ -3,9 +3,13 @@
 //! ```text
 //! threers-swipe train  --words en=words_en.txt [--words de=words_de.txt …]
 //!                      [--recorded swipes.jsonl] [--steps 20000] [--batch 64]
-//!                      [--size small|tiny] [--lr 2e-3] [--seed 1] [--resume M]
-//!                      [--held-out dev.jsonl] [--eval-every 1000] [--out swipe.safetensors]
-//! threers-swipe eval   --model M --words en=… [--recorded swipes.jsonl] [--n 1000]
+//!                      [--size small|tiny] [--lr 2e-3] [--seed 1] [--ema 0.999]
+//!                      [--held-out dev.jsonl] [--eval-every 1000] [--eval-n 1000]
+//!                      [--lm-weight 0.75] [--out swipe.safetensors]
+//!                      [--state swipe.state.safetensors] [--fresh] [--resume M --resume-step N]
+//! threers-swipe eval   --model M --words en=… [--held-out test.jsonl] [--n 1000]
+//!                      [--lm-weight 0.5] [--beam 48]
+//! threers-swipe tune   --model M --words en=… --held-out dev.jsonl [--n 3000]
 //! threers-swipe decode --model M --words en=… --word hello [--n 5]
 //! threers-swipe check  --recorded swipes.jsonl [--futo-layout qwerty.json] [--futo-aspect A]
 //! threers-swipe lexicon --from train.jsonl --out words_en.txt [--top 100000]
@@ -21,6 +25,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use threers_swipe::data::{self, FutoKeyboard, Recording, Recordings};
+use threers_swipe::decode::DecodeConfig;
 use threers_swipe::synth::{self, Rng, SynthConfig};
 use threers_swipe::train::{self, Accuracy, TrainConfig, Trainer};
 use threers_swipe::{Decoder, KeyboardGeometry, Lexicon, Model, ModelConfig};
@@ -171,6 +176,16 @@ fn report(
     }
 }
 
+/// `out` with `.safetensors` replaced by `.{what}.safetensors`.
+fn beside(out: &str, what: &str) -> String {
+    let stem = out.strip_suffix(".safetensors").unwrap_or(out);
+    format!("{stem}.{what}.safetensors")
+}
+
+/// Trains; every `--eval-every` steps saves the full state (`--state`,
+/// resumed from when it exists) and the averaged model
+/// (`<out>.last.safetensors`), and with `--held-out` scores that model on
+/// a fixed `--eval-n` sample, keeping the best as `--out`.
 fn cmd_train(args: &Args) -> Result<(), String> {
     let langs = languages(args)?;
     let model_cfg = match args.get("size").unwrap_or("small") {
@@ -185,24 +200,39 @@ fn cmd_train(args: &Args) -> Result<(), String> {
         lr: args.num("lr", 2e-3)?,
         seed: args.num("seed", 1)?,
         recorded_share: args.num("recorded-share", 0.7)?,
+        ema: args.num("ema", 0.999)?,
         ..TrainConfig::default()
     };
     let out = args.get("out").unwrap_or("swipe.safetensors").to_owned();
+    let last = beside(&out, "last");
+    let state = args
+        .get("state")
+        .map_or_else(|| beside(&out, "state"), str::to_owned);
     let eval_every: usize = args.num("eval-every", 1000)?;
-    let mut trainer = match args.get("resume") {
-        Some(p) => {
-            let m = Model::load(p)?;
-            let step = args.num("resume-step", 0)?;
-            Trainer::resume(
-                TrainConfig {
-                    model: m.config.clone(),
-                    ..cfg
-                },
-                m,
-                step,
-            )
-        }
-        None => Trainer::new(cfg),
+    let eval_n: usize = args.num("eval-n", 1000)?;
+    let decode = DecodeConfig {
+        lm_weight: args.num("lm-weight", 0.75)?,
+        ..decode_config(args)?
+    };
+    let fresh = args.get("fresh").is_some_and(|v| v != "0" && v != "false");
+    let mut trainer = if !fresh && std::path::Path::new(&state).exists() {
+        let t = Trainer::load_state(cfg, &state)?;
+        eprintln!("resuming {state} at step {}", t.step);
+        t
+    } else if let Some(p) = args.get("resume") {
+        // Weights only: the optimiser and the average start afresh.
+        let m = Model::load(p)?;
+        let step = args.num("resume-step", 0)?;
+        Trainer::resume(
+            TrainConfig {
+                model: m.config.clone(),
+                ..cfg
+            },
+            m,
+            step,
+        )
+    } else {
+        Trainer::new(cfg)
     };
     for (_, lex, kbs) in &langs {
         for kb in kbs {
@@ -225,13 +255,55 @@ fn cmd_train(args: &Args) -> Result<(), String> {
         );
         trainer.set_recorded(tr);
     }
+    // The same held-out swipes at every checkpoint, so scores compare.
+    let english = langs.iter().find(|l| l.0 == "en").map(|l| &l.1);
+    let sample = held.as_ref().map(|h| subsample(h, eval_n));
+    let score = |m: &Model| -> Option<f32> {
+        let (h, lex) = (sample.as_ref()?, english?);
+        let acc = train::evaluate_recorded_with(m, h, lex, &decode);
+        eprintln!("  held out (lm-weight {}): {acc}", decode.lm_weight);
+        Some(acc.top1)
+    };
+    // A best kept from before a resume stays the one to beat.
+    let mut best = match Model::load(&out) {
+        Ok(m) if trainer.step > 0 => score(&m),
+        _ => None,
+    };
     eprintln!(
-        "model: {} weights; {} steps of {}; {} keyboards",
+        "model: {} weights; {} steps of {}; {} keyboards; moving average {}",
         trainer.model.len(),
         trainer.config.steps,
         trainer.config.batch,
-        langs.iter().map(|l| l.2.len()).sum::<usize>()
+        langs.iter().map(|l| l.2.len()).sum::<usize>(),
+        trainer.config.ema
     );
+    let checkpoint = |trainer: &Trainer, best: &mut Option<f32>| -> Result<(), String> {
+        trainer.save_state(&state)?;
+        let m = trainer.averaged();
+        m.save(&last)?;
+        let step = trainer.step;
+        match (score(&m), *best) {
+            (Some(s), Some(b)) if s <= b => {
+                eprintln!(
+                    "step {step}: state {state}; {last} (best stays {:.1}%)",
+                    b * 100.0
+                )
+            }
+            (Some(s), _) => {
+                m.save(&out)?;
+                *best = Some(s);
+                eprintln!(
+                    "step {step}: state {state}; new best {out} ({:.1}%)",
+                    s * 100.0
+                );
+            }
+            (None, _) => {
+                m.save(&out)?;
+                eprintln!("step {step}: state {state}; {out}");
+            }
+        }
+        Ok(())
+    };
     let start = Instant::now();
     let (mut avg, mut count) = (0.0f32, 0usize);
     while trainer.step < trainer.config.steps {
@@ -251,21 +323,20 @@ fn cmd_train(args: &Args) -> Result<(), String> {
             (avg, count) = (0.0, 0);
         }
         if eval_every > 0 && step % eval_every == 0 && step < trainer.config.steps {
-            trainer.model.save(&out)?;
-            eprintln!("step {step}: checkpoint {out}");
-            report(&langs, &trainer.model, held.as_ref(), 200);
+            checkpoint(&trainer, &mut best)?;
         }
     }
-    trainer.model.save(&out)?;
-    eprintln!("wrote {out}");
-    report(&langs, &trainer.model, held.as_ref(), 500);
+    checkpoint(&trainer, &mut best)?;
+    report(&langs, &trainer.averaged(), None, 500);
     Ok(())
 }
 
 fn main() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = raw.first() else {
-        eprintln!("usage: threers-swipe <train|eval|decode|check|synth|lexicon> [--flag value …]");
+        eprintln!(
+            "usage: threers-swipe <train|eval|decode|check|synth|lexicon|tune> [--flag value …]"
+        );
         return ExitCode::FAILURE;
     };
     let result = Args::parse(&raw[1..]).and_then(|args| match cmd.as_str() {
@@ -275,8 +346,9 @@ fn main() -> ExitCode {
         "check" => cmd_check(&args),
         "synth" => cmd_synth(&args),
         "lexicon" => cmd_lexicon(&args),
+        "tune" => cmd_tune(&args),
         other => Err(format!(
-            "no command `{other}`: train, eval, decode, check, synth, lexicon"
+            "no command `{other}`: train, eval, decode, check, synth, lexicon, tune"
         )),
     });
     match result {
@@ -288,15 +360,64 @@ fn main() -> ExitCode {
     }
 }
 
+fn decode_config(args: &Args) -> Result<DecodeConfig, String> {
+    let d = DecodeConfig::default();
+    Ok(DecodeConfig {
+        lm_weight: args.num("lm-weight", d.lm_weight)?,
+        beam: args.num("beam", d.beam)?,
+        prune: args.num("prune", d.prune)?,
+    })
+}
+
 fn cmd_eval(args: &Args) -> Result<(), String> {
     let model = Model::load(args.need("model")?)?;
     let langs = languages(args)?;
     let n = args.num("n", 1000)?;
+    let cfg = decode_config(args)?;
     let held = match load_recorded(args, "held-out")? {
         Some(h) => Some(h),
         None => recorded(args)?.map(|r| train::split_by_session(r, 0.05).1),
     };
-    report(&langs, &model, held.as_ref(), n);
+    for (lang, lex, kbs) in &langs {
+        let acc = train::evaluate_synthetic(
+            &model,
+            &kbs[0],
+            lex,
+            &SynthConfig::default(),
+            n.min(2000),
+            0xe7a1,
+        );
+        eprintln!("  {lang} synthetic: {acc}");
+    }
+    if let (Some(h), Some((_, lex, _))) = (&held, langs.iter().find(|l| l.0 == "en")) {
+        let start = Instant::now();
+        let acc = train::evaluate_recorded_with(&model, &subsample(h, n), lex, &cfg);
+        eprintln!(
+            "  recorded (held out): {acc}  [{:.0}s]",
+            start.elapsed().as_secs_f32()
+        );
+    }
+    Ok(())
+}
+
+fn cmd_tune(args: &Args) -> Result<(), String> {
+    let model = Model::load(args.need("model")?)?;
+    let langs = languages(args)?;
+    let (_, lex, _) = langs
+        .iter()
+        .find(|l| l.0 == "en")
+        .ok_or("tune needs --words en=…")?;
+    let held = load_recorded(args, "held-out")?.ok_or("--held-out is needed")?;
+    let held = subsample(&held, args.num("n", 3000)?);
+    let base = decode_config(args)?;
+    for w in [0.0f32, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0] {
+        let cfg = DecodeConfig {
+            lm_weight: w,
+            ..base.clone()
+        };
+        let acc = train::evaluate_recorded_with(&model, &held, lex, &cfg);
+        println!("lm-weight {w:4.2}: {acc}");
+    }
     Ok(())
 }
 

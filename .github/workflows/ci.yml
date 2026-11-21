@@ -40,6 +40,12 @@ jobs:
       - run: cargo check -p threers --target wasm32-unknown-unknown --no-default-features --features render
       - run: cargo test -p threers-math -p threers-audio -p threers-captions -p threers-ui
       - run: cargo check -p threers-ui --target wasm32-unknown-unknown --tests
+      # Gesture typing is opt-in: the keyboard with it, and the crate that
+      # trains and decodes for it with every feature.
+      - run: cargo test -p threers-ui --features swipe
+      - run: cargo check -p threers-ui --features swipe --target wasm32-unknown-unknown --tests
+      - run: cargo test -p threers-swipe --all-features
+      - run: cargo check -p threers-swipe --no-default-features --features keyboard,ngram --target wasm32-unknown-unknown
       - run: cargo check -p threers-video --all-targets
 
   # The Metal side, which no Linux job compiles: the scene backend, the fluid

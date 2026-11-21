@@ -327,6 +327,7 @@ impl BitmapGlyphs {
             offset_x: 0,
             offset_y: 0,
             advance,
+            color: None,
         };
         let Some(g) = self.glyphs.get(&(c as u32)) else {
             return blank(0.0);
@@ -377,6 +378,7 @@ impl BitmapGlyphs {
             offset_x: x0,
             offset_y: y0,
             advance,
+            color: None,
         }
     }
 }

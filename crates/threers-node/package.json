@@ -1,6 +1,6 @@
 {
   "name": "threers-node",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Native Node.js bindings for threers (napi-rs) — headless wgpu, math, animation, physics, finite and boundary elements",
   "license": "MIT",
   "main": "index.js",
@@ -31,11 +31,11 @@
     "version": "napi version"
   },
   "optionalDependencies": {
-    "@threers/node-darwin-arm64": "0.1.0",
-    "@threers/node-darwin-x64": "0.1.0",
-    "@threers/node-linux-arm64-gnu": "0.1.0",
-    "@threers/node-linux-x64-gnu": "0.1.0",
-    "@threers/node-win32-x64-msvc": "0.1.0"
+    "@threers/node-darwin-arm64": "0.1.1",
+    "@threers/node-darwin-x64": "0.1.1",
+    "@threers/node-linux-arm64-gnu": "0.1.1",
+    "@threers/node-linux-x64-gnu": "0.1.1",
+    "@threers/node-win32-x64-msvc": "0.1.1"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.10.12"

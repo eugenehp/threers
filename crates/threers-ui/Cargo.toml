@@ -38,8 +38,8 @@ swipe = []
 [dependencies]
 # Easing curves for `anim`, and WCAG contrast for `a11y`; neither has
 # dependencies of its own.
-threers-math = { path = "../threers-math", version = "0.1.0" }
-threers-captions = { path = "../threers-captions", version = "0.1.0" }
+threers-math = { path = "../threers-math", version = "0.1.1" }
+threers-captions = { path = "../threers-captions", version = "0.1.1" }
 serde_json = { version = "1", optional = true }
 accesskit = { version = "0.25", optional = true }
 

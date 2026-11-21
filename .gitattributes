@@ -20,6 +20,7 @@ papers/**                   linguist-documentation
 *.ttf    binary
 *.mp4    binary
 *.bin    binary
+*.safetensors binary
 
 # The shell scripts run on Linux CI and macOS; keep them LF on every checkout.
 *.sh     text eol=lf

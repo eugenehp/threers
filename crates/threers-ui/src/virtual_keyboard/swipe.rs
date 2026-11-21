@@ -4,7 +4,8 @@
 //! The keyboard records the path and hands it, with the letter keys as
 //! they are drawn, to the app's decoder
 //! ([`VirtualKeyboard::set_swipe_decoder`](super::VirtualKeyboard::set_swipe_decoder));
-//! the `threers-swipe` crate makes one from a trained model. A press turns
+//! the `threers-swipe` crate makes one from a trained model. The word types
+//! with a space after it; punctuation typed next takes that space's place. A press turns
 //! into a swipe once the finger has gone [`SWIPE_START`] key widths, before
 //! a hold offers accents; a tap or a slide to a neighbouring key types as
 //! it did.
@@ -37,6 +38,11 @@ pub struct Swipe {
     pub keys: Vec<SwipeKey>,
     /// The layout's language tag (`en`, `de`, …).
     pub language: String,
+    /// The field's text before the caret when the swipe began (what the
+    /// keyboard typed lately without
+    /// [`set_context`](super::VirtualKeyboard::set_context)), for the
+    /// words before the swiped one.
+    pub before: String,
 }
 
 /// How far, in widths of the key it began on, a press must travel to be a

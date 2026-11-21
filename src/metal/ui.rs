@@ -71,7 +71,8 @@ impl MetalUi {
         let (w, h) = (width as f32 / scale, height as f32 / scale);
         ui.layout(w, h, &mut OverlayPainter::with_scale(&mut self.overlay, scale));
         let now = damage::collect(ui);
-        let damage = if self.stale { Damage::Full } else { damage::diff(&self.last, &now, w, h) };
+        // `repaint` draws what reaches a rectangle whole and keeps the rectangle: no growing
+        let damage = if self.stale { Damage::Full } else { damage::diff_cropped(&self.last, &now, w, h) };
         self.last = now;
         self.stale = false;
         match damage {

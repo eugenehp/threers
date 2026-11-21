@@ -23,6 +23,12 @@
 //! - [`model`], [`ctc`], [`train`]: the network, its loss and its training.
 //! - [`decode`]: the words a swipe could be, through a trie of the
 //!   language's words weighted by how common they are.
+//! - [`next_word`]: the words before the caret as context, for the bar's
+//!   next words and to settle a swipe: an n-gram model (`ngram`, feature
+//!   `ngram`), a small neural one run by RLX (`neural`, feature `rlx`),
+//!   or both mixed.
+//! - [`user`]: what one person types, learnt as they type it and mixed in.
+//! - [`prelude`]: one import for all of it but training.
 //! - `keyboard` (feature `keyboard`): all of it as the on-screen
 //!   keyboard's swipe decoder.
 //!
@@ -48,12 +54,20 @@ pub mod geometry;
 #[cfg(feature = "keyboard")]
 pub mod keyboard;
 pub mod model;
+#[cfg(feature = "rlx")]
+pub mod neural;
+pub mod next_word;
+#[cfg(feature = "ngram")]
+pub mod ngram;
+pub mod prelude;
 pub mod synth;
 pub mod trace;
 pub mod train;
+pub mod user;
 
 pub use decode::{Candidate, Decoder, Lexicon};
 pub use geometry::{Key, KeyboardGeometry};
 pub use model::{Model, ModelConfig};
+pub use next_word::{Interpolated, WordModel};
 pub use trace::{TouchPoint, FEATURES, FRAMES};
 pub use train::{TrainConfig, Trainer};

@@ -383,8 +383,8 @@ impl Recordings {
 }
 
 /// Word counts from the `sentence` of each line of FUTO's files (each
-/// sentence counted once, however many of its words were swiped): a
-/// lexicon of the words the swipes come from. Only words of letters
+/// sentence counted once, however many of its words were swiped), or
+/// from a text file of one sentence a line: a lexicon. Only words of letters
 /// (apostrophes inside allowed); lower case.
 pub fn sentence_counts(path: impl AsRef<Path>) -> Result<Vec<(String, f32)>, String> {
     #[derive(Deserialize)]
@@ -398,9 +398,15 @@ pub fn sentence_counts(path: impl AsRef<Path>) -> Result<Vec<(String, f32)>, Str
     let mut counts: HashMap<String, f32> = HashMap::new();
     for line in std::io::BufReader::with_capacity(1 << 20, f).lines() {
         let line = line.map_err(|e| e.to_string())?;
-        let Ok(S { sentence: Some(s) }) = serde_json::from_str::<S>(&line) else {
-            continue;
+        // A JSON line's `sentence`, or a plain line as it is.
+        let s = match serde_json::from_str::<S>(&line) {
+            Ok(S { sentence: Some(s) }) => s,
+            Ok(_) => continue,
+            Err(_) => line.trim().to_owned(),
         };
+        if s.is_empty() {
+            continue;
+        }
         if !seen.insert(s.clone()) {
             continue;
         }
@@ -446,6 +452,24 @@ pub fn alignment(recs: &Recordings) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counts_words_of_json_and_plain_sentences() {
+        let dir = std::env::temp_dir().join(format!("threers-swipe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("s.txt");
+        std::fs::write(
+            &p,
+            "{\"sentence\":\"The cat sat.\"}\n{\"sentence\":\"The cat sat.\"}\nThe dog's well-known 42 tricks!\n",
+        )
+        .unwrap();
+        let c: HashMap<String, f32> = sentence_counts(&p).unwrap().into_iter().collect();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(c["the"], 2.0, "a repeated sentence counts once");
+        assert_eq!(c["dog's"], 1.0);
+        assert!(c.contains_key("well") && c.contains_key("known"));
+        assert!(!c.contains_key("42") && !c.contains_key("sat."));
+    }
 
     #[test]
     fn reads_both_shapes() {

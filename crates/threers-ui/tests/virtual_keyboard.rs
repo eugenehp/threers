@@ -607,6 +607,41 @@ fn words_are_suggested_and_a_tap_takes_one() {
 }
 
 #[test]
+fn the_next_word_is_predicted_after_a_space() {
+    let mut r = Rig::made(W, H, |ui, input| {
+        let kb = VirtualKeyboard::new(ui, input);
+        kb.set_context(|f: &TextField, _| Some(f.before_caret()));
+        kb.set_suggestions(|_| vec!["never".into()]);
+        kb.set_predictions(|language, before| {
+            assert_eq!(language, "en");
+            match before.to_lowercase().as_str() {
+                "go " => vec!["to".into(), "home".into()],
+                "go h" => vec!["home".into()],
+                _ => vec![],
+            }
+        });
+        kb
+    });
+    r.settle();
+    for k in ["G", "o", "Space"] {
+        r.tap(k);
+        r.settle();
+    }
+    assert!(has(&r, "Suggestion: to") && has(&r, "Suggestion: home"));
+    assert!(!has(&r, "Suggestion: never"), "predictions come first");
+    r.tap("h");
+    r.settle();
+    assert!(has(&r, "Suggestion: home") && !has(&r, "Suggestion: to"));
+    r.tap("Suggestion: home");
+    r.settle();
+    assert_eq!(r.field.text, "Go home ", "the half-typed word replaced");
+    r.kb.clear_predictions();
+    r.tap("h");
+    r.settle();
+    assert!(has(&r, "Suggestion: never"), "the suggester again");
+}
+
+#[test]
 fn a_space_on_the_symbols_page_goes_back_to_the_letters() {
     let mut r = Rig::new(KeyboardConfig::iphone());
     r.tap("Numbers and symbols");
@@ -840,12 +875,81 @@ mod swiping {
         r.up_at(*at.last().unwrap());
     }
 
+    /// Counts what the trail paints: segments, their widths and alphas.
+    #[derive(Default)]
+    struct Strokes(Vec<(f32, f32)>);
+
+    impl threers_ui::TextMeasure for Strokes {
+        fn measure(&mut self, _: &str, _: &threers_ui::Style) -> (f32, f32) {
+            (0.0, 0.0)
+        }
+    }
+
+    impl threers_ui::Painter for Strokes {
+        fn fill_rect(&mut self, _: Rect, _: threers_ui::Rgba) {}
+        fn text(&mut self, _: Rect, _: &str, _: &threers_ui::TextStyle) {}
+        fn path(
+            &mut self,
+            _: Rect,
+            _: &[String],
+            _: [f32; 4],
+            stroke: Option<f32>,
+            _: bool,
+            c: threers_ui::Rgba,
+        ) {
+            self.0.push((stroke.unwrap_or(0.0), c[3]));
+        }
+    }
+
+    #[test]
+    fn the_finger_leaves_a_trail_that_fades_once_it_lifts() {
+        let (mut r, _) = swiping_rig(&["hello"]);
+        let mut none = Strokes::default();
+        assert!(!r.kb.paint_swipe_trail(&mut none, r.t), "no swipe yet");
+        assert!(none.0.is_empty());
+        let (h, e, l) = (r.center("h"), r.center("e"), r.center("l"));
+        r.down_at(h);
+        for (from, to) in [(h, e), (e, l)] {
+            for i in 1..=6 {
+                let f = i as f32 / 6.0;
+                r.tick(0.016);
+                r.send(Event::PointerMove {
+                    x: from.0 + (to.0 - from.0) * f,
+                    y: from.1 + (to.1 - from.1) * f,
+                });
+            }
+        }
+        let mut mid = Strokes::default();
+        assert!(r.kb.paint_swipe_trail(&mut mid, r.t), "drawn while swiping");
+        assert_eq!(mid.0.len(), 8, "eight strokes stacked toward the finger");
+        let (first, last) = (mid.0[0], *mid.0.last().unwrap());
+        assert!(last.0 > first.0, "wider toward the finger");
+        // Stacked, the finger's end shows about 0.8 opaque.
+        let stacked = 1.0 - mid.0.iter().map(|s| 1.0 - s.1).product::<f32>();
+        assert!((stacked - 0.8).abs() < 1e-3, "{stacked}");
+        r.send(Event::PointerUp {
+            x: l.0,
+            y: l.1,
+            button: PointerButton::Primary,
+        });
+        let mut lifted = Strokes::default();
+        assert!(r.kb.paint_swipe_trail(&mut lifted, r.t + 0.1), "fading");
+        assert!(lifted.0.last().unwrap().1 < last.1, "dimmer as it fades");
+        let mut gone = Strokes::default();
+        assert!(!r.kb.paint_swipe_trail(&mut gone, r.t + 1.0));
+        assert!(gone.0.is_empty());
+        assert_eq!(r.field.text, "hello ");
+    }
+
     #[test]
     fn a_swipe_types_the_decoder_s_word_and_offers_the_others() {
         let (mut r, seen) = swiping_rig(&["hello", "jello", "hells"]);
         swipe(&mut r, "helo");
         r.settle();
-        assert_eq!(r.field.text, "hello", "no letter typed, the word instead");
+        assert_eq!(
+            r.field.text, "hello ",
+            "no letter typed: the word, and a space"
+        );
         {
             let seen = seen.borrow();
             assert_eq!(seen.len(), 1);
@@ -865,11 +969,33 @@ mod swiping {
         // A second word gets its space before it.
         swipe(&mut r, "helo");
         r.settle();
-        assert_eq!(r.field.text, "hello hello");
+        assert_eq!(r.field.text, "hello hello ", "one space between");
         // The bar's other word replaces the one swiped.
         r.tap("Suggestion: jello");
         r.settle();
-        assert_eq!(r.field.text, "hello jello ");
+        assert_eq!(
+            r.field.text, "hello jello ",
+            "the word and its space replaced"
+        );
+    }
+
+    #[test]
+    fn punctuation_after_a_swiped_word_takes_its_space() {
+        let (mut r, _) = swiping_rig(&["hello"]);
+        swipe(&mut r, "helo");
+        r.settle();
+        assert_eq!(r.field.text, "hello ");
+        r.tap("Numbers and symbols");
+        r.settle();
+        r.tap(".");
+        r.settle();
+        assert_eq!(r.field.text, "hello.", "the period in the space's place");
+        r.tap("Letters");
+        r.settle();
+        // The next swipe puts its space back.
+        swipe(&mut r, "helo");
+        r.settle();
+        assert_eq!(r.field.text, "hello. hello ");
     }
 
     #[test]
@@ -904,7 +1030,7 @@ mod swiping {
         r.settle();
         swipe(&mut r, "helo");
         r.settle();
-        assert_eq!(r.field.text, "Hello");
+        assert_eq!(r.field.text, "Hello ");
         assert!(has(&r, "q"), "Shift was for one word");
     }
 }

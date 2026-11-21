@@ -1,6 +1,6 @@
 {
   "name": "@threers/threers",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "exports": {
     ".": "./dist/mini/threejs-shim.js",
     "./mini": "./dist/mini/threejs-shim.js",

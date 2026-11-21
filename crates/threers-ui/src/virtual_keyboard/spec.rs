@@ -1,38 +1,6 @@
 //! Keyboards written as text, drawn as text, and checked.
 //!
-//! [`row`] reads a row from a line: each word a key typing itself, `a|b`
-//! a key typing `a` (`b` under Shift), `{name}` one of the special keys,
-//! and `@` after any of them its width — units, or `*` for what the row
-//! leaves:
-//!
-//! | Written | Key |
-//! |---|---|
-//! | `q`, `.com` | types it |
-//! | `1\|!` | types `1`, `!` under Shift, both shown |
-//! | `{shift}` `{caps}` `{backspace}` `{return}` `{space}` `{tab}` | those keys |
-//! | `{123}` `{abc}` `{#+=}` | the pages: symbols, letters, more symbols |
-//! | `{globe}` `{dismiss}` `{gap}` | next language, hide, an empty unit |
-//! | `{row:1}` | the language's letters of row 1 |
-//! | `{key:ArrowLeft:←}` | sends a named key, labelled `←` |
-//! | `{action:emoji:☺}` | calls [`on_action`](super::VirtualKeyboard::on_action) with `emoji` |
-//! | `{shift@1.3}`, `{space@*}`, `{return@*2}` | 1.3 units; fill; fill at least 2 |
-//!
-//! `\` before `{`, `|`, `@` or `\` types it; so does `@` with no width
-//! after it (`2|@`).
-//!
-//! ```
-//! use threers_ui::virtual_keyboard::{KeyboardConfig, KeyboardLayout, Page};
-//!
-//! let pad = KeyboardConfig::from_rows(&[
-//!     "7 8 9 {backspace}",
-//!     "4 5 6 {key:Tab:next}",
-//!     "1 2 3 {return@*}",
-//!     "{gap} 0 . {dismiss}",
-//! ]);
-//! assert!(pad.validate().is_empty());
-//! let drawn = pad.sketch(Page::Letters, &KeyboardLayout::english(), 1);
-//! assert!(drawn.lines().next().unwrap().contains("[ 7 ]"));
-//! ```
+//! The row syntax is on [`row`].
 
 use super::config::{keys, Key, KeyAction, KeyLook, KeySize, KeyboardConfig, Page};
 use super::layouts::{alternates_for, KeyboardLayout};
@@ -49,7 +17,41 @@ pub struct KeyBox {
     pub width: f32,
 }
 
-/// The keys `spec` writes (see the [module docs](self)).
+/// The keys `spec` writes.
+///
+/// Reads a row from a line: each word a key typing itself, `a|b`
+/// a key typing `a` (`b` under Shift), `{name}` one of the special keys,
+/// and `@` after any of them its width — units, or `*` for what the row
+/// leaves:
+///
+/// | Written | Key |
+/// |---|---|
+/// | `q`, `.com` | types it |
+/// | `1\|!` | types `1`, `!` under Shift, both shown |
+/// | `{shift}` `{caps}` `{backspace}` `{return}` `{space}` `{tab}` | those keys |
+/// | `{123}` `{abc}` `{#+=}` | the pages: symbols, letters, more symbols |
+/// | `{globe}` `{dismiss}` `{gap}` | next language, hide, an empty unit |
+/// | `{row:1}` | the language's letters of row 1 |
+/// | `{key:ArrowLeft:←}` | sends a named key, labelled `←` |
+/// | `{action:emoji:☺}` | calls [`on_action`](super::VirtualKeyboard::on_action) with `emoji` |
+/// | `{shift@1.3}`, `{space@*}`, `{return@*2}` | 1.3 units; fill; fill at least 2 |
+///
+/// `\` before `{`, `|`, `@` or `\` types it; so does `@` with no width
+/// after it (`2|@`).
+///
+/// ```
+/// use threers_ui::virtual_keyboard::{KeyboardConfig, KeyboardLayout, Page};
+///
+/// let pad = KeyboardConfig::from_rows(&[
+///     "7 8 9 {backspace}",
+///     "4 5 6 {key:Tab:next}",
+///     "1 2 3 {return@*}",
+///     "{gap} 0 . {dismiss}",
+/// ]);
+/// assert!(pad.validate().is_empty());
+/// let drawn = pad.sketch(Page::Letters, &KeyboardLayout::english(), 1);
+/// assert!(drawn.lines().next().unwrap().contains("[ 7 ]"));
+/// ```
 ///
 /// # Panics
 ///
@@ -295,7 +297,7 @@ impl KeyboardConfig {
     }
 
     /// A keyboard written as a text file: settings, then pages of rows in
-    /// the [row syntax](self). What a file leaves out keeps the `base`
+    /// the [row syntax](row). What a file leaves out keeps the `base`
     /// preset's. Errors say the line.
     ///
     /// ```text

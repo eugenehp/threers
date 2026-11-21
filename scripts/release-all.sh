@@ -19,8 +19,9 @@
 # Targets (env TARGETS, comma-separated, or default "all"):
 #   language  — npm ESM (mini+full), npm native (host), PyPI wheel (host)
 #   crates    — crates.io: every workspace crate not marked `publish = false`
-#               (today threers-math, -captions, -audio, -codec, -softbody,
-#               -splat-sort, threers, -physics, -animation, -probe and -video); versions
+#               (today threers-math, -captions, -ui, -swipe, -audio, -codec,
+#               -softbody, -splat-sort, threers, -physics, -animation, -probe and
+#               -video); versions
 #               already on the index are skipped, so a partial publish can be rerun
 #   npm-esm   — @threers/threers on npm (wasm mini + full)
 #   npm-node  — threers-node + @threers/node-* (host .node only locally)
@@ -510,6 +511,7 @@ docs_check() {
   # Docs warn rather than fail on a broken intra-doc link; make them fail.
   RUSTDOCFLAGS="-D warnings" cargo doc -q --no-deps --all-features -p threers -p threers-physics -p threers-probe \
     && RUSTDOCFLAGS="-D warnings" cargo doc -q --no-deps --all-features -p threers-codec \
+    && RUSTDOCFLAGS="-D warnings" cargo doc -q --no-deps --all-features -p threers-ui -p threers-swipe \
     && RUSTDOCFLAGS="-D warnings" cargo doc -q --no-deps -p threers-codec --features vaapi,nvidia,gif,parallel \
          --target x86_64-unknown-linux-gnu \
     && cargo clean -q -p threers   # the narrower doc build leaves an rlib the tests must not link

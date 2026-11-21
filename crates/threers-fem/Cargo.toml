@@ -35,7 +35,7 @@ wasm = ["dep:wasm-bindgen"]
 [dependencies]
 # Geometry in and out (`BufferGeometry`) and colour ramps for result plots.
 # Nothing here draws, so the renderer stays out of the build.
-threers = { path = "../..", version = "0.1.0", default-features = false }
+threers = { path = "../..", version = "0.1.1", default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { version = "1.10", optional = true }

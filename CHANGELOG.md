@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-11-20
+
 ### Added
 
 - **Gesture typing, trained here.** New crate `threers-swipe`: a small
@@ -17,9 +19,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (minimum-jerk strokes, Fitts' law timing) for layouts with no recordings;
   keyboard-and-swipe augmentation; FUTO's MIT swipe corpus and its own JSON
   lines read; lexicon-constrained beam search weighted by word frequency.
-  CLI `threers-swipe train|eval|decode|check|synth`, weights as
-  safetensors, example `swipe_train_synth`. `KeyboardConfig::key_boxes`
+  CLI `threers-swipe train|eval|tune|decode|check|synth|lexicon`, weights
+  as safetensors, example `swipe_train_synth`. `KeyboardConfig::key_boxes`
   (threers-ui) gives every key's place in units, as `sketch` draws it.
+- **English swipe weights.** `threers-swipe/weights/swipe-en-small.safetensors`
+  (897 KB, 224 k weights), trained on FUTO's 933 k recorded swipes plus
+  made-up ones on the threers keyboards: on FUTO's held-out test split
+  (49 661 swipes) 88.1% of words first and 93.2% in the top three, 87.8% /
+  92.9% with a lexicon from unrelated sentences, unknown words counted as
+  misses. How it was made and what the numbers do not say:
+  `weights/README.md`.
+- **Swipe training that carries on exactly.** `train` keeps a state file
+  (weights, AdamW's moments, a moving average of the weights, the step)
+  and resumes from it bit for bit; batches sum in fixed groups, the same
+  on any number of threads; the moving average (0.999) is what is scored
+  and exported, the best on a fixed held-out sample kept apart from the
+  last. FUTO's files stream (933 k swipes in about 1 GB), their layout file
+  and each line's canvas give the keys; `lexicon` builds a word list from
+  sentences, `tune` picks the word-frequency weight on dev.
 - **Swiping on the on-screen keyboard (opt-in).** `threers-ui` feature
   `swipe`: a press on a letter that travels 0.9 of a key width is a
   swipe, handed with the keys as drawn to `set_swipe_decoder`; the best
@@ -28,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `keyboard`: `SwipeTyping` makes the decoder from a model and word lists.
   Both off by default; off, the keyboard is as it was. `Input::now` reads
   the input's clock.
+  A swiped word types with a space after it; punctuation typed next takes
+  the space's place ("word." not "word ."), and a chip in the bar swaps the
+  word and its space. `scripts/swipe-demo-gif.mjs` records the README's
+  demo GIF from `web/swipe-demo`.
 - **On-screen keyboards as Apple's.** `virtual_keyboard::KeyboardConfig`
   describes a keyboard as pages (letters, `123`, `#+=`) of rows of `Key`s
   sized in units, with `Key::letters(n)` standing for the language's row,
@@ -137,6 +158,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   centred.
 
 ### Fixed
+
+- **Rounded borders on faded, see-through or background-less boxes.** A
+  rounded box with a uniform border was painted as the border colour over
+  the whole box with the background inset on top: right when both are
+  opaque, but a faded box (`opacity`) or a translucent background showed
+  the border colour through it — a button at `opacity: 0.45` kept about
+  70 % of its colour — and a rounded border with no background got square
+  corners. Such borders are now a ring: the background inset with the inner
+  radii, the corners as quarter arcs (`stroke_arc`) and the sides as bars,
+  nothing painted twice. Opaque boxes keep the old path, pixel for pixel.
 
 - **`white-space` is inherited, as its docs said.** A box that set
   `white-space: normal` (or `pre`, `nowrap`, `word-wrap`) reached only the
@@ -8405,7 +8436,8 @@ on, and a second crate to make things move.
 - Opt-in `mesh-bvh` and `bvh-csg` (three-mesh-bvh / three-bvh-csg parity).
 - Web shim (`THREE.*`) and parity tooling.
 
-[Unreleased]: https://github.com/eugenehp/threers/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/eugenehp/threers/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/eugenehp/threers/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/eugenehp/threers/compare/v0.0.12...v0.1.0
 [0.0.12]: https://github.com/eugenehp/threers/compare/v0.0.10...v0.0.12
 [0.0.10]: https://github.com/eugenehp/threers/compare/v0.0.9...v0.0.10
