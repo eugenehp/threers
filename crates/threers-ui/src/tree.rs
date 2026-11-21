@@ -238,6 +238,8 @@ pub struct Ui {
     /// Seconds stepped so far (see [`Ui::step`]), the clock `auto`
     /// scrollbars fade by.
     pub(crate) clock: f64,
+    /// Nodes that flicker (see [`flicker`](super::flicker)).
+    pub(crate) flickers: Vec<(NodeId, super::flicker::Flicker)>,
     /// For each scrolling box with an `auto` scrollbar: the scroll offset it
     /// was last seen at, and when its bar was last used.
     pub(crate) scrollbar_use: std::collections::HashMap<NodeId, (f32, f64)>,
@@ -289,6 +291,7 @@ impl Ui {
             announced: 0,
             focus_ring: true,
             clock: 0.0,
+            flickers: vec![],
             scrollbar_use: Default::default(),
         }
     }
@@ -768,7 +771,8 @@ impl Ui {
         }
     }
 
-    /// `id`'s font (family, size, weight, line height, alignment), on to
+    /// `id`'s font (family, size, weight, line height, alignment) and
+    /// `white-space`, on to
     /// the boxes under it that do not set their own (and on to their text),
     /// as CSS inherits it.
     pub(crate) fn pass_inherited_down(&mut self, id: NodeId) {
@@ -1079,6 +1083,7 @@ fn inherited_of(
     crate::FontWeight,
     Option<u32>,
     crate::style::TextAlign,
+    (bool, bool),
 ) {
     (
         s.font_family.clone(),
@@ -1086,6 +1091,7 @@ fn inherited_of(
         s.font_weight,
         s.line_height.map(f32::to_bits),
         s.text_align,
+        (s.wrap, s.keep_newlines),
     )
 }
 
@@ -1094,6 +1100,8 @@ const SIZE: u8 = 2;
 const LINE: u8 = 4;
 const WEIGHT: u8 = 8;
 const ALIGN: u8 = 16;
+/// `white-space`: `wrap` and `keep_newlines` together.
+const WHITE_SPACE: u8 = 32;
 
 /// Which parts of its font a box given `s` takes from its parent: those
 /// neither given in CSS (`*_set`) nor given another value than the default
@@ -1118,6 +1126,9 @@ pub(crate) fn inheritable(s: &Style) -> u8 {
     if !s.text_align_set && s.text_align == d.text_align {
         m |= ALIGN;
     }
+    if !s.white_space_set && s.wrap == d.wrap && s.keep_newlines == d.keep_newlines {
+        m |= WHITE_SPACE;
+    }
     m
 }
 
@@ -1137,6 +1148,10 @@ pub(crate) fn inherit_into(parent: &Style, s: &mut Style, inherits: u8) {
     }
     if inherits & ALIGN != 0 {
         s.text_align = parent.text_align;
+    }
+    if inherits & WHITE_SPACE != 0 {
+        s.wrap = parent.wrap;
+        s.keep_newlines = parent.keep_newlines;
     }
 }
 

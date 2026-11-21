@@ -83,6 +83,23 @@ pub struct Object3D {
     /// maps or the refraction back-face prepass, which have no fragment stage
     /// to discard in: a clipped caster still casts its whole shadow.
     pub clip_plane: Option<crate::math::Plane>,
+    /// Shows this object, and what is under it, at a level that rises and
+    /// falls at a given frequency: a square wave on and off, or a sine. Each
+    /// frame's level is written by
+    /// [`Scene::apply_flicker`](crate::Scene::apply_flicker) into what every
+    /// renderer reads — hidden at 0; between 0 and 1, its materials'
+    /// opacity scaled (on copies of them, made transparent) and a light's
+    /// intensity — and what it overwrote put back once it is fully shown.
+    /// Set `visible`, the materials or the intensity while the object is
+    /// fully shown, or after setting this to `None` and applying again:
+    /// changes made mid-flicker are lost when the flicker gives the old
+    /// ones back. `None` (the default) does not flicker.
+    pub flicker: Option<crate::math::flicker::Flicker>,
+    /// What [`flicker`](Self::flicker) took over, to give back: its
+    /// visibility and intensity, and its materials (empty until a level
+    /// between 0 and 1 has scaled them).
+    pub(crate) flicker_saved: Option<super::flicker::Saved>,
+    pub(crate) flicker_materials: Vec<std::sync::Arc<crate::materials::Material>>,
     pub kind: ObjectKind,
     /// three.js `isGroup`: this node is a `Group`, as opposed to a bare
     /// `Object3D` — both are [`ObjectKind::Group`] here. Only what reads
@@ -161,6 +178,9 @@ impl Object3D {
             receive_shadow: false,
             render_order: 0,
             clip_plane: None,
+            flicker: None,
+            flicker_saved: None,
+            flicker_materials: Vec::new(),
             refract_capture: true,
             kind,
             is_group: false,

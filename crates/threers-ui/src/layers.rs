@@ -198,7 +198,7 @@ impl Ui {
     pub(crate) fn inherited_opacity(&self, id: NodeId) -> f32 {
         self.ancestors(id)
             .skip(1)
-            .map(|n| self.nodes[n.0].style.opacity)
+            .map(|n| self.painted_opacity(n))
             .product()
     }
 

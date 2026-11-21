@@ -7,6 +7,7 @@ members = [
     "crates/threers-video",
     "crates/threers-captions",
     "crates/threers-ui",
+    "crates/threers-swipe",
     "crates/threers-ui-demo",
     "crates/threers-ui-demo-visionos",
     "crates/threers-codec",
@@ -574,6 +575,21 @@ required-features = ["sketch", "ui"]
 [[example]]
 name = "multi_view"
 path = "examples/multi_view.rs"
+required-features = ["sketch", "ui"]
+
+[[example]]
+name = "keyboard_designer"
+path = "examples/keyboard_designer.rs"
+required-features = ["ui"]
+
+[[example]]
+name = "virtual_keyboards"
+path = "examples/virtual_keyboards.rs"
+required-features = ["ui"]
+
+[[example]]
+name = "flicker"
+path = "examples/flicker.rs"
 required-features = ["sketch", "ui"]
 
 [[example]]

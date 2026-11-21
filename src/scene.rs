@@ -163,6 +163,45 @@ impl Scene {
         // it draws, from the bones' fresh world matrices.
         crate::core::update_skeletons(&mut self.arena);
     }
+
+    /// Writes each object's [`flicker`](Object3D::flicker) at `time`
+    /// seconds into the scene, for the frame about to be drawn: an object
+    /// at level 0 is hidden, one partly shown has its materials' opacity and
+    /// its light's intensity scaled. A flicker reaches what is under its
+    /// object, multiplied by any flicker of their own. Call it once a frame,
+    /// before rendering, with the time the frame will show at; nothing
+    /// flickers until it is called.
+    ///
+    /// ```
+    /// use threers::math::flicker::Flicker;
+    /// use threers::{Object3D, Scene};
+    ///
+    /// let mut scene = Scene::new();
+    /// let marker = scene.add(Object3D::group());
+    /// scene.get_mut(marker).unwrap().flicker = Some(Flicker::square(15.0));
+    /// scene.apply_flicker(0.05); // 0.75 of a cycle in
+    /// assert!(!scene.get(marker).unwrap().visible);
+    /// ```
+    pub fn apply_flicker(&mut self, time: f64) {
+        let mut stack = vec![(self.root, 1.0f32)];
+        let mut children = Vec::new();
+        while let Some((id, above)) = stack.pop() {
+            let Some(obj) = self.arena.get_mut(id) else {
+                continue;
+            };
+            // Most scenes flicker nothing: nothing to write, and nothing to give back.
+            let level = above * obj.flicker.map_or(1.0, |f| f.level(time));
+            if level < 1.0 || obj.flicker_saved.is_some() {
+                obj.show_at(level);
+            }
+            // Hidden takes what is under it out of the frame too; it is
+            // brought up to date when it shows again.
+            if level > 0.0 {
+                children.clone_from(&obj.children);
+                stack.extend(children.iter().map(|&c| (c, level)));
+            }
+        }
+    }
 }
 
 impl Default for Scene {

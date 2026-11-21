@@ -871,6 +871,7 @@ pub fn try_apply(s: &mut Style, name: &str, value: &str) -> bool {
             "white-space" => {
                 s.wrap = v != "nowrap" && v != "pre";
                 s.keep_newlines = matches!(v, "pre" | "pre-wrap" | "pre-line" | "break-spaces");
+                s.white_space_set = true;
             }
             "text-align" => {
                 s.text_align = match v {
@@ -881,7 +882,10 @@ pub fn try_apply(s: &mut Style, name: &str, value: &str) -> bool {
                 };
                 s.text_align_set = true;
             }
-            "word-wrap" | "overflow-wrap" => s.wrap |= v == "break-word" || v == "anywhere",
+            "word-wrap" | "overflow-wrap" => {
+                s.wrap |= v == "break-word" || v == "anywhere";
+                s.white_space_set = true;
+            }
             "writing-mode" => s.vertical = v.starts_with("vertical"),
             "background-clip" => {
                 s.background_clip_content = match v {

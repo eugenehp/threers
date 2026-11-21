@@ -9,6 +9,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Gesture typing, trained here.** New crate `threers-swipe`: a small
+  temporal convolution net whose head says where the finger aimed and how
+  surely, scored against the keyboard's own key centres, so one set of
+  weights serves every layout and placement; CTC loss with a hand-written
+  backward pass (checked against finite differences); made-up swipes
+  (minimum-jerk strokes, Fitts' law timing) for layouts with no recordings;
+  keyboard-and-swipe augmentation; FUTO's MIT swipe corpus and its own JSON
+  lines read; lexicon-constrained beam search weighted by word frequency.
+  CLI `threers-swipe train|eval|decode|check|synth`, weights as
+  safetensors, example `swipe_train_synth`. `KeyboardConfig::key_boxes`
+  (threers-ui) gives every key's place in units, as `sketch` draws it.
+- **Swiping on the on-screen keyboard (opt-in).** `threers-ui` feature
+  `swipe`: a press on a letter that travels 0.9 of a key width is a
+  swipe, handed with the keys as drawn to `set_swipe_decoder`; the best
+  word types (a space before it after a word, a capital under Shift), the
+  next three go to the bar and a tap swaps one in. `threers-swipe` feature
+  `keyboard`: `SwipeTyping` makes the decoder from a model and word lists.
+  Both off by default; off, the keyboard is as it was. `Input::now` reads
+  the input's clock.
+- **On-screen keyboards as Apple's.** `virtual_keyboard::KeyboardConfig`
+  describes a keyboard as pages (letters, `123`, `#+=`) of rows of `Key`s
+  sized in units, with `Key::letters(n)` standing for the language's row,
+  plus rows over or under every page. Presets: `iphone` (default), `ipad`,
+  `ipad_pro` (number row, Tab, Caps Lock), `ipad_floating`, `number_pad`,
+  `decimal_pad`, `phone_pad`, `email`, `url`; a field can have its own
+  (`set_config_for`). `Placement`: docked, `one_handed` left or right (with
+  a strip back), `anchored`/`centered` at a width, `floating` (dragged by
+  its handle, over the page), and `split`; keys and `set_placement` move
+  it. `KeyboardTheme::apple()` (light and dark) or `system()` (UI tokens);
+  `ReturnKey` (go, search, send… in the accent). Example:
+  `virtual_keyboards` draws them all to PNG.
+- **Keyboard feedback, by sight, sound and touch.** `KeyFeedback` (preview
+  bubble, `PressStyle` Swap/Dim/None, sound, volume, haptics); every press
+  reported to `on_feedback` as a `KeyPress` with Apple's click
+  (`KeySound::Letter`/`Delete`/`Modifier`, `samples(rate)` synthesises it)
+  and tap (`Haptic`). The `sound` feature of `threers-ui` plays the clicks
+  (`play_clicks`, `ClickPlayer`, example `keyboard_clicks`).
+- **Keyboards for the device and the field.** `VirtualKeyboard::new` picks a
+  phone's, tablet's or large tablet's keyboard by the window's size, again
+  on resize (`Device`); `set_type_for(field, KeyboardType::Email)` and the
+  rest of `UIKeyboardType`; `customize` changes every keyboard shown.
+- **Typing that knows the field.** `set_context` (with
+  `TextField::before_caret`) brings sentence capitals (`AutoCapitalize`),
+  two spaces for “. ”, and word suggestions in the bar (`set_suggestions`).
+  Backspace held deletes words; arrows repeat; holding the space bar makes
+  the keys a trackpad; a space on a symbols page goes back to the letters.
+- **Keyboards as text.** A row syntax (`row`, `"{shift@1.3} {row:2}
+  {backspace@1.3}"`), `KeyboardConfig::parse` for whole files with
+  line-numbered errors, `validate`, `sketch` (a page as text),
+  `Key::action` with `on_action`, and the `keyboard_designer` example,
+  which redraws a `.kbd` file to PNG on every save. Guide:
+  `docs/virtual-keyboard.md`. `keyboard_bench` reports each press's CPU
+  time, layout passes and damage.
+- **Flicker at a given frequency.** `threers_math::flicker::Flicker`: a
+  square wave (with duty cycle) or a sine at any frequency, with phase and
+  low/high levels, timed in `f64`. UI nodes take one with
+  `Ui::set_flicker` — it multiplies the node's opacity at paint, by the
+  `Ui::step` clock, and keeps `needs_frame` true while on screen. Scene
+  objects take one in `Object3D::flicker`, applied by
+  `Scene::apply_flicker(time)` each frame: hidden at 0, materials' opacity
+  and lights' intensity scaled between, originals restored when fully shown;
+  a group's flicker reaches its children.
 - **PDF and PNG from 2D drawings.** `write_pdf` and `write_pdf_pages` write
   an `SvgDocument` as vector PDF with its text embedded as a font subset;
   `rasterize_svg` and `svg_to_png` draw it on the CPU. Drawings gained
@@ -64,7 +126,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window's size and scale and when to draw next; `ThreadWaker` wakes it
   from other threads. `examples/ui_thread.rs`.
 
+### Changed
+
+- **The on-screen keyboard behaves as an iPhone's by default.** Letters
+  type when the finger lifts (the key under it then), shown large while
+  pressed; holding one offers its accents; Backspace repeats while held;
+  Shift locks only when tapped twice quickly; 🌐 shows only with more than
+  one language. It looks like Apple's (`KeyboardTheme::system()` for the
+  previous token colours), and short rows keep the long rows' key width,
+  centred.
+
 ### Fixed
+
+- **`white-space` is inherited, as its docs said.** A box that set
+  `white-space: normal` (or `pre`, `nowrap`, `word-wrap`) reached only the
+  text right inside it; boxes nested under it laid their text out as one
+  run, so a paragraph in a card under a wrapping root ran out of the card.
+  It now passes down like the font does — to boxes that don't set it, at
+  any depth, and again when the ancestor is restyled. `Style` has
+  `white_space_set`, as `font_size_set` and the rest.
+
+- **Fast typing on the on-screen keyboard lost and delayed letters.** A
+  finger landing while another was still down made a pinch: the first key
+  never typed and the second was never pressed. `Input::set_rollover` marks
+  a region where a new finger ends the earlier finger's press (its key
+  types, in order) and presses on its own; the keyboard is one.
+- **A number row repeated the symbols page's digits.** With
+  `with_number_row` or a `[top]` row of digits, the symbols page showed
+  1–0 twice; a page's row typing what a row on every page types is left
+  out.
+
+- **Repainting a key repainted the window around it.** Damage grew to keep
+  whole any text it touched, even text clipped out of sight (a list's rows
+  scrolled under a keyboard), so a key press repainted a quarter to all of
+  the window; and hidden subtrees were copied every frame. Damage now uses
+  what each node can show (`damage::Node::visible`) and stands in for
+  hidden subtrees. With the keyboard's own changes — a press drawn without
+  layout (per-key preview bubbles shown by opacity), pages built once and
+  switched, Shift relabelling only what changes — a phone key press went
+  from a full repaint and a layout pass to about 13% of the window and
+  none, 0.64 → 0.28 ms a frame in `keyboard_bench`.
 
 - A multisampled renderer drawing transparent objects into render targets
   of two sizes in turn (an adaptive resolution, a resize back and forth)

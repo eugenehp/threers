@@ -4,6 +4,7 @@ mod buffer_attribute;
 mod buffer_geometry;
 mod clock;
 mod derived;
+mod flicker;
 mod infer_quads;
 mod instanced_mesh;
 mod layers;

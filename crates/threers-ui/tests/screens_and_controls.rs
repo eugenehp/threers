@@ -749,8 +749,8 @@ fn the_on_screen_keyboard_types_where_the_focus_is() {
     assert_eq!(input.focused(), Some(b), "focus stayed in the field");
     assert_eq!(
         ui.style(named(&ui, "Shift")).background,
-        ui.style(named(&ui, "Space")).background,
-        "shift no longer lit"
+        ui.style(named(&ui, "Delete")).background,
+        "shift no longer lit: grey as the other function keys"
     );
     let n = named(&ui, "Done");
     click(&mut input, &mut ui, &mut field, n);

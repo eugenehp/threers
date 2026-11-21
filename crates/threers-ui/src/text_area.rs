@@ -44,6 +44,12 @@ impl TextArea {
         self.text.chars().count()
     }
 
+    /// The text before the caret (what an on-screen keyboard reads to
+    /// capitalise a sentence or suggest a word).
+    pub fn before_caret(&self) -> String {
+        self.text.chars().take(self.caret).collect()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
     }

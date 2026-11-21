@@ -25,6 +25,15 @@ json = ["dep:serde_json"]
 # The accessibility tree for native screen readers through AccessKit
 # (`a11y_accesskit`).
 accesskit = ["dep:accesskit"]
+# Key clicks for the on-screen keyboard out of the default audio device
+# (`virtual_keyboard::ClickPlayer`); without it the clicks are samples for
+# your own audio.
+sound = ["dep:cpal"]
+# Gesture typing on the on-screen keyboard: a word drawn across the letter
+# keys is handed to the app's decoder (`VirtualKeyboard::set_swipe_decoder`;
+# `threers-swipe` makes one from a trained model). Off, a slide types the
+# key it ends on, as before.
+swipe = []
 
 [dependencies]
 # Easing curves for `anim`, and WCAG contrast for `a11y`; neither has
@@ -33,6 +42,9 @@ threers-math = { path = "../threers-math", version = "0.1.0" }
 threers-captions = { path = "../threers-captions", version = "0.1.0" }
 serde_json = { version = "1", optional = true }
 accesskit = { version = "0.25", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cpal = { version = "0.18", optional = true }
 
 # `canvas` (the page's 2D canvas as a painter) and `a11y_dom` (the
 # accessibility tree mirrored into the page) exist only in a browser.
@@ -84,3 +96,7 @@ features = ["ImageData"]
 [[test]]
 name = "text_editing"
 required-features = ["text-touch"]
+
+[[example]]
+name = "keyboard_clicks"
+required-features = ["sound"]

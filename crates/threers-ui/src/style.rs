@@ -598,6 +598,9 @@ pub struct Style {
     pub font_weight_set: bool,
     pub line_height_set: bool,
     pub text_align_set: bool,
+    /// `white-space` (or `word-wrap`) was given; a box without it takes its
+    /// parent's `wrap` and `keep_newlines`, as CSS inherits `white-space`.
+    pub white_space_set: bool,
     pub font_size: f32,
     pub font_weight: FontWeight,
     /// `line-height` in pixels; `None` is `normal` (the font's own).
@@ -762,6 +765,7 @@ impl Default for Style {
             font_weight_set: false,
             line_height_set: false,
             text_align_set: false,
+            white_space_set: false,
             font_size: 16.0,
             font_weight: FontWeight::Normal,
             line_height: None,

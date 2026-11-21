@@ -18,6 +18,10 @@ pub type PathPaint = (Vec<String>, [f32; 4], Option<f32>, bool);
 #[derive(Clone, PartialEq)]
 pub struct Node {
     pub rect: Rect,
+    /// The part of `rect` the boxes that clip it let show: what painting it
+    /// can touch. A list's rows scrolled out of sight show nothing, so they
+    /// neither need repainting nor hold a repaint open to keep them whole.
+    pub visible: Rect,
     pub style: Style,
     pub text: Option<String>,
     /// A drawn path, if the node is one.
@@ -41,10 +45,33 @@ pub enum Damage {
 
 /// The tree's nodes, depth first. Call it after the tree is laid out.
 pub fn collect(ui: &Ui) -> Vec<Node> {
-    fn walk(ui: &Ui, out: &mut Vec<Node>, id: NodeId) {
+    /// `clip`: where the clipping boxes around `id` let it show (`None`:
+    /// anywhere), as painting cuts it.
+    fn walk(ui: &Ui, out: &mut Vec<Node>, id: NodeId, clip: Option<Rect>) {
+        // Deferred nodes are painted outside their ancestors' clips.
+        let clip = if ui.deferred_priority(id).is_some() {
+            None
+        } else {
+            clip
+        };
+        // Hidden, it paints nothing, and nothing inside it does: a stand-in
+        // for each node keeps the tree's shape (shown again, it damages
+        // just its box) without copying styles nothing will paint.
+        if ui.style(id).display == crate::Display::None {
+            hidden(ui, out, id);
+            return;
+        }
+        let rect = ui.rect(id);
+        let visible = clip.map_or(rect, |c| intersection(rect, c));
         out.push(Node {
-            rect: ui.rect(id),
-            style: ui.style(id).clone(),
+            rect,
+            visible,
+            // A flicker shows as the opacity it paints at.
+            style: {
+                let mut s = ui.style(id).clone();
+                s.opacity = ui.painted_opacity(id);
+                s
+            },
             text: match ui.kind(id) {
                 NodeKind::Text(t) => Some(t.clone()),
                 _ => None,
@@ -68,13 +95,56 @@ pub fn collect(ui: &Ui) -> Vec<Node> {
             deferred: ui.deferred_priority(id),
             children: ui.children(id).len(),
         });
+        // What its children can show in: cut to it if it clips; anywhere,
+        // once transformed (their boxes are then not where they show).
+        let inner = if ui.paint_transform(id).is_some() {
+            None
+        } else if ui.style(id).clip {
+            Some(clip.map_or(rect, |c| intersection(rect, c)))
+        } else {
+            clip
+        };
         for &child in ui.children(id) {
-            walk(ui, out, child);
+            walk(ui, out, child, inner);
         }
     }
-    let mut out = Vec::new();
-    walk(ui, &mut out, ui.root());
+    fn hidden(ui: &Ui, out: &mut Vec<Node>, id: NodeId) {
+        let none = Rect::default();
+        out.push(Node {
+            rect: none,
+            visible: none,
+            style: Style {
+                display: crate::Display::None,
+                ..Style::default()
+            },
+            text: None,
+            path: None,
+            image: None,
+            deferred: None,
+            children: ui.children(id).len(),
+        });
+        for &child in ui.children(id) {
+            hidden(ui, out, child);
+        }
+    }
+    let mut out = Vec::with_capacity(ui.nodes.len());
+    walk(ui, &mut out, ui.root(), None);
     out
+}
+
+/// Where `a` and `b` overlap; an empty rectangle where they do not.
+fn intersection(a: Rect, b: Rect) -> Rect {
+    let (x0, y0) = (a.x.max(b.x), a.y.max(b.y));
+    let (x1, y1) = (
+        (a.x + a.width).min(b.x + b.width),
+        (a.y + a.height).min(b.y + b.height),
+    );
+    Rect {
+        x: x0,
+        y: y0,
+        width: (x1 - x0).max(0.0),
+        height: (y1 - y0).max(0.0),
+    }
 }
 
 pub fn union(a: Rect, b: Rect) -> Rect {
@@ -163,7 +233,7 @@ pub fn diff(prev: &[Node], next: &[Node], width: f32, height: f32) -> Damage {
     let mut rects: Vec<Rect> = Vec::new();
     for (a, b) in prev.iter().zip(next) {
         if a != b {
-            for r in [a.rect, b.rect] {
+            for r in [a.visible, b.visible] {
                 let r = snap(r, width, height);
                 if r.width > 0.0 && r.height > 0.0 {
                     rects.push(r);
@@ -185,7 +255,7 @@ pub fn diff(prev: &[Node], next: &[Node], width: f32, height: f32) -> Damage {
                 }
                 // Only the part inside the window counts: a node that runs past its edge (a scrolled
                 // panel) could never be held whole by a region, which stops at the edge.
-                let inside = snap(n.rect, width, height);
+                let inside = snap(n.visible, width, height);
                 if inside.width > 0.0
                     && inside.height > 0.0
                     && intersects(*region, inside)

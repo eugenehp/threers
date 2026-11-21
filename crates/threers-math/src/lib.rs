@@ -22,7 +22,8 @@ mod cylindrical;
 pub mod ellipse;
 pub mod easing;
 mod euler;
-/// A flame's flicker and sway, shared by everything near a flame.
+/// A flame's flicker and sway, shared by everything near a flame, and a
+/// flicker at a given frequency.
 pub mod flicker;
 pub mod float;
 mod frustum;

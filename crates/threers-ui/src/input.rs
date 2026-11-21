@@ -485,6 +485,9 @@ pub struct Input<S = ()> {
     captured: Option<NodeId>,
     pointer: (f32, f32),
     touches: Touches,
+    /// Where a finger landing while another is down takes over from it
+    /// (see [`Input::set_rollover`]).
+    rollover: Vec<NodeId>,
     /// The press being dispatched is a finger's.
     finger: bool,
     ime_area: Option<super::Rect>,
@@ -638,6 +641,7 @@ impl<S> Input<S> {
             captured: None,
             pointer: (f32::NAN, f32::NAN),
             touches: Touches::default(),
+            rollover: vec![],
             finger: false,
             ime_area: None,
             drag_sources: HashMap::new(),
@@ -775,6 +779,26 @@ impl<S> Input<S> {
             .entry(node)
             .or_default()
             .push((TypeId::of::<A>(), handler));
+    }
+
+    /// Makes `node` (and what is in it) take fingers one after another, as
+    /// a keyboard is typed on: a finger landing there while another is
+    /// still down ends the other's press first — released where it is, so
+    /// its key types — and then presses on its own, instead of the two
+    /// making a pinch. Fast typing with two thumbs overlaps every key.
+    pub fn set_rollover(&mut self, node: NodeId, on: bool) {
+        self.rollover.retain(|&n| n != node);
+        if on {
+            self.rollover.push(node);
+        }
+    }
+
+    /// Whether a finger at `(x, y)` lands in a rollover region.
+    fn rolls_over(&self, ui: &Ui, x: f32, y: f32) -> bool {
+        !self.rollover.is_empty()
+            && ui
+                .hit_test(x, y)
+                .is_some_and(|t| ui.ancestors(t).any(|a| self.rollover.contains(&a)))
     }
 
     /// Forgets `node`'s listeners, action handlers and key context.
@@ -1324,6 +1348,12 @@ impl<S> Input<S> {
         self.run_after_hooks(ui, state);
         self.sync_states(ui);
         out
+    }
+
+    /// The clock as [`tick`](Self::tick) (or a timed dispatch) last gave
+    /// it, in seconds; 0 before the first.
+    pub fn now(&self) -> f64 {
+        self.now.unwrap_or(0.0)
     }
 
     /// Calls `f` after each dispatch and tick, with the input itself, for
@@ -2515,6 +2545,15 @@ impl<S> Input<S> {
                 if self.touches.down.iter().any(|d| d.0 == id) {
                     self.touch(ui, state, id, TouchPhase::Cancel, x, y, time);
                 }
+                // Typing: the fingers already down end their presses where
+                // they are, in order, and this one presses on its own.
+                if !self.touches.down.is_empty() && self.rolls_over(ui, x, y) {
+                    let earlier: Vec<(u64, (f32, f32))> =
+                        self.touches.down.iter().map(|d| (d.0, d.2)).collect();
+                    for (other, (ox, oy)) in earlier {
+                        self.touch(ui, state, other, TouchPhase::End, ox, oy, time);
+                    }
+                }
                 self.touches.down.push((id, (x, y), (x, y)));
                 match self.touches.down.len() {
                     1 if self.close_swipe_unless_on_action(ui, x, y) => {
@@ -2897,6 +2936,7 @@ impl<S> Input<S> {
         self.drag_sources.retain(|n, _| ui.contains(*n));
         self.tooltips.retain(|n, _| ui.contains(*n));
         self.click_outside.retain(|n, _| ui.contains(*n));
+        self.rollover.retain(|&n| ui.contains(n));
         if self.modal.is_some_and(|m| !ui.contains(m)) {
             self.modal = None;
         }

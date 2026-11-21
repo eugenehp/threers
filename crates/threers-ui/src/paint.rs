@@ -517,7 +517,7 @@ impl Ui {
         self.paint_node(
             id,
             painter,
-            opacity / self.style(id).opacity.max(1e-6),
+            opacity / self.painted_opacity(id).max(1e-6),
             false,
             EVERYWHERE,
         );
@@ -576,7 +576,7 @@ impl Ui {
             return;
         }
 
-        let opacity = opacity * s.opacity;
+        let opacity = opacity * s.opacity * self.flicker_level(id);
         if opacity <= 0.0 {
             return;
         }

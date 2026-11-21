@@ -1399,6 +1399,23 @@ impl Overlay {
                 // minus its half-width.
                 let solid = middle + radius <= -BAND;
 
+                // Opaque over anything: every pixel of a solid tile becomes the
+                // paint's own encoded colour, whatever was under it, so the
+                // blend (two transfer functions a channel) can be skipped and
+                // the tile written as rows of one colour. Panels painted over
+                // panels — the common case in a UI — are mostly this.
+                if solid && paint.alpha >= 1.0 {
+                    let px = [paint.encoded[0], paint.encoded[1], paint.encoded[2], 255];
+                    for py in ty..ty1 {
+                        let row = (py as usize * self.width as usize + tx as usize) * 4;
+                        for dst in self.pixels[row..row + (tx1 - tx) as usize * 4].chunks_exact_mut(4) {
+                            dst.copy_from_slice(&px);
+                        }
+                    }
+                    self.touched = true;
+                    continue;
+                }
+
                 for py in ty..ty1 {
                     let row = py as usize * self.width as usize;
                     for px in tx..tx1 {
@@ -1510,6 +1527,35 @@ impl Bands {
 
 #[cfg(test)]
 mod tests {
+    /// An opaque fill over existing pixels takes the fast path: the same
+    /// bytes the blend gives, and the edges still anti-aliased.
+    #[test]
+    fn opaque_fill_over_paint_matches_the_blend() {
+        let mut fast = Overlay::new(64, 64);
+        fast.fill(Color::new(0.2, 0.4, 0.8));
+        fast.rect(0.0, 0.0, 64.0, 64.0);
+        fast.fill(Color::new(0.9, 0.3, 0.1));
+        fast.rect(10.3, 10.3, 40.0, 40.0);
+        // the same picture, the second fill a hair under opaque (the blend)
+        let mut slow = Overlay::new(64, 64);
+        slow.fill(Color::new(0.2, 0.4, 0.8));
+        slow.rect(0.0, 0.0, 64.0, 64.0);
+        slow.fill_alpha(Color::new(0.9, 0.3, 0.1), 0.99999);
+        slow.rect(10.3, 10.3, 40.0, 40.0);
+        let diff = fast
+            .pixels()
+            .iter()
+            .zip(slow.pixels())
+            .map(|(a, b)| (*a as i32 - *b as i32).abs())
+            .max()
+            .unwrap();
+        assert!(diff <= 1, "max difference {diff}");
+        // the middle is the fill's colour exactly, the edge a mix
+        let at = |x: usize, y: usize| &fast.pixels()[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4];
+        assert_eq!(at(30, 30)[3], 255);
+        assert_ne!(at(10, 30), at(30, 30));
+    }
+
     use super::*;
 
     #[cfg(feature = "captions")]

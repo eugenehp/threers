@@ -127,6 +127,8 @@ pub mod flac;
 pub mod gif;
 pub mod h264;
 pub mod hevc;
+#[cfg(feature = "decode")]
+pub mod heif;
 pub mod hw;
 pub mod mkv_demux;
 pub mod mp3;

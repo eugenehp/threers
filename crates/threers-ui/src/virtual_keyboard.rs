@@ -7,12 +7,23 @@
 //! hardware keyboard's do (the same key events), and pressing them leaves
 //! the focus where it is.
 //!
-//! It has the letters of a [`KeyboardLayout`] (English, Spanish, German,
-//! French, Russian, Ukrainian and Greek built in; the first chosen by the
-//! UI's [`Locale`](crate::i18n::Locale)), and a 🌐 key moves to the next of
-//! those it is given; Shift (once, or twice for caps lock), a page of
-//! digits and symbols, Backspace, Space and Return. A bar over the keys
-//! says which field it types into, with Done to put it away.
+//! What is on it, where it sits and how it looks is a [`KeyboardConfig`]:
+//! pages of rows of [`Key`]s, a [`Placement`] (docked, one-handed, anchored
+//! to a side, floating, split) and a [`KeyboardTheme`]. The presets are
+//! Apple's — an iPhone's (the default), an iPad's, an iPad Pro's with its
+//! number row, the iPad's floating one — and the keyboards a field asks
+//! for: a number, decimal or phone pad, an email address, a web address.
+//! A field can have its own ([`VirtualKeyboard::set_config_for`]): a PIN
+//! box gets a number pad, the rest letters.
+//!
+//! It behaves as Apple's do: a letter types when the finger lifts, shown
+//! large over it on a phone; holding one offers its accented forms
+//! ([`alternates_for`]), chosen by sliding to one; Backspace repeats while
+//! held; Shift is for one letter, tapped twice quickly it locks; 🌐 moves
+//! to the next [`KeyboardLayout`] (English, Spanish, German, French,
+//! Russian, Ukrainian and Greek built in; the first chosen by the UI's
+//! [`Locale`](crate::i18n::Locale)) and is left out while there is one;
+//! Return says Go, Search or Send when the field wants it.
 //!
 //! ```
 //! use threers_ui::input::Input;
@@ -39,95 +50,63 @@
 //! assert_eq!(field.text, "üß");
 //! assert_eq!(input.focused(), Some(b), "focus stays in the field");
 //! ```
+//!
+//! An iPad's, floating, for one field and an iPhone's for the rest:
+//!
+//! ```
+//! use threers_ui::input::Input;
+//! use threers_ui::virtual_keyboard::{Align, KeyboardConfig, Placement, VirtualKeyboard};
+//! use threers_ui::Ui;
+//!
+//! let mut ui = Ui::new();
+//! let mut input: Input<()> = Input::new();
+//! let notes = ui.add_box(ui.root(), Default::default());
+//! let kb = VirtualKeyboard::with_config(
+//!     &mut ui,
+//!     &mut input,
+//!     KeyboardConfig::iphone().placement(Placement::one_handed(Align::Left)),
+//! );
+//! kb.set_config_for(notes, Some(KeyboardConfig::ipad_floating()));
+//! ```
 
+mod config;
+mod context;
+mod feedback;
+mod layouts;
+#[cfg(all(feature = "sound", not(target_arch = "wasm32")))]
+mod sound;
+mod spec;
+#[cfg(feature = "swipe")]
+mod swipe;
+mod types;
+
+pub use config::{
+    keys, Align, Key, KeyAction, KeyColor, KeyLook, KeySize, KeyboardConfig, KeyboardTheme, Page,
+    Placement, ReturnKey,
+};
+pub use context::{current_word, period_shortcut, wants_capital, AutoCapitalize};
+pub use feedback::{Haptic, KeyFeedback, KeyPress, KeySound, PressStyle};
+pub use layouts::{alternates_for, KeyboardLayout};
+#[cfg(all(feature = "sound", not(target_arch = "wasm32")))]
+pub use sound::ClickPlayer;
+pub use spec::{row, try_row, KeyBox};
+#[cfg(feature = "swipe")]
+pub use swipe::{Swipe, SwipeKey, SwipePoint, SWIPE_START};
+pub use types::{Device, KeyboardType};
+
+use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::environment::Token;
-use crate::input::{Event, Input, Phase};
+use crate::input::{Event, EventCx, Input, Phase, TimerId};
+use crate::states::Appearance;
 use crate::transitions::Transition;
 use crate::tree::{NodeId, Ui};
-use crate::{style, Display, KeyModifiers, Role, Semantics};
-
-/// The letters of a keyboard, three rows of them, and its name.
-#[derive(Debug, Clone, PartialEq)]
-pub struct KeyboardLayout {
-    /// Shown on the space bar and said to assistive technology.
-    pub name: String,
-    /// A language tag it is for (`en`, `de`, …).
-    pub language: String,
-    /// Its letters, row by row, lower case.
-    pub rows: [String; 3],
-    /// Letters with accents the three rows leave out, as a row over them
-    /// (French's ê, ô, ï…); empty for none.
-    pub accents: String,
-}
-
-impl KeyboardLayout {
-    pub fn new(name: &str, language: &str, rows: [&str; 3]) -> Self {
-        Self {
-            name: name.into(),
-            language: language.into(),
-            rows: rows.map(String::from),
-            accents: String::new(),
-        }
-    }
-
-    /// With a row of accented letters over the others.
-    pub fn with_accents(mut self, accents: &str) -> Self {
-        self.accents = accents.into();
-        self
-    }
-
-    pub fn english() -> Self {
-        Self::new("English", "en", ["qwertyuiop", "asdfghjkl", "zxcvbnm"])
-    }
-    pub fn spanish() -> Self {
-        Self::new("Español", "es", ["qwertyuiop", "asdfghjklñ", "zxcvbnm"])
-    }
-    pub fn german() -> Self {
-        Self::new("Deutsch", "de", ["qwertzuiopü", "asdfghjklöä", "yxcvbnmß"])
-    }
-    pub fn french() -> Self {
-        Self::new("Français", "fr", ["azertyuiop", "qsdfghjklm", "wxcvbnéèàç"])
-            .with_accents("êëâùûüôîïœ«»")
-    }
-    pub fn russian() -> Self {
-        Self::new("Русский", "ru", ["йцукенгшщзх", "фывапролджэ", "ячсмитьбю"])
-    }
-    pub fn ukrainian() -> Self {
-        Self::new(
-            "Українська",
-            "uk",
-            ["йцукенгшщзхї", "фівапролджє", "ячсмитьбюґ"],
-        )
-    }
-    pub fn greek() -> Self {
-        Self::new("Ελληνικά", "el", ["ςερτυθιοπ", "ασδφγηξκλ", "ζχψωβνμ"])
-    }
-
-    /// Those built in.
-    pub fn all() -> Vec<Self> {
-        vec![
-            Self::english(),
-            Self::spanish(),
-            Self::german(),
-            Self::french(),
-            Self::russian(),
-            Self::ukrainian(),
-            Self::greek(),
-        ]
-    }
-
-    /// The one for `locale`'s language (English for one not built in).
-    pub fn for_locale(locale: &str) -> Self {
-        let lang = locale.split(['-', '_']).next().unwrap_or("").to_lowercase();
-        Self::all()
-            .into_iter()
-            .find(|l| l.language == lang)
-            .unwrap_or_else(Self::english)
-    }
-}
+use crate::{
+    style, AlignItems, BoxShadow, Display, JustifyContent, KeyModifiers, Length, Rgba, Role,
+    Semantics,
+};
 
 /// The text of a text node (a key's label).
 fn text_of(ui: &Ui, id: NodeId) -> String {
@@ -137,8 +116,52 @@ fn text_of(ui: &Ui, id: NodeId) -> String {
     }
 }
 
-/// Digits and symbols, the keyboard's second page.
-const SYMBOLS: [&str; 3] = ["1234567890", "-/:;()$&@\"", ".,?!'#%*"];
+/// `text` in upper case, unless that is longer (ß is not SS on a key).
+/// The letter `text` types, if it is one letter (what a swipe crosses).
+#[cfg(feature = "swipe")]
+fn swipe_letter(text: &str) -> Option<char> {
+    let mut it = text.chars();
+    let c = it.next()?;
+    (it.next().is_none() && c.is_alphabetic()).then_some(c)
+}
+
+fn upper(text: &str) -> String {
+    let u = text.to_uppercase();
+    if u.chars().count() == text.chars().count() {
+        u
+    } else {
+        text.to_owned()
+    }
+}
+
+/// Holding a key this long offers its alternates; Backspace starts
+/// repeating then, this often.
+const HOLD: f64 = 0.45;
+const REPEAT: f64 = 0.09;
+/// Backspace held this many repeats deletes words.
+const WORDS_AFTER: u32 = 12;
+/// Pixels the finger moves on the space bar's trackpad per caret step.
+const TRACKPAD_STEP: f32 = 12.0;
+
+/// The modifier that makes Backspace delete a word on this platform's
+/// text shortcuts: ⌥ on Apple's, Ctrl on the rest.
+fn word_modifier() -> KeyModifiers {
+    match crate::text_shortcuts::Platform::current() {
+        crate::text_shortcuts::Platform::Mac => KeyModifiers {
+            alt: true,
+            ..KeyModifiers::default()
+        },
+        crate::text_shortcuts::Platform::Other => KeyModifiers {
+            control: true,
+            ..KeyModifiers::default()
+        },
+    }
+}
+
+/// Two taps of Shift this close lock it.
+const DOUBLE_TAP: f64 = 0.35;
+/// The strip beside a one-handed keyboard.
+const STRIP: f32 = 56.0;
 
 /// Shift: off, for the next letter, or locked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,19 +171,184 @@ enum Shift {
     Locked,
 }
 
+/// Changes every config shown gets.
+type Tweak = Rc<dyn Fn(&mut KeyboardConfig)>;
+/// Told of each press.
+type FeedbackListener = Rc<dyn Fn(&KeyPress)>;
+/// Told of each action key's id.
+type ActionListener = Rc<dyn Fn(&str, &mut Ui)>;
+/// Words for the one being typed.
+type Suggester = Rc<dyn Fn(&str) -> Vec<String>>;
+/// Words a swipe may be, best first.
+#[cfg(feature = "swipe")]
+type SwipeDecoder = Rc<dyn Fn(&Swipe) -> Vec<String>>;
+/// Reads the text before the caret from the input's state `S`.
+type ContextReader<S> = Box<dyn Fn(&S, NodeId) -> Option<String>>;
+
+/// A key on the keyboard now.
+struct Built {
+    cell: NodeId,
+    face: NodeId,
+    label: NodeId,
+    key: Key,
+    /// The page it is on (`None`: beside every page, as the one-handed
+    /// strip's).
+    page: Option<Page>,
+    /// What it shows now: its label and colours, so a change of Shift
+    /// touches only the keys it changes.
+    shown: Option<(String, Option<KeyColor>, KeyColor)>,
+    /// Its preview bubble and the bubble's text: laid out over it once and
+    /// shown by its opacity, so a press is drawn without a layout pass.
+    bubble: Option<(NodeId, NodeId)>,
+}
+
+/// The alternates offered by a held key.
+struct Popup {
+    options: Vec<String>,
+    chosen: usize,
+}
+
+/// A key held down.
+struct Press {
+    index: usize,
+    /// Typed when the finger lifts (a letter), or already acted on (Shift).
+    types: bool,
+    popup: Option<Popup>,
+    /// Where the finger is.
+    at: (f32, f32),
+    /// The space bar held, the keyboard a trackpad: where the caret last
+    /// stepped from.
+    trackpad: Option<(f32, f32)>,
+    /// A letter pressed with a swipe decoder set: the path so far, and how
+    /// far it has gone.
+    #[cfg(feature = "swipe")]
+    path: Option<(Vec<SwipePoint>, f32)>,
+    /// The path went far enough to be a swipe: no letter types, the
+    /// decoder's word does.
+    #[cfg(feature = "swipe")]
+    swiping: bool,
+}
+
+/// Alternates a held key can offer at once.
+const MOST_ALTERNATES: usize = 10;
+/// Words offered at once.
+const SUGGESTIONS: usize = 3;
+
+/// What a listener asks of the input, done after its dispatch.
+enum Request {
+    Hold(usize),
+    Release,
+    ShiftTap,
+}
+
 /// The keyboard's state, shared by its keys and its hook.
 struct Board {
+    /// The config for fields without their own, when no device is chosen.
+    default: KeyboardConfig,
+    /// The device the configs are for (`None`: `default` as given), and
+    /// what it came to for the window.
+    device: Option<Device>,
+    resolved: Device,
+    /// Changes made to every config shown ([`VirtualKeyboard::customize`]).
+    tweaks: Vec<Tweak>,
+    per_field: Vec<(NodeId, FieldKeyboard)>,
+    /// The config showing: the focused field's, or the default.
+    active: KeyboardConfig,
+    active_field: Option<NodeId>,
+    /// The per-field configs changed: take up the focused field's again.
+    refresh: bool,
+    /// Where a key or the app moved it, over the config's.
+    placement: Option<Placement>,
     layouts: Vec<KeyboardLayout>,
     current: usize,
     shift: Shift,
-    symbols: bool,
-    /// The letter keys: each key, its label's text node, and its row and
-    /// place.
-    letters: Vec<(NodeId, NodeId, usize, usize)>,
-    /// The rows holding the letter keys (rebuilt for a new layout).
-    rows: Vec<NodeId>,
-    /// The layout the rows were built for, and the page.
-    built: Option<(usize, bool)>,
+    page: Page,
+    /// Counts changes to the config or the placement.
+    generation: u64,
+    /// What the keys were built for.
+    built: Option<(u64, usize, Page, Appearance)>,
+    keys: Vec<Built>,
+    press: Option<Press>,
+    requests: Vec<Request>,
+    timers: Vec<TimerId>,
+    shift_tapped: Rc<Cell<bool>>,
+    /// A floating keyboard being dragged: where the pointer was.
+    drag: Option<(f32, f32)>,
+    /// How far a floating keyboard was dragged.
+    offset: (f32, f32),
+    hide: bool,
+    /// Told of each press.
+    feedback: Vec<FeedbackListener>,
+    /// Told of each action key.
+    actions: Vec<ActionListener>,
+    /// Reads the text before the caret: a [`ContextReader`] for the
+    /// input's state `S`.
+    context: Option<Rc<dyn Any>>,
+    /// The text before the caret as last read.
+    before: Option<String>,
+    /// Shift came on by itself (a sentence starting), not by a tap.
+    auto_shift: bool,
+    /// What this keyboard typed lately, for the period shortcut without a
+    /// context.
+    recent: String,
+    /// Words offered for the one being typed.
+    suggest: Option<Suggester>,
+    /// The word they were offered for, and them.
+    offered: (String, Vec<String>),
+    /// The generation whose config was checked.
+    checked: Option<u64>,
+    /// What had focus last.
+    focused: Option<NodeId>,
+    /// Each page's column of rows, all built, the showing one shown.
+    columns: Vec<(Page, NodeId)>,
+    shown_page: Option<Page>,
+    /// The preview bubble showing.
+    lit_bubble: Option<NodeId>,
+    /// Turns swipes into words ([`VirtualKeyboard::set_swipe_decoder`]).
+    #[cfg(feature = "swipe")]
+    swipe: Option<SwipeDecoder>,
+    /// The input's clock at the last dispatch, for a swipe's times.
+    #[cfg(feature = "swipe")]
+    clock: f64,
+    /// The word a swipe typed and the others it may have been, offered
+    /// in the bar while that word is the one being typed.
+    #[cfg(feature = "swipe")]
+    swiped: Option<(String, Vec<String>)>,
+}
+
+/// A field's own keyboard: a type for the device, or a config as given.
+#[derive(Clone)]
+enum FieldKeyboard {
+    Type(KeyboardType),
+    Config(Box<KeyboardConfig>),
+}
+
+impl Board {
+    /// The config `field` shows (the default for `None`), with the tweaks.
+    fn config_for(&self, field: Option<NodeId>) -> KeyboardConfig {
+        let own = field.and_then(|f| self.per_field.iter().find(|(n, _)| *n == f));
+        let mut c = match own.map(|(_, k)| k) {
+            Some(FieldKeyboard::Config(c)) => (**c).clone(),
+            Some(FieldKeyboard::Type(t)) => t.config(self.resolved),
+            None if self.device.is_some() => KeyboardConfig::for_device(self.resolved),
+            None => self.default.clone(),
+        };
+        for t in &self.tweaks {
+            t(&mut c);
+        }
+        c
+    }
+
+    fn placement(&self) -> Placement {
+        self.placement.unwrap_or(self.active.placement)
+    }
+
+    fn layout(&self) -> KeyboardLayout {
+        self.layouts
+            .get(self.current)
+            .cloned()
+            .unwrap_or_else(KeyboardLayout::english)
+    }
 }
 
 /// The keyboard: built once, shown while it is on (or summoned) and a text
@@ -168,55 +356,96 @@ struct Board {
 #[derive(Clone)]
 pub struct VirtualKeyboard {
     panel: NodeId,
+    sheet: NodeId,
+    bar: NodeId,
+    body: NodeId,
+    handle: NodeId,
+    /// The bar's line saying which field it types into, and its box.
+    field_label: NodeId,
+    label_box: NodeId,
+    /// The bar's suggestions: the row, and each chip and its text.
+    chips: NodeId,
+    chip_nodes: Rc<[(NodeId, NodeId)]>,
+    /// Over the keys, made once and shown when wanted, so a press never
+    /// changes the tree's shape (which would repaint the whole window): a
+    /// held key's alternates.
+    popup: NodeId,
+    options: Rc<[(NodeId, NodeId)]>,
     enabled: Rc<Cell<bool>>,
     /// Asked for by a field's keyboard button, until focus leaves it.
     summoned: Rc<Cell<bool>>,
     board: Rc<RefCell<Board>>,
     /// Keys pressed, waiting to be typed (pressed in listeners, which
     /// cannot dispatch; the input types them after).
-    queue: Rc<RefCell<Vec<String>>>,
-    /// The bar's line saying which field it types into.
-    field_label: NodeId,
-    space_label: NodeId,
-    shift_key: NodeId,
-    symbols_label: NodeId,
+    queue: Rc<RefCell<Vec<(String, KeyModifiers)>>>,
 }
 
-/// A key's height, in pixels.
-const KEY_HEIGHT: f32 = 42.0;
-
-fn key_box(ui: &mut Ui, row: NodeId, label: &str, grow: f32) -> (NodeId, NodeId) {
-    let k = ui.add_box(row, style! { display: flex; align-items: center; justify-content: center; border-radius: 6px; cursor: pointer; font-size: 18px; min-width: 0; flex-basis: 0px; box-shadow: 0 1px 0 rgba(0,0,0,0.35); });
-    let s = ui.style_mut(k);
-    s.flex_grow = grow;
-    s.height = crate::Length::Px(KEY_HEIGHT);
-    // Its own text colour: colour is not inherited by nodes added later,
-    // so a key's label was the root's (white on a white key in light).
-    ui.token_style(k, &[("background", Token::Raised), ("color", Token::Text)]);
-    ui.active_style(k, "opacity: 0.55");
-    let t = ui.add_text(k, label);
-    ui.set_semantics(
-        k,
-        Semantics::new(Role::Button).label(label).focusable(false),
-    );
-    (k, t)
-}
-
-/// `f` when `k` is pressed, without taking the focus from the field.
-fn on_press<S: 'static>(input: &mut Input<S>, k: NodeId, f: Rc<dyn Fn(&mut Ui)>) {
-    input.on(k, Phase::Bubble, move |_, ui, e, cx| {
-        if let Event::PointerDown { .. } = e {
-            cx.prevent_default();
-            f(ui);
+/// Gives `node` `color` for `property` (`background` or `color`).
+fn paint(ui: &mut Ui, node: NodeId, property: &str, color: KeyColor, appearance: Appearance) {
+    let fixed = match color {
+        KeyColor::Token(t) => {
+            ui.token_style(node, &[(property, t)]);
+            return;
+        }
+        KeyColor::Fixed(c) => c,
+        KeyColor::Adaptive { light, dark } => match appearance {
+            Appearance::Light => light,
+            Appearance::Dark => dark,
+        },
+    };
+    ui.clear_token_style(node, property);
+    ui.update_style(node, |s| match property {
+        "background" => s.background = Some(fixed),
+        _ => {
+            // Set, so the label in it takes it (as CSS's inheritance).
+            s.color = fixed;
+            s.color_set = true;
         }
     });
 }
 
+/// A colour as it shows now (a token as black: for shadows).
+fn resolve(color: KeyColor, appearance: Appearance) -> Rgba {
+    match color {
+        KeyColor::Token(_) => [0.0, 0.0, 0.0, 0.35],
+        KeyColor::Fixed(c) => c,
+        KeyColor::Adaptive { light, dark } => match appearance {
+            Appearance::Light => light,
+            Appearance::Dark => dark,
+        },
+    }
+}
+
 impl VirtualKeyboard {
+    /// The keyboard for the window: an iPhone's, an iPad's or an iPad
+    /// Pro's by its size, again when it changes ([`Device::Auto`]).
     pub fn new<S: 'static>(ui: &mut Ui, input: &mut Input<S>) -> Self {
+        Self::with_device(ui, input, Device::Auto)
+    }
+
+    /// The keyboard of `device` (each field's [`KeyboardType`] for it).
+    pub fn with_device<S: 'static>(ui: &mut Ui, input: &mut Input<S>, device: Device) -> Self {
+        Self::make(ui, input, KeyboardConfig::for_device(device), Some(device))
+    }
+
+    /// A keyboard as `config` has it, wherever it runs.
+    pub fn with_config<S: 'static>(
+        ui: &mut Ui,
+        input: &mut Input<S>,
+        config: KeyboardConfig,
+    ) -> Self {
+        Self::make(ui, input, config, None)
+    }
+
+    fn make<S: 'static>(
+        ui: &mut Ui,
+        input: &mut Input<S>,
+        config: KeyboardConfig,
+        device: Option<Device>,
+    ) -> Self {
         let root = ui.root();
-        // Centred under a window wider than a keyboard needs, its top
-        // corners rounded, over the bottom of what is behind it.
+        // Across the bottom, over what is behind it; the sheet in it placed
+        // as the placement says.
         let panel = ui.add_box(
             root,
             style! {
@@ -227,51 +456,75 @@ impl VirtualKeyboard {
         ui.defer(panel, 990);
         let sheet = ui.add_box(
             panel,
-            style! {
-                display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 760px; padding: 8px 6px 10px 6px; box-sizing: border-box;
-                border-radius: 14px; box-shadow: 0 -6px 24px rgba(0,0,0,0.35); pointer-events: auto;
-            },
+            style! { display: flex; flex-direction: column; position: relative; box-sizing: border-box; pointer-events: auto; },
         );
-        ui.token_style(
-            sheet,
-            &[("background", Token::Separator), ("color", Token::Text)],
-        );
-        ui.pad_safe_area(sheet, [false, false, true, false]);
         ui.set_semantics(sheet, Semantics::new(Role::Group).label("Keyboard"));
+        // Typed on with two thumbs: a finger landing ends the last one's
+        // press (its key types), rather than the two making a pinch.
+        input.set_rollover(sheet, true);
         // The bar: the field typed into, and Done.
         let bar = ui.add_box(sheet, style! { display: flex; align-items: center; gap: 8px; padding: 0 6px; min-height: 28px; });
         let fl = ui.add_box(bar, style! { flex-grow: 1; font-size: 12px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; });
         ui.token_style(fl, &[("color", Token::SecondaryText)]);
         let field_label = ui.add_text(fl, "");
-        let done = ui.add_box(bar, style! { padding: 4px 12px; border-radius: 6px; font-weight: bold; cursor: pointer; min-height: 24px; box-sizing: border-box; });
+        // Words for the one being typed, in place of the line when there
+        // are any.
+        let chips = ui.add_box(
+            bar,
+            style! { display: none; flex-grow: 1; min-width: 0; gap: 6px; },
+        );
+        let chip_nodes: Rc<[(NodeId, NodeId)]> = (0..SUGGESTIONS)
+            .map(|_| {
+                let chip = ui.add_box(
+                    chips,
+                    style! { display: none; justify-content: center; align-items: center; flex-grow: 1; flex-basis: 0px; min-width: 0; padding: 4px 6px; border-radius: 6px; font-size: 15px; cursor: pointer; overflow: hidden; white-space: nowrap; },
+                );
+                ui.token_style(chip, &[("color", Token::Text)]);
+                ui.active_style(chip, "opacity: 0.6");
+                (chip, ui.add_text(chip, ""))
+            })
+            .collect();
+        let done = ui.add_box(bar, style! { padding: 4px 12px; border-radius: 6px; font-weight: bold; font-size: 15px; cursor: pointer; min-height: 24px; box-sizing: border-box; });
         ui.token_style(done, &[("color", Token::Accent)]);
         ui.add_text(done, "Done");
         ui.set_semantics(
             done,
             Semantics::new(Role::Button).label("Done").focusable(false),
         );
-        let letters_box = ui.add_box(
+        let body = ui.add_box(sheet, style! { display: flex; });
+        // A floating keyboard's handle, to move it by.
+        let handle = ui.add_box(
             sheet,
-            style! { display: flex; flex-direction: column; gap: 8px; },
+            style! { display: none; justify-content: center; padding: 8px 0 2px; cursor: pointer; },
         );
-        // The bottom row: Shift, 123, 🌐, space, Return, Backspace.
-        let row = ui.add_box(sheet, style! { display: flex; gap: 6px; });
-        let (shift_key, _) = key_box(ui, row, "⇧", 1.4);
-        ui.semantics_mut(shift_key).label = Some("Shift".into());
-        let (sym, symbols_label) = key_box(ui, row, "123", 1.4);
-        ui.semantics_mut(sym).label = Some("Numbers and symbols".into());
-        let (globe, _) = key_box(ui, row, "🌐", 1.0);
-        ui.semantics_mut(globe).label = Some("Next keyboard".into());
-        let (space, space_label) = key_box(ui, row, "space", 4.5);
-        ui.update_style(space, |s| s.font_size = 13.0);
-        ui.semantics_mut(space).label = Some("Space".into());
-        let (ret, _) = key_box(ui, row, "return", 1.8);
-        ui.update_style(ret, |s| s.font_size = 13.0);
-        ui.semantics_mut(ret).label = Some("Return".into());
-        let (back, _) = key_box(ui, row, "⌫", 1.4);
-        ui.semantics_mut(back).label = Some("Delete".into());
+        let pill = ui.add_box(
+            handle,
+            style! { width: 40px; height: 5px; border-radius: 3px; background: rgba(128, 128, 128, 0.6); },
+        );
+        ui.set_semantics(
+            handle,
+            Semantics::new(Role::Button)
+                .label("Move keyboard")
+                .focusable(false),
+        );
+        let _ = pill;
+        // The alternates, over the keys when shown.
+        let popup = ui.add_box(
+            panel,
+            style! { position: absolute; display: none; padding: 6px; box-sizing: border-box; pointer-events: none; },
+        );
+        let options: Rc<[(NodeId, NodeId)]> = (0..MOST_ALTERNATES)
+            .map(|_| {
+                let o = ui.add_box(
+                    popup,
+                    style! { display: none; align-items: center; justify-content: center; pointer-events: none; },
+                );
+                let text = ui.add_text(o, "");
+                ui.update_style(text, |s| s.pointer_events = false);
+                (o, text)
+            })
+            .collect();
 
-        let queue: Rc<RefCell<Vec<String>>> = Rc::default();
         let lang = ui
             .environment::<crate::i18n::Locale>(root)
             .map_or_else(|| "en".to_owned(), |l| l.0);
@@ -279,111 +532,132 @@ impl VirtualKeyboard {
         let mut layouts = vec![first.clone()];
         layouts.extend(KeyboardLayout::all().into_iter().filter(|l| *l != first));
         let board = Rc::new(RefCell::new(Board {
+            default: config.clone(),
+            device,
+            resolved: Device::Phone,
+            tweaks: vec![],
+            per_field: vec![],
+            active: config,
+            active_field: None,
+            refresh: false,
+            placement: None,
             layouts,
             current: 0,
             shift: Shift::Off,
-            symbols: false,
-            letters: vec![],
-            rows: vec![letters_box],
+            page: Page::Letters,
+            generation: 0,
             built: None,
+            keys: vec![],
+            press: None,
+            requests: vec![],
+            timers: vec![],
+            shift_tapped: Rc::default(),
+            drag: None,
+            offset: (0.0, 0.0),
+            hide: false,
+            feedback: vec![],
+            actions: vec![],
+            context: None,
+            before: None,
+            auto_shift: false,
+            recent: String::new(),
+            suggest: None,
+            offered: (String::new(), vec![]),
+            checked: None,
+            focused: None,
+            columns: vec![],
+            shown_page: None,
+            lit_bubble: None,
+            #[cfg(feature = "swipe")]
+            swipe: None,
+            #[cfg(feature = "swipe")]
+            clock: 0.0,
+            #[cfg(feature = "swipe")]
+            swiped: None,
         }));
         let kb = Self {
             panel,
+            sheet,
+            bar,
+            body,
+            handle,
+            field_label,
+            label_box: fl,
+            chips,
+            chip_nodes: chip_nodes.clone(),
+            popup,
+            options,
             enabled: Rc::default(),
             summoned: Rc::default(),
-            board: board.clone(),
-            queue: queue.clone(),
-            field_label,
-            space_label,
-            shift_key,
-            symbols_label,
+            board,
+            queue: Rc::default(),
         };
-        for (k, name) in [(space, " "), (ret, "Enter"), (back, "Backspace")] {
-            let q = queue.clone();
-            on_press(
-                input,
-                k,
-                Rc::new(move |_| q.borrow_mut().push(name.to_owned())),
-            );
+        {
+            let b = kb.board.clone();
+            input.on(done, Phase::Bubble, move |_, _, e, cx| {
+                if let Event::PointerDown { .. } = e {
+                    cx.prevent_default();
+                    b.borrow_mut().hide = true;
+                }
+            });
         }
         {
-            let b = board.clone();
             let me = kb.clone();
-            on_press(
-                input,
-                shift_key,
-                Rc::new(move |ui: &mut Ui| {
-                    {
-                        let mut bd = b.borrow_mut();
-                        bd.shift = match bd.shift {
-                            Shift::Off => Shift::Once,
-                            Shift::Once => Shift::Locked,
-                            Shift::Locked => Shift::Off,
-                        };
+            input.on(handle, Phase::Bubble, move |_, ui, e, cx| {
+                me.drag(ui, e, cx);
+            });
+        }
+        for (i, &(chip, _)) in chip_nodes.iter().enumerate() {
+            let me = kb.clone();
+            input.on(chip, Phase::Bubble, move |_, ui, e, cx| {
+                if let Event::PointerDown { .. } = e {
+                    cx.prevent_default();
+                    let (word, words) = me.board.borrow().offered.clone();
+                    if let Some(w) = words.get(i) {
+                        me.take_suggestion(ui, word.chars().count(), w);
                     }
-                    me.relabel(ui);
-                }),
-            );
+                }
+            });
         }
-        {
-            let b = board.clone();
-            on_press(
-                input,
-                sym,
-                Rc::new(move |_| {
-                    let mut bd = b.borrow_mut();
-                    bd.symbols = !bd.symbols;
-                }),
-            );
-        }
-        {
-            let b = board.clone();
-            on_press(
-                input,
-                globe,
-                Rc::new(move |_| {
-                    let mut bd = b.borrow_mut();
-                    bd.current = (bd.current + 1) % bd.layouts.len().max(1);
-                    bd.symbols = false;
-                }),
-            );
-        }
-        let hide = Rc::new(Cell::new(false));
-        let h = hide.clone();
-        on_press(input, done, Rc::new(move |_| h.set(true)));
 
         let me = kb.clone();
         let mut shown = false;
-        // While it shows, the root's bottom padding is its height: the page
-        // above gets shorter, as a phone's does for its keyboard, and what
-        // has focus is scrolled into what is left.
+        // While it shows docked, the root's bottom padding is its height:
+        // the page above gets shorter, as a phone's does for its keyboard,
+        // and what has focus is scrolled into what is left.
         let mut own_bottom: Option<f32> = None;
         let mut reveal = false;
         input.on_after_dispatch(move |input, ui, s| {
             if !ui.contains(panel) {
                 return false;
             }
-            if hide.take() {
+            #[cfg(feature = "swipe")]
+            {
+                me.board.borrow_mut().clock = input.now();
+            }
+            if std::mem::take(&mut me.board.borrow_mut().hide) {
                 me.summoned.set(false);
+                me.release(ui);
                 input.set_focus(ui, s, None);
             }
-            // The letter keys, for the layout and page now.
-            me.build_letters(ui, input);
+            let window = ui.rect(ui.root());
+            me.follow(input.focused(), window.width, window.height);
+            me.serve_requests(input);
+            // The keys, for the config, layout, page and appearance now.
+            me.build(ui, input);
             // Type what was pressed, as keys, at what has focus.
-            let keys: Vec<String> = me.queue.borrow_mut().drain(..).collect();
-            for k in keys {
-                input.dispatch(
-                    ui,
-                    s,
-                    Event::Key {
-                        key: k,
-                        modifiers: KeyModifiers::default(),
-                    },
-                );
+            let keys: Vec<(String, KeyModifiers)> = me.queue.borrow_mut().drain(..).collect();
+            for (key, modifiers) in keys {
+                input.dispatch(ui, s, Event::Key { key, modifiers });
             }
             let typing = input.wants_ime(ui);
             if !typing {
                 me.summoned.set(false);
+            }
+            // What the text before the caret says now: Shift for a new
+            // sentence, words for the one being typed.
+            if typing && let Some(f) = input.focused() {
+                me.read_context(ui, s, f);
             }
             let want = typing && (me.enabled.get() || me.summoned.get());
             let root = ui.root();
@@ -394,6 +668,7 @@ impl VirtualKeyboard {
                     ui.appear(panel, Transition::from_below(80.0), 0.2);
                     own_bottom.get_or_insert(ui.style(root).padding.bottom);
                 } else {
+                    me.release(ui);
                     ui.update_style(panel, |st| st.display = Display::None);
                     if let Some(b) = own_bottom.take() {
                         ui.update_style(root, |st| st.padding.bottom = b);
@@ -409,12 +684,13 @@ impl VirtualKeyboard {
                 if text_of(ui, me.field_label) != name {
                     ui.set_text(me.field_label, name);
                 }
-                // Its height, once laid out.
-                let h = ui.rect(panel).height;
+                // Its height, once laid out, unless it floats over the page.
+                let floating = me.board.borrow().placement().floating;
+                let h = if floating { 0.0 } else { ui.rect(panel).height };
                 let want = own_bottom.unwrap_or(0.0) + h;
-                if h > 0.0 && ui.style(root).padding.bottom != want {
+                if (h > 0.0 || floating) && ui.style(root).padding.bottom != want {
                     ui.update_style(root, |st| st.padding.bottom = want);
-                    reveal = true;
+                    reveal = !floating;
                 } else if reveal && h > 0.0 {
                     reveal = false;
                     if let Some(f) = input.focused().filter(|&f| ui.contains(f)) {
@@ -427,109 +703,1447 @@ impl VirtualKeyboard {
         kb
     }
 
-    /// The letter rows built (again) when the layout or the page changed.
-    fn build_letters<S: 'static>(&self, ui: &mut Ui, input: &mut Input<S>) {
-        let (want, layout) = {
-            let b = self.board.borrow();
-            (
-                (b.current, b.symbols),
-                b.layouts
-                    .get(b.current)
-                    .cloned()
-                    .unwrap_or_else(KeyboardLayout::english),
-            )
-        };
-        if self.board.borrow().built == Some(want) {
+    /// The focused field's config, or the default, for the device the
+    /// window is, showing.
+    fn follow(&self, focused: Option<NodeId>, width: f32, height: f32) {
+        let mut b = self.board.borrow_mut();
+        let device = b
+            .device
+            .map_or(b.resolved, |d| d.resolve(width.max(1.0), height.max(1.0)));
+        if focused != b.focused {
+            // Another field: what was typed and read was the last one's.
+            b.focused = focused;
+            b.recent.clear();
+            b.before = None;
+            if b.auto_shift {
+                b.shift = Shift::Off;
+                b.auto_shift = false;
+                b.built = None;
+            }
+        }
+        let field = focused.filter(|f| b.per_field.iter().any(|(n, _)| n == f));
+        if field == b.active_field && device == b.resolved && !std::mem::take(&mut b.refresh) {
             return;
         }
-        let holder = self.board.borrow().rows[0];
-        for c in ui.children(holder).to_vec() {
-            ui.remove(c);
+        b.resolved = device;
+        b.active = b.config_for(field);
+        b.active_field = field;
+        b.page = b.active.start_page;
+        b.generation += 1;
+    }
+
+    /// Reads the text before the caret, if the app said how: Shift on for a
+    /// new sentence (off again when it is not), words for the one typed.
+    fn read_context<S: 'static>(&self, ui: &mut Ui, s: &S, field: NodeId) {
+        let reader = self.board.borrow().context.clone();
+        let Some(reader) = reader else {
+            return;
+        };
+        let Some(read) = reader.downcast_ref::<ContextReader<S>>() else {
+            return;
+        };
+        let before = read(s, field).unwrap_or_default();
+        if self.board.borrow().before.as_deref() == Some(before.as_str()) {
+            return;
         }
-        let symbols = want.1;
-        let mut letters = vec![];
-        // The accents' row first (letters only), then the three.
-        let accents = (!symbols && !layout.accents.is_empty()).then(|| layout.accents.clone());
-        let pages: Vec<String> = accents
-            .into_iter()
-            .chain(SYMBOLS.iter().enumerate().map(|(r, sym)| {
-                if symbols {
-                    sym.to_string()
-                } else {
-                    layout.rows[r].clone()
+        let relabel = {
+            let mut b = self.board.borrow_mut();
+            b.before = Some(before.clone());
+            let want = b.page == Page::Letters && wants_capital(b.active.auto_capitalize, &before);
+            match b.shift {
+                Shift::Off if want => {
+                    b.shift = Shift::Once;
+                    b.auto_shift = true;
+                    true
                 }
-            }))
-            .collect();
-        for (r, page) in pages.iter().enumerate() {
-            let chars: Vec<char> = page.chars().collect();
-            let row = ui.add_box(
-                holder,
-                style! { display: flex; gap: 6px; justify-content: center; },
-            );
-            for (c, ch) in chars.into_iter().enumerate() {
-                let (k, t) = key_box(ui, row, &ch.to_string(), 1.0);
-                letters.push((k, t, r, c));
-                let (q, b, me) = (self.queue.clone(), self.board.clone(), self.clone());
-                on_press(
-                    input,
-                    k,
-                    Rc::new(move |ui: &mut Ui| {
-                        let typed = text_of(ui, t);
-                        if typed.is_empty() {
-                            return;
-                        }
-                        q.borrow_mut().push(typed);
-                        let once = b.borrow().shift == Shift::Once;
-                        if once {
-                            b.borrow_mut().shift = Shift::Off;
-                            me.relabel(ui);
-                        }
-                    }),
+                Shift::Once if !want && b.auto_shift => {
+                    b.shift = Shift::Off;
+                    b.auto_shift = false;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if relabel {
+            self.relabel(ui);
+        }
+        self.offer_words(ui, current_word(&before));
+    }
+
+    /// The bar's suggestions for `word`, from the app's
+    /// [`set_suggestions`](Self::set_suggestions), in its three chips.
+    fn offer_words(&self, ui: &mut Ui, word: &str) {
+        #[cfg(feature = "swipe")]
+        let swiped = {
+            let mut b = self.board.borrow_mut();
+            // A swipe's other words while its word is the one being typed.
+            if b.swiped.as_ref().is_some_and(|(w, _)| w != word) {
+                b.swiped = None;
+            }
+            b.swiped.clone().map(|(_, others)| others)
+        };
+        #[cfg(not(feature = "swipe"))]
+        let swiped: Option<Vec<String>> = None;
+        let suggest = self.board.borrow().suggest.clone();
+        let words = match (&swiped, &suggest) {
+            (Some(others), _) => others.iter().take(SUGGESTIONS).cloned().collect(),
+            (None, Some(f)) if !word.is_empty() => {
+                let mut w = f(word);
+                w.truncate(SUGGESTIONS);
+                w
+            }
+            _ => vec![],
+        };
+        {
+            let b = self.board.borrow();
+            if b.offered.0 == word && b.offered.1 == words {
+                return;
+            }
+        }
+        let any = !words.is_empty();
+        if any != !self.board.borrow().offered.1.is_empty() {
+            ui.update_style(self.chips, |st| {
+                st.display = if any { Display::Flex } else { Display::None };
+            });
+            // The words in place of the line saying which field it is.
+            ui.update_style(self.label_box, |st| {
+                st.display = if any { Display::None } else { Display::Block };
+            });
+        }
+        for (i, &(chip, text)) in self.chip_nodes.iter().enumerate() {
+            let w = words.get(i);
+            let display = if w.is_some() {
+                Display::Flex
+            } else {
+                Display::None
+            };
+            if ui.style(chip).display != display {
+                ui.update_style(chip, |st| st.display = display);
+            }
+            if let Some(w) = w
+                && text_of(ui, text) != *w
+            {
+                ui.set_text(text, w.clone());
+                ui.set_semantics(
+                    chip,
+                    Semantics::new(Role::Button)
+                        .label(format!("Suggestion: {w}"))
+                        .focusable(false),
                 );
+            }
+        }
+        self.board.borrow_mut().offered = (word.to_owned(), words);
+    }
+
+    /// `word` in place of the `typed` characters before the caret, and a
+    /// space after it.
+    fn take_suggestion(&self, ui: &mut Ui, typed: usize, word: &str) {
+        let mut keys = vec!["Backspace".to_owned(); typed];
+        keys.extend(word.chars().map(|c| c.to_string()));
+        keys.push(" ".into());
+        self.send(keys);
+        let key = Key::text(word).name(word);
+        self.emit(&key, false, false, false);
+        let _ = ui;
+    }
+
+    /// Starts and stops the timers the listeners asked for.
+    fn serve_requests<S: 'static>(&self, input: &mut Input<S>) {
+        let requests = std::mem::take(&mut self.board.borrow_mut().requests);
+        for r in requests {
+            match r {
+                Request::Hold(i) => {
+                    let me = self.clone();
+                    let repeats = self
+                        .board
+                        .borrow()
+                        .keys
+                        .get(i)
+                        .is_some_and(|k| k.key.repeats);
+                    let id = if repeats {
+                        // Every REPEAT, from HOLD on.
+                        let mut waited = 0.0;
+                        input.every(REPEAT, move |_, _| {
+                            waited += REPEAT;
+                            if waited + 1e-6 < HOLD {
+                                return;
+                            }
+                            let held = {
+                                let b = me.board.borrow();
+                                match (&b.press, b.keys.get(i)) {
+                                    (Some(p), Some(k)) if p.index == i => {
+                                        Some((k.key.clone(), me.typed(&b, &k.key)))
+                                    }
+                                    _ => None,
+                                }
+                            };
+                            if let Some((key, typed)) = held {
+                                // Held a second, Backspace deletes words,
+                                // a little slower, as Apple's does.
+                                let repeats = ((waited - HOLD) / REPEAT).round() as u32;
+                                if key.action == KeyAction::Named("Backspace".into())
+                                    && repeats >= WORDS_AFTER
+                                {
+                                    if repeats.is_multiple_of(2) {
+                                        me.queue
+                                            .borrow_mut()
+                                            .push(("Backspace".into(), word_modifier()));
+                                        me.emit(&key, true, false, false);
+                                    }
+                                    return;
+                                }
+                                me.send(typed);
+                                me.emit(&key, true, false, false);
+                            }
+                        })
+                    } else {
+                        input.after(HOLD, move |_, ui| me.offer_alternates(ui, i))
+                    };
+                    self.board.borrow_mut().timers.push(id);
+                }
+                Request::Release => {
+                    let timers = std::mem::take(&mut self.board.borrow_mut().timers);
+                    for t in timers {
+                        input.cancel_timer(t);
+                    }
+                }
+                Request::ShiftTap => {
+                    let tapped = self.board.borrow().shift_tapped.clone();
+                    tapped.set(true);
+                    input.after(DOUBLE_TAP, move |_, _| tapped.set(false));
+                }
+            }
+        }
+    }
+
+    /// The keys built (again) when the config, placement, layout or
+    /// appearance changed: every page at once, so a page shows by being
+    /// shown, without building keys or changing the tree's shape.
+    fn build<S: 'static>(&self, ui: &mut Ui, input: &mut Input<S>) {
+        let appearance = ui.appearance_of(self.panel);
+        let (want, page) = {
+            let b = self.board.borrow();
+            ((b.generation, b.current, Page::Letters, appearance), b.page)
+        };
+        if self.board.borrow().built == Some(want) {
+            if self.board.borrow().shown_page != Some(page) {
+                self.show_page(ui, page);
+            }
+            return;
+        }
+        let (cfg, placement, layout, many) = {
+            let b = self.board.borrow();
+            (
+                b.active.clone(),
+                b.placement(),
+                b.layout(),
+                b.layouts.len() > 1,
+            )
+        };
+        self.release(ui);
+        self.place(ui, &cfg, placement, appearance);
+        ui.clear_children(self.body);
+
+        // In a debug build, what is wrong with the config, once.
+        if cfg!(debug_assertions) && self.board.borrow().checked != Some(want.0) {
+            self.board.borrow_mut().checked = Some(want.0);
+            for issue in cfg.validate() {
+                eprintln!("threers-ui keyboard: {issue}");
+            }
+        }
+        let languages = if many { 2 } else { 1 };
+        let mut built = vec![];
+
+        // The pages' columns, and a one-handed keyboard's strip beside them.
+        let holder = ui.add_box(
+            self.body,
+            style! { display: flex; flex-direction: column; flex-grow: 1; min-width: 0; },
+        );
+        if placement.one_handed {
+            let strip = ui.add_box(
+                self.body,
+                style! { display: flex; flex-direction: column; justify-content: center; flex-shrink: 0; },
+            );
+            ui.update_style(strip, |s| {
+                s.width = Length::Px(STRIP);
+                s.order = if placement.align == Align::Right {
+                    -1
+                } else {
+                    1
+                };
+            });
+            let back = Placement {
+                one_handed: false,
+                ..cfg.placement
+            };
+            let arrow = if placement.align == Align::Right {
+                "‹"
+            } else {
+                "›"
+            };
+            let key = Key::place(back, arrow, "Full width keyboard")
+                .look(KeyLook::Clear)
+                .font_size(34.0);
+            let row = ui.add_box(strip, style! { display: flex; });
+            self.build_key(ui, input, row, key, 1.0, &cfg, appearance, None, &mut built);
+        }
+        let mut columns = vec![];
+        for p in [Page::Letters, Page::Symbols, Page::More] {
+            let rows = spec::page_rows(&cfg, p, &layout, languages);
+            if rows.is_empty() {
+                continue;
+            }
+            let total = spec::total_units(&rows);
+            let column = ui.add_box(holder, style! { display: none; flex-direction: column; });
+            ui.update_style(column, |s| s.gap = cfg.row_gap);
+            for row in rows {
+                let r = ui.add_box(column, style! { display: flex; justify-content: center; });
+                if placement.split > 0.0 {
+                    self.build_split_row(
+                        ui,
+                        input,
+                        r,
+                        row,
+                        total,
+                        placement.split,
+                        &cfg,
+                        appearance,
+                        p,
+                        &mut built,
+                    );
+                } else {
+                    for k in row {
+                        self.build_key(
+                            ui,
+                            input,
+                            r,
+                            k,
+                            total,
+                            &cfg,
+                            appearance,
+                            Some(p),
+                            &mut built,
+                        );
+                    }
+                }
+            }
+            columns.push((p, column));
+        }
+        {
+            let mut b = self.board.borrow_mut();
+            b.keys = built;
+            b.built = Some(want);
+            b.columns = columns;
+            b.shown_page = None;
+        }
+        ui.semantics_mut(self.sheet).label = Some(format!("Keyboard: {}", layout.name));
+        self.show_page(ui, page);
+    }
+
+    /// `page` shown, the others hidden, and its keys labelled for Shift.
+    fn show_page(&self, ui: &mut Ui, page: Page) {
+        let columns = self.board.borrow().columns.clone();
+        // A page with no rows shows the letters.
+        let page = if columns.iter().any(|(p, _)| *p == page) {
+            page
+        } else {
+            Page::Letters
+        };
+        for (p, column) in columns {
+            let display = if p == page {
+                Display::Flex
+            } else {
+                Display::None
+            };
+            if ui.style(column).display != display {
+                ui.update_style(column, |s| s.display = display);
             }
         }
         {
             let mut b = self.board.borrow_mut();
-            b.letters = letters;
-            b.built = Some(want);
+            b.page = page;
+            b.shown_page = Some(page);
         }
-        ui.set_text(
-            self.space_label,
-            if symbols {
-                "space".to_owned()
-            } else {
-                layout.name.clone()
-            },
-        );
-        ui.set_text(self.symbols_label, if symbols { "ABC" } else { "123" });
-        ui.semantics_mut(self.panel).label = Some(format!("Keyboard: {}", layout.name));
         self.relabel(ui);
     }
 
-    /// The letter keys in upper or lower case, and Shift lit, as it stands.
-    fn relabel(&self, ui: &mut Ui) {
-        let b = self.board.borrow();
-        let upper = !b.symbols && b.shift != Shift::Off;
-        for &(k, t, _, _) in &b.letters {
-            let now = text_of(ui, t);
-            let want = if upper {
-                now.to_uppercase()
+    /// A row parted in the middle: the keys wholly left of it in one half
+    /// (`q w e r t | y u i o p`, `⇧ z x c v | b n m`), the rest in the other, each half against its side; a key wide enough to
+    /// straddle the parting (the space bar) in both.
+    #[allow(clippy::too_many_arguments)]
+    fn build_split_row<S: 'static>(
+        &self,
+        ui: &mut Ui,
+        input: &mut Input<S>,
+        row: NodeId,
+        keys: Vec<Key>,
+        total: f32,
+        split: f32,
+        cfg: &KeyboardConfig,
+        appearance: Appearance,
+        page: Page,
+        built: &mut Vec<Built>,
+    ) {
+        let half = total / 2.0;
+        let sum: f32 = keys.iter().map(|k| k.units_and_fill().0).sum();
+        // What the row leaves goes to its fill keys, as it would unparted;
+        // a row without one starts where it would centred.
+        let fills = keys.iter().filter(|k| k.units_and_fill().1).count();
+        let spare = (total - sum).max(0.0);
+        let lead = if fills > 0 { 0.0 } else { spare / 2.0 };
+        let keys: Vec<Key> = keys
+            .into_iter()
+            .map(|mut k| {
+                if let (u, true) = k.units_and_fill() {
+                    k.size = config::KeySize::Fill(u + spare / fills as f32);
+                }
+                k
+            })
+            .collect();
+        let (mut left, mut right) = (vec![], vec![]);
+        if lead > 0.0 {
+            left.push(Key::gap(lead));
+        }
+        let mut x = lead;
+        for k in keys {
+            let (u, fill) = k.units_and_fill();
+            if fill && x < half && x + u > half {
+                let mut l = k.clone();
+                l.size = config::KeySize::Fill(half - x);
+                let mut r = k;
+                r.size = config::KeySize::Fill(x + u - half);
+                left.push(l);
+                right.push(r);
+            } else if x + u <= half + 1e-3 {
+                left.push(k);
             } else {
-                now.to_lowercase()
-            };
-            if want != now {
-                ui.set_text(t, want.clone());
-                ui.semantics_mut(k).label = Some(want);
+                right.push(k);
+            }
+            x += u;
+        }
+        if lead > 0.0 {
+            right.push(Key::gap(lead));
+        }
+        for (side, keys, justify) in [
+            (0, left, JustifyContent::FlexStart),
+            (1, right, JustifyContent::FlexEnd),
+        ] {
+            // Half the row each, less half the parting: a definite width
+            // for its keys' percentages.
+            let group = ui.add_box(row, style! { display: flex; flex-shrink: 1; min-width: 0; });
+            ui.update_style(group, |s| {
+                s.justify_content = justify;
+                s.flex_basis = Length::Percent(50.0);
+            });
+            for k in keys {
+                self.build_key(
+                    ui,
+                    input,
+                    group,
+                    k,
+                    half,
+                    cfg,
+                    appearance,
+                    Some(page),
+                    built,
+                );
+            }
+            if side == 0 {
+                let gap = ui.add_box(row, style! { flex-shrink: 0; });
+                ui.update_style(gap, |s| s.width = Length::Px(split));
             }
         }
-        let on = b.shift != Shift::Off;
-        ui.token_style(
-            self.shift_key,
-            &[
-                ("background", if on { Token::Accent } else { Token::Raised }),
-                ("color", if on { Token::OnAccent } else { Token::Text }),
-            ],
+    }
+
+    /// A key: a cell `units / total` of its row wide that takes the
+    /// pointer (the gaps round the key included, as on a phone), and the
+    /// key drawn in it.
+    #[allow(clippy::too_many_arguments)]
+    fn build_key<S: 'static>(
+        &self,
+        ui: &mut Ui,
+        input: &mut Input<S>,
+        row: NodeId,
+        key: Key,
+        total: f32,
+        cfg: &KeyboardConfig,
+        appearance: Appearance,
+        page: Option<Page>,
+        built: &mut Vec<Built>,
+    ) {
+        let (u, fill) = key.units_and_fill();
+        let cell = ui.add_box(
+            row,
+            style! { display: flex; flex-direction: column; box-sizing: border-box; min-width: 0; },
         );
+        ui.update_style(cell, |s| {
+            s.flex_basis = Length::Percent(u / total.max(1e-3) * 100.0);
+            s.flex_grow = if fill { 1.0 } else { 0.0 };
+            s.flex_shrink = 1.0;
+            s.padding.left = cfg.gap / 2.0;
+            s.padding.right = cfg.gap / 2.0;
+            s.height = Length::Px(cfg.key_height);
+        });
+        if key.action == KeyAction::None {
+            return;
+        }
+        let theme = &cfg.theme;
+        let face = ui.add_box(
+            cell,
+            style! { display: flex; flex-direction: column; align-items: center; justify-content: center; flex-grow: 1; min-width: 0; overflow: hidden; cursor: pointer; },
+        );
+        let label_text = self.label_of(&key, cfg);
+        let size = key.font_size.unwrap_or_else(|| {
+            let glyphs = label_text.chars().count();
+            if glyphs <= 1 || key.action == KeyAction::NextLayout {
+                theme.letter_size
+            } else {
+                theme.label_size
+            }
+        });
+        ui.update_style(face, |s| {
+            s.border_radius = Length::Px(theme.key_radius);
+            s.font_size = size;
+            s.line_height = Some(size * 1.2);
+            if key.look != KeyLook::Clear
+                && let Some(c) = theme.shadow
+            {
+                s.box_shadow = vec![BoxShadow {
+                    x: 0.0,
+                    y: 1.0,
+                    blur: 0.0,
+                    spread: 0.0,
+                    color: resolve(c, appearance),
+                }];
+            }
+        });
+        if key.hint
+            && let Some(sh) = &key.shifted
+        {
+            let h = ui.add_box(face, style! { opacity: 0.6; });
+            ui.update_style(h, |s| {
+                s.font_size = theme.hint_size;
+                s.line_height = Some(theme.hint_size * 1.2);
+            });
+            ui.add_text(h, sh.clone());
+        }
+        let label = ui.add_text(face, label_text.clone());
+        if let Some(c) = &key.caption {
+            let h = ui.add_box(face, style! { font-weight: bold; });
+            ui.update_style(h, |s| {
+                s.font_size = theme.hint_size;
+                s.line_height = Some(theme.hint_size * 1.2);
+            });
+            ui.add_text(h, c.clone());
+        }
+        let name = key.name.clone().unwrap_or_else(|| label_text.clone());
+        ui.set_semantics(
+            face,
+            Semantics::new(Role::Button).label(name).focusable(false),
+        );
+        // Pressed: a letter with a preview keeps its look; the rest as
+        // the feedback says.
+        let previewed = cfg.feedback.preview
+            && key.look == KeyLook::Character
+            && label_text.chars().count() == 1;
+        if !previewed {
+            match cfg.feedback.press {
+                PressStyle::None => {}
+                PressStyle::Dim => ui.active_style(face, "opacity: 0.6"),
+                PressStyle::Swap => {
+                    let other = match key.look {
+                        KeyLook::Character => theme.function_key,
+                        KeyLook::Function | KeyLook::Clear => theme.key,
+                        KeyLook::Accent => theme.function_key,
+                    };
+                    match other {
+                        // A token's colour is the theme's to give: fade instead.
+                        KeyColor::Token(_) => ui.active_style(face, "opacity: 0.6"),
+                        c => {
+                            let [r, g, b, a] = resolve(c, appearance);
+                            let css = format!(
+                                "background: rgba({}, {}, {}, {a})",
+                                (r * 255.0).round(),
+                                (g * 255.0).round(),
+                                (b * 255.0).round()
+                            );
+                            ui.active_style(face, &css);
+                        }
+                    }
+                }
+            }
+        }
+        // Its preview, laid out over it now so showing it later is only
+        // drawn: half a key wider, a little taller, its letter larger.
+        let bubble = previewed.then(|| {
+            let h = cfg.key_height * 1.15;
+            ui.update_style(cell, |s| s.position = crate::Position::Relative);
+            let b = ui.add_box(
+                cell,
+                style! { position: absolute; display: flex; align-items: center; justify-content: center; pointer-events: none; opacity: 0; },
+            );
+            ui.update_style(b, |s| {
+                s.left = Length::Px(cfg.gap / 2.0 - 10.0);
+                s.right = Length::Px(cfg.gap / 2.0 - 10.0);
+                s.top = Length::Px(-(h + 4.0));
+                s.height = Length::Px(h);
+                s.border_radius = Length::Px(theme.key_radius + 2.0);
+                s.font_size = theme.letter_size * 1.6;
+                s.line_height = Some(theme.letter_size * 1.6 * 1.2);
+                s.box_shadow = vec![BoxShadow {
+                    x: 0.0,
+                    y: 2.0,
+                    blur: 8.0,
+                    spread: 0.0,
+                    color: [0.0, 0.0, 0.0, 0.3],
+                }];
+            });
+            paint(ui, b, "background", theme.key, appearance);
+            paint(ui, b, "color", theme.key_text, appearance);
+            // Decoration: the key itself is what assistive technology reads.
+            ui.set_semantics(b, Semantics::new(Role::Generic).hidden());
+            let text = ui.add_text(b, label_text.clone());
+            // Laid out over the row above even while unseen: nothing in it
+            // may take a press meant for the keys there (`pointer-events`
+            // is not inherited here, as it is in CSS).
+            ui.update_style(text, |s| s.pointer_events = false);
+            (b, text)
+        });
+        let index = built.len();
+        let me = self.clone();
+        input.on(cell, Phase::Bubble, move |_, ui, e, cx| {
+            me.on_key_event(ui, index, e, cx);
+        });
+        built.push(Built {
+            cell,
+            face,
+            label,
+            key,
+            page,
+            shown: None,
+            bubble,
+        });
+    }
+
+    /// What `key` shows, Shift aside.
+    fn label_of(&self, key: &Key, cfg: &KeyboardConfig) -> String {
+        match &key.action {
+            KeyAction::Named(n) if n == "Enter" => cfg.return_key.label(),
+            KeyAction::Text(t) if t == " " => {
+                let b = self.board.borrow();
+                if b.layouts.len() > 1 && b.page == Page::Letters && key.label == "space" {
+                    b.layout().name
+                } else {
+                    key.label.clone()
+                }
+            }
+            _ => key.label.clone(),
+        }
+    }
+
+    /// The panel, the sheet and the handle placed as `placement` says.
+    fn place(&self, ui: &mut Ui, cfg: &KeyboardConfig, p: Placement, appearance: Appearance) {
+        let theme = &cfg.theme;
+        let offset = if p.floating {
+            self.board.borrow().offset
+        } else {
+            (0.0, 0.0)
+        };
+        ui.update_style(self.panel, |s| {
+            s.align_items = match p.align {
+                Align::Left => AlignItems::FlexStart,
+                Align::Center => AlignItems::Center,
+                Align::Right => AlignItems::FlexEnd,
+            };
+            let m = if p.floating { p.margin } else { 0.0 };
+            s.bottom = Length::Px(m);
+            s.padding.left = m;
+            s.padding.right = m;
+        });
+        ui.update_style(self.sheet, |s| {
+            s.width = match p.width {
+                Some(w) if !p.one_handed => Length::Px(w),
+                _ => Length::Percent(100.0),
+            };
+            s.max_width = p.max_width.map_or(Length::Auto, Length::Px);
+            let radius = if p.floating {
+                theme.radius.max(14.0)
+            } else {
+                theme.radius
+            };
+            s.border_radius = Length::Px(radius);
+            s.box_shadow = if p.floating || radius > 0.0 {
+                vec![BoxShadow {
+                    x: 0.0,
+                    y: if p.floating { 8.0 } else { -6.0 },
+                    blur: 24.0,
+                    spread: 0.0,
+                    color: [0.0, 0.0, 0.0, 0.3],
+                }]
+            } else {
+                vec![]
+            };
+            let [t, r, b, l] = cfg.padding;
+            s.padding = crate::Edges {
+                top: t,
+                right: r,
+                bottom: b,
+                left: l,
+            };
+            s.gap = cfg.row_gap.min(8.0);
+            s.left = Length::Px(offset.0);
+            s.top = Length::Px(offset.1);
+        });
+        // Docked, it reaches the bottom edge, under the home indicator.
+        ui.pad_safe_area(self.sheet, [false, false, !p.floating, false]);
+        paint(ui, self.sheet, "background", theme.background, appearance);
+        paint(ui, self.sheet, "color", theme.key_text, appearance);
+        ui.update_style(self.bar, |s| {
+            s.display = if cfg.bar || self.board.borrow().suggest.is_some() {
+                Display::Flex
+            } else {
+                Display::None
+            };
+        });
+        ui.update_style(self.handle, |s| {
+            s.display = if p.floating {
+                Display::Flex
+            } else {
+                Display::None
+            };
+        });
+    }
+
+    /// Each key's label for Shift, and its colours: on the page showing,
+    /// and only where they change.
+    fn relabel(&self, ui: &mut Ui) {
+        let appearance = ui.appearance_of(self.panel);
+        let mut b = self.board.borrow_mut();
+        let theme = b.active.theme;
+        let accent_return = b.active.return_key.accent();
+        let (page, shift) = (b.page, b.shift);
+        let up = page == Page::Letters && shift != Shift::Off;
+        for k in b.keys.iter_mut() {
+            if k.page.is_some_and(|p| p != page) {
+                continue;
+            }
+            let lit = match k.key.action {
+                KeyAction::Shift => shift != Shift::Off,
+                KeyAction::CapsLock => shift == Shift::Locked,
+                _ => false,
+            };
+            let label = match &k.key.action {
+                KeyAction::Text(_) if !k.key.hint && k.key.label != "space" => {
+                    if up {
+                        k.key.shifted.clone().unwrap_or_else(|| upper(&k.key.label))
+                    } else {
+                        k.key.label.clone()
+                    }
+                }
+                KeyAction::Shift => if shift == Shift::Locked { "⇪" } else { "⇧" }.to_owned(),
+                _ => text_of(ui, k.label),
+            };
+            let enter = matches!(&k.key.action, KeyAction::Named(n) if n == "Enter");
+            let look = if enter && accent_return {
+                KeyLook::Accent
+            } else {
+                k.key.look
+            };
+            let (bg, fg) = if lit {
+                (Some(theme.lit_key), theme.lit_text)
+            } else {
+                match look {
+                    KeyLook::Character => (Some(theme.key), theme.key_text),
+                    KeyLook::Function => (Some(theme.function_key), theme.function_text),
+                    KeyLook::Accent => (Some(theme.accent_key), theme.accent_text),
+                    KeyLook::Clear => (None, theme.function_text),
+                }
+            };
+            let was = k.shown.take();
+            if was.as_ref().is_none_or(|w| w.0 != label) && text_of(ui, k.label) != label {
+                ui.set_text(k.label, label.clone());
+                if k.key.name.is_none() {
+                    ui.semantics_mut(k.face).label = Some(label.clone());
+                }
+                if let Some((_, text)) = k.bubble {
+                    ui.set_text(text, label.clone());
+                }
+            }
+            if was.as_ref().is_none_or(|w| w.1 != bg || w.2 != fg) {
+                match bg {
+                    Some(c) => paint(ui, k.face, "background", c, appearance),
+                    None => {
+                        ui.clear_token_style(k.face, "background");
+                        ui.update_style(k.face, |s| s.background = None);
+                    }
+                }
+                paint(ui, k.face, "color", fg, appearance);
+            }
+            k.shown = Some((label, bg, fg));
+        }
+    }
+
+    /// What pressing `key` types now: one key event per character of its
+    /// text (upper case under Shift), or its name.
+    fn typed(&self, b: &Board, key: &Key) -> Vec<String> {
+        match &key.action {
+            KeyAction::Text(t) => {
+                let t = if b.page == Page::Letters && b.shift != Shift::Off {
+                    key.shifted.clone().unwrap_or_else(|| upper(t))
+                } else {
+                    t.clone()
+                };
+                t.chars().map(|c| c.to_string()).collect()
+            }
+            KeyAction::Named(n) => vec![n.clone()],
+            _ => vec![],
+        }
+    }
+
+    /// Queues `keys` to type, unmodified.
+    fn send(&self, keys: impl IntoIterator<Item = String>) {
+        self.queue
+            .borrow_mut()
+            .extend(keys.into_iter().map(|k| (k, KeyModifiers::default())));
+    }
+
+    /// Types `key`: two spaces after a word as “. ”, back to the letters
+    /// after a space on a symbols page, and Shift held for one letter let
+    /// go.
+    fn type_key(&self, ui: &mut Ui, key: &Key) {
+        let mut typed = self.typed(&self.board.borrow(), key);
+        if typed.is_empty() {
+            return;
+        }
+        let once = {
+            let mut b = self.board.borrow_mut();
+            if typed == [" "] && b.active.period_shortcut {
+                // The field's text if the app tells it, else what this
+                // keyboard typed.
+                let before = b.before.clone().unwrap_or_else(|| b.recent.clone());
+                if period_shortcut(&before) {
+                    typed = vec!["Backspace".into(), ".".into(), " ".into()];
+                }
+            }
+            for t in &typed {
+                if t == "Backspace" {
+                    b.recent.pop();
+                } else if t.chars().count() == 1 {
+                    b.recent.push_str(t);
+                }
+            }
+            let excess = b.recent.chars().count().saturating_sub(16);
+            if excess > 0 {
+                b.recent = b.recent.chars().skip(excess).collect();
+            }
+            if b.active.return_to_letters
+                && b.page != Page::Letters
+                && matches!(&key.action, KeyAction::Text(t) if t == " " || t == "'")
+            {
+                b.page = Page::Letters;
+            }
+            let once = b.shift == Shift::Once && matches!(key.action, KeyAction::Text(_));
+            if once {
+                b.shift = Shift::Off;
+                b.auto_shift = false;
+            }
+            once
+        };
+        self.send(typed);
+        if once {
+            self.relabel(ui);
+        }
+    }
+
+    /// Tells the app's [`on_feedback`](Self::on_feedback) listeners of a
+    /// press: its click, and a tap (a firmer one for a `strong` press).
+    fn emit(&self, key: &Key, repeat: bool, strong: bool, silent: bool) {
+        let (listeners, fb) = {
+            let b = self.board.borrow();
+            (b.feedback.clone(), b.active.feedback)
+        };
+        if listeners.is_empty() {
+            return;
+        }
+        let press = KeyPress {
+            name: key.name.clone().unwrap_or_else(|| key.label.clone()),
+            action: key.action.clone(),
+            sound: (fb.sound && !silent)
+                .then(|| KeySound::of(&key.action))
+                .flatten(),
+            volume: fb.volume,
+            haptic: fb.haptics.then_some(if strong {
+                Haptic::Medium
+            } else {
+                Haptic::Light
+            }),
+            repeat,
+        };
+        for f in listeners {
+            f(&press);
+        }
+    }
+
+    /// The pointer on key `index`.
+    fn on_key_event(&self, ui: &mut Ui, index: usize, e: &Event, cx: &mut EventCx) {
+        match e {
+            Event::PointerDown { x, y, .. } => {
+                // The focus stays in the field.
+                cx.prevent_default();
+                cx.capture_pointer();
+                self.down(ui, index, *x, *y);
+            }
+            Event::PointerMove { x, y } => {
+                if self.board.borrow().press.is_some() {
+                    self.slide(ui, *x, *y);
+                }
+            }
+            Event::PointerUp { x, y, .. } => {
+                cx.release_pointer();
+                self.up(ui, *x, *y);
+            }
+            Event::PointerCancel => self.release(ui),
+            // A held key offers its own alternates, not a context menu.
+            Event::ContextMenu { .. } => cx.prevent_default(),
+            _ => {}
+        }
+    }
+
+    fn down(&self, ui: &mut Ui, index: usize, x: f32, y: f32) {
+        self.release(ui);
+        let Some(key) = self.board.borrow().keys.get(index).map(|k| k.key.clone()) else {
+            return;
+        };
+        let mut relabel = false;
+        let mut types = false;
+        {
+            let mut b = self.board.borrow_mut();
+            match &key.action {
+                KeyAction::Shift => {
+                    b.auto_shift = false;
+                    let twice = b.shift_tapped.get();
+                    b.shift = match b.shift {
+                        Shift::Off if twice => Shift::Locked,
+                        Shift::Off => Shift::Once,
+                        Shift::Once if twice => Shift::Locked,
+                        _ => Shift::Off,
+                    };
+                    b.requests.push(Request::ShiftTap);
+                    relabel = true;
+                }
+                KeyAction::CapsLock => {
+                    b.shift = if b.shift == Shift::Locked {
+                        Shift::Off
+                    } else {
+                        Shift::Locked
+                    };
+                    relabel = true;
+                }
+                KeyAction::Page(p) => b.page = *p,
+                KeyAction::NextLayout => {
+                    b.current = (b.current + 1) % b.layouts.len().max(1);
+                    b.page = Page::Letters;
+                }
+                KeyAction::Dismiss => b.hide = true,
+                KeyAction::Place(p) => {
+                    b.placement = Some(*p);
+                    b.offset = (0.0, 0.0);
+                    b.generation += 1;
+                }
+                _ if key.repeats => {}
+                KeyAction::Text(_) | KeyAction::Named(_) | KeyAction::Action(_) => types = true,
+                _ => {}
+            }
+            // Only Shift twice in a row locks it.
+            if key.action != KeyAction::Shift {
+                b.shift_tapped.set(false);
+            }
+            #[cfg(feature = "swipe")]
+            let path = {
+                let letter = b.page == Page::Letters
+                    && matches!(&key.action, KeyAction::Text(t) if swipe_letter(t).is_some());
+                (types && letter && b.swipe.is_some())
+                    .then(|| (vec![SwipePoint { x, y, t: b.clock }], 0.0))
+            };
+            b.press = Some(Press {
+                index,
+                types,
+                popup: None,
+                at: (x, y),
+                trackpad: None,
+                #[cfg(feature = "swipe")]
+                path,
+                #[cfg(feature = "swipe")]
+                swiping: false,
+            });
+            let space = key.action == KeyAction::Text(" ".into());
+            if key.repeats
+                || (types && !key.alternates.is_empty())
+                || (space && b.active.space_trackpad)
+            {
+                b.requests.push(Request::Hold(index));
+            }
+        }
+        if key.repeats {
+            // Once now, then again while held.
+            self.type_key(ui, &key);
+        }
+        if relabel {
+            self.relabel(ui);
+        }
+        if types {
+            self.preview(ui, index);
+        }
+        let locked = key.action == KeyAction::Shift && self.board.borrow().shift == Shift::Locked;
+        self.emit(&key, false, locked, false);
+    }
+
+    /// The pointer moved while pressed: along a held key's alternates, or
+    /// from key to key (the one under the finger types).
+    fn slide(&self, ui: &mut Ui, x: f32, y: f32) {
+        let mut b = self.board.borrow_mut();
+        let Some(press) = b.press.as_mut() else {
+            return;
+        };
+        press.at = (x, y);
+        if let Some((ax, ay)) = press.trackpad {
+            // A caret step for every few pixels: across, and (further) up
+            // and down.
+            let across = ((x - ax) / TRACKPAD_STEP).trunc();
+            let down = ((y - ay) / (TRACKPAD_STEP * 2.0)).trunc();
+            press.trackpad = Some((ax + across * TRACKPAD_STEP, ay + down * TRACKPAD_STEP * 2.0));
+            drop(b);
+            let step = |n: f32, more: &str, less: &str| {
+                let key = if n > 0.0 { more } else { less };
+                std::iter::repeat_n(key.to_owned(), n.abs() as usize)
+            };
+            self.send(step(across, "ArrowRight", "ArrowLeft"));
+            self.send(step(down, "ArrowDown", "ArrowUp"));
+            return;
+        }
+        if let Some(popup) = press.popup.as_mut() {
+            let chosen = self.options[..popup.options.len()]
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, c)| {
+                    let d = |n: NodeId| {
+                        let r = ui.rect(n);
+                        (r.x + r.width / 2.0 - x).abs()
+                    };
+                    d(a.0).total_cmp(&d(c.0))
+                })
+                .map_or(0, |(i, _)| i);
+            if chosen != popup.chosen {
+                let was = popup.chosen;
+                popup.chosen = chosen;
+                drop(b);
+                self.light_options(ui, &[was, chosen], chosen);
+            }
+            return;
+        }
+        #[cfg(feature = "swipe")]
+        let press = {
+            let index = press.index;
+            let clock = b.clock;
+            let start_width = b.keys.get(index).map(|k| ui.rect(k.cell).width);
+            let press = b.press.as_mut().unwrap();
+            if let Some((path, travel)) = press.path.as_mut() {
+                let last = *path.last().unwrap();
+                *travel += (x - last.x).hypot(y - last.y);
+                path.push(SwipePoint { x, y, t: clock });
+                if press.swiping {
+                    return;
+                }
+                if *travel > SWIPE_START * start_width.unwrap_or(f32::MAX) {
+                    // A swipe: no letter types, no hold offers accents.
+                    press.swiping = true;
+                    b.requests.push(Request::Release);
+                    drop(b);
+                    self.unlight_bubble(ui);
+                    return;
+                }
+            }
+            press
+        };
+        if !press.types {
+            return;
+        }
+        let at = press.index;
+        let page = b.page;
+        let under = b.keys.iter().position(|k| {
+            matches!(k.key.action, KeyAction::Text(_) | KeyAction::Named(_))
+                && !k.key.repeats
+                && k.page.is_none_or(|p| p == page)
+                && ui.rect(k.cell).contains(x, y)
+        });
+        let Some(to) = under.filter(|&to| to != at) else {
+            return;
+        };
+        b.press.as_mut().unwrap().index = to;
+        // The new key's hold counts from now.
+        b.requests.push(Request::Release);
+        if !b.keys[to].key.alternates.is_empty() {
+            b.requests.push(Request::Hold(to));
+        }
+        drop(b);
+        self.preview(ui, to);
+    }
+
+    fn up(&self, ui: &mut Ui, x: f32, y: f32) {
+        let press = self.board.borrow_mut().press.take();
+        let Some(press) = press else {
+            return;
+        };
+        self.close(ui, &press);
+        self.board.borrow_mut().requests.push(Request::Release);
+        #[cfg(feature = "swipe")]
+        if press.swiping
+            && let Some((mut path, _)) = press.path
+        {
+            let t = self.board.borrow().clock;
+            path.push(SwipePoint { x, y, t });
+            self.type_swipe(ui, path);
+            return;
+        }
+        if press.trackpad.is_some() {
+            // The caret was moved; the space is not typed.
+            return;
+        }
+        if let Some(popup) = &press.popup {
+            if let Some(text) = popup.options.get(popup.chosen) {
+                let key = Key::text(text);
+                // An accented capital stays as chosen.
+                let shift = self.board.borrow().shift;
+                self.board.borrow_mut().shift = Shift::Off;
+                self.type_key(ui, &key);
+                if shift == Shift::Once {
+                    self.relabel(ui);
+                } else {
+                    self.board.borrow_mut().shift = shift;
+                }
+            }
+            return;
+        }
+        if !press.types {
+            return;
+        }
+        // The key under the finger as it lifts, as a phone has it; the one
+        // pressed when it lifts off the keyboard's keys.
+        let key = {
+            let b = self.board.borrow();
+            b.keys
+                .iter()
+                .find(|k| {
+                    matches!(
+                        k.key.action,
+                        KeyAction::Text(_) | KeyAction::Named(_) | KeyAction::Action(_)
+                    ) && !k.key.repeats
+                        && k.page.is_none_or(|p| p == b.page)
+                        && ui.rect(k.cell).contains(x, y)
+                })
+                .or_else(|| b.keys.get(press.index))
+                .map(|k| k.key.clone())
+        };
+        match key {
+            Some(Key {
+                action: KeyAction::Action(id),
+                ..
+            }) => {
+                let listeners = self.board.borrow().actions.clone();
+                for f in listeners {
+                    f(&id, ui);
+                }
+            }
+            Some(key) => self.type_key(ui, &key),
+            None => {}
+        }
+    }
+
+    #[cfg(feature = "swipe")]
+    /// A finished swipe: the decoder's best word typed, a space before it
+    /// after a word, capitals as Shift says; its other words in the bar.
+    fn type_swipe(&self, ui: &mut Ui, points: Vec<SwipePoint>) {
+        let (decoder, swipe, shift, before) = {
+            let b = self.board.borrow();
+            let Some(decoder) = b.swipe.clone() else {
+                return;
+            };
+            let keys = b
+                .keys
+                .iter()
+                .filter(|k| k.page.is_none_or(|p| p == b.page) && ui.contains(k.cell))
+                .filter_map(|k| match &k.key.action {
+                    KeyAction::Text(t) => swipe_letter(t).map(|c| {
+                        let r = ui.rect(k.cell);
+                        SwipeKey {
+                            text: c.to_lowercase().collect(),
+                            x: r.x,
+                            y: r.y,
+                            width: r.width,
+                            height: r.height,
+                        }
+                    }),
+                    _ => None,
+                })
+                .collect();
+            let swipe = Swipe {
+                points,
+                keys,
+                language: b.layout().language,
+            };
+            let before = b.before.clone().unwrap_or_else(|| b.recent.clone());
+            (decoder, swipe, b.shift, before)
+        };
+        let words = decoder(&swipe);
+        let Some(best) = words.first() else { return };
+        let cased = |w: &str| match shift {
+            Shift::Locked => upper(w),
+            Shift::Once => {
+                let mut c = w.chars();
+                c.next()
+                    .map_or_else(String::new, |f| upper(&f.to_string()) + c.as_str())
+            }
+            Shift::Off => w.to_owned(),
+        };
+        let word = cased(best);
+        let others: Vec<String> = words[1..].iter().map(|w| cased(w)).collect();
+        let mut keys: Vec<String> = vec![];
+        if before
+            .chars()
+            .last()
+            .is_some_and(|c| c.is_alphanumeric() || ".,!?;:".contains(c))
+        {
+            keys.push(" ".into());
+        }
+        keys.extend(word.chars().map(|c| c.to_string()));
+        let relabel = {
+            let mut b = self.board.borrow_mut();
+            for k in &keys {
+                b.recent.push_str(k);
+            }
+            let excess = b.recent.chars().count().saturating_sub(16);
+            if excess > 0 {
+                b.recent = b.recent.chars().skip(excess).collect();
+            }
+            b.swiped = Some((word.clone(), others));
+            let once = b.shift == Shift::Once;
+            if once {
+                b.shift = Shift::Off;
+                b.auto_shift = false;
+            }
+            once
+        };
+        self.send(keys);
+        self.emit(&Key::text(&word).name(&word), false, false, true);
+        if relabel {
+            self.relabel(ui);
+        }
+        self.offer_words(ui, &word);
+    }
+
+    /// Lets go of any key held, its preview and alternates closed, its
+    /// timers stopped.
+    fn release(&self, ui: &mut Ui) {
+        let press = self.board.borrow_mut().press.take();
+        if let Some(press) = press {
+            self.close(ui, &press);
+            self.board.borrow_mut().requests.push(Request::Release);
+        }
+    }
+
+    fn close(&self, ui: &mut Ui, press: &Press) {
+        self.unlight_bubble(ui);
+        if press.trackpad.is_some() {
+            ui.update_style(self.body, |s| s.opacity = 1.0);
+        }
+        if press.popup.is_some() {
+            self.hide(ui, self.popup);
+        }
+    }
+
+    fn hide(&self, ui: &mut Ui, node: NodeId) {
+        if ui.style(node).display != Display::None {
+            ui.update_style(node, |s| s.display = Display::None);
+        }
+    }
+
+    /// The pressed letter, large over the finger (`feedback.preview`): its
+    /// bubble made opaque, which is drawn without laying anything out.
+    fn preview(&self, ui: &mut Ui, index: usize) {
+        self.unlight_bubble(ui);
+        let bubble = self.board.borrow().keys.get(index).and_then(|k| k.bubble);
+        if let Some((b, _)) = bubble {
+            ui.update_style(b, |s| s.opacity = 1.0);
+            self.board.borrow_mut().lit_bubble = Some(b);
+        }
+    }
+
+    fn unlight_bubble(&self, ui: &mut Ui) {
+        let lit = self.board.borrow_mut().lit_bubble.take();
+        if let Some(b) = lit.filter(|&b| ui.contains(b)) {
+            ui.update_style(b, |s| s.opacity = 0.0);
+        }
+    }
+
+    /// Key `index` held: its alternates in a row over it, the first chosen,
+    /// in the popup kept for them.
+    fn offer_alternates(&self, ui: &mut Ui, index: usize) {
+        let space = self
+            .board
+            .borrow()
+            .keys
+            .get(index)
+            .is_some_and(|k| k.key.action == KeyAction::Text(" ".into()));
+        if space {
+            self.start_trackpad(ui, index);
+            return;
+        }
+        let (face, options, theme) = {
+            let b = self.board.borrow();
+            if !b
+                .press
+                .as_ref()
+                .is_some_and(|p| p.index == index && p.popup.is_none())
+            {
+                return;
+            }
+            let Some(k) = b.keys.get(index) else { return };
+            let up = b.page == Page::Letters && b.shift != Shift::Off;
+            let mut options: Vec<String> = if up {
+                k.key.alternates.iter().map(|a| upper(a)).collect()
+            } else {
+                k.key.alternates.clone()
+            };
+            options.truncate(MOST_ALTERNATES);
+            if options.is_empty() || !ui.contains(k.face) {
+                return;
+            }
+            (k.face, options, b.active.theme)
+        };
+        self.unlight_bubble(ui);
+        let appearance = ui.appearance_of(self.panel);
+        let (r, panel) = (ui.rect(face), ui.rect(self.panel));
+        let w = r.width.max(28.0);
+        let total = w * options.len() as f32 + 12.0;
+        let left = (r.x - panel.x - 6.0).min(panel.width - total).max(0.0);
+        ui.update_style(self.popup, |s| {
+            s.display = Display::Flex;
+            s.left = Length::Px(left);
+            s.top = Length::Px(r.y - panel.y - r.height - 18.0);
+            s.border_radius = Length::Px(theme.key_radius + 2.0);
+            s.box_shadow = vec![BoxShadow {
+                x: 0.0,
+                y: 2.0,
+                blur: 10.0,
+                spread: 0.0,
+                color: [0.0, 0.0, 0.0, 0.3],
+            }];
+        });
+        paint(ui, self.popup, "background", theme.key, appearance);
+        paint(ui, self.popup, "color", theme.key_text, appearance);
+        for (i, &(o, text)) in self.options.iter().enumerate() {
+            match options.get(i) {
+                Some(t) => {
+                    ui.update_style(o, |s| {
+                        s.display = Display::Flex;
+                        s.width = Length::Px(w);
+                        s.height = Length::Px(r.height + 6.0);
+                        s.border_radius = Length::Px(theme.key_radius);
+                        s.font_size = theme.letter_size;
+                    });
+                    if text_of(ui, text) != *t {
+                        ui.set_text(text, t.clone());
+                    }
+                }
+                None => self.hide(ui, o),
+            }
+        }
+        let all: Vec<usize> = (0..options.len()).collect();
+        if let Some(p) = self.board.borrow_mut().press.as_mut() {
+            p.popup = Some(Popup { options, chosen: 0 });
+        }
+        self.light_options(ui, &all, 0);
+        // Felt, not heard, as the alternates come up.
+        let key = self.board.borrow().keys.get(index).map(|k| k.key.clone());
+        if let Some(key) = key {
+            self.emit(&key, false, true, true);
+        }
+    }
+
+    /// The space bar held: the keys fade, and sliding moves the caret.
+    fn start_trackpad(&self, ui: &mut Ui, index: usize) {
+        let key = {
+            let mut b = self.board.borrow_mut();
+            let Some(press) = b.press.as_mut().filter(|p| p.index == index) else {
+                return;
+            };
+            press.trackpad = Some(press.at);
+            b.keys.get(index).map(|k| k.key.clone())
+        };
+        self.unlight_bubble(ui);
+        // Opacity alone: drawn, not laid out.
+        ui.update_style(self.body, |s| s.opacity = 0.35);
+        if let Some(key) = key {
+            self.emit(&key, false, true, true);
+        }
+    }
+
+    /// The alternates `which` lit if chosen, plain if not.
+    fn light_options(&self, ui: &mut Ui, which: &[usize], chosen: usize) {
+        let appearance = ui.appearance_of(self.panel);
+        let theme = self.board.borrow().active.theme;
+        for &i in which {
+            let Some(&(n, _)) = self.options.get(i) else {
+                continue;
+            };
+            if i == chosen {
+                paint(ui, n, "background", theme.accent_key, appearance);
+                paint(ui, n, "color", theme.accent_text, appearance);
+            } else {
+                ui.clear_token_style(n, "background");
+                ui.update_style(n, |s| s.background = None);
+                paint(ui, n, "color", theme.key_text, appearance);
+            }
+        }
+    }
+
+    /// A floating keyboard dragged by its handle, kept in the window.
+    fn drag(&self, ui: &mut Ui, e: &Event, cx: &mut EventCx) {
+        match *e {
+            Event::PointerDown { x, y, .. } => {
+                cx.prevent_default();
+                cx.capture_pointer();
+                self.board.borrow_mut().drag = Some((x, y));
+            }
+            Event::PointerMove { x, y } => {
+                let Some((px, py)) = self.board.borrow().drag else {
+                    return;
+                };
+                let (sheet, panel, root) =
+                    (ui.rect(self.sheet), ui.rect(self.panel), ui.rect(ui.root()));
+                let (ox, oy) = self.board.borrow().offset;
+                // Where it would be undragged, and how far it may go.
+                let (x0, y0) = (sheet.x - ox, sheet.y - oy);
+                let nx =
+                    (ox + x - px).clamp(panel.x - x0, panel.x + panel.width - sheet.width - x0);
+                let ny =
+                    (oy + y - py).clamp(root.y - y0, panel.y + panel.height - sheet.height - y0);
+                {
+                    let mut b = self.board.borrow_mut();
+                    b.offset = (nx, ny);
+                    b.drag = Some((x, y));
+                }
+                ui.update_style(self.sheet, |s| {
+                    s.left = Length::Px(nx);
+                    s.top = Length::Px(ny);
+                });
+            }
+            Event::PointerUp { .. } | Event::PointerCancel => {
+                cx.release_pointer();
+                self.board.borrow_mut().drag = None;
+            }
+            _ => {}
+        }
     }
 
     /// Turns it on or off. On, it shows while a text control has focus.
@@ -554,11 +2168,238 @@ impl VirtualKeyboard {
 
     /// The layout showing.
     pub fn layout(&self) -> KeyboardLayout {
+        self.board.borrow().layout()
+    }
+
+    /// The keyboard every field without one of its own gets, wherever it
+    /// runs (the device no longer chosen by the window).
+    pub fn set_config(&self, config: KeyboardConfig) {
+        let mut b = self.board.borrow_mut();
+        b.default = config;
+        b.device = None;
+        b.refresh = true;
+    }
+
+    /// The keyboards for `device` from now on ([`Device::Auto`]: by the
+    /// window's size).
+    pub fn set_device(&self, device: Device) {
+        let mut b = self.board.borrow_mut();
+        b.device = Some(device);
+        b.refresh = true;
+    }
+
+    /// The device the keyboard is shaped for now (`None` before it first
+    /// shows, or when [`set_config`](Self::set_config) gave one config for
+    /// all).
+    pub fn device(&self) -> Option<Device> {
         let b = self.board.borrow();
-        b.layouts
-            .get(b.current)
-            .cloned()
-            .unwrap_or_else(KeyboardLayout::english)
+        b.device.map(|_| b.resolved)
+    }
+
+    /// The keyboard showing now (or that would, for a field without its
+    /// own).
+    pub fn config(&self) -> KeyboardConfig {
+        self.board.borrow().active.clone()
+    }
+
+    /// Changes every keyboard it shows — for any device, any field's type —
+    /// with `f`: sound off, a theme, a row of shortcuts, everywhere.
+    ///
+    /// ```
+    /// # use threers_ui::{input::Input, Ui};
+    /// # use threers_ui::virtual_keyboard::{KeyboardTheme, VirtualKeyboard};
+    /// # let (mut ui, mut input) = (Ui::new(), Input::<()>::new());
+    /// let kb = VirtualKeyboard::new(&mut ui, &mut input);
+    /// kb.customize(|c| {
+    ///     c.feedback.sound = false;
+    ///     c.theme = KeyboardTheme::system();
+    /// });
+    /// ```
+    pub fn customize(&self, f: impl Fn(&mut KeyboardConfig) + 'static) {
+        let mut b = self.board.borrow_mut();
+        b.tweaks.push(Rc::new(f));
+        b.refresh = true;
+    }
+
+    /// The keyboard `field` gets while it has focus (`None`: the default):
+    /// a config of your own. For the usual kinds of field,
+    /// [`set_type_for`](Self::set_type_for) is shorter and follows the
+    /// device.
+    pub fn set_config_for(&self, field: NodeId, config: Option<KeyboardConfig>) {
+        self.set_field(field, config.map(|c| FieldKeyboard::Config(Box::new(c))));
+    }
+
+    /// What `field` takes — an email address, a PIN, a price — and so the
+    /// keyboard it gets, shaped for the device.
+    ///
+    /// ```
+    /// # use threers_ui::{input::Input, Ui};
+    /// # use threers_ui::virtual_keyboard::{KeyboardType, VirtualKeyboard};
+    /// # let (mut ui, mut input) = (Ui::new(), Input::<()>::new());
+    /// # let (email, pin) = (ui.add_box(ui.root(), Default::default()), ui.add_box(ui.root(), Default::default()));
+    /// let kb = VirtualKeyboard::new(&mut ui, &mut input);
+    /// kb.set_type_for(email, KeyboardType::Email);
+    /// kb.set_type_for(pin, KeyboardType::NumberPad);
+    /// ```
+    pub fn set_type_for(&self, field: NodeId, kind: KeyboardType) {
+        self.set_field(field, Some(FieldKeyboard::Type(kind)));
+    }
+
+    fn set_field(&self, field: NodeId, keyboard: Option<FieldKeyboard>) {
+        let mut b = self.board.borrow_mut();
+        b.per_field.retain(|(n, _)| *n != field);
+        if let Some(k) = keyboard {
+            b.per_field.push((field, k));
+        }
+        // Taken up on the next dispatch, if it has focus.
+        b.refresh = true;
+    }
+
+    /// Calls `f` for every key pressed (and Backspace again while held):
+    /// the click to play, the tap to give. For your own audio or haptics;
+    /// [`play_clicks`](Self::play_clicks) plays the clicks itself.
+    ///
+    /// ```
+    /// # use threers_ui::{input::Input, Ui};
+    /// # use threers_ui::virtual_keyboard::{Haptic, VirtualKeyboard};
+    /// # let (mut ui, mut input) = (Ui::new(), Input::<()>::new());
+    /// let kb = VirtualKeyboard::new(&mut ui, &mut input);
+    /// kb.on_feedback(|press| {
+    ///     if let Some(sound) = press.sound {
+    ///         let _samples = sound.samples(48_000); // to your mixer
+    ///     }
+    ///     if press.haptic == Some(Haptic::Light) { /* a light tap */ }
+    /// });
+    /// ```
+    pub fn on_feedback(&self, f: impl Fn(&KeyPress) + 'static) {
+        self.board.borrow_mut().feedback.push(Rc::new(f));
+    }
+
+    /// Plays the key clicks on the default audio device (the `sound`
+    /// feature), as [`KeyFeedback::sound`] and its volume say.
+    ///
+    /// # Errors
+    ///
+    /// If there is no device, or it will not open.
+    #[cfg(all(feature = "sound", not(target_arch = "wasm32")))]
+    pub fn play_clicks(&self) -> Result<(), String> {
+        let player = Rc::new(ClickPlayer::open()?);
+        self.on_feedback(move |p| {
+            if let Some(s) = p.sound {
+                player.play(s, p.volume);
+            }
+        });
+        Ok(())
+    }
+
+    /// Calls `f` with the id of an action key ([`Key::action`],
+    /// `{action:id:label}`) when it is pressed.
+    pub fn on_action(&self, f: impl Fn(&str, &mut Ui) + 'static) {
+        self.board.borrow_mut().actions.push(Rc::new(f));
+    }
+
+    /// How to read the text before the caret of the focused field from the
+    /// input's state: sentences then start with a capital
+    /// ([`KeyboardConfig::auto_capitalize`]), the period shortcut knows the
+    /// field's text, and [`set_suggestions`](Self::set_suggestions) has a
+    /// word to suggest for. `S` is the state the [`Input`] dispatches to.
+    ///
+    /// ```
+    /// # use threers_ui::{input::Input, TextField, Ui};
+    /// # use threers_ui::virtual_keyboard::VirtualKeyboard;
+    /// # let (mut ui, mut input) = (Ui::new(), Input::<TextField>::new());
+    /// let kb = VirtualKeyboard::new(&mut ui, &mut input);
+    /// kb.set_context(|field: &TextField, _node| Some(field.before_caret()));
+    /// ```
+    pub fn set_context<S: 'static>(&self, f: impl Fn(&S, NodeId) -> Option<String> + 'static) {
+        let reader: ContextReader<S> = Box::new(f);
+        let mut b = self.board.borrow_mut();
+        b.context = Some(Rc::new(reader));
+        b.before = None;
+    }
+
+    /// Words to offer for the one being typed, up to three, shown in the
+    /// bar over the keys; a tap puts one in its place with a space. Needs
+    /// [`set_context`](Self::set_context) to know the word.
+    ///
+    /// ```
+    /// # use threers_ui::{input::Input, TextField, Ui};
+    /// # use threers_ui::virtual_keyboard::VirtualKeyboard;
+    /// # let (mut ui, mut input) = (Ui::new(), Input::<TextField>::new());
+    /// let words = ["hello", "help", "helmet"];
+    /// let kb = VirtualKeyboard::new(&mut ui, &mut input);
+    /// kb.set_context(|f: &TextField, _| Some(f.before_caret()));
+    /// kb.set_suggestions(move |typed| {
+    ///     words.iter().filter(|w| w.starts_with(typed)).map(|w| w.to_string()).collect()
+    /// });
+    /// ```
+    pub fn set_suggestions(&self, f: impl Fn(&str) -> Vec<String> + 'static) {
+        let mut b = self.board.borrow_mut();
+        b.suggest = Some(Rc::new(f));
+        b.before = None;
+        b.built = None;
+    }
+
+    #[cfg(feature = "swipe")]
+    /// Turns on gesture typing: a word drawn across the letter keys
+    /// without lifting is handed to `f` (the path, and the keys as drawn),
+    /// and the first word it gives is typed, the next ones offered in the
+    /// bar. `threers-swipe` makes such a decoder from a trained model.
+    ///
+    /// ```
+    /// use threers_ui::input::Input;
+    /// use threers_ui::virtual_keyboard::VirtualKeyboard;
+    /// use threers_ui::Ui;
+    ///
+    /// let mut ui = Ui::new();
+    /// let mut input: Input<()> = Input::new();
+    /// let kb = VirtualKeyboard::new(&mut ui, &mut input);
+    /// // Whatever was drawn, "hello"; a real decoder reads the path.
+    /// kb.set_swipe_decoder(|swipe| {
+    ///     assert!(swipe.keys.iter().any(|k| k.text == "h"));
+    ///     vec!["hello".into(), "jello".into()]
+    /// });
+    /// ```
+    pub fn set_swipe_decoder(&self, f: impl Fn(&Swipe) -> Vec<String> + 'static) {
+        self.board.borrow_mut().swipe = Some(Rc::new(f));
+    }
+
+    /// Turns gesture typing off: a slide types the key it ends on again.
+    #[cfg(feature = "swipe")]
+    pub fn clear_swipe_decoder(&self) {
+        self.board.borrow_mut().swipe = None;
+    }
+
+    /// Shows `page` (the letters, if the keyboard has no such page), as
+    /// its page keys do.
+    pub fn set_page(&self, page: Page) {
+        self.board.borrow_mut().page = page;
+    }
+
+    /// The page showing.
+    pub fn page(&self) -> Page {
+        self.board.borrow().page
+    }
+
+    /// The page showing, drawn as text ([`KeyboardConfig::sketch`]): to
+    /// see in a test or a log what is on it.
+    pub fn sketch(&self) -> String {
+        let b = self.board.borrow();
+        b.active.sketch(b.page, &b.layout(), b.layouts.len())
+    }
+
+    /// Moves it, over what its config says, until set again (`None`: back
+    /// to the config's), as its one-handed and dock keys do.
+    pub fn set_placement(&self, placement: Option<Placement>) {
+        let mut b = self.board.borrow_mut();
+        b.placement = placement;
+        b.offset = (0.0, 0.0);
+        b.generation += 1;
+    }
+
+    /// Where it sits now.
+    pub fn placement(&self) -> Placement {
+        self.board.borrow().placement()
     }
 
     /// Whether it is showing now.
@@ -569,6 +2410,11 @@ impl VirtualKeyboard {
     /// Its panel (to measure, or keep content clear of).
     pub fn panel(&self) -> NodeId {
         self.panel
+    }
+
+    /// The keyboard itself, inside the panel (where it is drawn).
+    pub fn sheet(&self) -> NodeId {
+        self.sheet
     }
 
     /// Gives `field` (a text box, text area or search box, positioned) a

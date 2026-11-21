@@ -1,0 +1,22 @@
+# A kiosk's keyboard: centred at 640 pixels, the UI's own colours, no
+# clicks, a number row on top and arrows under the keys.
+# Render it, and again on every save:
+#   cargo run --features ui --example keyboard_designer -- examples/keyboards/kiosk.kbd --watch
+
+base: iphone
+theme: system
+placement: centered 640
+return: go
+sound: off
+
+[top]
+1|! 2|@ 3|# 4|$ 5|% 6|^ 7|& 8|* 9|( 0|)
+
+[letters]
+{row:0}
+{row:1}
+{shift@1.3} {gap@0.2} {row:2} {gap@0.2} {backspace@1.3}
+{123@1.25} {space} .com@1.5 {return@2.5}
+
+[bottom]
+{key:ArrowLeft:←} {key:ArrowRight:→} {gap@4} {action:help:?} {dismiss}

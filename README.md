@@ -173,7 +173,8 @@ Start with [getting started](docs/getting-started.md). Every guide is in
 [soft bodies](docs/softbody.md) · [Gaussian splats](docs/splats.md) ·
 [time smear](docs/time-smear.md) ·
 [animation](docs/animation.md) · [camera animation](docs/camera-animation.md) ·
-[scroll video](docs/scroll-video.md) · [parity with three.js](docs/parity.md) ·
+[scroll video](docs/scroll-video.md) · [on-screen keyboard](docs/virtual-keyboard.md) ·
+[parity with three.js](docs/parity.md) ·
 [releasing](docs/releasing.md).
 
 ## License

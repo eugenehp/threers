@@ -4055,10 +4055,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "threers-swipe"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "safetensors",
+ "serde",
+ "serde_json",
+ "threers-ui",
+]
+
+[[package]]
 name = "threers-ui"
 version = "0.1.0"
 dependencies = [
  "accesskit",
+ "cpal",
  "js-sys",
  "serde_json",
  "threers-captions",

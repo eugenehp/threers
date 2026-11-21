@@ -266,7 +266,9 @@ impl Ui {
         self.step_solids();
         self.step_beams();
         self.plan_effects();
+        let flickers = self.step_flickers();
         self.animations.iter().any(|r| !self.idles(r))
+            || flickers
             || bars
             || !self.leaving.is_empty()
             || sprung
@@ -426,6 +428,7 @@ impl Ui {
             || !self.leaving.is_empty()
             || self.nodes[0].dirty
             || self.effects_animate()
+            || self.flickers_animate()
             || self.motions_animate()
             || self.env.repaint.get()
             || self.jobs_pending()

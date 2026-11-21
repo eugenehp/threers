@@ -1,0 +1,40 @@
+[package]
+name = "threers-swipe"
+version.workspace = true
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+authors = ["Eugene Hauptmann"]
+repository = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-swipe"
+readme = "README.md"
+description = "Gesture (swipe) typing for the threers on-screen keyboard: a layout-agnostic CTC model trained on synthetic and recorded swipes, and a lexicon beam decoder"
+keywords = ["swipe", "gesture-typing", "keyboard", "ctc", "wasm"]
+categories = ["text-processing", "science", "wasm"]
+
+[lib]
+bench = false
+
+[features]
+default = ["parallel"]
+# Gradients of a batch on every core (rayon). Off, training runs on one
+# thread; decoding never needs it.
+parallel = ["dep:rayon"]
+# `keyboard::SwipeTyping`: a trained model as the on-screen keyboard's
+# swipe decoder (turns on threers-ui's `swipe`). Training and decoding do
+# not need it.
+keyboard = ["threers-ui/swipe"]
+
+[dependencies]
+threers-ui = { path = "../threers-ui", version = "0.1.0", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+safetensors = "0.7"
+rayon = { version = "1", optional = true }
+
+[[bin]]
+name = "threers-swipe"
+path = "src/bin/threers_swipe.rs"
+
+[[example]]
+name = "swipe_train_synth"
