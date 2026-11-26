@@ -64,11 +64,33 @@ pub struct Control {
     /// own (`Input::set_focused_text`).
     pub editable: bool,
     /// Its accessible value: a text control's text, for the native field
-    /// over it to start from (and to follow when the UI changes it).
+    /// over it to start from (and to follow when the UI changes it). A
+    /// [`secret`](Self::secret) one's is never given: `None` while there is
+    /// one, empty when there is none (and the native field is emptied).
     pub value: Option<String>,
+    /// It holds a password: the native field over it is a secure one.
+    pub secret: bool,
     /// Slid ([`Role::Slider`]): a native view over it shows the look's
     /// highlight and passes the drag on to the UI.
     pub slider: bool,
+    /// A slider's thumb, for a shell that shows a solid one: its box.
+    pub thumb: Option<Rect>,
+    /// What it is painted on, see-through where it has nothing of its own:
+    /// for a shell that shows it raised.
+    pub fill: Rgba,
+    /// What of it such a shell raises, and its corners: a switch's track, a
+    /// box to tick, a radio's ring; of any other, all of it.
+    pub solid: Rect,
+    pub solid_radius: f32,
+    /// A slider's rail, for a shell that shows it solid: the thin bars it
+    /// is drawn with (its track, then what of it is filled), each with its
+    /// colour. Given with one of a rail's controls only (a range's two
+    /// thumbs share theirs).
+    pub rails: Vec<(Rect, Rgba)>,
+    /// A knob's turn ([`pickers::knob`](crate::pickers::knob)): radians
+    /// right of up, for a shell that shows a solid one. A slider that is
+    /// itself round.
+    pub dial: Option<f32>,
     /// The UI's accent: the highlight's colour, as its own hover's.
     pub tint: Rgba,
 }
@@ -102,7 +124,19 @@ pub fn pressable(role: Role) -> bool {
             | Role::MenuItem
             | Role::Option
             | Role::ComboBox
+            | Role::TreeItem(_)
     )
+}
+
+/// Whether `id`, of a role that only sometimes is, is something to press: a
+/// table's heading that sorts it, one of its rows.
+fn pressed_in_a_table(ui: &Ui, id: NodeId, role: Role) -> bool {
+    match role {
+        Role::ColumnHeader => ui.style(id).cursor == crate::Cursor::Pointer,
+        // (a heading row has no place among the rows)
+        Role::Row => ui.semantics(id).is_some_and(|s| s.row_index.is_some()),
+        _ => false,
+    }
 }
 
 /// Whether a role is typed into: a native text field stands in for it.
@@ -116,8 +150,9 @@ pub fn editable(role: Role) -> bool {
 pub fn controls(ui: &Ui) -> Vec<Control> {
     let mut seen: HashMap<(Role, String), u32> = HashMap::new();
     let mut out = vec![];
+    let mut railed = std::collections::HashSet::new();
     for a in ui.accessibility_tree() {
-        if !(pressable(a.role) || editable(a.role) || a.role == Role::Slider)
+        if !(pressable(a.role) || editable(a.role) || a.role == Role::Slider || pressed_in_a_table(ui, a.id, a.role))
             || a.bounds.width <= 0.0
             || a.bounds.height <= 0.0
         {
@@ -144,6 +179,9 @@ pub fn controls(ui: &Ui) -> Vec<Control> {
             .resolve(Some(short))
             .unwrap_or(0.0)
             .clamp(0.0, short / 2.0);
+        let mark = matches!(a.role, Role::Switch | Role::Checkbox | Role::Radio)
+            .then(|| mark(ui, a.id))
+            .flatten();
         out.push(Control {
             key: h.finish(),
             node: a.id,
@@ -154,13 +192,119 @@ pub fn controls(ui: &Ui) -> Vec<Control> {
             checked: a.checked,
             selected: a.selected,
             disabled: a.disabled,
-            editable: editable(a.role),
-            value: a.value,
+            // (none where the UI has its own keyboard on: pressed, it has focus
+            // and that keyboard comes up)
+            editable: editable(a.role) && !own_keyboard(ui),
+            // (its bullets are not its text: edited, they would replace it)
+            value: a.value.filter(|v| !a.secret || v.is_empty()),
+            secret: a.secret,
             slider: a.role == Role::Slider,
+            dial: (a.role == Role::Slider).then(|| dial(ui, a.id)).flatten(),
+            thumb: (a.role == Role::Slider && dial(ui, a.id).is_none()).then(|| thumb(ui, a.id)).flatten(),
+            fill: ui.style(mark.unwrap_or(a.id)).background.unwrap_or([0.0; 4]),
+            solid: mark.map_or(rect, |m| ui.rect(m)),
+            solid_radius: mark.map_or(radius, |m| corner(ui, m)),
+            rails: if a.role == Role::Slider { rails(ui, a.id, &mut railed) } else { vec![] },
             tint: ui.token(Token::Accent),
         });
     }
     out
+}
+
+/// A slider's rail: the thin painted bars in it, or round it (a range's
+/// thumb is in its rail's box), not given before (in `seen`). Widest first.
+fn rails(ui: &Ui, id: NodeId, seen: &mut std::collections::HashSet<NodeId>) -> Vec<(Rect, Rgba)> {
+    fn bars(ui: &Ui, id: NodeId, out: &mut Vec<NodeId>) {
+        let (r, s) = (ui.rect(id), ui.style(id));
+        if s.background.is_some_and(|c| c[3] > 0.3) && (1.5..=10.0).contains(&r.height) && r.width >= 3.0 * r.height {
+            out.push(id);
+        }
+        for &c in ui.children(id) {
+            bars(ui, c, out);
+        }
+    }
+    let mut at = Some(id);
+    for _ in 0..4 {
+        let Some(n) = at else { break };
+        let mut found = vec![];
+        bars(ui, n, &mut found);
+        if !found.is_empty() {
+            found.retain(|b| seen.insert(*b));
+            let mut out: Vec<(Rect, Rgba)> = found.iter().map(|&b| (ui.rect(b), ui.style(b).background.unwrap_or([0.0; 4]))).collect();
+            out.sort_by(|a, b| b.0.width.total_cmp(&a.0.width));
+            return out;
+        }
+        at = ui.parent(n);
+    }
+    vec![]
+}
+
+/// A knob's turn: of a slider that is round (as wide as tall, its corners
+/// half that), where its value has it.
+fn dial(ui: &Ui, id: NodeId) -> Option<f32> {
+    let r = ui.rect(id);
+    let round = (r.width - r.height).abs() < 1.0
+        && r.width >= 24.0
+        && ui.style(id).border_radius.resolve(Some(r.width)).unwrap_or(0.0) >= r.width * 0.45;
+    let range = ui.semantics(id)?.range?;
+    round.then(|| {
+        let t = ((range.now - range.min) / (range.max - range.min).max(f32::EPSILON)).clamp(0.0, 1.0);
+        (t - 0.5) * crate::pickers::KNOB_SWEEP.to_radians()
+    })
+}
+
+/// Whether `ui` types with its own keyboard now
+/// ([`VirtualKeyboard`](crate::virtual_keyboard::VirtualKeyboard)).
+fn own_keyboard(ui: &Ui) -> bool {
+    ui.environment::<crate::virtual_keyboard::OwnKeyboard>(ui.root()).is_some_and(|k| k.on())
+}
+
+/// `id`'s corners' radius.
+fn corner(ui: &Ui, id: NodeId) -> f32 {
+    let r = ui.rect(id);
+    let short = r.width.min(r.height);
+    let radius = ui.style(id).border_radius.resolve(Some(short));
+    radius.unwrap_or(0.0).clamp(0.0, short / 2.0)
+}
+
+/// What marks a row that is on or off (a switch's track, a box to tick, a
+/// ring): the first small painted or bordered box in it, if the row is not
+/// itself painted.
+fn mark(ui: &Ui, id: NodeId) -> Option<NodeId> {
+    if ui.style(id).background.is_some_and(|c| c[3] > 0.05) {
+        return None;
+    }
+    fn find(ui: &Ui, id: NodeId) -> Option<NodeId> {
+        let (r, s) = (ui.rect(id), ui.style(id));
+        let painted = s.background.is_some_and(|c| c[3] > 0.05) || (s.border.horizontal() > 0.0 && s.border_color[3] > 0.05);
+        if painted && (12.0..=64.0).contains(&r.width) && (12.0..=36.0).contains(&r.height) {
+            return Some(id);
+        }
+        ui.children(id).iter().find_map(|&c| find(ui, c))
+    }
+    let row = ui.rect(id);
+    let found = ui.children(id).iter().find_map(|&c| find(ui, c))?;
+    // (not what is most of it: a chip's own box)
+    (ui.rect(found).width < row.width * 0.75).then_some(found)
+}
+
+/// A slider's thumb: the round box in `id`, or the one `id` is the target
+/// of.
+fn thumb(ui: &Ui, id: NodeId) -> Option<Rect> {
+    fn round(ui: &Ui, id: NodeId) -> Option<Rect> {
+        let r = ui.rect(id);
+        let s = ui.style(id);
+        ((r.width - r.height).abs() < 1.0
+            && (10.0..=32.0).contains(&r.width)
+            && s.background.is_some_and(|c| c[3] > 0.5)
+            && s.border_radius.resolve(Some(r.width)).unwrap_or(0.0) >= r.width * 0.45)
+            .then_some(r)
+    }
+    // the last painted: over its rail
+    fn within(ui: &Ui, id: NodeId) -> Option<Rect> {
+        round(ui, id).or_else(|| ui.children(id).iter().rev().find_map(|&c| within(ui, c)))
+    }
+    within(ui, id).or_else(|| round(ui, ui.parent(id)?))
 }
 
 /// `rect` (node `id`'s) cut to what its clipping and scrolling ancestors
@@ -214,10 +358,17 @@ pub fn version(controls: &[Control]) -> u64 {
             v.to_bits().hash(&mut h);
         }
         (
-            c.checked, c.selected, c.disabled, c.editable, &c.value, c.slider,
+            c.checked, c.selected, c.disabled, c.editable, &c.value, c.slider, c.secret,
         )
             .hash(&mut h);
         c.tint.map(f32::to_bits).hash(&mut h);
+        c.fill.map(f32::to_bits).hash(&mut h);
+        [c.solid.x, c.solid.y, c.solid.width, c.solid.height, c.solid_radius].map(f32::to_bits).hash(&mut h);
+        c.thumb.map(|r| [r.x, r.y, r.width, r.height].map(f32::to_bits)).hash(&mut h);
+        c.dial.map(f32::to_bits).hash(&mut h);
+        for (r, k) in &c.rails {
+            [r.x, r.y, r.width, r.height, k[0], k[1], k[2], k[3]].map(f32::to_bits).hash(&mut h);
+        }
     }
     h.finish()
 }
@@ -228,8 +379,11 @@ pub fn find(controls: &[Control], key: u64) -> Option<&Control> {
 }
 
 /// `controls` as JSON, for a shell in another language: an array of
-/// `{"key","role","label","x","y","w","h","r","on","toggle","disabled","edit","value","slide","tint"}`
-/// (`value` a string, or null; `tint` `[r, g, b]`, 0–1, sRGB).
+/// `{"key","role","label","x","y","w","h","r","on","toggle","disabled","edit","secret","value","slide","tint","fill","thumb","solid","rails","dial"}`
+/// (`value` a string, or null; `tint` `[r, g, b]` and `fill` `[r, g, b, a]`,
+/// 0–1, sRGB; `thumb` a slider's, `[x, y, w, h]`, or null; `solid` `[x, y, w, h, radius]`;
+/// `rails` a slider's bars, `[x, y, w, h, r, g, b, a]` each, track first;
+/// `dial` a knob's turn, radians right of up, or null).
 /// The key is a string (a 64-bit number does not survive a double);
 /// `toggle` says whether it has an on and an off, `edit` whether it is
 /// typed into.
@@ -241,7 +395,7 @@ pub fn to_json(controls: &[Control]) -> String {
         }
         let r = c.rect;
         s.push_str(&format!(
-            "{{\"key\":\"{}\",\"role\":\"{}\",\"label\":{},\"x\":{},\"y\":{},\"w\":{},\"h\":{},\"r\":{},\"on\":{},\"toggle\":{},\"disabled\":{},\"edit\":{},\"value\":{},\"slide\":{},\"tint\":[{},{},{}]}}",
+            "{{\"key\":\"{}\",\"role\":\"{}\",\"label\":{},\"x\":{},\"y\":{},\"w\":{},\"h\":{},\"r\":{},\"on\":{},\"toggle\":{},\"disabled\":{},\"edit\":{},\"secret\":{},\"value\":{},\"slide\":{},\"tint\":[{},{},{}],\"fill\":[{},{},{},{}],\"thumb\":{},\"solid\":[{},{},{},{},{}],\"rails\":[{}],\"dial\":{}}}",
             c.key,
             c.role.aria(),
             json_string(&c.label),
@@ -254,11 +408,24 @@ pub fn to_json(controls: &[Control]) -> String {
             c.checked.is_some() || c.selected.is_some(),
             c.disabled,
             c.editable,
+            c.secret,
             c.value.as_deref().map_or("null".to_owned(), json_string),
             c.slider,
             c.tint[0],
             c.tint[1],
-            c.tint[2]
+            c.tint[2],
+            c.fill[0],
+            c.fill[1],
+            c.fill[2],
+            c.fill[3],
+            c.thumb.map_or("null".to_owned(), |t| format!("[{},{},{},{}]", t.x, t.y, t.width, t.height)),
+            c.solid.x,
+            c.solid.y,
+            c.solid.width,
+            c.solid.height,
+            c.solid_radius,
+            c.rails.iter().map(|(r, k)| format!("[{},{},{},{},{},{},{},{}]", r.x, r.y, r.width, r.height, k[0], k[1], k[2], k[3])).collect::<Vec<_>>().join(","),
+            c.dial.map_or("null".to_owned(), |d| d.to_string()),
         ));
     }
     s.push(']');

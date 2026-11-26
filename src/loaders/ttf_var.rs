@@ -618,7 +618,7 @@ fn iup_axis(p: f32, a: f32, b: f32, da: f32, db: f32) -> f32 {
 pub(crate) struct ItemVariationStore<'a> {
     bytes: &'a [u8],
     off: usize,
-    scalars: Vec<f32>,
+    scalars: std::borrow::Cow<'a, [f32]>,
 }
 
 impl<'a> ItemVariationStore<'a> {
@@ -647,8 +647,19 @@ impl<'a> ItemVariationStore<'a> {
         Some(Self {
             bytes,
             off,
-            scalars,
+            scalars: scalars.into(),
         })
+    }
+
+    /// The scalars [`new`](Self::new) computed, for
+    /// [`with_scalars`](Self::with_scalars).
+    pub(crate) fn into_scalars(self) -> Vec<f32> {
+        self.scalars.into_owned()
+    }
+
+    /// The store at `off` again, its scalars already computed.
+    pub(crate) fn with_scalars(bytes: &'a [u8], off: usize, scalars: &'a [f32]) -> Self {
+        Self { bytes, off, scalars: scalars.into() }
     }
 
     /// The region scalars of subtable `outer`, in that subtable's own region order.

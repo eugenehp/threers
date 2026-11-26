@@ -38,7 +38,7 @@ pub enum TtfError {
 
 pub struct TtfFont {
     pub units_per_em: u16,
-    pub glyphs: Vec<TtfGlyph>,
+    pub glyphs: TtfGlyphs,
     pub cmap: std::collections::HashMap<u32, u16>,
     /// `hhea.ascender` — height above the baseline, in font units.
     pub ascender: i16,
@@ -104,6 +104,78 @@ pub struct TtfFont {
 pub struct TtfGlyph {
     pub shape: Shape,
     pub advance_width: u16,
+}
+
+/// A font's glyphs, by id: all read, or
+/// ([`TtfFont::parse_variation_lazy`]) each when it is first asked for.
+pub struct TtfGlyphs {
+    cells: Vec<std::sync::OnceLock<Box<TtfGlyph>>>,
+    unread: Option<UnreadGlyphs>,
+}
+
+impl TtfGlyphs {
+    /// Glyph `gid`; `None` past the last.
+    pub fn get(&self, gid: usize) -> Option<&TtfGlyph> {
+        let cell = self.cells.get(gid)?;
+        Some(cell.get_or_init(|| {
+            Box::new(match &self.unread {
+                Some(u) => u.tables.read(&u.bytes, u.gvar(&u.bytes).as_ref(), gid),
+                None => TtfGlyph { shape: Shape::new(), advance_width: 0 },
+            })
+        }))
+    }
+
+    pub fn len(&self) -> usize {
+        self.cells.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
+
+    /// Every glyph, by id.
+    pub fn iter(&self) -> impl Iterator<Item = &TtfGlyph> {
+        (0..self.len()).filter_map(|g| self.get(g))
+    }
+}
+
+impl From<Vec<TtfGlyph>> for TtfGlyphs {
+    fn from(all: Vec<TtfGlyph>) -> Self {
+        let cells = all.into_iter().map(|g| Box::new(g).into()).collect();
+        Self { cells, unread: None }
+    }
+}
+
+impl std::ops::Index<usize> for TtfGlyphs {
+    type Output = TtfGlyph;
+    fn index(&self, gid: usize) -> &TtfGlyph {
+        self.get(gid).expect("a glyph id of this font")
+    }
+}
+
+/// What reading a glyph later needs.
+struct UnreadGlyphs {
+    bytes: std::sync::Arc<[u8]>,
+    tables: GlyfTables,
+    /// `gvar`'s offset and the location, for a font that is varied.
+    varied: Option<(usize, Vec<f32>)>,
+}
+
+impl UnreadGlyphs {
+    fn gvar<'a>(&self, bytes: &'a [u8]) -> Option<Gvar<'a>> {
+        let (off, coords) = self.varied.as_ref()?;
+        Gvar::new(bytes, *off, coords.clone())
+    }
+}
+
+/// Where a `glyf` font's outlines are, and their advances.
+struct GlyfTables {
+    loca: usize,
+    glyf: usize,
+    long: bool,
+    n_glyphs: usize,
+    advances: Vec<u16>,
+    hvar: Option<Vec<f32>>,
 }
 
 impl TtfFont {
@@ -216,6 +288,18 @@ impl TtfFont {
         Self::parse_face(bytes, 0, variation)
     }
 
+    /// [`parse_variation`](Self::parse_variation), each glyph and kerning
+    /// pair read when it is first asked for: an instance of a font of
+    /// thousands of glyphs then costs little more than the ones drawn. For
+    /// a font shown at many sizes, weights or both. (A `CFF` font's glyphs
+    /// are read now.)
+    pub fn parse_variation_lazy(
+        bytes: &std::sync::Arc<[u8]>,
+        variation: &[([u8; 4], f32)],
+    ) -> Result<Self, TtfError> {
+        Self::parse_kept(bytes, 0, variation, Some(bytes))
+    }
+
     /// One face of a font **collection** (`.ttc`), at a point of its design space.
     ///
     /// A collection is several table directories in one file sharing their tables, and it
@@ -229,6 +313,16 @@ impl TtfFont {
         bytes: &[u8],
         face: u32,
         variation: &[([u8; 4], f32)],
+    ) -> Result<Self, TtfError> {
+        Self::parse_kept(bytes, face, variation, None)
+    }
+
+    /// `kept`, the same bytes, when glyphs and kerning are to be read later.
+    fn parse_kept(
+        bytes: &[u8],
+        face: u32,
+        variation: &[([u8; 4], f32)],
+        kept: Option<&std::sync::Arc<[u8]>>,
     ) -> Result<Self, TtfError> {
         if bytes.len() < 12 {
             return Err(TtfError::Truncated);
@@ -320,33 +414,6 @@ impl TtfFont {
             _ => return Err(TtfError::UnsupportedFormat),
         };
 
-        let glyph_offset = |idx: usize| -> usize {
-            if index_to_loc_format == 0 {
-                let o =
-                    u16::from_be_bytes([bytes[loca_off + idx * 2], bytes[loca_off + idx * 2 + 1]])
-                        as usize;
-                glyf_off + o * 2
-            } else {
-                let o = u32::from_be_bytes([
-                    bytes[loca_off + idx * 4],
-                    bytes[loca_off + idx * 4 + 1],
-                    bytes[loca_off + idx * 4 + 2],
-                    bytes[loca_off + idx * 4 + 3],
-                ]) as usize;
-                glyf_off + o
-            }
-        };
-
-        // For components named by id: an id past the table reads as empty
-        // rather than past the end of `loca`.
-        let bounded_offset = |idx: usize| -> usize {
-            if idx <= n_glyphs {
-                glyph_offset(idx)
-            } else {
-                0
-            }
-        };
-
         // hmtx advance widths.
         let (hhea_off, _) = *tables.get(b"hhea").ok_or(TtfError::UnsupportedFormat)?;
         if hhea_off + 36 > bytes.len() {
@@ -399,7 +466,7 @@ impl TtfFont {
             .and_then(|h| super::ttf_var::hvar_advance_deltas(bytes, h, &coords, n_glyphs));
 
         // Parse glyph outlines.
-        let mut glyphs: Vec<TtfGlyph> = Vec::with_capacity(n_glyphs);
+        let glyphs: TtfGlyphs;
         // `CFF`: the outlines are little stack programs, drawn rather than read. The
         // advance still comes from `hmtx` — a charstring can carry its own width, and for
         // every font here the two agree, so `hmtx` stays the one answer and `HVAR` keeps
@@ -408,6 +475,7 @@ impl TtfFont {
             let cff = bytes
                 .get(cff_off..cff_off.saturating_add(cff_len))
                 .and_then(|d| super::cff::Cff::parse(d, units_per_em, &coords));
+            let mut all = Vec::with_capacity(n_glyphs);
             for g_idx in 0..n_glyphs {
                 let advance = advance_widths[g_idx] as f32;
                 let advance = match &hvar {
@@ -418,7 +486,7 @@ impl TtfFont {
                 let drawn = cff
                     .as_ref()
                     .and_then(|c| c.draw(super::cff::GlyphId(g_idx as u16), &mut sink));
-                glyphs.push(TtfGlyph {
+                all.push(TtfGlyph {
                     shape: Shape {
                         outline: if drawn.is_some() {
                             sink.path
@@ -430,79 +498,48 @@ impl TtfFont {
                     advance_width: advance.round().clamp(0.0, u16::MAX as f32) as u16,
                 });
             }
+            glyphs = all.into();
         } else {
-            // `g_idx` is a glyph id, passed to `glyph_offset` as well as indexing.
-            #[allow(clippy::needless_range_loop)]
-            for g_idx in 0..n_glyphs {
-                let off = glyph_offset(g_idx);
-                let next_off = glyph_offset(g_idx + 1);
-                if next_off <= off {
-                    // No outline (a space), but its advance still varies.
-                    let advance = advance_widths[g_idx] as f32;
-                    let varied = match (&hvar, &gvar) {
-                        (Some(h), _) => advance + h[g_idx],
-                        (None, Some(g)) => {
-                            let pp = [
-                                Vector2::new(0.0, 0.0),
-                                Vector2::new(advance, 0.0),
-                                Vector2::new(0.0, 0.0),
-                                Vector2::new(0.0, 0.0),
-                            ];
-                            g.deltas(g_idx, &pp, Some(&[]))
-                                .map_or(advance, |d| advance + d[1].x - d[0].x)
-                        }
-                        (None, None) => advance,
-                    };
-                    glyphs.push(TtfGlyph {
-                        shape: Shape::new(),
-                        advance_width: varied.round().clamp(0.0, u16::MAX as f32) as u16,
-                    });
-                    continue;
-                }
-                let advance = advance_widths[g_idx];
-                let Some((mut contours, phantom)) =
-                    glyph_contours(bytes, &bounded_offset, g_idx, 0, gvar.as_ref(), advance)
-                else {
-                    glyphs.push(TtfGlyph {
-                        shape: Shape::new(),
-                        advance_width: advance,
-                    });
-                    continue;
+            let tables = GlyfTables {
+                loca: loca_off,
+                glyf: glyf_off,
+                long: index_to_loc_format != 0,
+                n_glyphs,
+                advances: advance_widths,
+                hvar,
+            };
+            if let Some(bytes) = kept {
+                glyphs = TtfGlyphs {
+                    cells: (0..n_glyphs).map(|_| Default::default()).collect(),
+                    unread: Some(UnreadGlyphs {
+                        bytes: bytes.clone(),
+                        tables,
+                        varied: table(b"gvar").filter(|_| varied).map(|g| (g, coords.clone())),
+                    }),
                 };
-                // The phantom points carry the varied metrics: the origin (pp1)
-                // and the advance (pp2). The outline is moved so the origin stays
-                // at the pen.
-                let mut varied_advance = advance as f32;
-                if let Some(pp) = phantom {
-                    for c in &mut contours {
-                        for (v, _) in c.iter_mut() {
-                            v.x -= pp[0].x;
-                        }
-                    }
-                    varied_advance += pp[1].x - pp[0].x;
-                }
-                if let Some(h) = &hvar {
-                    varied_advance = advance as f32 + h[g_idx];
-                }
-                glyphs.push(TtfGlyph {
-                    shape: shape_from_contours(&contours),
-                    advance_width: varied_advance.round().clamp(0.0, u16::MAX as f32) as u16,
-                });
+            } else {
+                let all: Vec<TtfGlyph> = (0..n_glyphs)
+                    .map(|g| tables.read(bytes, gvar.as_ref(), g))
+                    .collect();
+                glyphs = all.into();
             }
         }
         let kerning = tables
             .get(b"kern")
             .and_then(|&(off, len)| parse_kern(bytes, off, len))
             .unwrap_or_default();
-        let store = if varied {
-            table(b"GDEF")
-                .and_then(|g| super::gpos::gdef_var_store(bytes, g))
-                .and_then(|s| ItemVariationStore::new(bytes, s, &coords))
-        } else {
-            None
-        };
+        let store_off = table(b"GDEF")
+            .filter(|_| varied)
+            .and_then(|g| super::gpos::gdef_var_store(bytes, g));
+        let store = store_off.and_then(|s| ItemVariationStore::new(bytes, s, &coords));
         let gpos_kerning = table(b"GPOS")
-            .and_then(|g| super::gpos::parse(bytes, g, store.as_ref()))
+            .and_then(|g| match kept {
+                Some(bytes) => {
+                    let store = store_off.zip(store.map(ItemVariationStore::into_scalars));
+                    super::gpos::parse_in_place(bytes, g, store)
+                }
+                None => super::gpos::parse(bytes, g, store.as_ref()),
+            })
             .unwrap_or_default();
         // Kept only if there is mark positioning to read them for.
         let mark_bytes = (|| {
@@ -776,6 +813,85 @@ fn parse_trak(b: &[u8], off: usize) -> Option<Vec<(f32, f32)>> {
             .collect();
     }
     None
+}
+
+impl GlyfTables {
+    /// Where glyph `idx`'s outline starts; an id past the table, or a table
+    /// past the file, reads as empty.
+    fn offset(&self, bytes: &[u8], idx: usize) -> usize {
+        if idx > self.n_glyphs {
+            return 0;
+        }
+        let at = |p: usize, n: usize| {
+            bytes
+                .get(p..p + n)
+                .map(|b| b.iter().fold(0usize, |v, &b| v << 8 | b as usize))
+        };
+        let o = if self.long {
+            at(self.loca + idx * 4, 4)
+        } else {
+            at(self.loca + idx * 2, 2).map(|o| o * 2)
+        };
+        o.map_or(0, |o| self.glyf + o)
+    }
+
+    /// Glyph `g_idx`, varied by `gvar`.
+    fn read(&self, bytes: &[u8], gvar: Option<&Gvar>, g_idx: usize) -> TtfGlyph {
+        let off = self.offset(bytes, g_idx);
+        let next_off = self.offset(bytes, g_idx + 1);
+        let advance = self.advances[g_idx];
+        let hvar = self.hvar.as_ref().map(|h| h[g_idx]);
+        let rounded = |v: f32| v.round().clamp(0.0, u16::MAX as f32) as u16;
+        if next_off <= off {
+            // No outline (a space), but its advance still varies.
+            let advance = advance as f32;
+            let varied = match (hvar, gvar) {
+                (Some(h), _) => advance + h,
+                (None, Some(g)) => {
+                    let pp = [
+                        Vector2::new(0.0, 0.0),
+                        Vector2::new(advance, 0.0),
+                        Vector2::new(0.0, 0.0),
+                        Vector2::new(0.0, 0.0),
+                    ];
+                    g.deltas(g_idx, &pp, Some(&[]))
+                        .map_or(advance, |d| advance + d[1].x - d[0].x)
+                }
+                (None, None) => advance,
+            };
+            return TtfGlyph {
+                shape: Shape::new(),
+                advance_width: rounded(varied),
+            };
+        }
+        let Some((mut contours, phantom)) =
+            glyph_contours(bytes, &|g| self.offset(bytes, g), g_idx, 0, gvar, advance)
+        else {
+            return TtfGlyph {
+                shape: Shape::new(),
+                advance_width: advance,
+            };
+        };
+        // The phantom points carry the varied metrics: the origin (pp1)
+        // and the advance (pp2). The outline is moved so the origin stays
+        // at the pen.
+        let mut varied_advance = advance as f32;
+        if let Some(pp) = phantom {
+            for c in &mut contours {
+                for (v, _) in c.iter_mut() {
+                    v.x -= pp[0].x;
+                }
+            }
+            varied_advance += pp[1].x - pp[0].x;
+        }
+        if let Some(h) = hvar {
+            varied_advance = advance as f32 + h;
+        }
+        TtfGlyph {
+            shape: shape_from_contours(&contours),
+            advance_width: rounded(varied_advance),
+        }
+    }
 }
 
 /// One contour's points in font units, each with whether it is on the curve.
@@ -1778,6 +1894,42 @@ mod cmap_tests {
             };
             let font = TtfFont::parse(&bytes).unwrap();
             assert_eq!(font.cmap.get(&('A' as u32)), Some(&36), "{name}");
+        }
+    }
+
+    /// Read later, a glyph, an advance and a kerning pair are what they are
+    /// read at once; and only those asked for are read.
+    #[test]
+    fn glyphs_read_later_are_the_same() {
+        for (path, at) in [
+            ("src/openscad/DejaVuSans.ttf", vec![]),
+            ("/System/Library/Fonts/SFNS.ttf", vec![(*b"opsz", 33.0), (*b"wght", 600.0)]),
+            ("/System/Library/Fonts/SFNS.ttf", vec![(*b"wght", 400.0)]),
+            ("/System/Library/Fonts/SFCompact.ttf", vec![(*b"opsz", 19.5), (*b"wght", 457.9)]),
+            ("/System/Library/Fonts/NewYork.ttf", vec![(*b"opsz", 20.0)]),
+            ("/System/Library/Fonts/SFNSMono.ttf", vec![(*b"wght", 700.0)]),
+            ("/System/Library/Fonts/SFArabic.ttf", vec![(*b"wght", 700.0)]),
+            ("/System/Library/Fonts/Supplemental/Arial.ttf", vec![]),
+        ] {
+            let Ok(bytes) = std::fs::read(path) else { continue };
+            let bytes: std::sync::Arc<[u8]> = bytes.into();
+            let now = TtfFont::parse_variation(&bytes, &at).unwrap();
+            let later = TtfFont::parse_variation_lazy(&bytes, &at).unwrap();
+            assert!(later.glyphs.cells.iter().all(|c| c.get().is_none()), "{path}");
+            assert_eq!(now.glyphs.len(), later.glyphs.len(), "{path}");
+            for g in 0..now.glyphs.len() {
+                assert_eq!(now.glyphs[g].advance_width, later.glyphs[g].advance_width, "{path} {g}");
+                assert_eq!(now.outline_segments(g as u16), later.outline_segments(g as u16), "{path} {g}");
+            }
+            assert!(later.glyphs.get(now.glyphs.len()).is_none());
+            assert_eq!(now.gpos_kerning.is_empty(), later.gpos_kerning.is_empty(), "{path}");
+            let mut ids: Vec<u16> = (' '..'\u{250}').filter_map(|c| now.cmap.get(&(c as u32)).copied()).collect();
+            ids.extend((0..now.glyphs.len() as u16).step_by(37));
+            for &l in &ids {
+                for &r in &ids {
+                    assert_eq!(now.kern(l, r), later.kern(l, r), "{path} {l} {r}");
+                }
+            }
         }
     }
 }

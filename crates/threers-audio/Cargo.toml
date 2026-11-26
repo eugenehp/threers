@@ -16,4 +16,4 @@ categories = ["multimedia::audio", "game-development", "wasm"]
 bench = false
 
 [dependencies]
-threers-math = { path = "../threers-math", version = "0.1.1" }
+threers-math = { path = "../threers-math", version = "0.1.2" }

@@ -208,22 +208,73 @@ impl Pair {
     }
 }
 
+/// `s` as numbers and what is between them.
+fn tokens(s: &str) -> Vec<Result<f64, String>> {
+    let mut out = vec![];
+    let mut num = String::new();
+    let mut other = String::new();
+    for c in s.chars() {
+        let in_num = c.is_ascii_digit() || c == '.' || (c == '-' && num.is_empty()) || (!num.is_empty() && (c == 'e' || (c == '-' && num.ends_with('e'))));
+        if in_num {
+            if !other.is_empty() {
+                out.push(Err(std::mem::take(&mut other)));
+            }
+            num.push(c);
+        } else {
+            if !num.is_empty() {
+                out.push(num.parse().map_err(|_| num.clone()));
+                num.clear();
+            }
+            other.push(c);
+        }
+    }
+    if !num.is_empty() {
+        out.push(num.parse().map_err(|_| num.clone()));
+    }
+    if !other.is_empty() {
+        out.push(Err(other));
+    }
+    out
+}
+
+/// Whether two scenes are the same, every number to within 1/1024: a cached
+/// box put back moved is where laying it out puts it to within float
+/// rounding.
+fn same_scene(a: &str, b: &str) -> bool {
+    let (a, b) = (tokens(a), tokens(b));
+    a.len() == b.len()
+        && a.iter().zip(&b).all(|(p, q)| match (p, q) {
+            (Ok(p), Ok(q)) => (p - q).abs() < 1.0 / 1024.0,
+            _ => p == q,
+        })
+}
+
 fn assert_same(pair: &Pair, frame: usize) {
-    assert_eq!(
-        pair.plain.scene(),
-        pair.cached.scene(),
+    let (plain, cached) = (format!("{:?}", pair.plain.scene()), format!("{:?}", pair.cached.scene()));
+    assert!(
+        same_scene(&plain, &cached),
         "frame {frame}: scenes differ"
     );
     for &n in &pair.nodes {
         if pair.plain.contains(n) {
             let (a, b) = (pair.plain.rect(n), pair.cached.rect(n));
+            // the same size to the bit; the same place to within float
+            // rounding (a cached box put back moved adds the move after)
             assert_eq!(
-                [a.x, a.y, a.width, a.height].map(f32::to_bits),
-                [b.x, b.y, b.width, b.height].map(f32::to_bits),
-                "frame {frame}: {n:?} placed differently"
+                [a.width, a.height].map(f32::to_bits),
+                [b.width, b.height].map(f32::to_bits),
+                "frame {frame}: {n:?} sized differently"
+            );
+            assert!(
+                (a.x - b.x).abs() < 1.0 / 1024.0 && (a.y - b.y).abs() < 1.0 / 1024.0,
+                "frame {frame}: {n:?} placed differently: {a:?} and {b:?}"
             );
             if pair.plain.style(n).scroll {
-                assert_eq!(pair.plain.scroll_extent(n), pair.cached.scroll_extent(n));
+                let (p, c) = (pair.plain.scroll_extent(n), pair.cached.scroll_extent(n));
+                assert!(
+                    [p.0 - c.0, p.1 - c.1, p.2 - c.2].iter().all(|d| d.abs() < 1.0 / 1024.0),
+                    "frame {frame}: {n:?} scrolls differently: {p:?} and {c:?}"
+                );
             }
         }
     }

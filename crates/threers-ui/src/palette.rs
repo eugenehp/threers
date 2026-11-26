@@ -35,6 +35,27 @@ pub struct Command {
     pub label: String,
     /// Its key binding's label (`⌘S`), shown at the end.
     pub shortcut: Option<String>,
+    /// Other words it is found by.
+    pub keywords: String,
+}
+
+/// What a palette says of itself.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PaletteWords {
+    pub title: String,
+    pub placeholder: String,
+    /// When nothing matches.
+    pub none: String,
+}
+
+impl Default for PaletteWords {
+    fn default() -> Self {
+        Self {
+            title: "Command palette".into(),
+            placeholder: "Type a command…".into(),
+            none: "No matching commands".into(),
+        }
+    }
 }
 
 impl Command {
@@ -43,7 +64,28 @@ impl Command {
             id: id.into(),
             label: label.into(),
             shortcut: None,
+            keywords: String::new(),
         }
+    }
+
+    pub fn keywords(mut self, words: impl Into<String>) -> Self {
+        self.keywords = words.into();
+        self
+    }
+
+    /// How well `query` matches it: by its name, or (less) as the start of
+    /// one of its other words.
+    fn score(&self, query: &str) -> Option<i32> {
+        fuzzy_score(query, &self.label).or_else(|| {
+            let q = query.trim().to_lowercase();
+            (!q.is_empty()
+                && self
+                    .keywords
+                    .to_lowercase()
+                    .split_whitespace()
+                    .any(|w| w.starts_with(&q)))
+            .then_some(-1000)
+        })
     }
 
     pub fn shortcut(mut self, label: impl Into<String>) -> Self {
@@ -110,6 +152,10 @@ struct Palette {
     query: String,
     matches: Vec<usize>,
     highlighted: usize,
+    /// The first match shown.
+    top: usize,
+    words: PaletteWords,
+    none: NodeId,
     query_text: NodeId,
     rows: Vec<(NodeId, NodeId, NodeId)>,
     closing: bool,
@@ -121,33 +167,59 @@ impl Palette {
             .commands
             .iter()
             .enumerate()
-            .filter_map(|(i, c)| fuzzy_score(&self.query, &c.label).map(|s| (s, i)))
+            .filter_map(|(i, c)| c.score(&self.query).map(|s| (s, i)))
             .collect();
         scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         self.matches = scored.into_iter().map(|(_, i)| i).collect();
-        self.highlighted = 0;
+        (self.highlighted, self.top) = (0, 0);
+    }
+
+    /// `to` highlighted, among those shown.
+    fn highlight(&mut self, to: usize) {
+        self.highlighted = to.min(self.matches.len().saturating_sub(1));
+        self.top = self
+            .top
+            .clamp(self.highlighted.saturating_sub(ROWS - 1), self.highlighted);
     }
 
     fn show(&self, ui: &mut Ui) {
         let shown = if self.query.is_empty() {
-            "Type a command…".to_owned()
+            self.words.placeholder.clone()
         } else {
             self.query.clone()
         };
         ui.set_text(self.query_text, shown);
+        if let Some(field) = ui.parent(self.query_text) {
+            let t = if self.query.is_empty() {
+                Token::SecondaryText
+            } else {
+                Token::Text
+            };
+            ui.token_style(field, &[("color", t)]);
+        }
+        let none = if self.matches.is_empty() {
+            Display::Block
+        } else {
+            Display::None
+        };
+        ui.update_style(self.none, |s| s.display = none);
         for (k, &(row, label, keys)) in self.rows.iter().enumerate() {
+            let k = k + self.top;
             match self.matches.get(k).map(|&i| &self.commands[i]) {
                 Some(c) => {
                     ui.update_style(row, |s| s.display = Display::Flex);
                     ui.set_text(label, c.label.clone());
                     ui.set_text(keys, c.shortcut.clone().unwrap_or_default());
                     let on = k == self.highlighted;
-                    ui.style_mut(row).background = on.then(|| ui.token(Token::Accent));
-                    ui.style_mut(row).color = if on {
-                        ui.token(Token::OnAccent)
+                    if on {
+                        ui.token_style(
+                            row,
+                            &[("background", Token::Accent), ("color", Token::OnAccent)],
+                        );
                     } else {
-                        [1.0; 4]
-                    };
+                        ui.clear_token_style(row, "background");
+                        ui.token_style(row, &[("color", Token::Text)]);
+                    }
                     // The shortcut, readable on the highlight.
                     if let Some(k) = ui.parent(keys) {
                         ui.token_style(
@@ -183,6 +255,18 @@ pub fn open_palette<S: 'static>(
     commands: Vec<Command>,
     on_run: impl FnMut(&mut S, &mut Ui, &str) + 'static,
 ) -> NodeId {
+    open_palette_in(ui, input, state, commands, PaletteWords::default(), on_run)
+}
+
+/// [`open_palette`] in the app's own words (its language).
+pub fn open_palette_in<S: 'static>(
+    ui: &mut Ui,
+    input: &mut Input<S>,
+    state: &mut S,
+    commands: Vec<Command>,
+    words: PaletteWords,
+    on_run: impl FnMut(&mut S, &mut Ui, &str) + 'static,
+) -> NodeId {
     let root = ui.root();
     let panel = ui.add_box(
         root,
@@ -201,29 +285,30 @@ pub fn open_palette<S: 'static>(
         ],
     );
     place_in_window(ui, panel, 440.0, 0.12);
-    ui.set_semantics(panel, Semantics::new(Role::Dialog).label("Command palette"));
+    ui.set_semantics(panel, Semantics::new(Role::Dialog).label(words.title.clone()));
     ui.defer(panel, 960);
     ui.appear(panel, crate::transitions::Transition::Fade, 0.12);
     let field = ui.add_box(
         panel,
-        style! { padding: 8px 10px; border-bottom: 1px solid #3a4150; },
+        style! { padding: 6px 8px; margin-bottom: 4px; border-radius: 8px; border: 2px solid transparent; },
     );
     ui.token_style(
         field,
         &[
-            ("border-color", Token::Separator),
             ("color", Token::SecondaryText),
         ],
     );
+    // (a border, not a shadow, which would show through the field)
+    ui.focus_visible_style(field, "border-color: var(--focus)");
     let query_text = ui.add_text(field, "");
     let mut sem = Semantics::new(Role::ComboBox)
-        .label("Command")
+        .label(words.placeholder.clone())
         .tab_index(-1);
     sem.expanded = Some(true);
     ui.set_semantics(field, sem);
     // Scrolls when the window is too short for every row.
     let list = ui.add_box(panel, style! { display: flex; flex-direction: column; min-height: 0; flex-shrink: 1; overflow: auto; });
-    ui.set_semantics(list, Semantics::new(Role::ListBox).label("Commands"));
+    ui.set_semantics(list, Semantics::new(Role::ListBox).label(words.title.clone()));
     let rows: Vec<(NodeId, NodeId, NodeId)> = (0..ROWS)
         .map(|_| {
             let r = ui.add_box(list, style! { display: flex; justify-content: space-between; gap: 16px; padding: 7px 10px; border-radius: 6px; cursor: pointer; });
@@ -236,8 +321,15 @@ pub fn open_palette<S: 'static>(
             (r, l, kt)
         })
         .collect();
+    let none = ui.add_box(panel, style! { display: none; padding: 7px 10px; });
+    ui.token_style(none, &[("color", Token::SecondaryText)]);
+    ui.add_text(none, words.none.clone());
+    ui.set_semantics(none, Semantics::new(Role::Status).label(words.none.clone()).live());
     let mut p = Palette {
         commands,
+        top: 0,
+        words,
+        none,
         query: String::new(),
         matches: vec![],
         highlighted: 0,
@@ -264,7 +356,11 @@ pub fn open_palette<S: 'static>(
     };
     for (k, &(row, _, _)) in rows.iter().enumerate() {
         let pk = pick.clone();
-        input.on_click(row, move |s, ui, _| pk(s, ui, k));
+        let pp = p.clone();
+        input.on_click(row, move |s, ui, _| {
+            let top = pp.borrow().top;
+            pk(s, ui, k + top);
+        });
     }
     let (pp, pk) = (p.clone(), pick.clone());
     input.on_key(field, move |s, ui, key, m, _| {
@@ -278,9 +374,13 @@ pub fn open_palette<S: 'static>(
                 return true;
             }
             "ArrowDown" => {
-                b.highlighted = (b.highlighted + 1).min(b.matches.len().min(ROWS).saturating_sub(1))
+                let to = b.highlighted + 1;
+                b.highlight(to);
             }
-            "ArrowUp" => b.highlighted = b.highlighted.saturating_sub(1),
+            "ArrowUp" => {
+                let to = b.highlighted.saturating_sub(1);
+                b.highlight(to);
+            }
             "Backspace" => {
                 b.query.pop();
                 b.refilter();
@@ -318,6 +418,35 @@ pub fn open_palette<S: 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_command_is_reached_and_other_words_find_it() {
+        let mut ui = Ui::new();
+        let mut input: Input<Vec<String>> = Input::new();
+        let mut ran = vec![];
+        let commands: Vec<Command> = (0..20)
+            .map(|i| Command::new(format!("c{i}"), format!("Item {i}")).keywords(format!("word{i}x")))
+            .collect();
+        let open = |ui: &mut Ui, input: &mut Input<Vec<String>>, ran: &mut Vec<String>| {
+            open_palette(ui, input, ran, commands.clone(), |ran, _, id| ran.push(id.to_owned()));
+            ui.layout(600.0, 400.0, &mut crate::FixedWidthText(7.0));
+        };
+        open(&mut ui, &mut input, &mut ran);
+        input
+            .simulate_keystrokes(&mut ui, &mut ran, &format!("{}enter", "down ".repeat(15)))
+            .unwrap();
+        open(&mut ui, &mut input, &mut ran);
+        input
+            .simulate_keystrokes(&mut ui, &mut ran, "w o r d 7 enter")
+            .unwrap();
+        assert_eq!(ran, ["c15", "c7"]);
+        // Nothing matches: said so, and nothing run.
+        open(&mut ui, &mut input, &mut ran);
+        input.simulate_keystrokes(&mut ui, &mut ran, "z z q").unwrap();
+        assert!(ui.accessibility_tree().iter().any(|n| n.name == "No matching commands"));
+        input.simulate_keystrokes(&mut ui, &mut ran, "enter").unwrap();
+        assert_eq!(ran.len(), 2);
+    }
 
     #[test]
     fn fuzzy_matching_prefers_word_starts_and_runs() {

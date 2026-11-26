@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use crate::core::{BufferAttribute, BufferGeometry};
 use crate::math::Matrix4;
 use crate::nurbs::v3;
-use crate::nurbs::V3;
+use crate::nurbs::{NurbsSurface, V3};
 
 use super::table::{triangle_normal, triangle_vertices};
 use super::{Surface, SurfaceTable};
@@ -350,10 +350,51 @@ impl Body {
             }
             let (a, b) = (&self.surfaces[e.surfaces.0], &self.surfaces[e.surfaces.1]);
             let mut out: Vec<usize> = Vec::with_capacity(e.vertices.len());
-            for w in e.vertices.windows(2) {
+            let joint = tangent_circle(&e.vertices, &self.vertices, a, b);
+            let border = if joint.is_none() {
+                border_of(&e.vertices, &self.vertices, a, b)
+            } else {
+                None
+            };
+            let mut feet = [None; 2];
+            for (i, w) in e.vertices.windows(2).enumerate() {
                 out.push(w[0]);
                 let (p, q) = (self.vertices[w[0]], self.vertices[w[1]]);
-                subdivide(p, q, a, b, tolerance, 0, &mut self.vertices, &mut out);
+                if let Some((border, at)) = &border {
+                    border.subdivide(
+                        (p, at[i]),
+                        (q, at[i + 1]),
+                        tolerance,
+                        0,
+                        &mut self.vertices,
+                        &mut out,
+                    );
+                    continue;
+                }
+                if let Some((centre, radius)) = joint {
+                    subdivide_arc(
+                        p,
+                        q,
+                        centre,
+                        radius,
+                        tolerance,
+                        0,
+                        &mut self.vertices,
+                        &mut out,
+                    );
+                    continue;
+                }
+                subdivide(
+                    p,
+                    q,
+                    a,
+                    b,
+                    tolerance,
+                    0,
+                    &mut feet,
+                    &mut self.vertices,
+                    &mut out,
+                );
             }
             if let Some(&last) = e.vertices.last() {
                 out.push(last);
@@ -361,6 +402,252 @@ impl Body {
             e.vertices = out;
         }
         self.restate_rings();
+    }
+
+    /// Put a vertex on each curved edge where it goes through a surface of
+    /// `other`, on all three surfaces.
+    ///
+    /// The two faces beside an edge would each find it on chords of their own,
+    /// and where the surface grazes the edge the chords' sag comes back many
+    /// times over: a box's side took a sliver off the end of a pipe, and its cut
+    /// came to the rim in two places a weld apart. Found once and shared, the
+    /// two cannot differ.
+    /// The body with every face that lies across the seam of a spline closed on
+    /// itself put on the same spline opened where the face does not go.
+    pub(super) fn off_seams(&self) -> std::borrow::Cow<'_, Body> {
+        let mut out = std::borrow::Cow::Borrowed(self);
+        for fi in 0..self.faces.len() {
+            for k in 0..2 {
+                let here: &Body = &out;
+                let surface = &here.surfaces[here.faces[fi].surface];
+                let Surface::Nurbs(n) = surface else { break };
+                let Some((lo, hi)) = super::fuse::closes(surface)[k] else {
+                    continue;
+                };
+                let span = hi - lo;
+                let mut loops = here.face_loops(fi);
+                let over = loops.iter().any(|l| {
+                    let n = l.uv.len();
+                    (0..n).any(|i| (l.uv[i][k] - l.uv[(i + 1) % n][k]).abs() > 0.5 * span)
+                });
+                if !over {
+                    continue;
+                }
+                // The widest stretch its boundary does not go.
+                let mut at: Vec<f64> = loops.iter().flat_map(|l| &l.uv).map(|q| q[k]).collect();
+                at.sort_by(f64::total_cmp);
+                let widest = at
+                    .windows(2)
+                    .map(|w| (w[1] - w[0], 0.5 * (w[0] + w[1])))
+                    .max_by(|a, b| a.0.total_cmp(&b.0));
+                let Some((gap, open)) = widest.filter(|w| w.0 > 1e-2 * span) else {
+                    continue;
+                };
+                // Or it goes all round, and this is how far apart its edges'
+                // points are.
+                let next = at.windows(2).map(|w| w[1] - w[0]).fold(0.0, |m, w| {
+                    if w < gap {
+                        f64::max(m, w)
+                    } else {
+                        m
+                    }
+                });
+                if at.windows(2).filter(|w| w[1] - w[0] >= gap).count() > 1 || gap < 4.0 * next {
+                    continue;
+                }
+                let moved = if k == 0 {
+                    crate::nurbs::reseam_u(n, open)
+                } else {
+                    crate::nurbs::reseam_v(n, open)
+                };
+                let Some(moved) = moved else { continue };
+                for q in loops.iter_mut().flat_map(|l| l.uv.iter_mut()) {
+                    if q[k] < open {
+                        q[k] += span;
+                    }
+                }
+                let reach = loops
+                    .iter()
+                    .flat_map(|l| &l.uv)
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |m, q| {
+                        (m.0.min(q[k]), m.1.max(q[k]))
+                    });
+                for l in &mut loops {
+                    l.area = signed_area(&l.uv);
+                }
+                right_way_round(&mut loops);
+                let body = out.to_mut();
+                body.surfaces.push(Surface::Nurbs(Box::new(moved)));
+                let last = body.surfaces.len() - 1;
+                let face = &mut body.faces[fi];
+                let old = std::mem::replace(&mut face.surface, last);
+                // Its edges run along the one it is on.
+                for &e in &face.edges {
+                    let pair = &mut body.edges[e].surfaces;
+                    if pair.0 == old {
+                        pair.0 = last;
+                    } else if pair.1 == old {
+                        pair.1 = last;
+                    }
+                }
+                if face.loops.is_some() {
+                    face.loops = Some(loops);
+                }
+                if k == 0 {
+                    (face.u_range, face.u_wraps) = (reach, false);
+                } else {
+                    (face.v_range, face.v_wraps) = (reach, false);
+                }
+            }
+        }
+        out
+    }
+
+    pub(crate) fn meet(&mut self, other: &Body, tolerance: f64) {
+        let boxes: Vec<(V3, V3, &Surface)> = other
+            .faces
+            .iter()
+            .filter_map(|f| {
+                let surface = &other.surfaces[f.surface];
+                // A spline's side of a point is a search, and its cuts are
+                // refined as they are marched.
+                if matches!(surface, Surface::Nurbs(_)) {
+                    return None;
+                }
+                let mut b = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+                for &v in f.edges.iter().flat_map(|e| &other.edges[*e].vertices) {
+                    for k in 0..3 {
+                        b.0[k] = b.0[k].min(other.vertices[v][k]);
+                        b.1[k] = b.1[k].max(other.vertices[v][k]);
+                    }
+                }
+                let pad = match surface {
+                    Surface::Plane { .. } => tolerance,
+                    _ => tolerance + v3::dist(b.0, b.1),
+                };
+                // No edges at all, as a whole ball has: anywhere.
+                if f.edges.is_empty() {
+                    return Some(([f64::NEG_INFINITY; 3], [f64::INFINITY; 3], surface));
+                }
+                Some((b.0.map(|x| x - pad), b.1.map(|x| x + pad), surface))
+            })
+            .collect();
+        let mut any = false;
+        for e in &mut self.edges {
+            let (a, b) = (&self.surfaces[e.surfaces.0], &self.surfaces[e.surfaces.1]);
+            if e.surfaces.0 == e.surfaces.1 {
+                continue;
+            }
+            let joint = tangent_circle(&e.vertices, &self.vertices, a, b);
+            let border = if joint.is_none() {
+                border_of(&e.vertices, &self.vertices, a, b)
+            } else {
+                None
+            };
+            // Straight, where its faces may meet along it at a tangent and no
+            // point can be settled onto both: a plane's wall running on into a
+            // round corner.
+            let straight = {
+                let (first, last) = (
+                    self.vertices[e.vertices[0]],
+                    self.vertices[*e.vertices.last().unwrap_or(&e.vertices[0])],
+                );
+                let along = v3::sub(last, first);
+                let length = v3::norm(along);
+                length > tolerance
+                    && e.vertices.iter().all(|&v| {
+                        let d = v3::sub(self.vertices[v], first);
+                        let t = v3::dot(d, along) / (length * length);
+                        v3::dist(self.vertices[v], v3::add(first, v3::scale(along, t)))
+                            <= tolerance * 1e-6
+                    })
+            };
+            let on_edge = |i: usize, p: V3, q: V3, t: f64| -> Option<V3> {
+                if let Some((border, at)) = &border {
+                    return Some(border.point(at[i] + (at[i + 1] - at[i]) * t));
+                }
+                let m = v3::add(p, v3::scale(v3::sub(q, p), t));
+                match joint {
+                    Some((centre, radius)) => {
+                        let d = v3::normalize(v3::sub(m, centre))?;
+                        Some(v3::add(centre, v3::scale(d, radius)))
+                    }
+                    // As near as rounding lets it be, where it can.
+                    None => super::intersect::settle(a, b, m, tolerance * 1e-9)
+                        .or_else(|| super::intersect::settle(a, b, m, tolerance * 1e-3))
+                        .or_else(|| straight.then_some(m)),
+                }
+            };
+            let mut out: Vec<usize> = Vec::with_capacity(e.vertices.len());
+            // Samples a crossing is put in place of: both would weld.
+            let mut moved: Vec<(usize, V3)> = Vec::new();
+            let steps = e.vertices.len().saturating_sub(1);
+            for (i, w) in e.vertices.windows(2).enumerate() {
+                out.push(w[0]);
+                let (p, q) = (self.vertices[w[0]], self.vertices[w[1]]);
+                let mut found: Vec<(f64, V3)> = Vec::new();
+                for (lo, hi, surface) in &boxes {
+                    if (0..3).any(|k| p[k].min(q[k]) > hi[k] || p[k].max(q[k]) < lo[k]) {
+                        continue;
+                    }
+                    let (dp, dq) = (surface.signed_distance(p), surface.signed_distance(q));
+                    let near = tolerance * 1e-3;
+                    if dp * dq >= 0.0 || dp.abs() <= near || dq.abs() <= near {
+                        continue;
+                    }
+                    let (mut x, mut y) = (0.0, 1.0);
+                    for _ in 0..50 {
+                        let m = 0.5 * (x + y);
+                        let Some(r) = on_edge(i, p, q, m) else {
+                            break;
+                        };
+                        if surface.signed_distance(r) * dp > 0.0 {
+                            x = m;
+                        } else {
+                            y = m;
+                        }
+                    }
+                    let t = 0.5 * (x + y);
+                    let Some(r) = on_edge(i, p, q, t) else {
+                        continue;
+                    };
+                    let chord = v3::dist(p, q);
+                    // A straight edge is cut where it is; and nothing is put
+                    // where another vertex is.
+                    let straight = v3::dist(r, v3::add(p, v3::scale(v3::sub(q, p), t)));
+                    if straight > 1e-12 * (1.0 + chord)
+                        && surface.signed_distance(r).abs() <= near
+                        && v3::dist(r, p).min(v3::dist(r, q)) > near
+                        && v3::dist(r, p).max(v3::dist(r, q)) < chord
+                        && found.iter().all(|f| v3::dist(f.1, r) > near)
+                    {
+                        found.push((t, r));
+                    }
+                }
+                found.sort_by(|a, b| a.0.total_cmp(&b.0));
+                any |= !found.is_empty();
+                for (_, r) in found {
+                    let weld = tolerance * 2.0;
+                    if i > 0 && v3::dist(r, p) <= weld {
+                        moved.push((w[0], r));
+                    } else if i + 1 < steps && v3::dist(r, q) <= weld {
+                        moved.push((w[1], r));
+                    } else {
+                        self.vertices.push(r);
+                        out.push(self.vertices.len() - 1);
+                    }
+                }
+            }
+            for (v, r) in moved {
+                self.vertices[v] = r;
+            }
+            out.extend(e.vertices.last());
+            e.vertices = out;
+        }
+        // Rings as they were, where nothing has moved.
+        if any {
+            self.restate_rings();
+        }
     }
 
     /// Write every ring in terms of the edges it runs along.
@@ -449,9 +736,18 @@ impl Body {
                     let mut anchor = l.uv[i];
                     let mut run: Vec<(usize, [f64; 2])> = Vec::new();
                     for v in best.into_iter().flatten() {
-                        let Some((u, w)) = surface.invert(self.vertices[v]) else {
+                        let Some((u, w)) =
+                            surface.invert_beside(self.vertices[v], (anchor[0], anchor[1]))
+                        else {
                             continue;
                         };
+                        // A spline that closes on itself has no period to
+                        // wrap by: its seam is both ends of its domain, and
+                        // the end meant is the one the run is at. Taking
+                        // whichever comes back folds a seam's two sides onto
+                        // one and the ring encloses nothing.
+                        let (u, w) =
+                            surface.seam_near(self.vertices[v], (u, w), (anchor[0], anchor[1]));
                         let p = [
                             if pu { near(u, anchor[0]) } else { u },
                             if pv { near(w, anchor[1]) } else { w },
@@ -1746,6 +2042,184 @@ pub(crate) fn adaptive_steps(
     steps
 }
 
+/// The circle an edge lies on, where its two surfaces are tangent along it:
+/// its centre and radius.
+///
+/// Along such a joint a chord's middle leaves the curve *along* both surfaces
+/// — a bend's end lies in the plane it runs out into, and so does every chord
+/// of it — so its distance from them says nothing of how far off it is. A
+/// chord three thousandths off passed as within a ten-thousandth, and the
+/// section that came to the joint from the other side missed it.
+fn tangent_circle(edge: &[usize], vertices: &[V3], a: &Surface, b: &Surface) -> Option<(V3, f64)> {
+    if edge.len() < 3 {
+        return None;
+    }
+    let p = vertices[edge[edge.len() / 2]];
+    let normal = |s: &Surface| s.invert(p).and_then(|(u, v)| s.normal(u, v));
+    let (na, nb) = (normal(a)?, normal(b)?);
+    if v3::norm(v3::cross(na, nb)) > 1e-4 {
+        return None;
+    }
+    let points: Vec<V3> = edge.iter().map(|&v| vertices[v]).collect();
+    let (centre, _, radius, _) = super::fuse::circle_through(&points)?;
+    Some((centre, radius))
+}
+
+/// As [`subdivide`], on a circle.
+#[allow(clippy::too_many_arguments)]
+fn subdivide_arc(
+    p: V3,
+    q: V3,
+    centre: V3,
+    radius: f64,
+    tolerance: f64,
+    depth: usize,
+    vertices: &mut Vec<V3>,
+    out: &mut Vec<usize>,
+) {
+    if depth >= super::settings::settings().max_refine_depth {
+        return;
+    }
+    let mid = v3::sub(v3::scale(v3::add(p, q), 0.5), centre);
+    let reach = v3::norm(mid);
+    // Half a turn in one chord has no middle of its own.
+    if reach <= radius * 1e-3 || radius - reach <= tolerance {
+        return;
+    }
+    let m = v3::add(centre, v3::scale(mid, radius / reach));
+    subdivide_arc(p, m, centre, radius, tolerance, depth + 1, vertices, out);
+    vertices.push(m);
+    out.push(vertices.len() - 1);
+    subdivide_arc(m, q, centre, radius, tolerance, depth + 1, vertices, out);
+}
+
+/// The border of a spline surface: one parameter at an end of its domain.
+struct Border<'a> {
+    surface: &'a NurbsSurface,
+    /// Which parameter is held, and at what.
+    held: usize,
+    at: f64,
+}
+
+impl Border<'_> {
+    fn point(&self, t: f64) -> V3 {
+        if self.held == 0 {
+            self.surface.point(self.at, t)
+        } else {
+            self.surface.point(t, self.at)
+        }
+    }
+
+    /// The parameter along it of a point that is on it, from one near.
+    fn parameter(&self, p: V3, mut t: f64) -> Option<f64> {
+        let (lo, hi) = if self.held == 0 {
+            self.surface.domain_v()
+        } else {
+            self.surface.domain_u()
+        };
+        for _ in 0..40 {
+            let d = if self.held == 0 {
+                self.surface.derivatives_fixed(self.at, t, 2)
+            } else {
+                self.surface.derivatives_fixed(t, self.at, 2)
+            };
+            let (along, bend) = if self.held == 0 {
+                (d[0][1], d[0][2])
+            } else {
+                (d[1][0], d[2][0])
+            };
+            let r = v3::sub(p, d[0][0]);
+            let slope = v3::dot(along, along) - v3::dot(r, bend);
+            if slope <= 0.0 {
+                return None;
+            }
+            let next = (t + v3::dot(r, along) / slope).clamp(lo, hi);
+            let step = (next - t).abs();
+            t = next;
+            if step <= 1e-15 * (hi - lo) {
+                break;
+            }
+        }
+        (v3::dist(self.point(t), p) <= 1e-8 * (1.0 + v3::norm(p))).then_some(t)
+    }
+
+    /// Points along it between two on it, until its chords are as near it as
+    /// asked.
+    fn subdivide(
+        &self,
+        (p, s): (V3, f64),
+        (q, t): (V3, f64),
+        tolerance: f64,
+        depth: usize,
+        vertices: &mut Vec<V3>,
+        out: &mut Vec<usize>,
+    ) {
+        if depth >= super::settings::settings().max_refine_depth {
+            return;
+        }
+        let mid = 0.5 * (s + t);
+        let m = self.point(mid);
+        let chord = v3::dist(p, q);
+        // Beside the chord's middle: all along, and about it.
+        let off = v3::dist(m, v3::scale(v3::add(p, q), 0.5));
+        if off <= tolerance || v3::dist(p, m) + v3::dist(m, q) > 1.5 * chord {
+            return;
+        }
+        self.subdivide((p, s), (m, mid), tolerance, depth + 1, vertices, out);
+        vertices.push(m);
+        out.push(vertices.len() - 1);
+        self.subdivide((m, mid), (q, t), tolerance, depth + 1, vertices, out);
+    }
+}
+
+/// The border of either surface that an edge runs along, the other surface too,
+/// and where on it each of its points is. Two surfaces that touch along an edge
+/// say nothing of where between its points it goes: a chord far from it is near
+/// them both.
+fn border_of<'a>(
+    edge: &[usize],
+    vertices: &[V3],
+    a: &'a Surface,
+    b: &'a Surface,
+) -> Option<(Border<'a>, Vec<f64>)> {
+    for (s, other) in [(a, b), (b, a)] {
+        let Surface::Nurbs(n) = s else { continue };
+        let (du, dv) = (n.domain_u(), n.domain_v());
+        let (u, v) = s.invert(vertices[edge[0]])?;
+        for (held, at, from, d) in [(0, u, v, du), (1, v, u, dv)] {
+            // Beside an end, to begin with: where the two touch no nearer.
+            let end = if at - d.0 < d.1 - at { d.0 } else { d.1 };
+            if (at - end).abs() > 1e-2 * (d.1 - d.0) {
+                continue;
+            }
+            let border = Border {
+                surface: n,
+                held,
+                at: end,
+            };
+            let mut near = from;
+            let found: Option<Vec<f64>> = edge
+                .iter()
+                .map(|x| {
+                    let t = border.parameter(vertices[*x], near)?;
+                    near = t;
+                    Some(t)
+                })
+                .collect();
+            let Some(found) = found else { continue };
+            // And the other all along it, between its points as at them.
+            let along = found.windows(2).all(|w| {
+                let m = border.point(0.5 * (w[0] + w[1]));
+                other.distance(m) <= 1e-7 * (1.0 + v3::norm(m))
+            });
+            if along && found.windows(2).all(|w| w[0] != w[1]) {
+                return Some((border, found));
+            }
+        }
+    }
+    None
+}
+
 /// Put vertices along a segment until it is within `tolerance` of both surfaces.
 ///
 /// The midpoint of a chord is pulled onto both surfaces by alternating
@@ -1759,6 +2233,7 @@ fn subdivide(
     b: &Surface,
     tolerance: f64,
     depth: usize,
+    feet: &mut [Option<(f64, f64)>; 2],
     vertices: &mut Vec<V3>,
     out: &mut Vec<usize>,
 ) {
@@ -1766,27 +2241,54 @@ fn subdivide(
         return;
     }
     let mid = v3::scale(v3::add(p, q), 0.5);
-    if a.distance(mid).max(b.distance(mid)) <= tolerance {
-        return;
-    }
-    // Pull the midpoint onto both surfaces by alternating projection.
-    let mut m = mid;
-    for _ in 0..16 {
-        if a.distance(m) < 1e-12 && b.distance(m) < 1e-12 {
-            break;
+    // From where the surfaces were last met, half this chord away: no nearer
+    // than the nearest point, so what is within the tolerance is.
+    let mut off = 0.0f64;
+    for (s, at) in [a, b].into_iter().zip(feet.iter_mut()) {
+        match s.foot(mid, *at) {
+            Some((found, d, _)) => {
+                *at = Some(found);
+                off = off.max(d.abs());
+            }
+            None => off = off.max(s.distance(mid)),
         }
-        let Some((au, av)) = a.invert(m) else { return };
-        m = a.point(au, av);
-        let Some((bu, bv)) = b.invert(m) else { return };
-        m = b.point(bu, bv);
     }
-    if a.distance(m).max(b.distance(m)) > 1e-6 {
+    if off <= tolerance {
         return;
     }
-    subdivide(p, m, a, b, tolerance, depth + 1, vertices, out);
+    // Onto both surfaces at once, as marching settles; where they are too
+    // near tangent for that, by going to one and the other in turn.
+    // A seam has one surface on both sides, which is met wherever it is.
+    let settled = if std::ptr::eq(a, b) {
+        feet[0].map(|(u, v)| a.point(u, v))
+    } else {
+        super::intersect::settle_from(a, b, mid, 1e-9, feet)
+    }
+    .filter(|m| v3::dist(*m, mid) <= v3::dist(p, q));
+    let met = settled.is_some();
+    let m = match settled {
+        Some(m) => m,
+        None => {
+            let mut m = mid;
+            for _ in 0..16 {
+                if a.distance(m) < 1e-12 && b.distance(m) < 1e-12 {
+                    break;
+                }
+                let Some((au, av)) = a.invert(m) else { return };
+                m = a.point(au, av);
+                let Some((bu, bv)) = b.invert(m) else { return };
+                m = b.point(bu, bv);
+            }
+            m
+        }
+    };
+    if !met && a.distance(m).max(b.distance(m)) > 1e-6 {
+        return;
+    }
+    subdivide(p, m, a, b, tolerance, depth + 1, feet, vertices, out);
     vertices.push(m);
     out.push(vertices.len() - 1);
-    subdivide(m, q, a, b, tolerance, depth + 1, vertices, out);
+    subdivide(m, q, a, b, tolerance, depth + 1, feet, vertices, out);
 }
 
 fn centroid(v: &[V3; 3]) -> V3 {
@@ -1828,6 +2330,56 @@ fn count_boundary_edges(indices: &[u32]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An edge between a wall and a plane that touches it all along is refined
+    /// along the wall's own border: a chord's middle is in the plane, and as
+    /// good as on the wall, wherever it is.
+    #[test]
+    fn an_edge_two_surfaces_touch_along_follows_the_border() {
+        // A quarter of a rod about a bent line in the plane y = 0, which it
+        // comes up to squarely at y = 1.
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let mut poles = Vec::new();
+        for (x, y, w) in [(1.0, 0.0, 1.0), (1.0, 1.0, h), (0.0, 1.0, 1.0)] {
+            for (along, up) in [(0.0, 0.0), (0.0, 4.0), (3.0, 8.0)] {
+                poles.push([(x + along) * w, y * w, up * w, w]);
+            }
+        }
+        let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let wall = NurbsSurface::from_homogeneous(2, 2, knots.clone(), knots, 3, 3, poles).unwrap();
+        let plane = Surface::Plane {
+            origin: [0.0, 1.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            x_dir: [1.0, 0.0, 0.0],
+        };
+        let mut vertices: Vec<V3> = [0.0, 0.4, 1.0].map(|v| wall.point(1.0, v)).to_vec();
+        let wall = Surface::Nurbs(Box::new(wall));
+        let edge = [0, 1, 2];
+        let (border, at) = border_of(&edge, &vertices, &plane, &wall).unwrap();
+        assert_eq!((border.held, border.at), (0, 1.0));
+        let mut out = vec![0];
+        for i in 0..2 {
+            let ends = [i, i + 1].map(|k| (vertices[edge[k]], at[k]));
+            border.subdivide(ends[0], ends[1], 1e-4, 0, &mut vertices, &mut out);
+            out.push(i + 1);
+        }
+        assert!(out.len() > 20);
+        for w in out.windows(2) {
+            let (p, q) = (vertices[w[0]], vertices[w[1]]);
+            let m = v3::scale(v3::add(p, q), 0.5);
+            let t = border.parameter(p, 0.5).unwrap();
+            let u = border.parameter(q, 0.5).unwrap();
+            assert!(u > t);
+            assert!(v3::dist(border.point(0.5 * (t + u)), m) < 1.1e-4);
+        }
+        // An edge across the wall is along no border.
+        let Surface::Nurbs(n) = &wall else {
+            unreachable!()
+        };
+        let across: Vec<V3> = [0.1, 0.5, 0.9].map(|u| n.point(u, 0.5)).to_vec();
+        assert!(border_of(&edge, &across, &plane, &wall).is_none());
+    }
+
     use crate::geometries::{BoxGeometry, CylinderGeometry};
 
     const TAU: f32 = std::f32::consts::PI * 2.0;
@@ -3521,29 +4073,33 @@ impl Body {
             });
         }
 
-        // Largest area is the outer loop; make it positive and the rest negative,
-        // so `is_hole` means what it says whichever way the input wound.
-        if let Some(outer) = loops
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.area.abs().partial_cmp(&b.1.area.abs()).unwrap())
-            .map(|(i, _)| i)
-        {
-            let flip = loops[outer].area < 0.0;
-            for (i, l) in loops.iter_mut().enumerate() {
-                if flip {
-                    l.area = -l.area;
-                    l.vertices.reverse();
-                    l.uv.reverse();
-                }
-                if i != outer && l.area > 0.0 {
-                    l.area = -l.area;
-                    l.vertices.reverse();
-                    l.uv.reverse();
-                }
+        right_way_round(&mut loops);
+        loops
+    }
+}
+
+/// Largest area is the outer loop; make it positive and the rest negative,
+/// so `is_hole` means what it says whichever way the input wound.
+fn right_way_round(loops: &mut [TrimLoop]) {
+    if let Some(outer) = loops
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.area.abs().partial_cmp(&b.1.area.abs()).unwrap())
+        .map(|(i, _)| i)
+    {
+        let flip = loops[outer].area < 0.0;
+        for (i, l) in loops.iter_mut().enumerate() {
+            if flip {
+                l.area = -l.area;
+                l.vertices.reverse();
+                l.uv.reverse();
+            }
+            if i != outer && l.area > 0.0 {
+                l.area = -l.area;
+                l.vertices.reverse();
+                l.uv.reverse();
             }
         }
-        loops
     }
 }
 

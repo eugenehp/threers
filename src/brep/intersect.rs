@@ -199,7 +199,73 @@ pub fn march(a: &Surface, b: &Surface, bounds: (V3, V3), tolerance: f64) -> Vec<
         if closed {
             points.pop();
         }
+        // Or the same curve come at from beyond the box: a seed settles
+        // where the surfaces meet, which can be further out than any trace
+        // goes, and the walk from it leads back in along a curve we have.
+        // Sampled twice over, the two polylines cross and cross again.
+        let (lo, hi) = bounds;
+        let mut within = points
+            .iter()
+            .filter(|p| (0..3).all(|k| p[k] >= lo[k] && p[k] <= hi[k]))
+            .peekable();
+        if within.peek().is_some()
+            && within.all(|p| out.iter().any(|c| c.distance(*p) <= tolerance * 4.0))
+        {
+            continue;
+        }
+        // A spline says no radius for the step to answer to: its chords are
+        // halved until they hold the tolerance instead.
+        if scale == f64::MAX {
+            points = held_to(a, b, points, closed, tolerance);
+        }
         out.push(Curve3d::Sampled { points, closed });
+    }
+    out
+}
+
+/// A traced polyline with its chords halved, each middle settled onto both
+/// surfaces, until none strays from the curve by more than `tolerance`.
+fn held_to(a: &Surface, b: &Surface, points: Vec<V3>, closed: bool, tolerance: f64) -> Vec<V3> {
+    fn halve(
+        a: &Surface,
+        b: &Surface,
+        p: V3,
+        q: V3,
+        tolerance: f64,
+        depth: usize,
+        out: &mut Vec<V3>,
+    ) {
+        let mid = v3::scale(v3::add(p, q), 0.5);
+        if depth == 0 {
+            return;
+        }
+        let Some(m) = settle(a, b, mid, tolerance) else {
+            return;
+        };
+        let off = v3::dist(m, mid);
+        // Settled somewhere else altogether: not this chord's middle.
+        if off <= tolerance || off > 0.5 * v3::dist(p, q) {
+            return;
+        }
+        halve(a, b, p, m, tolerance, depth - 1, out);
+        out.push(m);
+        halve(a, b, m, q, tolerance, depth - 1, out);
+    }
+    let n = points.len();
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        out.push(points[i]);
+        if i + 1 < n || closed {
+            halve(
+                a,
+                b,
+                points[i],
+                points[(i + 1) % n],
+                tolerance,
+                10,
+                &mut out,
+            );
+        }
     }
     out
 }
@@ -218,17 +284,36 @@ fn span(bounds: (V3, V3)) -> f64 {
 /// Newton step on the pair of distance functions. `None` when it will not
 /// converge — a tangential meeting, where the two normals are parallel and the
 /// correction has no unique answer.
-pub(crate) fn settle(a: &Surface, b: &Surface, mut p: V3, tolerance: f64) -> Option<V3> {
+pub(crate) fn settle(a: &Surface, b: &Surface, p: V3, tolerance: f64) -> Option<V3> {
+    settle_from(a, b, p, tolerance, &mut [None; 2])
+}
+
+/// As [`settle`], with each surface's last foot to start from, and its new
+/// one to go on from.
+pub(crate) fn settle_from(
+    a: &Surface,
+    b: &Surface,
+    mut p: V3,
+    tolerance: f64,
+    feet: &mut [Option<(f64, f64)>; 2],
+) -> Option<V3> {
     let want = tolerance * 1e-3;
-    for _ in 0..64 {
-        let (da, db) = (a.signed_distance(p), b.signed_distance(p));
+    // How far off it was, eight steps ago and since.
+    let mut last = [f64::INFINITY; 8];
+    for step in 0..64 {
+        let ((at_a, da, na), (at_b, db, nb)) = (a.foot(p, feet[0])?, b.foot(p, feet[1])?);
+        *feet = [Some(at_a), Some(at_b)];
         if da.abs() <= want && db.abs() <= want {
             return Some(p);
         }
-        let (Some((ua, va)), Some((ub, vb))) = (a.invert(p), b.invert(p)) else {
+        // Getting nowhere: at a tenth nearer in eight steps, it will not be
+        // there in sixty-four.
+        let off = da.abs().max(db.abs());
+        if off > 0.9 * last[step % 8] {
             return None;
-        };
-        let (Some(na), Some(nb)) = (a.normal(ua, va), b.normal(ub, vb)) else {
+        }
+        last[step % 8] = off;
+        let (Some(na), Some(nb)) = (na, nb) else {
             return None;
         };
         // Solve the 2x2 system for the move along the two normals.
@@ -250,6 +335,18 @@ fn seeds(a: &Surface, b: &Surface, bounds: (V3, V3), tolerance: f64, apart: f64)
     const N: usize = 12;
     let mut out = Vec::new();
     let reach = span(bounds);
+    let (first, second) = match a {
+        Surface::Nurbs(_) => (b, a),
+        _ => (a, b),
+    };
+    // On a spline, from its own points: which side of the other surface each
+    // is on is a closed form, where how far a point of the box is from the
+    // spline is a search.
+    if let (Surface::Nurbs(n), false) = (second, matches!(first, Surface::Nurbs(_))) {
+        return seeds_on(n, first, bounds, tolerance, apart, |p| {
+            settle(a, b, p, tolerance)
+        });
+    }
     for i in 0..=N {
         for j in 0..=N {
             for k in 0..=N {
@@ -258,8 +355,12 @@ fn seeds(a: &Surface, b: &Surface, bounds: (V3, V3), tolerance: f64, apart: f64)
                     lo[1] + (hi[1] - lo[1]) * j as f64 / N as f64,
                     lo[2] + (hi[2] - lo[2]) * k as f64 / N as f64,
                 ];
-                // Only bother where both surfaces are near.
-                if a.distance(p) > reach / N as f64 || b.distance(p) > reach / N as f64 {
+                // Only bother where both surfaces are near: asked first of
+                // the one that answers in closed form.
+                if [first, second]
+                    .iter()
+                    .any(|s| s.distance(p) > reach / N as f64)
+                {
                     continue;
                 }
                 if let Some(q) = settle(a, b, p, tolerance) {
@@ -282,6 +383,119 @@ fn seeds(a: &Surface, b: &Surface, bounds: (V3, V3), tolerance: f64, apart: f64)
 }
 
 /// Walk one component from `seed`, forwards then backwards.
+/// Seeds where a spline's points change sides of the other surface, and
+/// where one comes nearer it than its neighbours do without.
+fn seeds_on(
+    n: &crate::nurbs::NurbsSurface,
+    other: &Surface,
+    (lo, hi): (V3, V3),
+    tolerance: f64,
+    apart: f64,
+    settled: impl Fn(V3) -> Option<V3>,
+) -> Vec<V3> {
+    let grid = super::surface::seed_grid(n);
+    let (nu, nv) = super::surface::seed_counts(n);
+    let row = nv + 1;
+    let side: Vec<f64> = grid
+        .points
+        .iter()
+        .map(|q| other.signed_distance(q.0))
+        .collect();
+    let mut out: Vec<V3> = Vec::new();
+    let mut take = |p: V3, reach: f64| {
+        let near = |k: usize| p[k] >= lo[k] - reach && p[k] <= hi[k] + reach;
+        if !(0..3).all(near) {
+            return;
+        }
+        if let Some(q) = settled(p) {
+            if out.iter().all(|r| v3::dist(*r, q) > apart) {
+                out.push(q);
+            }
+        }
+    };
+    // From within before from the ends of the domain: a march that sets out
+    // from a seam has two ways to say where it is.
+    let inner = |i: usize, j: usize| i > 0 && i < nu && j > 0 && j < nv;
+    for within in [true, false] {
+        for (i, j) in (0..=nu).flat_map(|i| (0..=nv).map(move |j| (i, j))) {
+            if inner(i, j) != within {
+                continue;
+            }
+            let at = i * row + j;
+            let (p, d) = (grid.points[at].0, side[at]);
+            let mut widest = 0.0f64;
+            let mut crossed = false;
+            let mut least = true;
+            let mut beside = |k: usize, forward: bool| {
+                let (q, e) = (grid.points[k].0, side[k]);
+                let step = v3::dist(p, q);
+                widest = widest.max(step);
+                least &= d.abs() <= e.abs();
+                // Along the line from the one to the other, whose ends are on
+                // either side: from a guess, the walk onto both can go to
+                // another place they meet at.
+                let ((_, u0, v0), (_, u1, v1)) = (grid.points[at], grid.points[k]);
+                let on = |t: f64| n.point(u0 + (u1 - u0) * t, v0 + (v1 - v0) * t);
+                let between = |(mut a, mut da): (f64, f64), (mut b, mut db): (f64, f64)| {
+                    for _ in 0..12 {
+                        let m = 0.5 * (a + b);
+                        let dm = other.signed_distance(on(m));
+                        if da * dm <= 0.0 {
+                            (b, db) = (m, dm);
+                        } else {
+                            (a, da) = (m, dm);
+                        }
+                    }
+                    on(a + (b - a) * da / (da - db))
+                };
+                if d * e <= 0.0 {
+                    crossed = true;
+                    if forward && (d != 0.0 || e != 0.0) {
+                        take(between((0.0, d), (1.0, e)), step);
+                    }
+                } else if forward && d.abs() + e.abs() <= 1.25 * step {
+                    // Over to the other side and back between the two: a
+                    // distance changes by no more than the way gone.
+                    const N: usize = 8;
+                    let mut from = (0.0, d);
+                    for m in 1..=N {
+                        let t = m as f64 / N as f64;
+                        let to = (
+                            t,
+                            if m == N {
+                                e
+                            } else {
+                                other.signed_distance(on(t))
+                            },
+                        );
+                        if from.1 * to.1 < 0.0 {
+                            take(between(from, to), step);
+                        }
+                        from = to;
+                    }
+                }
+            };
+            if i > 0 {
+                beside(at - row, false);
+            }
+            if j > 0 {
+                beside(at - 1, false);
+            }
+            if i < nu {
+                beside(at + row, true);
+            }
+            if j < nv {
+                beside(at + 1, true);
+            }
+            // A touch, or a ring too small for the points to see.
+            if !crossed && least && d.abs() <= widest.max(tolerance) {
+                take(p, widest);
+            }
+        }
+    }
+    out
+}
+
 fn trace(
     a: &Surface,
     b: &Surface,
@@ -294,19 +508,21 @@ fn trace(
         let (lo, hi) = bounds;
         (0..3).all(|k| p[k] >= lo[k] - step && p[k] <= hi[k] + step)
     };
-    let tangent = |p: V3| -> Option<V3> {
-        let (ua, va) = a.invert(p)?;
-        let (ub, vb) = b.invert(p)?;
-        v3::normalize(v3::cross(a.normal(ua, va)?, b.normal(ub, vb)?))
+    // Each surface's foot of the point the walk is at.
+    let tangent = |p: V3, feet: &[Option<(f64, f64)>; 2]| -> Option<V3> {
+        let (_, _, na) = a.foot(p, feet[0])?;
+        let (_, _, nb) = b.foot(p, feet[1])?;
+        v3::normalize(v3::cross(na?, nb?))
     };
+    let mut feet = [None; 2];
 
     let cap = (span(bounds) / step * 8.0) as usize + 16;
     let mut forward = vec![seed];
-    let mut dir = tangent(seed)?;
+    let mut dir = tangent(seed, &feet)?;
     let mut p = seed;
     let mut closed = false;
     for _ in 0..cap {
-        let t = tangent(p)?;
+        let t = tangent(p, &feet)?;
         // Keep going the same way round.
         let t = if v3::dot(t, dir) < 0.0 {
             v3::scale(t, -1.0)
@@ -314,7 +530,9 @@ fn trace(
             t
         };
         dir = t;
-        let Some(next) = settle(a, b, v3::add(p, v3::scale(t, step)), tolerance) else {
+        let Some(next) = settle_from(a, b, v3::add(p, v3::scale(t, step)), tolerance, &mut feet)
+        else {
+            forward.extend(to_the_end(a, b, p, t, step, tolerance));
             break;
         };
         if !inside(next) {
@@ -348,17 +566,20 @@ fn trace(
 
     // Open: walk the other way from the seed and prepend.
     let mut backward = Vec::new();
-    let mut dir = v3::scale(tangent(seed)?, -1.0);
+    feet = [None; 2];
+    let mut dir = v3::scale(tangent(seed, &[None; 2])?, -1.0);
     let mut p = seed;
     for _ in 0..cap {
-        let t = tangent(p)?;
+        let t = tangent(p, &feet)?;
         let t = if v3::dot(t, dir) < 0.0 {
             v3::scale(t, -1.0)
         } else {
             t
         };
         dir = t;
-        let Some(next) = settle(a, b, v3::add(p, v3::scale(t, step)), tolerance) else {
+        let Some(next) = settle_from(a, b, v3::add(p, v3::scale(t, step)), tolerance, &mut feet)
+        else {
+            backward.extend(to_the_end(a, b, p, t, step, tolerance));
             break;
         };
         if !inside(next) {
@@ -370,6 +591,65 @@ fn trace(
     backward.reverse();
     backward.extend(forward);
     Some(backward)
+}
+
+/// Where a walk that cannot go on meets the edge of a spline's domain, within
+/// a step of `p` and ahead of it.
+///
+/// Every other surface goes on for ever, so a walk off a face's edge is cut
+/// there afterwards. A spline stops at the edge of its domain, and the last
+/// whole step that still settles leaves the curve short of it by up to a step:
+/// two walls of a tapered box each stopped before the corner they share, and
+/// the ring through them never closed. The point is on that edge, where the
+/// other surface crosses it: found along the edge itself, as springrep does,
+/// and so on it to rounding.
+fn to_the_end(a: &Surface, b: &Surface, p: V3, dir: V3, step: f64, tolerance: f64) -> Option<V3> {
+    let mut best: Option<(f64, V3)> = None;
+    for (s, other) in [(a, b), (b, a)] {
+        let Surface::Nurbs(n) = s else { continue };
+        let ((u, v), _, _) = s.foot(p, None)?;
+        for (along_u, (lo, hi), (from, to), start) in [
+            (true, n.domain_v(), n.domain_u(), u),
+            (false, n.domain_u(), n.domain_v(), v),
+        ] {
+            for edge in [lo, hi] {
+                let at = |t: f64| {
+                    if along_u {
+                        n.point(t, edge)
+                    } else {
+                        n.point(edge, t)
+                    }
+                };
+                let off = |t: f64| other.foot(at(t), None).map(|f| f.1);
+                let h = 1e-6 * (to - from);
+                let mut t = start;
+                for _ in 0..30 {
+                    let (x, y) = ((t - h).max(from), (t + h).min(to));
+                    let (Some(d), Some(e), Some(f)) = (off(t), off(x), off(y)) else {
+                        break;
+                    };
+                    let slope = (f - e) / (y - x);
+                    if d.abs() <= tolerance * 1e-6 || slope == 0.0 || !slope.is_finite() {
+                        break;
+                    }
+                    t = (t - d / slope).clamp(from, to);
+                }
+                let q = at(t);
+                let moved = v3::sub(q, p);
+                let far = v3::norm(moved);
+                // On both, and on from where the walk is.
+                if off(t).is_some_and(|d| d.abs() <= tolerance * 1e-3)
+                    && far <= step * 1.5
+                    && far > tolerance * 1e-3
+                    && v3::dot(moved, dir) > 0.5 * far
+                    && best.is_none_or(|b| far < b.0)
+                {
+                    best = Some((far, q));
+                }
+            }
+        }
+    }
+    best.map(|b| b.1)
 }
 
 /// Are these the same surface? `Some(opposite)` if so.
@@ -656,11 +936,41 @@ fn plane_cone(p: &Surface, c: &Surface) -> SsiResult {
     let cos = v3::dot(*normal, *axis);
     let apex_offset = v3::dot(v3::sub(*apex, *po), *normal);
 
-    // Through the apex: a degenerate conic (a point, or a pair of rulings).
-    // Which one needs the plane's inclination against the cone's; that case is
-    // left to the mesh kernel rather than guessed at.
+    // Through the apex: a point, the ruling the plane touches the cone along,
+    // or the two it cuts it in, by the plane's inclination against the cone's
+    // (`IntAna_QuadQuadGeo::Perform(gp_Pln, gp_Cone)`).
     if apex_offset.abs() <= EPS {
-        return SsiResult::Unknown;
+        let across = v3::cross(*normal, *axis);
+        let along = v3::cross(across, *normal);
+        let (sina, cosa) = (half_angle.sin().abs(), half_angle.cos());
+        let (sint, cost) = (v3::norm(across), cos.abs());
+        let costa = cost * cosa - sint * sina;
+        if costa.abs() < EPS {
+            // Along the axis's shadow in the plane.
+            let Some(dir) = v3::normalize(along) else {
+                return SsiResult::Unknown;
+            };
+            return SsiResult::Curves(vec![Curve3d::Line { origin: *apex, dir }]);
+        }
+        if cost < sina {
+            let dh = (sina * sina - cost * cost).sqrt() / cosa;
+            let rulings =
+                [1.0, -1.0].map(|k| v3::normalize(v3::add(along, v3::scale(across, k * dh))));
+            let [Some(d1), Some(d2)] = rulings else {
+                return SsiResult::Unknown;
+            };
+            return SsiResult::Curves(vec![
+                Curve3d::Line {
+                    origin: *apex,
+                    dir: d1,
+                },
+                Curve3d::Line {
+                    origin: *apex,
+                    dir: d2,
+                },
+            ]);
+        }
+        return SsiResult::Curves(vec![Curve3d::Point(*apex)]);
     }
 
     // Perpendicular to the axis → a circle.
@@ -1496,6 +1806,39 @@ mod tests {
     }
 
     #[test]
+    fn planes_through_a_cones_apex_meet_it_in_rulings_or_the_apex() {
+        let k = Surface::cone([0.0; 3], [0.0, 0.0, 1.0], FRAC_PI_4);
+        // Each ruling on both, on the side the cone goes.
+        let rulings = |p: &Surface| -> Vec<V3> {
+            let SsiResult::Curves(x) = ssi(p, &k) else {
+                panic!("no curves");
+            };
+            x.iter()
+                .map(|c| {
+                    let Curve3d::Line { origin, dir } = c else {
+                        panic!("{c:?}")
+                    };
+                    for i in 0..=20 {
+                        let q = v3::add(*origin, v3::scale(*dir, i as f64 * 0.5));
+                        assert!(p.distance(q) < 1e-9 && k.distance(q) < 1e-9, "{q:?}");
+                    }
+                    *dir
+                })
+                .collect()
+        };
+        // Along a ruling: touching it there.
+        let touch = Surface::plane([0.0; 3], v3::normalize([1.0, 0.0, -1.0]).unwrap());
+        assert_eq!(rulings(&touch).len(), 1);
+        // Steeper: two rulings.
+        assert_eq!(rulings(&Surface::plane([0.0; 3], [1.0, 0.0, 0.0])).len(), 2);
+        // Flatter: the apex alone.
+        let flat = Surface::plane([0.0; 3], v3::normalize([0.2, 0.0, 1.0]).unwrap());
+        assert!(
+            matches!(ssi(&flat, &k), SsiResult::Curves(x) if matches!(x[..], [Curve3d::Point(_)]))
+        );
+    }
+
+    #[test]
     fn a_plane_parallel_to_a_cone_ruling_is_unknown_not_approximated() {
         // Parabola and hyperbola are unbounded and have no `Curve3d`. Reporting
         // an ellipse would be worse than reporting nothing.
@@ -1829,6 +2172,149 @@ mod tests {
                 a.kind(),
                 b.kind()
             );
+        }
+    }
+
+    /// A curve that leaves the box is found once, though seeds beyond the
+    /// box lead back in along it.
+    #[test]
+    fn a_curve_cut_off_by_the_box_is_marched_once() {
+        let ball = Surface::Sphere {
+            center: [0.9, -0.5, 0.0],
+            axis: [0.0, 0.0, 1.0],
+            x_dir: [1.0, 0.0, 0.0],
+            radius: 8.0,
+        };
+        for (radius, z) in [(1.5, 1.0), (0.5, 1.0), (1.5, -1.0), (0.5, -1.0)] {
+            let rod = Surface::Cylinder {
+                origin: [-9.0, -0.5, z],
+                axis: [1.0, 0.0, 0.0],
+                x_dir: [0.0, 1.0, 0.0],
+                radius,
+            };
+            // Half of the rod, as a slot's end is.
+            let (zlo, zhi) = if z > 0.0 {
+                (z, z + radius)
+            } else {
+                (z - radius, z)
+            };
+            let pad = 0.2;
+            let bounds = (
+                [-9.0 - pad, -0.5 - radius - pad, zlo - pad],
+                [1.0 + pad, -0.5 + radius + pad, zhi + pad],
+            );
+            let curves = march(&ball, &rod, bounds, 3e-5);
+            for (k, c) in curves.iter().enumerate() {
+                let Curve3d::Sampled { points, .. } = c else {
+                    panic!("a marched curve is sampled");
+                };
+                let inside: Vec<&V3> = points
+                    .iter()
+                    .filter(|p| (0..3).all(|i| p[i] >= bounds.0[i] && p[i] <= bounds.1[i]))
+                    .collect();
+                for (m, d) in curves.iter().enumerate() {
+                    assert!(
+                        m == k || inside.iter().any(|p| d.distance(**p) > 1e-3),
+                        "rod {radius} at {z}: curves {k} and {m} are one"
+                    );
+                }
+            }
+            assert!(!curves.is_empty(), "rod {radius} at {z}");
+        }
+    }
+
+    /// A spline gives marching no radius to step by; the curve it finds
+    /// holds the tolerance all the same, and stays on both surfaces.
+    #[test]
+    fn a_marched_spline_section_holds_its_tolerance() {
+        use crate::nurbs::NurbsSurface;
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let ring = [
+            (1.0, 0.0, 1.0),
+            (1.0, 1.0, w),
+            (0.0, 1.0, 1.0),
+            (-1.0, 1.0, w),
+            (-1.0, 0.0, 1.0),
+            (-1.0, -1.0, w),
+            (0.0, -1.0, 1.0),
+            (1.0, -1.0, w),
+            (1.0, 0.0, 1.0),
+        ];
+        let poles = ring
+            .iter()
+            .flat_map(|&(x, y, w)| [-20.0, 20.0].map(|z| [30.0 * x * w, 10.0 * y * w, z * w, w]))
+            .collect();
+        let knots_u = vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 4.0];
+        let knots_v = vec![0.0, 0.0, 1.0, 1.0];
+        let wall = Surface::Nurbs(Box::new(
+            NurbsSurface::from_homogeneous(2, 1, knots_u, knots_v, 9, 2, poles).unwrap(),
+        ));
+        let s = 0.2f64;
+        let plane = Surface::Plane {
+            origin: [0.0, 0.0, 1.0],
+            normal: [s, 0.0, (1.0 - s * s).sqrt()],
+            x_dir: [0.0, 1.0, 0.0],
+        };
+        let tolerance = 1e-3;
+        let bounds = ([-31.0, -11.0, -21.0], [31.0, 11.0, 21.0]);
+        let curves = march(&wall, &plane, bounds, tolerance);
+        assert_eq!(curves.len(), 1);
+        let Curve3d::Sampled { points, closed } = &curves[0] else {
+            panic!("a marched curve is sampled");
+        };
+        assert!(*closed);
+        let n = points.len();
+        for i in 0..n {
+            let (p, q) = (points[i], points[(i + 1) % n]);
+            for t in [0.25, 0.5, 0.75] {
+                let m = v3::add(p, v3::scale(v3::sub(q, p), t));
+                // Off the wall's ellipse, to first order.
+                let (x, y) = (m[0] / 30.0, m[1] / 10.0);
+                let grad = 2.0 * ((x / 30.0).powi(2) + (y / 10.0).powi(2)).sqrt();
+                let off = (x * x + y * y - 1.0).abs() / grad;
+                assert!(off <= tolerance * 1.5, "{off} off at {m:?} of {n} points");
+                assert!(plane.distance(m) <= tolerance);
+            }
+        }
+    }
+
+    /// A spline wall stops at the edge of its domain, and so do the curves on
+    /// it: right there, not up to a step short.
+    #[test]
+    fn a_marched_curve_reaches_the_end_of_a_spline() {
+        use crate::nurbs::NurbsSurface;
+        // A side of a tapered box: 6 wide at the bottom, 4 at the top.
+        let poles = [
+            [-3.0, -3.0, 0.0, 1.0],
+            [-2.0, -2.0, 7.0, 1.0],
+            [3.0, -3.0, 0.0, 1.0],
+            [2.0, -2.0, 7.0, 1.0],
+        ];
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let wall = Surface::Nurbs(Box::new(
+            NurbsSurface::from_homogeneous(1, 1, knots.clone(), knots, 2, 2, poles.to_vec())
+                .unwrap(),
+        ));
+        let plane = Surface::Plane {
+            origin: [0.0, 0.0, 2.0],
+            normal: [0.0, 0.0, 1.0],
+            x_dir: [1.0, 0.0, 0.0],
+        };
+        let tolerance = 1e-3;
+        let curves = march(
+            &wall,
+            &plane,
+            ([-5.0, -5.0, -1.0], [5.0, 5.0, 8.0]),
+            tolerance,
+        );
+        assert_eq!(curves.len(), 1);
+        let Curve3d::Sampled { points, closed } = &curves[0] else {
+            panic!("a marched curve is sampled");
+        };
+        assert!(!closed);
+        let end = 3.0 - 2.0 / 7.0;
+        for p in [points[0], points[points.len() - 1]] {
+            assert!((p[0].abs() - end).abs() <= tolerance, "{p:?}, not {end}");
         }
     }
 }

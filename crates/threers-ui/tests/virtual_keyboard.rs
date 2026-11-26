@@ -899,6 +899,9 @@ mod swiping {
         ) {
             self.0.push((stroke.unwrap_or(0.0), c[3]));
         }
+        fn fill_rounded_rect(&mut self, r: threers_ui::Rect, _: f32, _: f32, c: threers_ui::Rgba) {
+            self.0.push((r.width, c[3]));
+        }
     }
 
     #[test]
@@ -921,11 +924,11 @@ mod swiping {
         }
         let mut mid = Strokes::default();
         assert!(r.kb.paint_swipe_trail(&mut mid, r.t), "drawn while swiping");
-        assert_eq!(mid.0.len(), 8, "eight strokes stacked toward the finger");
+        assert!(mid.0.len() > 8, "dots along it");
         let (first, last) = (mid.0[0], *mid.0.last().unwrap());
         assert!(last.0 > first.0, "wider toward the finger");
-        // Stacked, the finger's end shows about 0.8 opaque.
-        let stacked = 1.0 - mid.0.iter().map(|s| 1.0 - s.1).product::<f32>();
+        // About four over each place: 0.8 opaque, so.
+        let stacked = 1.0 - (1.0 - last.1).powi(4);
         assert!((stacked - 0.8).abs() < 1e-3, "{stacked}");
         r.send(Event::PointerUp {
             x: l.0,
@@ -1033,4 +1036,86 @@ mod swiping {
         assert_eq!(r.field.text, "Hello ");
         assert!(has(&r, "q"), "Shift was for one word");
     }
+}
+
+/// A password's keyboard asks nobody about it, says nothing of it and keeps
+/// nothing of it — nor for the next field.
+#[test]
+fn a_secret_is_not_read_predicted_nor_kept() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let told: Rc<RefCell<Vec<String>>> = Default::default();
+    // With the app telling the text and without (the keyboard's own record).
+    for context in [false, true] {
+        let mut r = Rig::new(KeyboardConfig::iphone());
+        if context {
+            let t = told.clone();
+            r.kb.set_context(move |f: &TextField, _| {
+                t.borrow_mut().push(format!("read {}", f.text));
+                Some(f.before_caret())
+            });
+        }
+        let t = told.clone();
+        r.kb.set_predictions(move |_, before| {
+            t.borrow_mut().push(format!("predict {before}"));
+            vec!["offered".into()]
+        });
+        let t = told.clone();
+        r.kb.set_suggestions(move |word| {
+            t.borrow_mut().push(format!("suggest {word}"));
+            vec!["offered".into()]
+        });
+        let offered = |r: &Rig| r.names().iter().any(|n| n.starts_with("Suggestion"));
+        // An ordinary field is offered words: the hooks work.
+        let a = if r.names().iter().any(|n| n == "a") { "a" } else { "A" };
+        r.tap(a);
+        assert_eq!(!told.borrow().is_empty(), context, "context {context}");
+        assert_eq!(offered(&r), context);
+        // The same field, a password now.
+        r.ui.semantics_mut(r.target).secret = true;
+        r.settle();
+        assert!(!offered(&r), "what was offered goes");
+        told.borrow_mut().clear();
+        r.field = TextField::new("");
+        for k in ["s", "e", "c"] {
+            r.tap(k);
+        }
+        r.tap("Space");
+        r.tap("Space");
+        assert_eq!(r.field.text, "sec  ", "no capital, no full stop");
+        assert!(told.borrow().is_empty(), "{:?}", told.borrow());
+        assert!(!offered(&r));
+        // Back to an ordinary one: nothing of it is left.
+        r.ui.semantics_mut(r.target).secret = false;
+        r.field = TextField::new("");
+        r.settle();
+        let x = if r.names().iter().any(|n| n == "x") { "x" } else { "X" };
+        r.tap(x);
+        assert!(told.borrow().iter().all(|t| !t.contains("sec")), "{:?}", told.borrow());
+        told.borrow_mut().clear();
+    }
+}
+
+#[cfg(feature = "swipe")]
+#[test]
+fn a_secret_is_not_swiped() {
+    let seen: std::rc::Rc<std::cell::Cell<u32>> = Default::default();
+    let mut r = Rig::new(KeyboardConfig::iphone());
+    r.ui.semantics_mut(r.target).secret = true;
+    r.settle();
+    let n = seen.clone();
+    r.kb.set_swipe_decoder(move |_| {
+        n.set(n.get() + 1);
+        vec!["hello".into()]
+    });
+    let (from, to) = (r.center("q"), r.center("p"));
+    r.down_at(from);
+    for i in 1..=12 {
+        r.tick(0.016);
+        let x = from.0 + (to.0 - from.0) * i as f32 / 12.0;
+        r.send(Event::PointerMove { x, y: from.1 });
+    }
+    r.up_at(to);
+    assert_eq!(seen.get(), 0);
+    assert_eq!(r.field.text, "p", "the key under the finger, as without swiping");
 }

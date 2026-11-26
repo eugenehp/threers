@@ -121,6 +121,9 @@ struct WgpuWindow {
     /// The surface format's sRGB variant, for the overlay: fixed-function
     /// blending on a plain `Unorm` view mixes encodings rather than light.
     srgb_format: wgpu::TextureFormat,
+    /// Where [`present_with`](WindowRenderer::present_with)'s drawing mixes
+    /// see-through colours (see [`WindowRenderer::set_blend_space`]).
+    blend: crate::overlay::BlendSpace,
     /// What the surface can composite as (for [`WindowRenderer::set_transparent`]).
     alpha_modes: Vec<wgpu::CompositeAlphaMode>,
     /// What the surface can present with (for [`WindowRenderer::set_present_mode`]).
@@ -144,6 +147,9 @@ struct MetalWindow {
     sample_count: u32,
     surface: crate::metal::MetalSurface,
     renderer: crate::metal::MetalRenderer,
+    /// What views drawn by wgpu on this device on other threads hold
+    /// ([`WindowRenderer::shared_gpu`]).
+    gate: super::SubmitGate,
 }
 
 impl WindowRenderer {
@@ -306,6 +312,20 @@ impl WindowRenderer {
     /// `Mailbox` replaces a queued frame with a newer one, so a frame is never
     /// waited on. `Immediate` presents at once and may tear. Returns whether
     /// the surface supports `mode`; nothing changes when it doesn't. wgpu only.
+    /// Where [`present_with`](Self::present_with)'s drawing (a
+    /// [`UiPass`](super::UiPass)) mixes see-through colours: linear light,
+    /// the default, or the sRGB-encoded values as CSS does — it is then
+    /// given a plain (not sRGB) view, and the pass encodes its colours
+    /// itself. wgpu only.
+    pub fn set_blend_space(&mut self, space: crate::overlay::BlendSpace) {
+        match &mut self.backend {
+            #[cfg(winit_window)]
+            Backend::Wgpu(w) => w.blend = space,
+            #[cfg(metal_backend)]
+            Backend::Metal(_) => {}
+        }
+    }
+
     pub fn set_present_mode(&mut self, mode: wgpu::PresentMode) -> bool {
         match &mut self.backend {
             #[cfg(winit_window)]
@@ -356,12 +376,12 @@ impl WindowRenderer {
                 queue: w.renderer.queue_arc(),
                 gate: w.gate.clone(),
             }),
+            // wgpu on the window's own Metal device and queue
             #[cfg(metal_backend)]
-            Backend::Metal(_) => Err(
-                "views on other threads need the wgpu backend; this window draws with native Metal \
-                 (unset THREERS_BACKEND or open it with WindowBackend::Wgpu)"
-                    .into(),
-            ),
+            Backend::Metal(m) => {
+                let (device, queue) = crate::metal::wgpu_on(&m.device).map_err(|e| e.to_string())?;
+                Ok(super::SharedGpu { device, queue, gate: m.gate.clone() })
+            }
         }
     }
 
@@ -372,9 +392,8 @@ impl WindowRenderer {
         match &self.backend {
             #[cfg(winit_window)]
             Backend::Wgpu(w) => w.gate.clone(),
-            // No wgpu device to share; a gate nothing else holds.
             #[cfg(metal_backend)]
-            Backend::Metal(_) => super::SubmitGate::new(),
+            Backend::Metal(m) => m.gate.clone(),
         }
     }
 
@@ -504,11 +523,15 @@ impl WindowRenderer {
     }
 
     /// Draws a frame with no scene: `draw(device, queue, target, size,
-    /// format)` fills `target`, an sRGB view of the next drawable, and the
+    /// format)` fills `target`, a view of the next drawable (sRGB, or plain
+    /// for [`BlendSpace::Srgb`](crate::overlay::BlendSpace)), and the
     /// frame is presented after it returns. This is for a window whose content
     /// is all UI, e.g. a [`UiPass`](super::UiPass) compositing
     /// [`ViewFrames`](super::ViewFrames) drawn on other threads. `false`, with
-    /// nothing called, for a frame to skip, or on the native Metal backend.
+    /// nothing called, for a frame to skip. On the native Metal backend the
+    /// device and queue are wgpu on the window's own Metal device and queue
+    /// ([`crate::metal::wgpu_on`]); [`set_blend_space`](Self::set_blend_space)
+    /// is wgpu's only.
     pub fn present_with(
         &mut self,
         draw: impl FnOnce(&wgpu::Device, &wgpu::Queue, &wgpu::TextureView, (u32, u32), wgpu::TextureFormat),
@@ -517,13 +540,7 @@ impl WindowRenderer {
             #[cfg(winit_window)]
             Backend::Wgpu(w) => w.present_with(draw),
             #[cfg(metal_backend)]
-            Backend::Metal(_) => {
-                static WARNED: std::sync::Once = std::sync::Once::new();
-                WARNED.call_once(|| {
-                    log::warn!("present_with draws nothing on the native Metal backend; use the wgpu backend")
-                });
-                false
-            }
+            Backend::Metal(m) => m.present_with(self.size, draw),
         }
     }
 
@@ -739,11 +756,12 @@ impl WgpuWindow {
             height: size.1,
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: caps.alpha_modes[0],
-            view_formats: if srgb_format == format {
-                vec![]
-            } else {
-                vec![srgb_format]
-            },
+            // Its sRGB view (light mixed linearly) and its plain one (the
+            // encoded values mixed, as CSS does), whichever it is not.
+            view_formats: [srgb_format, format.remove_srgb_suffix()]
+                .into_iter()
+                .filter(|f| *f != format)
+                .collect(),
             desired_maximum_frame_latency: 2,
             color_space: wgpu::SurfaceColorSpace::Srgb,
         };
@@ -755,6 +773,7 @@ impl WgpuWindow {
             surface,
             config,
             srgb_format,
+            blend: crate::overlay::BlendSpace::Linear,
             alpha_modes: caps.alpha_modes.clone(),
             present_modes: caps.present_modes.clone(),
             device,
@@ -824,8 +843,14 @@ impl WgpuWindow {
         let Some(frame) = self.acquire() else {
             return false;
         };
+        // An sRGB view mixes light; a plain one the encoded values (the
+        // drawing then encodes its colours itself).
+        let format = match self.blend {
+            crate::overlay::BlendSpace::Linear => self.srgb_format,
+            crate::overlay::BlendSpace::Srgb => self.srgb_format.remove_srgb_suffix(),
+        };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(self.srgb_format),
+            format: Some(format),
             ..Default::default()
         });
         let queue = self.renderer.queue_arc();
@@ -834,7 +859,7 @@ impl WgpuWindow {
             &queue,
             &view,
             (self.config.width, self.config.height),
-            self.srgb_format,
+            format,
         );
         queue.present(frame);
         true
@@ -914,7 +939,46 @@ impl MetalWindow {
             sample_count: 4,
             surface,
             renderer,
+            gate: super::SubmitGate::new(),
         })
+    }
+
+    /// [`WindowRenderer::present_with`]: wgpu on this window's own Metal
+    /// device and queue ([`crate::metal::wgpu_on`]), drawing into the frame's
+    /// drawable, then presenting it on the same queue (so after what was
+    /// drawn).
+    fn present_with(
+        &mut self,
+        size: (u32, u32),
+        draw: impl FnOnce(&wgpu::Device, &wgpu::Queue, &wgpu::TextureView, (u32, u32), wgpu::TextureFormat),
+    ) -> bool {
+        let (device, queue) = match crate::metal::wgpu_on(&self.device) {
+            Ok(pair) => pair,
+            Err(e) => {
+                log::error!("wgpu on the window's Metal device: {e}");
+                return false;
+            }
+        };
+        let Some(frame) = self.surface.next_frame() else {
+            return false;
+        };
+        let pass = frame.attachments();
+        // SAFETY: the frame's drawable (or its resolve target), alive until
+        // it is presented, on the device wgpu was made from; the layer's
+        // drawables are render targets only.
+        let Some(texture) = (unsafe { crate::metal::wgpu_texture(&device, pass.shown(), wgpu::TextureUsages::RENDER_ATTACHMENT) }) else {
+            log::error!("the window's drawable has a format wgpu cannot name");
+            return false;
+        };
+        let format = texture.format();
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        draw(&device, &queue, &view, size, format);
+        drop(view);
+        drop(texture);
+        if let Err(e) = self.renderer.present(&pass) {
+            log::error!("Metal present: {e}");
+        }
+        true
     }
 
     fn render_frame(

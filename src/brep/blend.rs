@@ -24,14 +24,24 @@
 //! * **A circular rim** where a plane caps a cylinder square to its axis: the
 //!   end of a shaft, the mouth of a hole, the foot of a boss, the floor of a
 //!   blind bore. A chamfer there is a cone and a fillet a torus.
+//! * **A smooth ring round a flat face**, each of its edges between the face
+//!   and a plane or a cylinder square to it, the sides tangent where they meet:
+//!   the top of a rounded rectangle, a slot, the mouth or floor of a pocket with
+//!   rounded corners. Selecting any of its edges blends the whole ring, as a
+//!   blend that follows tangent edges does, in planes and cones (chamfer) or
+//!   cylinders and tori (fillet) that meet each other tangentially. Where the
+//!   ring has sharp corners too — a notch cut in from the side — the blend
+//!   runs along the smooth stretch to the sharp corner either side and ends on
+//!   the flat face there, using up an edge it reaches the end of exactly.
 //!
 //! # What it declines
 //!
 //! Everything else, by name — see [`BlendDeclined`]. The contract is the
 //! boolean's: a result is a closed solid, or there is no result and a reason.
 //! In particular an edge that ends on a curved face, or on an edge that is not
-//! straight, is declined, so a box whose vertical edges were rounded cannot yet
-//! have its top edges rounded as well.
+//! straight, is declined unless it is part of such a ring, and so is a blend
+//! whose strip another edge of the face reaches into — a hole near the edge,
+//! which the blend would have to be trimmed by.
 //!
 //! # Tolerance
 //!
@@ -216,6 +226,31 @@ fn blend(
         return Ok(body.clone());
     }
 
+    // Edges on smooth rings round a flat face blend round the whole ring.
+    let eps = 1e-9 * extent(body.vertices());
+    let mut rings: Vec<TangentLoop> = Vec::new();
+    let mut on_rings: HashSet<usize> = HashSet::new();
+    for &e in &selection {
+        if on_rings.contains(&e) || body.edges()[e].closed {
+            continue;
+        }
+        if let Some(ring) = tangent_loop(body, e, eps) {
+            on_rings.extend(ring.edges.iter().map(|r| r.0));
+            rings.push(ring);
+        }
+    }
+    for ring in &rings {
+        if let Some(r) = ring.risers.iter().flatten().find(|r| selection.contains(r)) {
+            return Err(BlendDeclined::UnsupportedEdge { edge: *r });
+        }
+        for end in ring.ends.iter().flatten() {
+            if selection.contains(&end.on_cap) || selection.contains(&end.on_side) {
+                return Err(BlendDeclined::UnsupportedVertex { vertex: end.vertex });
+            }
+        }
+    }
+    selection.retain(|e| !on_rings.contains(e));
+
     let (rims, straight): (Vec<usize>, Vec<usize>) =
         selection.iter().partition(|&&e| body.edges()[e].closed);
 
@@ -229,6 +264,9 @@ fn blend(
     };
     for &rim in &rims {
         blend_rim(&mut parts, rim, size, kind, tolerance)?;
+    }
+    for ring in &rings {
+        blend_loop(&mut parts, ring, size, kind, tolerance)?;
     }
     parts.compact();
 
@@ -1369,6 +1407,864 @@ fn blend_rim(
     });
     if !parts.body().face_loops(cap).iter().any(|l| l.is_outer()) {
         return Err(BlendDeclined::TrimmedFace { face: cap });
+    }
+    Ok(())
+}
+
+/// A smooth chain of edges bounding a flat face — the *cap* — each between
+/// the cap and a side square to it, a plane or a cylinder whose axis is the
+/// cap's normal, the sides tangent where they meet: the top of a rounded
+/// rectangle, a slot, the mouth of a pocket with rounded corners.
+///
+/// A blend that starts along one of its edges runs on along the chain, as
+/// OpenCASCADE's does where it follows tangent edges: round the whole ring
+/// where every vertex of it is smooth, and otherwise to the sharp corners
+/// either side, where it ends on the third face there as a single straight
+/// blend does. Its pieces are the rim blends and the straight ones, a plane
+/// or a cone (chamfer), a cylinder or a torus (fillet) for each edge, meeting
+/// their neighbours tangentially along the line from the cap's new boundary
+/// to the side's.
+struct TangentLoop {
+    cap: usize,
+    /// The chain's edges in the order the cap's ring walks them, and whether
+    /// it walks each against its stored order.
+    edges: Vec<(usize, bool)>,
+    /// The edge leaving the chain at each vertex along it, `risers[i]` at the
+    /// start of `edges[i]`; for an open chain one more, and `None` at its two
+    /// ends.
+    risers: Vec<Option<usize>>,
+    /// Where an open chain stops: at the start of its first edge and the end
+    /// of its last.
+    ends: Option<[ChainEnd; 2]>,
+}
+
+/// A sharp corner an open chain ends at: three straight edges, the chain's,
+/// one more on the cap and one on the side, and the face across them.
+struct ChainEnd {
+    vertex: usize,
+    on_cap: usize,
+    on_side: usize,
+    third: usize,
+}
+
+/// The faces using each edge.
+fn edge_faces(edges: &[Edge], faces: &[Face]) -> Vec<Vec<usize>> {
+    let mut out = vec![Vec::new(); edges.len()];
+    for (fi, f) in faces.iter().enumerate() {
+        for &e in &f.edges {
+            out[e].push(fi);
+        }
+    }
+    out
+}
+
+/// A face's outward normal at a point on it, for a plane or a cylinder.
+fn outward_at(body: &Body, face: usize, p: V3) -> Option<V3> {
+    let f = &body.faces()[face];
+    let n = match &body.surfaces()[f.surface] {
+        Surface::Plane { normal, .. } => *normal,
+        Surface::Cylinder { origin, axis, .. } => {
+            let d = v3::sub(p, *origin);
+            v3::normalize(v3::sub(d, v3::scale(*axis, v3::dot(d, *axis))))?
+        }
+        _ => return None,
+    };
+    Some(if f.flipped { v3::scale(n, -1.0) } else { n })
+}
+
+/// How many pieces an arc of `radius` through `angle` needs to be within
+/// `tolerance` of its chords.
+fn arc_pieces(radius: f64, angle: f64, tolerance: f64) -> usize {
+    if tolerance >= radius {
+        return 2;
+    }
+    let step = 2.0 * (1.0 - tolerance / radius).acos();
+    ((angle.abs() / step).ceil() as usize).clamp(2, 4096)
+}
+
+/// The chain along a flat face that `edge` bounds, if it is a
+/// [`TangentLoop`] with at least one curved edge.
+fn tangent_loop(body: &Body, edge: usize, eps: f64) -> Option<TangentLoop> {
+    let users = edge_faces(body.edges(), body.faces());
+    let e = &body.edges()[edge];
+    if e.closed || e.vertices.len() < 2 {
+        return None;
+    }
+    let mut ending: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut inner: HashSet<usize> = HashSet::new();
+    for (ei, e) in body.edges().iter().enumerate() {
+        let n = e.vertices.len();
+        if e.closed || n < 2 {
+            inner.extend(e.vertices.iter().copied());
+            continue;
+        }
+        ending.entry(e.vertices[0]).or_default().push(ei);
+        ending.entry(e.vertices[n - 1]).or_default().push(ei);
+        inner.extend(e.vertices[1..n - 1].iter().copied());
+    }
+    let other = |e: usize, cap: usize| -> Option<usize> {
+        match *users[e].as_slice() {
+            [a, b] if a == cap && b != cap => Some(b),
+            [a, b] if b == cap && a != cap => Some(a),
+            _ => None,
+        }
+    };
+    'caps: for &cap in &users[edge] {
+        let Some((normal, _)) = plane_normals(body, cap) else {
+            continue;
+        };
+        // The ring through the edge, as steps between vertices, each named by
+        // the edge it is part of.
+        let (p, q) = (e.vertices[0], e.vertices[1]);
+        let loops = body.face_loops(cap);
+        let Some(ring) = loops.iter().find(|l| {
+            let n = l.vertices.len();
+            (0..n).any(|i| {
+                let s = (l.vertices[i], l.vertices[(i + 1) % n]);
+                s == (p, q) || s == (q, p)
+            })
+        }) else {
+            continue;
+        };
+        let mut owner: HashMap<(usize, usize), usize> = HashMap::new();
+        for &ce in &body.faces()[cap].edges {
+            for w in body.edges()[ce].vertices.windows(2) {
+                owner.insert(pair(w[0], w[1]), ce);
+            }
+        }
+        let n = ring.vertices.len();
+        let mut steps = Vec::with_capacity(n);
+        for i in 0..n {
+            let (a, b) = (ring.vertices[i], ring.vertices[(i + 1) % n]);
+            let Some(&ce) = owner.get(&pair(a, b)) else {
+                continue 'caps;
+            };
+            steps.push((ce, a));
+        }
+        // Start at an edge's first step.
+        let Some(start) = (0..n).find(|&i| steps[i].0 != steps[(i + n - 1) % n].0) else {
+            continue;
+        };
+        steps.rotate_left(start);
+        let mut ring_edges: Vec<(usize, bool)> = Vec::new();
+        let mut starts: Vec<usize> = Vec::new();
+        for (i, &(ce, a)) in steps.iter().enumerate() {
+            if i > 0 && steps[i - 1].0 == ce {
+                continue;
+            }
+            let v = &body.edges()[ce].vertices;
+            if v[0] != a && v[v.len() - 1] != a {
+                continue 'caps;
+            }
+            ring_edges.push((ce, v[0] != a));
+            starts.push(a);
+        }
+        // An edge met twice is a ring that doubles back on itself.
+        let mut seen = HashSet::new();
+        let m = ring_edges.len();
+        if ring_edges.iter().any(|(ce, _)| !seen.insert(*ce)) || m < 2 {
+            continue;
+        }
+        let Some(k) = ring_edges.iter().position(|r| r.0 == edge) else {
+            continue;
+        };
+
+        // Which edges have a side square to the cap (and which of those are
+        // curved), and which vertices are smooth, with a riser straight and
+        // square to the cap too.
+        let sides: Vec<Option<(usize, bool)>> = ring_edges
+            .iter()
+            .map(|&(ce, _)| {
+                let side = other(ce, cap)?;
+                match &body.surfaces()[body.faces()[side].surface] {
+                    Surface::Plane { normal: m, .. } => (v3::dot(*m, normal).abs() <= 1e-9
+                        && straight_edge(body, ce, eps).is_some())
+                    .then_some((side, false)),
+                    Surface::Cylinder { axis, .. } => (v3::dot(*axis, normal).abs() >= 1.0 - 1e-9
+                        && !body.faces()[side].u_wraps)
+                        .then_some((side, true)),
+                    _ => None,
+                }
+            })
+            .collect();
+        let smooth = |i: usize| -> Option<usize> {
+            let prev = (i + m - 1) % m;
+            let ((side, _), (before, _)) = (sides[i]?, sides[prev]?);
+            let v = starts[i];
+            let at = ending.get(&v)?;
+            if at.len() != 3 || inner.contains(&v) || before == side {
+                return None;
+            }
+            let (ce, pe) = (ring_edges[i].0, ring_edges[prev].0);
+            let &riser = at.iter().find(|&&r| r != ce && r != pe)?;
+            let (_, _, dir, _) = straight_edge(body, riser, eps)?;
+            if v3::dot(dir, normal).abs() < 1.0 - 1e-9 {
+                return None;
+            }
+            let at_v = body.vertices()[v];
+            let (m0, m1) = (
+                outward_at(body, before, at_v)?,
+                outward_at(body, side, at_v)?,
+            );
+            (v3::dot(m0, m1) >= 1.0 - 1e-6).then_some(riser)
+        };
+        if sides[k].is_none() {
+            continue;
+        }
+        let all: Vec<Option<usize>> = (0..m).map(smooth).collect();
+        if all.iter().all(Option::is_some) {
+            if !sides.iter().flatten().any(|s| s.1) {
+                continue;
+            }
+            return Some(TangentLoop {
+                cap,
+                edges: ring_edges,
+                risers: all,
+                ends: None,
+            });
+        }
+
+        // Open: from the edge back and on to the sharp corners either side.
+        let (mut lo, mut len) = (k, 1usize);
+        while all[lo].is_some() {
+            lo = (lo + m - 1) % m;
+            len += 1;
+        }
+        while all[(lo + len) % m].is_some() {
+            len += 1;
+        }
+        let chain: Vec<usize> = (0..len).map(|i| (lo + i) % m).collect();
+        if !chain.iter().any(|&i| sides[i].is_some_and(|s| s.1)) {
+            continue;
+        }
+        let end_at =
+            |vertex_index: usize, chain_edge: usize, neighbour: usize| -> Option<ChainEnd> {
+                let v = starts[vertex_index];
+                let (side, curved) = sides[chain_edge]?;
+                if curved {
+                    return None;
+                }
+                let at = ending.get(&v)?;
+                if at.len() != 3 || inner.contains(&v) {
+                    return None;
+                }
+                let ce = ring_edges[chain_edge].0;
+                let on_cap = ring_edges[neighbour].0;
+                let &on_side = at.iter().find(|&&r| r != ce && r != on_cap)?;
+                straight_edge(body, on_cap, eps)?;
+                straight_edge(body, on_side, eps)?;
+                let third = *users[on_cap]
+                    .iter()
+                    .find(|f| **f != cap && **f != side && users[on_side].contains(f))?;
+                plane_normals(body, third)?;
+                Some(ChainEnd {
+                    vertex: v,
+                    on_cap,
+                    on_side,
+                    third,
+                })
+            };
+        let last = chain[len - 1];
+        let (Some(first_end), Some(last_end)) = (
+            end_at(lo, lo, (lo + m - 1) % m),
+            end_at((last + 1) % m, last, (last + 1) % m),
+        ) else {
+            continue;
+        };
+        let mut risers: Vec<Option<usize>> = chain.iter().map(|&i| all[i]).collect();
+        risers[0] = None;
+        risers.push(None);
+        return Some(TangentLoop {
+            cap,
+            edges: chain.iter().map(|&i| ring_edges[i]).collect(),
+            risers,
+            ends: Some([first_end, last_end]),
+        });
+    }
+    None
+}
+
+/// Blend every edge of a [`TangentLoop`].
+fn blend_loop(
+    parts: &mut Parts,
+    plan: &TangentLoop,
+    size: f64,
+    kind: Kind,
+    tolerance: f64,
+) -> Result<(), BlendDeclined> {
+    let probe = parts.body();
+    let body = &probe;
+    let eps = 1e-9 * extent(body.vertices());
+    let users = edge_faces(body.edges(), body.faces());
+    let first = plan.edges[0].0;
+    let unsupported = BlendDeclined::UnsupportedEdge { edge: first };
+    let (normal, cap_out) = plane_normals(body, plan.cap).ok_or(unsupported.clone())?;
+    let count = plan.edges.len();
+    let open = plan.ends.is_some();
+    // Vertex `i` starts edge `i`; an open chain has one more, ending it.
+    let corners = if open { count + 1 } else { count };
+    let next = |i: usize| if open { i + 1 } else { (i + 1) % count };
+
+    // Each edge as the ring walks it.
+    let walked: Vec<Vec<usize>> = plan
+        .edges
+        .iter()
+        .map(|&(e, back)| {
+            let mut v = body.edges()[e].vertices.clone();
+            if back {
+                v.reverse();
+            }
+            v
+        })
+        .collect();
+    let vertex_at = |i: usize| -> usize {
+        if i < count {
+            walked[i][0]
+        } else {
+            walked[count - 1][walked[count - 1].len() - 1]
+        }
+    };
+    let side_of = |i: usize| -> usize {
+        let e = plan.edges[i].0;
+        if users[e][0] == plan.cap {
+            users[e][1]
+        } else {
+            users[e][0]
+        }
+    };
+
+    // Into the cap, square to the ring, at a point of edge `i`.
+    let inward = |i: usize, p: V3| -> Option<V3> {
+        let w = &walked[i];
+        let (a, b) = (body.vertices()[w[0]], body.vertices()[w[1]]);
+        let rough = v3::normalize(v3::cross(normal, v3::sub(b, a)))?;
+        match &body.surfaces()[body.faces()[side_of(i)].surface] {
+            Surface::Cylinder { origin, axis, .. } => {
+                let d = v3::sub(p, *origin);
+                let radial = v3::normalize(v3::sub(d, v3::scale(*axis, v3::dot(d, *axis))))?;
+                Some(if v3::dot(radial, rough) < 0.0 {
+                    v3::scale(radial, -1.0)
+                } else {
+                    radial
+                })
+            }
+            _ => Some(rough),
+        }
+    };
+    // The edge a vertex is measured from: its own, or the last one's at the
+    // end of an open chain.
+    let edge_at = |i: usize| i.min(count - 1);
+
+    // Away from the cap along the sides, and how far there is to go.
+    let mut down: Option<V3> = None;
+    for (i, r) in plan.risers.iter().enumerate() {
+        let Some(r) = *r else { continue };
+        let v = vertex_at(i);
+        let rv = &body.edges()[r].vertices;
+        let far = if rv[0] == v { rv[rv.len() - 1] } else { rv[0] };
+        let d = v3::sub(body.vertices()[far], body.vertices()[v]);
+        if v3::norm(d) <= size + eps {
+            if std::env::var("THREERS_BREP_DEBUG").is_ok() {
+                eprintln!("  [blend] riser {r} is only {}", v3::norm(d));
+            }
+            return Err(BlendDeclined::TooLarge { edge: r });
+        }
+        let d = v3::normalize(d).ok_or(unsupported.clone())?;
+        if down.is_some_and(|prev| v3::dot(prev, d) < 1.0 - 1e-9) {
+            return Err(unsupported);
+        }
+        down = Some(d);
+    }
+    // Along an edge leaving a sharp end down the side: away from the cap,
+    // whichever way that is.
+    let away = |e: usize, from: usize| -> Option<V3> {
+        let (a, b, dir, _) = straight_edge(body, e, eps)?;
+        if a == from {
+            Some(dir)
+        } else if b == from {
+            Some(v3::scale(dir, -1.0))
+        } else {
+            None
+        }
+    };
+    if let Some(ends) = &plan.ends {
+        for end in ends {
+            let d = away(end.on_side, end.vertex).ok_or(unsupported.clone())?;
+            let along = v3::dot(d, normal);
+            if along.abs() < 1e-6 {
+                return Err(BlendDeclined::UnsupportedVertex { vertex: end.vertex });
+            }
+            let d = if along > 0.0 {
+                normal
+            } else {
+                v3::scale(normal, -1.0)
+            };
+            if down.is_some_and(|prev| v3::dot(prev, d) < 1.0 - 1e-9) {
+                return Err(BlendDeclined::UnsupportedVertex { vertex: end.vertex });
+            }
+            down = Some(d);
+        }
+    }
+    let down = down.ok_or(unsupported.clone())?;
+
+    // One way across every edge: a smooth chain cannot turn from convex to
+    // concave.
+    let a0 = body.vertices()[walked[0][0]];
+    let c0 = inward(0, a0).ok_or(unsupported.clone())?;
+    let m0 = outward_at(body, side_of(0), a0).ok_or(unsupported.clone())?;
+    let convex = if v3::dot(c0, m0) < 0.0 { 1.0 } else { -1.0 };
+
+    // The strips the blend takes must be clear of everything else bounding
+    // the cap and the sides.
+    let chain: Vec<usize> = plan.edges.iter().map(|e| e.0).collect();
+    let segments = |e: usize| -> Vec<(V3, V3)> {
+        body.edges()[e]
+            .vertices
+            .windows(2)
+            .map(|w| (body.vertices()[w[0]], body.vertices()[w[1]]))
+            .collect()
+    };
+    // A point of another edge in the strip a chain edge's blend takes: beside
+    // one of its segments, and between it and `size` into the face, `into`
+    // giving the way into the face at a point of chain edge `i`. Points
+    // beyond the ends are judged by the ends' own edges.
+    let in_strip = |i: usize, p: V3, into: &dyn Fn(usize, V3) -> Option<V3>| -> bool {
+        walked[i].windows(2).any(|w| {
+            let (a, b) = (body.vertices()[w[0]], body.vertices()[w[1]]);
+            let ab = v3::sub(b, a);
+            let len2 = v3::dot(ab, ab);
+            if len2 <= 0.0 {
+                return false;
+            }
+            let t = v3::dot(v3::sub(p, a), ab) / len2;
+            if !(1e-9..=1.0 - 1e-9).contains(&t) {
+                return false;
+            }
+            let foot = v3::add(a, v3::scale(ab, t));
+            let Some(d) = into(i, foot) else { return false };
+            let off = v3::sub(p, foot);
+            let depth = v3::dot(off, d);
+            let lateral = v3::norm(v3::sub(off, v3::scale(d, depth)));
+            depth > eps && depth < size + eps && lateral <= size
+        })
+    };
+    let clear = |face: usize,
+                 own: &[usize],
+                 of: &[usize],
+                 into: &dyn Fn(usize, V3) -> Option<V3>|
+     -> bool {
+        body.faces()[face]
+            .edges
+            .iter()
+            .filter(|e| !own.contains(e))
+            .all(|&e| {
+                // Each segment sampled finely enough that a strip `size`
+                // deep cannot fall between two samples.
+                let ok = segments(e).iter().all(|&(p, q)| {
+                    let n = ((v3::dist(p, q) / (0.25 * size)).ceil() as usize).clamp(1, 4096);
+                    (0..=n).all(|k| {
+                        let x = v3::add(p, v3::scale(v3::sub(q, p), k as f64 / n as f64));
+                        !of.iter().any(|&i| in_strip(i, x, into))
+                    })
+                });
+                if !ok && std::env::var("THREERS_BREP_DEBUG").is_ok() {
+                    eprintln!("  [blend] face {face}: edge {e} reaches into the blend of {of:?}");
+                }
+                ok
+            })
+    };
+    let mut cap_own = chain.clone();
+    let mut end_of: [Option<&ChainEnd>; 2] = [None, None];
+    if let Some(ends) = &plan.ends {
+        cap_own.extend(ends.iter().map(|e| e.on_cap));
+        end_of = [Some(&ends[0]), Some(&ends[1])];
+    }
+    let all_edges: Vec<usize> = (0..count).collect();
+    let into_cap = |i: usize, p: V3| inward(i, p);
+    if !clear(plan.cap, &cap_own, &all_edges, &into_cap) {
+        return Err(BlendDeclined::TooLarge { edge: first });
+    }
+    let end_at = |i: usize| -> Option<&ChainEnd> {
+        if !open {
+            None
+        } else if i == 0 {
+            end_of[0]
+        } else if i == count {
+            end_of[1]
+        } else {
+            None
+        }
+    };
+    for i in 0..count {
+        let mut own = vec![plan.edges[i].0];
+        for v in [i, next(i)] {
+            if let Some(r) = plan.risers[v] {
+                own.push(r);
+            }
+            if let Some(end) = end_at(v) {
+                own.push(end.on_side);
+            }
+        }
+        let into_side = |_: usize, _: V3| Some(down);
+        if !clear(side_of(i), &own, &[i], &into_side) {
+            return Err(BlendDeclined::TooLarge { edge: own[0] });
+        }
+    }
+
+    // The new corners: where each vertex moves on the cap and on the sides.
+    // At a sharp end that is along the two edges it leaves by, cut back to
+    // where the blend reaches them.
+    let mut on_cap = Vec::with_capacity(corners);
+    let mut on_side = Vec::with_capacity(corners);
+    // An edge a sharp end's blend reaches the far end of, which it uses up:
+    // `(corner, 0 on the cap or 1 down the side, the edge)`.
+    let mut consumed: Vec<(usize, usize, usize)> = Vec::new();
+    for i in 0..corners {
+        let v = vertex_at(i);
+        let p = body.vertices()[v];
+        let c = inward(edge_at(i), p).ok_or(unsupported.clone())?;
+        let ids = match end_at(i) {
+            Some(end) => {
+                let too_large = BlendDeclined::TooLarge {
+                    edge: plan.edges[edge_at(i)].0,
+                };
+                let mut ids = [usize::MAX; 2];
+                for (slot, (e, to)) in [(end.on_cap, c), (end.on_side, down)]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let d = away(e, v).ok_or(BlendDeclined::UnsupportedVertex { vertex: v })?;
+                    let reach = v3::dot(d, to);
+                    if reach < 1e-6 {
+                        return Err(BlendDeclined::UnsupportedVertex { vertex: v });
+                    }
+                    let (a, b, _, length) =
+                        straight_edge(body, e, eps).ok_or(unsupported.clone())?;
+                    let back = size / reach;
+                    ids[slot] = if (back - length).abs() <= 1e-7 * (1.0 + length) {
+                        // To the far end exactly: a chamfer as deep as the
+                        // bevel beside it meets that bevel's own edge.
+                        consumed.push((i, slot, e));
+                        if a == v {
+                            b
+                        } else {
+                            a
+                        }
+                    } else if back > length {
+                        return Err(too_large);
+                    } else {
+                        parts.vertex(v3::add(p, v3::scale(d, back)))
+                    };
+                }
+                if consumed.iter().filter(|c| c.0 == i).count() > 1 {
+                    return Err(BlendDeclined::UnsupportedVertex { vertex: v });
+                }
+                ids
+            }
+            None => [
+                parts.vertex(v3::add(p, v3::scale(c, size))),
+                parts.vertex(v3::add(p, v3::scale(down, size))),
+            ],
+        };
+        on_cap.push(ids[0]);
+        on_side.push(ids[1]);
+    }
+
+    // Each edge's two new boundaries and its blend surface.
+    let mut blend_surfaces = Vec::with_capacity(count);
+    let mut cap_rails = Vec::with_capacity(count);
+    let mut side_rails = Vec::with_capacity(count);
+    for i in 0..count {
+        let j = next(i);
+        let edge = plan.edges[i].0;
+        let w = &walked[i];
+        let (a, b) = (body.vertices()[w[0]], body.vertices()[w[w.len() - 1]]);
+        let side = side_of(i);
+        let side_surface = body.surfaces()[body.faces()[side].surface].clone();
+        let (cap_rail, side_rail, surface) = match &side_surface {
+            Surface::Cylinder {
+                origin,
+                axis,
+                radius,
+                ..
+            } => {
+                // Angles along the arc as the ring walks it, unwrapped.
+                let mut us: Vec<f64> = Vec::with_capacity(w.len());
+                for &v in w {
+                    let (u, _) = side_surface
+                        .invert(body.vertices()[v])
+                        .ok_or(unsupported.clone())?;
+                    let u = match us.last() {
+                        Some(&prev) => u + TAU * ((prev - u) / TAU).round(),
+                        None => u,
+                    };
+                    us.push(u);
+                }
+                let (u0, u1) = (us[0], us[us.len() - 1]);
+                let height = v3::dot(v3::sub(a, *origin), *axis);
+                let c = inward(i, a).ok_or(unsupported.clone())?;
+                let ra = v3::sub(v3::sub(a, *origin), v3::scale(*axis, height));
+                let grows = if v3::dot(c, ra) > 0.0 { 1.0 } else { -1.0 };
+                let cap_radius = radius + grows * size;
+                if cap_radius <= eps {
+                    return Err(BlendDeclined::TooLarge { edge });
+                }
+                let n = arc_pieces(radius.max(cap_radius), u1 - u0, tolerance);
+                let at =
+                    |k: usize| side_surface.point(u0 + (u1 - u0) * k as f64 / n as f64, height);
+                let mut cap_rail = vec![on_cap[i]];
+                let mut side_rail = vec![on_side[i]];
+                for k in 1..n {
+                    let p = at(k);
+                    let c = inward(i, p).ok_or(unsupported.clone())?;
+                    cap_rail.push(parts.vertex(v3::add(p, v3::scale(c, size))));
+                    side_rail.push(parts.vertex(v3::add(p, v3::scale(down, size))));
+                }
+                cap_rail.push(on_cap[j]);
+                side_rail.push(on_side[j]);
+                // Aimed at the arc's middle, clear of the branch cut.
+                let middle = v3::sub(at(n / 2), *origin);
+                let middle = v3::sub(middle, v3::scale(*axis, v3::dot(middle, *axis)));
+                let foot = |h: f64| v3::add(*origin, v3::scale(*axis, h));
+                let side_height = height + v3::dot(down, *axis) * size;
+                let surface = match kind {
+                    Kind::Chamfer => {
+                        // 45° from the smaller circle to the larger.
+                        let (wide_height, wide) = if cap_radius > *radius {
+                            (height, cap_radius)
+                        } else {
+                            (side_height, *radius)
+                        };
+                        let narrow_height = if cap_radius > *radius {
+                            side_height
+                        } else {
+                            height
+                        };
+                        let towards = v3::normalize(v3::scale(*axis, wide_height - narrow_height))
+                            .ok_or(unsupported.clone())?;
+                        let apex = v3::sub(foot(wide_height), v3::scale(towards, wide));
+                        Surface::cone(apex, towards, FRAC_PI_4).with_x_dir(middle)
+                    }
+                    Kind::Fillet => Surface::torus(foot(side_height), *axis, cap_radius, size)
+                        .with_x_dir(middle),
+                };
+                (cap_rail, side_rail, surface)
+            }
+            _ => {
+                let c = inward(i, a).ok_or(unsupported.clone())?;
+                let t = v3::normalize(v3::sub(b, a)).ok_or(unsupported.clone())?;
+                let surface = match kind {
+                    Kind::Chamfer => {
+                        let pc = v3::add(a, v3::scale(c, size));
+                        let ps = v3::add(a, v3::scale(down, size));
+                        let n = v3::normalize(v3::cross(t, v3::sub(ps, pc)))
+                            .ok_or(unsupported.clone())?;
+                        let m = outward_at(body, side, a).ok_or(unsupported.clone())?;
+                        let between = v3::add(cap_out, m);
+                        Surface::plane(
+                            pc,
+                            if v3::dot(n, between) < 0.0 {
+                                v3::scale(n, -1.0)
+                            } else {
+                                n
+                            },
+                        )
+                    }
+                    Kind::Fillet => {
+                        let o = v3::add(a, v3::scale(v3::add(c, down), size));
+                        let aim = v3::normalize(v3::scale(v3::add(c, down), -1.0))
+                            .ok_or(unsupported.clone())?;
+                        Surface::cylinder(o, t, size).with_x_dir(aim)
+                    }
+                };
+                (
+                    vec![on_cap[i], on_cap[j]],
+                    vec![on_side[i], on_side[j]],
+                    surface,
+                )
+            }
+        };
+        parts.surfaces.push(surface);
+        blend_surfaces.push(parts.surfaces.len() - 1);
+        cap_rails.push(cap_rail);
+        side_rails.push(side_rail);
+    }
+
+    // Across the blend at every vertex: between neighbouring blends, from the
+    // cap to the side, a straight bevel or a quarter of the ball's circle;
+    // at a sharp end, where the blend meets the third face.
+    let mut seams = Vec::with_capacity(corners);
+    let mut thirds: Vec<(usize, usize)> = Vec::new();
+    for i in 0..corners {
+        let p = body.vertices()[vertex_at(i)];
+        let mut vertices = vec![on_cap[i]];
+        let surfaces = match end_at(i) {
+            Some(end) => {
+                let blend = blend_surfaces[edge_at(i)];
+                if kind == Kind::Fillet {
+                    let (third_normal, _) =
+                        plane_normals(body, end.third).ok_or(unsupported.clone())?;
+                    let (from, to) = (parts.vertices[on_cap[i]], parts.vertices[on_side[i]]);
+                    let cylinder = parts.surfaces[blend].clone();
+                    let between = section(&cylinder, p, third_normal, from, to, tolerance, parts)
+                        .ok_or(BlendDeclined::UnsupportedVertex { vertex: end.vertex })?;
+                    vertices.extend(between);
+                }
+                pair(blend, body.faces()[end.third].surface)
+            }
+            None => {
+                let prev = (i + count - 1) % count;
+                if kind == Kind::Fillet {
+                    let c = inward(i, p).ok_or(unsupported.clone())?;
+                    let o = v3::add(p, v3::scale(v3::add(c, down), size));
+                    let n = arc_pieces(size, FRAC_PI_2, tolerance);
+                    for k in 1..n {
+                        let (s, co) = (FRAC_PI_2 * k as f64 / n as f64).sin_cos();
+                        let off = v3::add(v3::scale(down, -co), v3::scale(c, -s));
+                        vertices.push(parts.vertex(v3::add(o, v3::scale(off, size))));
+                    }
+                }
+                pair(blend_surfaces[prev], blend_surfaces[i])
+            }
+        };
+        vertices.push(on_side[i]);
+        let edge = Edge {
+            surfaces,
+            vertices,
+            closed: false,
+        };
+        // A used-up edge already lies on the third face, where the end goes:
+        // it becomes the end, and leaves the face it bounded with the third.
+        if let Some(&(_, slot, e)) = consumed.iter().find(|c| c.0 == i) {
+            parts.edges[e] = edge;
+            seams.push(e);
+            let gone = if slot == 0 {
+                plan.cap
+            } else {
+                side_of(edge_at(i))
+            };
+            parts.faces[gone].edges.retain(|&x| x != e);
+            continue;
+        }
+        parts.edges.push(edge);
+        seams.push(parts.edges.len() - 1);
+        if let Some(end) = end_at(i) {
+            thirds.push((end.third, parts.edges.len() - 1));
+        }
+    }
+
+    // Risers lose the stretch the blend took; so do the edges a sharp end
+    // leaves by, on the cap and down the side.
+    for (i, r) in plan.risers.iter().enumerate() {
+        let Some(r) = *r else { continue };
+        let v = vertex_at(i);
+        for slot in parts.edges[r].vertices.iter_mut() {
+            if *slot == v {
+                *slot = on_side[i];
+            }
+        }
+    }
+    for i in [0, count] {
+        let Some(end) = end_at(i) else { continue };
+        for (e, to) in [(end.on_cap, on_cap[i]), (end.on_side, on_side[i])] {
+            if consumed.iter().any(|c| c.0 == i && c.2 == e) {
+                continue;
+            }
+            for slot in parts.edges[e].vertices.iter_mut() {
+                if *slot == end.vertex {
+                    *slot = to;
+                }
+            }
+        }
+    }
+    for &(third, e) in &thirds {
+        parts.faces[third].edges.push(e);
+    }
+
+    // Each chain edge becomes its blend's boundary on the cap; its boundary
+    // on the side is new.
+    let cap_surface = body.faces()[plan.cap].surface;
+    let mut fresh = Vec::with_capacity(count);
+    let mut sides = Vec::with_capacity(count);
+    for i in 0..count {
+        let (edge, _) = plan.edges[i];
+        let side = side_of(i);
+        let side_surface = body.faces()[side].surface;
+        parts.edges[edge] = Edge {
+            surfaces: pair(cap_surface, blend_surfaces[i]),
+            vertices: cap_rails[i].clone(),
+            closed: false,
+        };
+        parts.edges.push(Edge {
+            surfaces: pair(side_surface, blend_surfaces[i]),
+            vertices: side_rails[i].clone(),
+            closed: false,
+        });
+        let rail = parts.edges.len() - 1;
+        for slot in parts.faces[side].edges.iter_mut() {
+            if *slot == edge {
+                *slot = rail;
+            }
+        }
+        sides.push(side);
+        fresh.push(parts.faces.len());
+        let curved = !matches!(parts.surfaces[blend_surfaces[i]], Surface::Plane { .. });
+        let flipped = match kind {
+            Kind::Fillet => convex < 0.0,
+            // A cone faces away from its axis: inwards where the side is a
+            // bore.
+            Kind::Chamfer => curved && body.faces()[side].flipped,
+        };
+        parts.faces.push(Face {
+            surface: blend_surfaces[i],
+            edges: vec![edge, rail, seams[i], seams[next(i)]],
+            flipped,
+            u_range: (0.0, 0.0),
+            v_range: (0.0, 0.0),
+            u_wraps: false,
+            v_wraps: false,
+            loops: None,
+        });
+    }
+
+    // Faces bounded afresh, their rings read off the edges.
+    let mut flat = vec![plan.cap];
+    flat.extend(thirds.iter().map(|t| t.0));
+    if let Some(ends) = &plan.ends {
+        flat.extend(ends.iter().map(|e| e.third));
+    }
+    flat.sort_unstable();
+    flat.dedup();
+    for &f in &flat {
+        parts.faces[f].loops = None;
+    }
+    for &s in &sides {
+        parts.faces[s].loops = None;
+    }
+    let probe = parts.body();
+    for &f in &flat {
+        if !probe.face_loops(f).iter().any(|l| l.is_outer()) {
+            return Err(BlendDeclined::TrimmedFace { face: f });
+        }
+    }
+    for &f in sides.iter().chain(&fresh) {
+        let loops = probe.face_loops(f);
+        let Some(outer) = loops.iter().find(|l| l.is_outer()) else {
+            return Err(BlendDeclined::TrimmedFace { face: f });
+        };
+        let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+        for c in &outer.uv {
+            for k in 0..2 {
+                lo[k] = lo[k].min(c[k]);
+                hi[k] = hi[k].max(c[k]);
+            }
+        }
+        let face = &mut parts.faces[f];
+        face.u_range = (lo[0], hi[0]);
+        face.v_range = (lo[1], hi[1]);
+        if !matches!(parts.surfaces[face.surface], Surface::Plane { .. }) {
+            face.loops = Some(loops);
+        }
     }
     Ok(())
 }

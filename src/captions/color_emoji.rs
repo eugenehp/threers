@@ -263,7 +263,7 @@ impl ColorGlyphs {
             units_per_em: units_per_em.max(1),
             ascender,
             descender,
-            cmap: cmap.into_iter().filter(|&(c, _)| char::from_u32(c).is_some_and(is_emoji_presentation)).collect(),
+            cmap: cmap.into_iter().collect(),
             advances,
             loca,
             glyf_at,
@@ -292,6 +292,8 @@ impl ColorGlyphs {
         Some(SEQUENCES + n as u32)
     }
 
+    // (Core Text draws sequences: Apple's platforms only)
+    #[cfg_attr(not(any(target_os = "macos", target_os = "ios", target_os = "visionos", target_os = "tvos")), allow(dead_code))]
     fn sequence(&self, gid: u32) -> Option<String> {
         let n = gid.checked_sub(SEQUENCES)? as usize;
         self.sequences.lock().unwrap_or_else(|e| e.into_inner()).get(n).cloned()
@@ -322,8 +324,14 @@ impl ColorGlyphs {
         GlyphBitmap::default()
     }
 
-    /// Whether `c` is one of its emoji.
+    /// Whether `c` is one of its emoji: a character shown as an emoji by default.
     pub fn has(&self, c: char) -> bool {
+        is_emoji_presentation(c) && self.has_any(c)
+    }
+
+    /// Whether the font has a picture for `c` at all, a symbol shown as text by
+    /// default (⏱, ✂) included: what to draw when no other face has it.
+    pub fn has_any(&self, c: char) -> bool {
         self.cmap.contains_key(&(c as u32))
     }
 
@@ -508,6 +516,7 @@ pub(crate) mod coretext {
     unsafe extern "C" {
         fn CGColorSpaceCreateDeviceRGB() -> Ref;
         fn CGBitmapContextCreate(data: *mut c_void, w: usize, h: usize, bits: usize, row: usize, space: Ref, info: u32) -> Ref;
+        fn CGContextScaleCTM(ctx: Ref, x: f64, y: f64);
         fn CGContextSetTextPosition(ctx: Ref, x: f64, y: f64);
     }
 
@@ -587,10 +596,16 @@ pub(crate) mod coretext {
     /// it.
     pub(crate) fn line(text: &str, size: f32, shift: f32, draw: bool) -> Option<GlyphBitmap> {
         const PREMULTIPLIED_LAST: u32 = 1;
-        let line = set(text, &font(size)?)?;
+        // Set small, Apple's emoji are enlarged (16 pixels' are 20 across):
+        // set larger and drawn smaller, an em is an em at every size.
+        const UNENLARGED: f32 = 32.0;
+        let set_at = size.max(UNENLARGED);
+        let k = (size / set_at) as f64;
+        let line = set(text, &font(set_at)?)?;
         let (mut ascent, mut descent, mut leading) = (0.0, 0.0, 0.0);
         // SAFETY: a valid line; the bounds are written to locals.
-        let advance = unsafe { CTLineGetTypographicBounds(line.0, &mut ascent, &mut descent, &mut leading) } as f32;
+        let advance = (unsafe { CTLineGetTypographicBounds(line.0, &mut ascent, &mut descent, &mut leading) } * k) as f32;
+        (ascent, descent) = (ascent * k, descent * k);
         if !draw {
             return Some(GlyphBitmap { advance, ..GlyphBitmap::default() });
         }
@@ -600,25 +615,44 @@ pub(crate) mod coretext {
         let bottom = -(descent.ceil() as i32) - pad;
         let w = (advance.ceil() as i32 + 2 * pad + 1) as usize;
         let h = (ascent.ceil() as i32 + descent.ceil() as i32 + 2 * pad) as usize;
+        let top = -(bottom + h as i32);
         let mut px = vec![0u8; w * h * 4];
         // SAFETY: `px` is `w × h` RGBA and outlives the context, dropped
         // (released) at the end of this block.
         unsafe {
             let space = Cf::new(CGColorSpaceCreateDeviceRGB())?;
             let ctx = Cf::new(CGBitmapContextCreate(px.as_mut_ptr().cast(), w, h, 8, w * 4, space.0, PREMULTIPLIED_LAST))?;
-            CGContextSetTextPosition(ctx.0, shift as f64 - left as f64, -bottom as f64);
+            CGContextScaleCTM(ctx.0, k, k);
+            CGContextSetTextPosition(ctx.0, (shift as f64 - left as f64) / k, -bottom as f64 / k);
             CTLineDraw(line.0, ctx.0);
         }
+        // the bitmap's first row is its top
+        let (color, w, h, dx, dy) = trim(&px, w, h);
         Some(GlyphBitmap {
             width: w as u32,
             height: h as u32,
-            coverage: px.as_chunks::<4>().0.iter().map(|p| p[3]).collect(),
-            offset_x: left,
-            // the bitmap's first row is its top
-            offset_y: -(bottom + h as i32),
+            coverage: color.as_chunks::<4>().0.iter().map(|p| p[3]).collect(),
+            offset_x: left + dx as i32,
+            offset_y: top + dy as i32,
             advance,
-            color: Some(Arc::new(px)),
+            color: Some(Arc::new(color)),
         })
+    }
+
+    /// `px` (`w × h` RGBA) cut to what is drawn in it, and where that was:
+    /// the pixels, their width and height, and the columns and rows gone
+    /// from its left and top.
+    pub(super) fn trim(px: &[u8], w: usize, h: usize) -> (Vec<u8>, usize, usize, usize, usize) {
+        let inked = |x: usize, y: usize| px[(y * w + x) * 4 + 3] != 0;
+        let row = |&y: &usize| (0..w).any(|x| inked(x, y));
+        let column = |&x: &usize| (0..h).any(|y| inked(x, y));
+        let (Some(y0), Some(y1), Some(x0), Some(x1)) =
+            ((0..h).find(row), (0..h).rfind(row), (0..w).find(column), (0..w).rfind(column))
+        else {
+            return (Vec::new(), 0, 0, 0, 0);
+        };
+        let out = (y0..=y1).flat_map(|y| px[(y * w + x0) * 4..(y * w + x1 + 1) * 4].iter().copied()).collect();
+        (out, x1 + 1 - x0, y1 + 1 - y0, x0, y0)
     }
 
     /// `c` at `size` pixels per em as the system draws it (see [`line`]);
@@ -756,6 +790,17 @@ mod tests {
         }
     }
 
+    /// A symbol shown as text by default is not one of its emoji, though it has a picture
+    /// of it, for when nothing else has the symbol.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_text_symbol_is_a_picture_but_not_an_emoji() {
+        let e = ColorGlyphs::system().expect("a Mac has Apple Color Emoji");
+        assert!(e.has('😀') && e.has_any('😀'));
+        assert!(!e.has('⏱') && e.has_any('⏱'));
+        assert!(!e.has_any('a'));
+    }
+
     #[test]
     fn the_systems_emoji_in_colour() {
         let Some(e) = ColorGlyphs::system() else {
@@ -812,6 +857,30 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// What the system draws is cut to its ink, which is about an em and
+    /// within its advance.
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos", target_os = "tvos"))]
+    #[test]
+    fn the_systems_emoji_are_an_em_and_no_more() {
+        let e = ColorGlyphs::system().expect("an Apple system has emoji");
+        for size in [9.0, 16.0, 24.0, 32.0, 45.0, 96.0] {
+            for c in ['🦊', '😀', '🚀'] {
+                let g = coretext::raster(c, size, 0.0).expect("drawn by the system");
+                let d = e.raster(c, size, 0.0);
+                let edge = |x: u32, y: u32| g.coverage[(y * g.width + x) as usize] != 0;
+                assert!((0..g.width).any(|x| edge(x, 0)) && (0..g.width).any(|x| edge(x, g.height - 1)));
+                assert!((0..g.height).any(|y| edge(0, y)) && (0..g.height).any(|y| edge(g.width - 1, y)));
+                for d in [&g, &d] {
+                    let (w, h) = (d.width as f32, d.height as f32);
+                    assert!(w.max(h) > 0.85 * size && w.max(h) < 1.3 * size + 2.0, "{c} at {size}: {w}×{h}");
+                    assert!(d.offset_x as f32 + w <= d.advance + 2.0, "{c} at {size}: past its advance {}", d.advance);
+                }
+                assert!((g.advance - d.advance).abs() <= 0.15 * size, "{c} at {size}: {} and {}", g.advance, d.advance);
+            }
+        }
+        assert_eq!(coretext::trim(&[0; 16], 2, 2), (vec![], 0, 0, 0, 0));
     }
 
     /// Text with an emoji: the letters in the text's colour, the emoji in

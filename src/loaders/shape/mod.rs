@@ -18,6 +18,7 @@ pub enum Joining {
 }
 
 pub mod gsub;
+pub mod indic;
 pub mod joining;
 mod joining_table;
 pub mod read;
@@ -76,6 +77,10 @@ pub fn shape(
     script: &[u8; 4],
     text: &[char],
 ) -> Vec<Shaped> {
+    // Indic scripts: their syllables, reordered, their forms (indic.rs)
+    if indic::v2_tag(script).is_some() {
+        return indic::shape(&glyph_of, gsub, script, text);
+    }
     let forms = joining::forms(text);
     let mut pairs: Vec<(u16, usize)> = Vec::with_capacity(text.len());
     for (i, c) in text.iter().enumerate() {

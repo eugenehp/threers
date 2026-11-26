@@ -54,6 +54,23 @@ pub enum Token {
     DestructiveFill,
     Success,
     Focus,
+    /// Behind the default button's label: the accent, unless the theme
+    /// keeps its accent for highlights and draws buttons plainer.
+    Prominent,
+    /// The default button's label, on [`Prominent`](Token::Prominent).
+    OnProminent,
+    /// What to mind: amber, as text and as a wash.
+    Warning,
+    /// The accent as text (a link, a text-only button): moved toward the
+    /// text's colour as far as it takes to read. See
+    /// [`TokenSet::accent_text`].
+    AccentText,
+    /// What a control is drawn on that has to be seen (a slider's rail):
+    /// the border's colour, stronger. See [`TokenSet::track`].
+    Track,
+    /// What is raised off a control's own ground (a segmented control's
+    /// chosen part). See [`TokenSet::thumb`].
+    Thumb,
 }
 
 /// The colours of one appearance, by purpose.
@@ -83,6 +100,12 @@ pub struct TokenSet {
     pub success: Rgba,
     /// The focus ring.
     pub focus: Rgba,
+    /// The default button's fill (often the accent; a neutral one where
+    /// the accent only highlights) and its label.
+    pub prominent: Rgba,
+    pub on_prominent: Rgba,
+    /// What to mind (not an error).
+    pub warning: Rgba,
 }
 
 impl TokenSet {
@@ -102,7 +125,65 @@ impl TokenSet {
             Token::DestructiveFill => self.destructive_fill,
             Token::Success => self.success,
             Token::Focus => self.focus,
+            Token::Prominent => self.prominent,
+            Token::OnProminent => self.on_prominent,
+            Token::Warning => self.warning,
+            Token::AccentText => self.accent_text(),
+            Token::Track => self.track(),
+            Token::Thumb => self.thumb(),
         }
+    }
+
+    /// The accent as text: itself where it is 4.5:1 on the background, the
+    /// surface and what is raised (WCAG AA), else mixed with the text's
+    /// colour until it is. (One accent cannot be both dark enough under
+    /// white labels and light enough on a dark page.)
+    pub fn accent_text(&self) -> Rgba {
+        self.toward_text(self.accent, 4.5)
+    }
+
+    /// The border's colour as a control's rail: mixed with the text's until
+    /// it is 3:1 on the background, the surface and what is raised (WCAG
+    /// 1.4.11).
+    pub fn track(&self) -> Rgba {
+        self.toward_text(self.border, 3.0)
+    }
+
+    /// Lighter than the separator's colour, as what is raised off it is in
+    /// either appearance: the surface where that is lighter, else the
+    /// separator part of the way to white.
+    pub fn thumb(&self) -> Rgba {
+        let light = |c: Rgba| c[0] + c[1] + c[2];
+        if light(self.surface) > light(self.separator) {
+            self.surface
+        } else {
+            let s = self.separator;
+            [0, 1, 2, 3].map(|i| if i == 3 { 1.0 } else { s[i] + (1.0 - s[i]) * 0.2 })
+        }
+    }
+
+    /// `from`, mixed with the text's colour as little as makes it `ratio`
+    /// against the background, the surface and what is raised.
+    fn toward_text(&self, from: Rgba, ratio: f32) -> Rgba {
+        // A see-through colour as it looks on the surface.
+        let alpha = from[3];
+        let mut from = from;
+        if alpha < 1.0 {
+            from = std::array::from_fn(|i| self.surface[i] + (from[i] - self.surface[i]) * alpha);
+            from[3] = 1.0;
+        }
+        let rgb = |c: Rgba| [c[0], c[1], c[2]];
+        let mixed =
+            |k: f32| -> Rgba { std::array::from_fn(|i| from[i] + (self.text[i] - from[i]) * k) };
+        let reads = |c: &Rgba| {
+            [self.background, self.surface, self.raised]
+                .iter()
+                .all(|&b| crate::contrast_ratio(rgb(*c), rgb(b)) >= ratio)
+        };
+        (0..=32)
+            .map(|i| mixed(i as f32 / 32.0))
+            .find(reads)
+            .unwrap_or(self.text)
     }
 }
 
@@ -136,8 +217,13 @@ impl Default for Tokens {
                 // fill's 4.7:1.
                 destructive: hex(0xb91c1c),
                 destructive_fill: hex(0xdc2626),
-                success: hex(0x10b981),
-                focus: hex(0x93c5fd),
+                // 4.5:1 or more as text; the ring 3:1 or more (WCAG 1.4.11):
+                // on white, the dark theme's pale ones are not.
+                success: hex(0x047857),
+                focus: hex(0x2563eb),
+                prominent: hex(0x2563eb),
+                on_prominent: [0.99, 0.99, 0.99, 1.0],
+                warning: hex(0xb45309),
             },
             dark: TokenSet {
                 background: hex(0x12151b),
@@ -156,8 +242,86 @@ impl Default for Tokens {
                 destructive_fill: hex(0xdc2626),
                 success: hex(0x10b981),
                 focus: hex(0x93c5fd),
+                prominent: hex(0x2563eb),
+                on_prominent: [0.99, 0.99, 0.99, 1.0],
+                warning: hex(0xf59e0b),
             },
         }
+    }
+}
+
+impl Tokens {
+    /// The lightest glass these are made to be read on, sRGB: glass over a
+    /// bright room, darkened as `threers-ios`'s pieces darken it.
+    pub const GLASS_GROUND: Rgba = [0.36, 0.36, 0.36, 1.0];
+
+    /// The colours for a UI on glass (a visionOS window's, a piece's): white
+    /// text and pale accents, what holds others a darker, see-through
+    /// layer that lets the glass show, and what floats over the rest nearly
+    /// solid. On glass no lighter than [`GLASS_GROUND`](Self::GLASS_GROUND),
+    /// text is 4.5:1 or more and what has to be seen 3:1. The same light
+    /// and dark: the glass is what it is.
+    pub fn glass() -> Self {
+        let grey = |v: f32, a: f32| [v, v, v + 0.015, a];
+        let white = |a: f32| [1.0, 1.0, 1.0, a];
+        let on_pale = hex(0x06142e);
+        let set = TokenSet {
+            background: grey(0.365, 0.0),
+            // shades, not greys: coloured glass keeps its colour through them
+            // (the surface a hair the lighter, which makes it the thumb's)
+            surface: grey(0.0, 0.14),
+            raised: grey(0.2, 0.95),
+            text: white(1.0),
+            secondary_text: hex(0xf2f2f6),
+            border: white(0.5),
+            separator: [0.0, 0.0, 0.0, 0.17],
+            accent: hex(0x9cc8ff),
+            on_accent: on_pale,
+            hover: white(0.1),
+            destructive: hex(0xffc9c4),
+            destructive_fill: hex(0xff9c94),
+            success: hex(0xa6f4b8),
+            focus: white(1.0),
+            prominent: hex(0x9cc8ff),
+            on_prominent: on_pale,
+            warning: hex(0xffd980),
+        };
+        Self { light: set, dark: set }
+    }
+
+    /// The darkest pale glass [`pale_glass`](Self::pale_glass) is made to be
+    /// read on, sRGB: pale glass over a dark room, lightened as
+    /// `threers-ios`'s pieces lighten it.
+    pub const PALE_GLASS_GROUND: Rgba = [0.68, 0.68, 0.68, 1.0];
+
+    /// [`glass`](Self::glass)'s for pale glass: dark text and deep accents,
+    /// as readable on glass no darker than
+    /// [`PALE_GLASS_GROUND`](Self::PALE_GLASS_GROUND).
+    pub fn pale_glass() -> Self {
+        let black = |a: f32| [0.0, 0.0, 0.0, a];
+        let white = |a: f32| [1.0, 1.0, 1.0, a];
+        // (not quite white: pure white is a style's default, which inherits)
+        let on_deep = [0.99, 0.99, 0.99, 1.0];
+        let set = TokenSet {
+            background: [0.68, 0.68, 0.68, 0.0],
+            surface: white(0.3),
+            raised: [0.95, 0.95, 0.96, 0.96],
+            text: hex(0x08080c),
+            secondary_text: hex(0x222228),
+            border: black(0.5),
+            separator: black(0.12),
+            accent: hex(0x07306e),
+            on_accent: on_deep,
+            hover: black(0.08),
+            destructive: hex(0x6a0808),
+            destructive_fill: hex(0xa01515),
+            success: hex(0x06331a),
+            focus: hex(0x07306e),
+            prominent: hex(0x07306e),
+            on_prominent: on_deep,
+            warning: hex(0x452600),
+        };
+        Self { light: set, dark: set }
     }
 }
 
@@ -165,6 +329,8 @@ impl Default for Tokens {
 #[derive(Clone, Default)]
 pub(crate) struct Env {
     pub tokens: Tokens,
+    /// Theme colours painted as something else (see [`fill`](crate::fill)).
+    pub fills: Vec<(Token, crate::fill::Fill)>,
     /// Values set on nodes, by type.
     pub values: HashMap<NodeId, HashMap<TypeId, Rc<dyn Any>>>,
     /// 1 when unset (`0.0` reads as 1).
@@ -208,6 +374,9 @@ pub(crate) struct Env {
     pub solids: HashMap<NodeId, crate::solid::SolidState>,
     /// Layers moving by their depth when the box around them tilts.
     pub parallax: HashMap<NodeId, f32>,
+    /// What is to be scrolled into view sideways once laid out (a field's
+    /// caret, after its text changed).
+    pub reveal_x: Vec<NodeId>,
     /// Strips whose items turn away from their middle.
     pub carousels: Vec<NodeId>,
     /// Where light falls from, for glare and shading.
@@ -279,6 +448,184 @@ impl std::fmt::Debug for Env {
             .field("reduce_motion", &self.reduce_motion)
             .finish()
     }
+}
+
+impl Token {
+    /// Every token.
+    pub const ALL: [Token; 20] = [
+        Token::Background,
+        Token::Surface,
+        Token::Raised,
+        Token::Text,
+        Token::SecondaryText,
+        Token::Border,
+        Token::Separator,
+        Token::Accent,
+        Token::OnAccent,
+        Token::Hover,
+        Token::Destructive,
+        Token::DestructiveFill,
+        Token::Success,
+        Token::Focus,
+        Token::Prominent,
+        Token::OnProminent,
+        Token::Warning,
+        Token::AccentText,
+        Token::Track,
+        Token::Thumb,
+    ];
+
+    /// Its name as a CSS custom property, without the dashes: in a state's
+    /// look (`hover_style(b, "background: var(--hover)")`) it is the
+    /// theme's colour as it is at the time, following a new theme.
+    pub fn css_name(self) -> &'static str {
+        match self {
+            Token::Background => "background",
+            Token::Surface => "surface",
+            Token::Raised => "raised",
+            Token::Text => "text",
+            Token::SecondaryText => "secondary-text",
+            Token::Border => "border",
+            Token::Separator => "separator",
+            Token::Accent => "accent",
+            Token::OnAccent => "on-accent",
+            Token::Hover => "hover",
+            Token::Destructive => "destructive",
+            Token::DestructiveFill => "destructive-fill",
+            Token::Success => "success",
+            Token::Focus => "focus",
+            Token::Prominent => "prominent",
+            Token::OnProminent => "on-prominent",
+            Token::Warning => "warning",
+            Token::AccentText => "accent-text",
+            Token::Track => "track",
+            Token::Thumb => "thumb",
+        }
+    }
+
+    /// The token named `name` (see [`css_name`](Self::css_name)).
+    pub fn from_css_name(name: &str) -> Option<Token> {
+        Token::ALL.into_iter().find(|t| t.css_name() == name)
+    }
+}
+
+/// `value` with each `var(--token)` in the colours of `tokens`, and a
+/// `color-mix(in srgb, A p%, B)` of two colours mixed (as CSS mixes them:
+/// premultiplied, so a colour mixed with `transparent` keeps its hue and
+/// takes `p`% opacity). Anything else is as it was.
+pub(crate) fn resolve_colors<'a>(
+    value: &'a str,
+    tokens: impl Fn(Token) -> Rgba,
+) -> std::borrow::Cow<'a, str> {
+    if !value.contains("var(--") && !value.contains("color-mix(") {
+        return std::borrow::Cow::Borrowed(value);
+    }
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(i) = rest.find("var(--") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 6..];
+        let Some(end) = after.find(')') else {
+            out.push_str(&rest[i..]);
+            rest = "";
+            break;
+        };
+        match Token::from_css_name(after[..end].trim()) {
+            Some(t) => out.push_str(&css_color(tokens(t))),
+            None => out.push_str(&rest[i..i + 6 + end + 1]),
+        }
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    // Every `color-mix(…)`, wherever it is: a gradient's stops, a shadow, a
+    // whole declaration list.
+    let mut mixed = String::with_capacity(out.len());
+    let mut rest = out.as_str();
+    while let Some(i) = rest.find("color-mix(") {
+        mixed.push_str(&rest[..i]);
+        let call = &rest[i..];
+        // Its closing bracket, past the ones its colours hold.
+        let mut depth = 0;
+        let end = call.char_indices().find_map(|(j, c)| {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(j + 1);
+                    }
+                }
+                _ => {}
+            }
+            None
+        });
+        let Some(end) = end else {
+            mixed.push_str(call);
+            rest = "";
+            break;
+        };
+        match color_mix(&call[..end]) {
+            Some(c) => mixed.push_str(&css_color(c)),
+            None => mixed.push_str(&call[..end]),
+        }
+        rest = &call[end..];
+    }
+    mixed.push_str(rest);
+    std::borrow::Cow::Owned(mixed)
+}
+
+/// `color-mix(in srgb, A p%, B q%)`, either percentage left out.
+fn color_mix(v: &str) -> Option<Rgba> {
+    let inner = v.strip_prefix("color-mix(")?.strip_suffix(')')?;
+    // Commas outside brackets (`rgba(1,2,3,1)` is one colour).
+    let mut parts = vec![];
+    let (mut depth, mut start) = (0, 0);
+    for (i, ch) in inner.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(inner[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(inner[start..].trim());
+    let [space, a, b] = parts[..] else {
+        return None;
+    };
+    if space != "in srgb" {
+        return None;
+    }
+    let side = |p: &str| -> Option<(Rgba, Option<f32>)> {
+        match p.rsplit_once(' ') {
+            Some((c, pc)) if pc.ends_with('%') => Some((
+                crate::css::color(c.trim())?,
+                Some(pc.trim_end_matches('%').parse::<f32>().ok()? / 100.0),
+            )),
+            _ => Some((crate::css::color(p)?, None)),
+        }
+    };
+    let ((ca, pa), (cb, pb)) = (side(a)?, side(b)?);
+    let (pa, pb) = match (pa, pb) {
+        (Some(x), Some(y)) => (x, y),
+        (Some(x), None) => (x, 1.0 - x),
+        (None, Some(y)) => (1.0 - y, y),
+        (None, None) => (0.5, 0.5),
+    };
+    let total = pa + pb;
+    if total <= 0.0 {
+        return None;
+    }
+    let (pa, pb) = (pa / total, pb / total);
+    let alpha = ca[3] * pa + cb[3] * pb;
+    if alpha <= 0.0 {
+        return Some([0.0; 4]);
+    }
+    let ch = |i: usize| (ca[i] * ca[3] * pa + cb[i] * cb[3] * pb) / alpha;
+    // Fewer than 100% in all: the alpha scales down (as CSS).
+    Some([ch(0), ch(1), ch(2), alpha * total.min(1.0)])
 }
 
 /// A colour as CSS, for a declaration.
@@ -617,14 +964,93 @@ impl Ui {
         self.env.direction
     }
 
-    /// After layout, right to left: every box mirrored across the root.
-    pub(crate) fn mirror_layout(&mut self) {
-        if self.env.direction != LayoutDirection::RightToLeft {
+    /// Which way `node` reads: as it says itself (`direction`), else as
+    /// what it is in, else as the whole UI.
+    pub fn direction_of(&self, node: NodeId) -> LayoutDirection {
+        self.ancestors(node)
+            .find_map(|n| self.own_direction(n))
+            .unwrap_or(self.env.direction)
+    }
+
+    /// Which way `node` says itself that it reads.
+    fn own_direction(&self, node: NodeId) -> Option<LayoutDirection> {
+        let s = self.style(node);
+        if !s.direction_auto {
+            return s.direction;
+        }
+        // The first text in it, in order, that has a letter.
+        let mut stack = vec![node];
+        while let Some(n) = stack.pop() {
+            if let crate::NodeKind::Text(t) = self.kind(n)
+                && let Some(d) = crate::bidi::first_strong(t)
+            {
+                return Some(d);
+            }
+            stack.extend(self.children(n).iter().rev());
+        }
+        None
+    }
+
+    /// `key` with the left and right arrows exchanged where `node` reads
+    /// right to left: the key as "towards the end" and "towards the start".
+    pub fn reading_key<'a>(&self, node: NodeId, key: &'a str) -> &'a str {
+        match (key, self.direction_of(node)) {
+            ("ArrowLeft", LayoutDirection::RightToLeft) => "ArrowRight",
+            ("ArrowRight", LayoutDirection::RightToLeft) => "ArrowLeft",
+            _ => key,
+        }
+    }
+
+    /// Before layout: which way each node reads.
+    pub(crate) fn resolve_directions(&mut self) {
+        let plain = self.env.direction == LayoutDirection::LeftToRight
+            && self.nodes.iter().all(|n| n.style.direction.is_none() && !n.style.direction_auto);
+        if plain {
+            for n in &mut self.nodes {
+                n.rtl = false;
+                n.flipped = false;
+            }
             return;
         }
-        let width = self.nodes[0].rect.width;
-        for n in self.nodes.iter_mut().skip(1).filter(|n| !n.removed) {
-            n.rect.x = width - n.rect.x - n.rect.width;
+        let mut stack = vec![(self.root(), self.env.direction, false)];
+        while let Some((id, around, flips)) = stack.pop() {
+            let d = self.own_direction(id).unwrap_or(around);
+            let n = &mut self.nodes[id.0];
+            n.rtl = d == LayoutDirection::RightToLeft;
+            let flips = flips || n.style.flips_rtl;
+            n.flipped = flips && n.rtl;
+            stack.extend(n.children.iter().map(|&c| (c, d, flips)));
+        }
+    }
+
+    /// After layout: what is in a box that reads right to left mirrored
+    /// across it.
+    pub(crate) fn mirror_layout(&mut self) {
+        self.resolve_directions();
+        if self.nodes.iter().all(|n| !n.rtl) {
+            return;
+        }
+        // Each with how far it was moved, and its box as it was laid out.
+        let root = self.root();
+        let mut stack = vec![(root, self.nodes[root.0].rect, self.nodes[root.0].rtl)];
+        let window = (self.nodes[root.0].rect, self.nodes[root.0].rtl);
+        while let Some((id, was, rtl)) = stack.pop() {
+            let now = self.nodes[id.0].rect;
+            for c in self.nodes[id.0].children.clone() {
+                let n = &mut self.nodes[c.0];
+                let laid = n.rect;
+                // A fixed box is in the window, whatever it is inside.
+                let (was, now, rtl) = match n.style.position {
+                    crate::Position::Fixed => (window.0, window.0, window.1),
+                    _ => (was, now, rtl),
+                };
+                n.rect.x = if rtl && !n.style.unmirrored {
+                    now.x + now.width - (laid.x - was.x) - laid.width
+                } else {
+                    now.x + (laid.x - was.x)
+                };
+                stack.push((c, laid, n.rtl));
+            }
         }
     }
 
@@ -655,6 +1081,52 @@ impl Ui {
 
 #[cfg(test)]
 mod tests {
+    /// `var(--token)` takes the theme's colour; `color-mix` with
+    /// `transparent` keeps the hue at that opacity; anything else is left.
+    #[test]
+    fn theme_colours_by_name_and_mixed() {
+        let tok = |t: Token| match t {
+            Token::Hover => [0.2, 0.4, 0.6, 1.0],
+            _ => [1.0, 0.0, 0.0, 1.0],
+        };
+        assert_eq!(resolve_colors("background: none", tok), "background: none");
+        assert_eq!(
+            resolve_colors("var(--hover)", tok),
+            css_color([0.2, 0.4, 0.6, 1.0])
+        );
+        assert_eq!(
+            resolve_colors("0 0 0 2px var(--focus)", tok),
+            format!("0 0 0 2px {}", css_color([1.0, 0.0, 0.0, 1.0]))
+        );
+        assert_eq!(
+            resolve_colors("var(--nope)", tok),
+            "var(--nope)",
+            "an unknown name is left"
+        );
+        assert_eq!(
+            resolve_colors(
+                "color-mix(in srgb, var(--destructive) 12%, transparent)",
+                tok
+            ),
+            css_color([1.0, 0.0, 0.0, 0.12])
+        );
+        assert_eq!(
+            resolve_colors("color-mix(in srgb, #000000, #ffffff)", tok),
+            css_color([0.5, 0.5, 0.5, 1.0]),
+            "half and half"
+        );
+        // Each of several, in a gradient: the rest left as it was.
+        let g = resolve_colors(
+            "linear-gradient(90deg, color-mix(in srgb, #000000, #ffffff), color-mix(in srgb, #ff0000 50%, transparent))",
+            tok,
+        );
+        assert!(!g.contains("color-mix"), "{g}");
+        assert!(g.starts_with("linear-gradient(90deg, "), "{g}");
+        assert!(Token::ALL
+            .iter()
+            .all(|t| Token::from_css_name(t.css_name()) == Some(*t)));
+    }
+
     use super::*;
     use crate::{style, FixedWidthText};
 

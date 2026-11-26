@@ -83,7 +83,7 @@ pub use hdr::{HdrError, HdrLoader};
 pub use obj::ObjLoader;
 pub use ply::PlyLoader;
 pub use stl::StlLoader;
-pub use ttf::{TtfError, TtfFont, TtfGlyph};
+pub use ttf::{TtfError, TtfFont, TtfGlyph, TtfGlyphs};
 pub use ttf_var::{wght_for_css_weight, NamedInstance, VariationAxis};
 #[cfg(feature = "usd")]
 pub use usd::{

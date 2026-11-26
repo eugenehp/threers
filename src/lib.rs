@@ -463,7 +463,7 @@ pub use loaders::{
     AlembicArchive, AlembicError, ColladaError, ColladaLoader, DracoError, DracoHeader, ExrError,
     ExrLoader, FbxError, FbxLoader, FbxScene, GcodeLoader, GcodeToolpath, GltfError, GltfImages,
     GltfLoader, GltfScene, HdrError, HdrLoader, Ktx2, Ktx2Error, MeshoptError, ObjLoader, PlyLoader, PolyMesh, StlLoader,
-    TtfError, TtfFont, TtfGlyph,
+    TtfError, TtfFont, TtfGlyph, TtfGlyphs,
 };
 pub use origami::{
     book_cardinal_cp, book_cardinal_stages, classic_bird_cp, classic_bird_stages, eagle_cp,

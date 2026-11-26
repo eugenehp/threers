@@ -40,6 +40,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use crate::environment::LayoutDirection;
 use crate::binding::Binding;
 use crate::environment::Token;
 use crate::input::{Event, GesturePhase, Input, Phase};
@@ -205,16 +206,19 @@ pub fn nav_stack<S: 'static>(
         container,
         Semantics::new(Role::Navigation).label(root_title),
     );
-    let header = ui.add_box(container, style! { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 8px; border-bottom: 1px solid #3a4150; flex-shrink: 0; });
+    let header = ui.add_box(container, style! { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 8px; border-bottom: 1px solid; flex-shrink: 0; });
     ui.token_style(header, &[("border-color", Token::Separator)]);
     let back = ui.add_box(
         header,
         style! { padding: 4px 8px; border-radius: 6px; cursor: pointer; display: none; },
     );
-    ui.token_style(back, &[("color", Token::Accent)]);
-    ui.add_text(back, "‹ Back");
-    ui.set_semantics(back, Semantics::new(Role::Button).label("Back"));
-    ui.hover_style(back, "background: rgba(128,138,160,0.2)");
+    ui.token_style(back, &[("color", Token::AccentText)]);
+    ui.add_text(back, crate::i18n::back_label());
+    ui.set_semantics(
+        back,
+        Semantics::new(Role::Button).label(crate::i18n::word(crate::i18n::Word::Back)),
+    );
+    ui.hover_style(back, "background: var(--hover)");
     let title = ui.add_box(header, style! { font-weight: bold; flex-grow: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; });
     ui.set_semantics(title, Semantics::new(Role::Heading(2)));
     let title_text = ui.add_text(title, root_title);
@@ -247,8 +251,8 @@ pub fn nav_stack<S: 'static>(
     let pp = pop.clone();
     input.on_click(back, move |s, _, _| pp(s));
     let pp = pop.clone();
-    input.on_key(container, move |s, _, key, m, _| {
-        if key == "ArrowLeft" && m.alt {
+    input.on_key(container, move |s, ui, key, m, _| {
+        if ui.reading_key(container, key) == "ArrowLeft" && m.alt {
             pp(s);
             return true;
         }
@@ -264,11 +268,17 @@ pub fn nav_stack<S: 'static>(
         let Event::Gesture(crate::input::Gesture::Pan { x, dx, phase, .. }) = *ev else {
             return;
         };
+        // From the edge the screen came over, and how far from there.
+        let r = ui.rect(body);
+        let (x, dx) = match ui.direction_of(body) {
+            LayoutDirection::LeftToRight => (x - r.x, dx),
+            LayoutDirection::RightToLeft => (r.x + r.width - x, -dx),
+        };
         let Some(&(_, top)) = b.borrow().last() else {
             return;
         };
         match phase {
-            GesturePhase::Began if x - dx - ui.rect(body).x <= EDGE && dx > 0.0 => e.set(Some(dx)),
+            GesturePhase::Began if x - dx <= EDGE && dx > 0.0 => e.set(Some(dx)),
             GesturePhase::Changed if e.get().is_some() => {
                 e.set(Some((e.get().unwrap_or(0.0) + dx).max(0.0)))
             }

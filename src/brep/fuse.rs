@@ -177,6 +177,33 @@ struct Patch {
     hi: V3,
     /// Whether the domain is a whole period across, in u and in v.
     wraps: [bool; 2],
+    /// Where a spline's domain starts and ends, scaled, in a direction it
+    /// closes on itself in: it has no period to say so.
+    closes: [Option<(f64, f64)>; 2],
+}
+
+/// The ends of a spline's domain in each direction it closes in.
+pub(super) fn closes(s: &Surface) -> [Option<(f64, f64)>; 2] {
+    let Surface::Nurbs(n) = s else {
+        return [None; 2];
+    };
+    let (u, v) = (n.domain_u(), n.domain_v());
+    let shut = |point: &dyn Fn(f64, f64) -> V3, along: (f64, f64), across: (f64, f64)| {
+        (0..=8).all(|i| {
+            let t = across.0 + (across.1 - across.0) * i as f64 / 8.0;
+            let (p, q) = (point(along.0, t), point(along.1, t));
+            v3::dist(p, q) <= 1e-9 * (1.0 + v3::norm(p))
+        }) && {
+            // And is not a point all the way: a pole is no seam.
+            let t = 0.5 * (across.0 + across.1);
+            let m = 0.5 * (along.0 + along.1);
+            v3::dist(point(along.0, t), point(m, t)) > 1e-9
+        }
+    };
+    [
+        shut(&|a, t| n.point(a, t), u, v).then_some(u),
+        shut(&|a, t| n.point(t, a), v, u).then_some(v),
+    ]
 }
 
 impl Patch {
@@ -263,6 +290,86 @@ impl Patch {
             out.push(q);
         }
         Some(out)
+    }
+
+    /// `q`, or where it is on the seam of a spline that closes, whichever of
+    /// its two places there is nearer `toward`.
+    fn beside(&self, mut q: P2, toward: P2, tolerance: f64) -> P2 {
+        for k in 0..2 {
+            let Some((a, b)) = self.closes[k] else {
+                continue;
+            };
+            let nearer = |x: f64, y: f64| {
+                if (toward[k] - x).abs() < (toward[k] - y).abs() {
+                    x
+                } else {
+                    y
+                }
+            };
+            if (q[k] - a).abs() <= tolerance || (q[k] - b).abs() <= tolerance {
+                q[k] = nearer(a, b);
+            }
+        }
+        q
+    }
+
+    /// Points of a polyline with one more wherever it goes over the seam of
+    /// a spline that closes on itself. `other` is the surface it lies on too.
+    fn with_seams(&self, pts: Vec<V3>, closed: bool, other: &Surface, tolerance: f64) -> Vec<V3> {
+        if self.closes == [None; 2] {
+            return pts;
+        }
+        let Some(uv) = pts.iter().map(|p| self.uv(*p)).collect::<Option<Vec<P2>>>() else {
+            return pts;
+        };
+        let n = pts.len();
+        let mut out = Vec::with_capacity(n + 4);
+        for i in 0..n {
+            out.push(pts[i]);
+            let j = (i + 1) % n;
+            if j == 0 && !closed {
+                break;
+            }
+            for k in 0..2 {
+                let Some((a, b)) = self.closes[k] else {
+                    continue;
+                };
+                let on = |q: P2| (q[k] - a).abs() <= tolerance || (q[k] - b).abs() <= tolerance;
+                if on(uv[i]) || on(uv[j]) || (uv[i][k] - uv[j][k]).abs() <= 0.5 * (b - a) {
+                    continue;
+                }
+                // Along the seam to where the other surface is.
+                let at = |t: f64| {
+                    let mut q = [0.0; 2];
+                    (q[k], q[1 - k]) = (a, t);
+                    self.point(q)
+                };
+                let off = |t: f64| other.foot(at(t), None).map(|f| f.1);
+                let mut t = 0.5 * (uv[i][1 - k] + uv[j][1 - k]);
+                let chord = v3::dist(pts[i], pts[j]);
+                for _ in 0..30 {
+                    let h = 1e-6 * (1.0 + chord);
+                    let (Some(d), Some(e)) = (off(t), off(t + h)) else {
+                        break;
+                    };
+                    let slope = (e - d) / h;
+                    if slope.abs() < 1e-9 {
+                        break;
+                    }
+                    let step = (d / slope).clamp(-chord, chord);
+                    t -= step;
+                    if step.abs() < 1e-14 * (1.0 + t.abs()) {
+                        break;
+                    }
+                }
+                let p = at(t);
+                let there = off(t).is_some_and(|d| d.abs() <= tolerance * 0.1);
+                if there && v3::dist(p, pts[i]) + v3::dist(p, pts[j]) <= chord * 1.5 + tolerance {
+                    out.push(p);
+                }
+            }
+        }
+        out
     }
 
     /// The shifts by whole periods that bring a polyline with this box over
@@ -386,6 +493,33 @@ fn side_along_u(
 }
 
 /// The faces of a body as patches, or `None` when one cannot be laid out.
+/// Says under `THREERS_BREP_DEBUG` why a face has no layout.
+fn unlaid(fi: usize, surface: &Surface, why: &str, loops: &[TrimLoop], face: &Face) {
+    if std::env::var_os("THREERS_BREP_DEBUG").is_some() {
+        let spans: Vec<_> = loops
+            .iter()
+            .map(|l| {
+                let of = |k: usize| {
+                    l.uv.iter()
+                        .fold((f64::INFINITY, f64::NEG_INFINITY), |m, q| {
+                            (m.0.min(q[k]), m.1.max(q[k]))
+                        })
+                };
+                (l.vertices.len(), l.area, of(0), of(1))
+            })
+            .collect();
+        eprintln!(
+            "  [fuse] {} face {fi} has no layout: {why}; wraps {} {}, u {:?} v {:?}, {} edges, rings {spans:?}",
+            surface.kind(),
+            face.u_wraps,
+            face.v_wraps,
+            face.u_range,
+            face.v_range,
+            face.edges.len()
+        );
+    }
+}
+
 fn patches(body: &Body, tolerance: f64) -> Option<Vec<Patch>> {
     let mut out = Vec::with_capacity(body.faces().len());
     for (fi, face) in body.faces().iter().enumerate() {
@@ -397,13 +531,50 @@ fn patches(body: &Body, tolerance: f64) -> Option<Vec<Patch>> {
             .filter(|l| l.is_outer() || l.is_hole())
             .collect();
         let wraps = [face.u_wraps && pu.is_some(), face.v_wraps && pv.is_some()];
+        // A rim of a face that wraps runs along one v: what area rounding
+        // gives it bounds nothing.
+        let rim = |l: &TrimLoop| {
+            let (lo, hi) =
+                l.uv.iter()
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |m, q| {
+                        (m.0.min(q[1]), m.1.max(q[1]))
+                    });
+            wraps[0] && hi - lo <= 1e-8 * (1.0 + hi.abs().max(lo.abs()))
+        };
+        let real: Vec<&TrimLoop> = real.into_iter().filter(|l| !rim(l)).collect();
         let mut rings: Vec<Ring> = Vec::new();
         let anchor;
         let mut wraps = wraps;
         if !wraps[0] && !wraps[1] {
             if real.is_empty() || real.iter().any(|l| l.vertices.len() < 3) {
+                unlaid(fi, &surface, "it has no rings", &loops, face);
                 return None;
             }
+            // A hole whose parameters are a period off the outline's, as
+            // OpenCASCADE may keep a curve on a closed surface, is the same
+            // hole a period on.
+            let mut moved: Vec<TrimLoop> = real.iter().map(|l| (*l).clone()).collect();
+            if let Some(outer) = moved.iter().position(|l| l.is_outer()) {
+                let span = |l: &TrimLoop, k: usize| {
+                    l.uv.iter()
+                        .fold((f64::INFINITY, f64::NEG_INFINITY), |m, q| {
+                            (m.0.min(q[k]), m.1.max(q[k]))
+                        })
+                };
+                for (k, p) in [pu, pv].into_iter().enumerate() {
+                    let Some(t) = p else { continue };
+                    let (a, b) = span(&moved[outer], k);
+                    for i in (0..moved.len()).filter(|&i| i != outer) {
+                        let (c, d) = span(&moved[i], k);
+                        let middle = 0.5 * (c + d);
+                        let shift = t * ((0.5 * (a + b) - middle) / t).round();
+                        if shift != 0.0 && middle + shift >= a && middle + shift <= b {
+                            moved[i].uv.iter_mut().for_each(|q| q[k] += shift);
+                        }
+                    }
+                }
+            }
+            let real: Vec<&TrimLoop> = moved.iter().collect();
             let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
             for q in real.iter().flat_map(|l| l.uv.iter()) {
                 for k in 0..2 {
@@ -418,6 +589,7 @@ fn patches(body: &Body, tolerance: f64) -> Option<Vec<Patch>> {
                 if let Some(t) = p {
                     let span = hi[k] - lo[k];
                     if span > t * (1.0 + 1e-6) {
+                        unlaid(fi, &surface, "it is over a period across", &loops, face);
                         return None;
                     }
                     if span >= t * (1.0 - 1e-6) {
@@ -434,6 +606,7 @@ fn patches(body: &Body, tolerance: f64) -> Option<Vec<Patch>> {
             }
         } else {
             if real.iter().any(|l| l.is_outer()) || wraps[1] && !wraps[0] {
+                unlaid(fi, &surface, "it wraps and has an outer ring", &loops, face);
                 return None;
             }
             let rims: Vec<Vec<(V3, (f64, f64))>> = loops
@@ -455,7 +628,19 @@ fn patches(body: &Body, tolerance: f64) -> Option<Vec<Patch>> {
             let mut u = face.u_range;
             let mut v = face.v_range;
             if let Some(t) = pu {
-                let start = rims.first().map(|r| r[0].1 .0).unwrap_or(u.0);
+                // Where a rim's edge starts, which is where the seam was: a
+                // ring read off the rim may start anywhere round it.
+                let edge_start = face
+                    .edges
+                    .iter()
+                    .map(|&e| &body.edges()[e])
+                    .find(|e| e.closed)
+                    .and_then(|e| surface.invert(body.vertices()[*e.vertices.first()?]))
+                    .map(|q| q.0);
+                // With none, where the face says it starts.
+                let start = edge_start
+                    .or_else(|| rims.first().map(|r| r[0].1 .0))
+                    .unwrap_or(u.0);
                 u = (start, start + t);
             }
             if let (true, Some(t)) = (wraps[1], pv) {
@@ -603,6 +788,8 @@ fn patches(body: &Body, tolerance: f64) -> Option<Vec<Patch>> {
             Surface::Plane { origin, normal, .. } => Some((*origin, *normal)),
             _ => None,
         };
+        let ends = closes(&surface);
+        let closes = [0, 1].map(|k| ends[k].map(|(a, b)| (a * scale[k], b * scale[k])));
         out.push(Patch {
             surface,
             flipped: face.flipped,
@@ -617,6 +804,7 @@ fn patches(body: &Body, tolerance: f64) -> Option<Vec<Patch>> {
             lo: lo.map(|x| x - pad),
             hi: hi.map(|x| x + pad),
             wraps,
+            closes,
         });
     }
     Some(out)
@@ -632,6 +820,8 @@ enum Section {
     Apart,
     /// The two touch without crossing: along a curve or at a point.
     Graze,
+    /// Touching at a point, one solid within the other there.
+    Nested(Inner),
     /// The two lie on one surface; whether they face the same way.
     Wall(bool),
     Cuts(Vec<Vec<V3>>),
@@ -867,6 +1057,24 @@ fn clip(poly: &[V3], closed: bool, f: &Patch, g: &Patch, tolerance: f64) -> Vec<
         runs[0] = joined;
     }
     runs.retain(|r| r.windows(2).map(|w| v3::dist(w[0], w[1])).sum::<f64>() > tolerance);
+    // A stretch that never goes into one of the faces and strays from its edge,
+    // within the tolerance, as a section that only touches the face there
+    // does — a plane along a chamfer's cone, meeting its rim at a point —
+    // cuts nothing. One along the edge stays on it to rounding.
+    runs.retain(|r| {
+        [f, g].iter().all(|p| {
+            let off = |q: &V3| {
+                p.uv(*q).map_or(f64::INFINITY, |u| {
+                    p.images(u)
+                        .into_iter()
+                        .map(|s| ring_distance(&p.rings2, s))
+                        .fold(f64::INFINITY, f64::min)
+                })
+            };
+            r.iter().any(|q| p.interior(*q, tolerance))
+                || r.iter().map(off).fold(0.0, f64::max) <= 0.25 * tolerance
+        })
+    });
     // A stretch along a ring of either face is that ring, with its points.
     for run in &mut runs {
         if std::env::var_os("THREERS_BREP_DEBUG").is_some() {
@@ -1132,6 +1340,152 @@ fn onto_rings(ring: &[V3], to: &Patch, tolerance: f64) -> Vec<Vec<V3>> {
     out
 }
 
+/// Is this run an edge of the other solid that rests on `f`, well inside it:
+/// do all of that solid's faces that come to it go off to one side of `f`?
+///
+/// Off at a clear angle. Where one leaves along `f` there is no telling from
+/// beside the edge which side it goes to, and where the run is inside a face
+/// of the other solid that face goes to both.
+fn rests(run: &[V3], f: &Patch, others: &[Patch], tolerance: f64) -> bool {
+    let inside = |p: V3| {
+        f.uv(p).is_some_and(|q| {
+            f.images(q)
+                .into_iter()
+                .any(|q| in_rings(&f.rings2, q) && ring_distance(&f.rings2, q) > tolerance * 4.0)
+        })
+    };
+    if run.len() < 2 || !run.iter().all(|p| inside(*p)) {
+        return false;
+    }
+    let mut side = 0.0f64;
+    let quarter = |k: usize| {
+        let at = (run.len() - 1) as f64 * k as f64 / 4.0;
+        let i = (at as usize).min(run.len() - 2);
+        let t = at - i as f64;
+        v3::add(run[i], v3::scale(v3::sub(run[i + 1], run[i]), t))
+    };
+    for p in [quarter(1), quarter(2), quarter(3)] {
+        let mut faces = 0;
+        for g in others {
+            let Some(q) = g.uv(p) else { continue };
+            if v3::dist(g.point(q), p) > tolerance * 4.0 {
+                continue;
+            }
+            for q in g.images(q) {
+                let near = ring_distance(&g.rings2, q);
+                if near > tolerance * 4.0 {
+                    if in_rings(&g.rings2, q) {
+                        return false;
+                    }
+                    continue;
+                }
+                // Into the face from its edge: each way about, as far as tells
+                // the face from its edge, or at a corner from both.
+                let h = tolerance * 64.0;
+                let mut found = false;
+                for k in 0..16 {
+                    let a = std::f64::consts::TAU * k as f64 / 16.0;
+                    let x = [q[0] + h * a.cos(), q[1] + h * a.sin()];
+                    if !in_rings(&g.rings2, x) || ring_distance(&g.rings2, x) < h * 0.5 {
+                        continue;
+                    }
+                    let off = f.surface.signed_distance(g.point(x));
+                    if off.abs() <= tolerance * 4.0 || off * side < 0.0 {
+                        return false;
+                    }
+                    side = off;
+                    found = true;
+                }
+                if !found {
+                    return false;
+                }
+                faces += 1;
+            }
+        }
+        if faces < 2 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Which of two solids lies inside the other where their faces touch.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Inner {
+    First,
+    Second,
+}
+
+/// Where two faces touch at one point, on the same side of it and one within
+/// the other all round it: a ball resting on a box's floor from within.
+/// Neither face is cut there. `None` where they kiss from outside, or cross
+/// somewhere near the touch, or touch along more than a point.
+///
+/// Told from a ring of points round the touch on each surface, against the
+/// other: far enough out that a hundredth of the tolerance's noise does not
+/// speak, near enough that only the touch does.
+fn nested(run: &[V3], f: &Patch, g: &Patch, tolerance: f64) -> Option<Inner> {
+    let n = run.len() as f64;
+    let at = run
+        .iter()
+        .fold([0.0; 3], |s, p| v3::add(s, v3::scale(*p, 1.0 / n)));
+    let spread = run.iter().map(|p| v3::dist(*p, at)).fold(0.0, f64::max);
+    // A touch is seen as wide as the surfaces stay within the tolerance of
+    // each other round it, which goes by its square root; wider is a line.
+    let size = |p: &Patch| (0..3).map(|k| p.hi[k] - p.lo[k]).fold(0.0f64, f64::max);
+    let scale = size(f).min(size(g));
+    if spread > (tolerance * scale).sqrt() {
+        return None;
+    }
+    let reach = (4.0 * spread).max(2.0 * (tolerance * scale).sqrt());
+    let outward = |p: &Patch, x: V3| -> Option<V3> {
+        let (u, v) = p.surface.invert(x)?;
+        let n = p.surface.normal(u, v)?;
+        Some(if p.flipped { v3::scale(n, -1.0) } else { n })
+    };
+    let (a, b) = (outward(f, at)?, outward(g, at)?);
+    if v3::dot(a, b) < 0.999 {
+        return None;
+    }
+    // How far out of `other`'s solid the points round the touch on `one` are.
+    let round = |one: &Patch, other: &Patch| -> Option<(f64, f64)> {
+        let x = v3::normalize(v3::cross(
+            a,
+            if a[0].abs() < 0.9 {
+                [1.0, 0.0, 0.0]
+            } else {
+                [0.0, 1.0, 0.0]
+            },
+        ))?;
+        let y = v3::cross(a, x);
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for i in 0..32 {
+            let (s, c) = (i as f64 * std::f64::consts::TAU / 32.0).sin_cos();
+            let p = v3::add(
+                at,
+                v3::add(v3::scale(x, c * reach), v3::scale(y, s * reach)),
+            );
+            let (u, v) = one.surface.invert(p)?;
+            let d = other.surface.signed_distance(one.surface.point(u, v));
+            let d = if other.flipped { -d } else { d };
+            (lo, hi) = (lo.min(d), hi.max(d));
+        }
+        Some((lo, hi))
+    };
+    let ((f_lo, f_hi), (g_lo, g_hi)) = (round(f, g)?, round(g, f)?);
+    // Clear of the surface almost all the way round: along a direction the
+    // two stay together in, as a rod on a floor, they touch along a line,
+    // which is a touch at an end of that line only where a face stops.
+    let noise = tolerance * 1e-2;
+    if f_hi <= noise && g_lo >= -noise && f_lo < -noise {
+        return Some(Inner::First);
+    }
+    if f_lo >= -noise && g_hi <= noise && f_hi > noise {
+        return Some(Inner::Second);
+    }
+    None
+}
+
 fn section(f: &Patch, g: &Patch, tolerance: f64) -> Section {
     if !boxes_meet((f.lo, f.hi), (g.lo, g.hi), tolerance) {
         return Section::Apart;
@@ -1164,11 +1518,15 @@ fn section(f: &Patch, g: &Patch, tolerance: f64) -> Section {
             }
         }
     }
+    let mut touches: Vec<Inner> = Vec::new();
     let mut cuts = Vec::new();
     for c in &curves {
         if let Curve3d::Point(p) = c {
             if f.holds(*p, tolerance) && g.holds(*p, tolerance) {
-                return Section::Graze;
+                match nested(&[*p], f, g, tolerance) {
+                    Some(inner) => touches.push(inner),
+                    None => return Section::Graze,
+                }
             }
             continue;
         }
@@ -1186,6 +1544,8 @@ fn section(f: &Patch, g: &Patch, tolerance: f64) -> Section {
                     gap(g)
                 );
             }
+            let pts = f.with_seams(pts, closed, &g.surface, tolerance);
+            let pts = g.with_seams(pts, closed, &f.surface, tolerance);
             let runs = clip(&pts, closed, f, g, tolerance);
             if std::env::var_os("THREERS_BREP_DEBUG").is_some() {
                 eprintln!(
@@ -1199,19 +1559,36 @@ fn section(f: &Patch, g: &Patch, tolerance: f64) -> Section {
                     Touch::Crosses => cuts.push(run),
                     // Resting along a ruling: neither face is cut.
                     Touch::AllAlong => {}
-                    Touch::Somewhere => return Section::Graze,
+                    Touch::Somewhere => match nested(&run, f, g, tolerance) {
+                        Some(inner) => touches.push(inner),
+                        None => return Section::Graze,
+                    },
                 }
             }
         }
     }
-    Section::Cuts(cuts)
+    match touches.first() {
+        Some(&inner) if cuts.is_empty() && touches.iter().all(|t| *t == inner) => {
+            Section::Nested(inner)
+        }
+        Some(_) => Section::Graze,
+        None => Section::Cuts(cuts),
+    }
 }
 
 // -- the arrangement of one face ---------------------------------------------
 
 /// Points welded at a tolerance: the same place is the same index.
+///
+/// And the same point always the same index. A point can lie within the
+/// tolerance of two others that do not of each other, and the second may
+/// come later: a section's sample welded to a vertex while one face was laid
+/// out would weld to a crossing that face found when the next face asked,
+/// and the two faces along that section would part.
 struct Pool {
     points: Vec<V3>,
+    /// What each point asked for was answered with.
+    asked: HashMap<[u64; 3], usize>,
     grid: HashMap<[i64; 3], Vec<usize>>,
     tolerance: f64,
 }
@@ -1220,12 +1597,24 @@ impl Pool {
     fn new(tolerance: f64) -> Self {
         Self {
             points: Vec::new(),
+            asked: HashMap::new(),
             grid: HashMap::new(),
             tolerance,
         }
     }
 
     fn id(&mut self, p: V3) -> usize {
+        // Zero is zero, whichever its sign.
+        let exact = p.map(|x| (x + 0.0).to_bits());
+        if let Some(&i) = self.asked.get(&exact) {
+            return i;
+        }
+        let i = self.weld(p);
+        self.asked.insert(exact, i);
+        i
+    }
+
+    fn weld(&mut self, p: V3) -> usize {
         let k = p.map(|x| (x / self.tolerance).floor() as i64);
         for dx in -1..=1 {
             for dy in -1..=1 {
@@ -1260,6 +1649,29 @@ struct Node {
 struct Cell {
     rings: Vec<Vec<Node>>,
     probe: V3,
+}
+
+/// Places well inside a piece, off the middle of it.
+fn elsewhere(cell: &Cell, tolerance: f64) -> Vec<P2> {
+    let rings: Vec<Vec<P2>> = cell
+        .rings
+        .iter()
+        .map(|r| r.iter().map(|n| n.uv).collect())
+        .collect();
+    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for q in rings.iter().flatten() {
+        for k in 0..2 {
+            lo[k] = lo[k].min(q[k]);
+            hi[k] = hi[k].max(q[k]);
+        }
+    }
+    // Fractions of no simple relation to one another or to a half.
+    const AT: [f64; 5] = [0.37, 0.71, 0.19, 0.83, 0.57];
+    AT.iter()
+        .flat_map(|u| AT.iter().map(move |v| [*u, *v]))
+        .map(|w| [0, 1].map(|k| lo[k] + (hi[k] - lo[k]) * w[k]))
+        .filter(|q| in_rings(&rings, *q) && ring_distance(&rings, *q) > tolerance * 4.0)
+        .collect()
 }
 
 /// The point of a region furthest from its boundary, from a grid over it.
@@ -1414,6 +1826,8 @@ fn cells(
             segs.push((ids[i], ids[(i + 1) % n]));
         }
     }
+    segs.retain(|(a, b)| a != b);
+    let own = segs.len();
     let pad = tolerance * 2.0;
     for cut in cuts {
         let Some(uv) = f.unwrapped(cut) else { continue };
@@ -1436,7 +1850,13 @@ fn cells(
                 .map(|(&p, q)| nodes.id(p, *q))
                 .collect();
             for (k, w) in ns.windows(2).enumerate() {
-                let (a, b) = (moved[k], moved[k + 1]);
+                let (mut a, mut b) = (moved[k], moved[k + 1]);
+                let mut w = [w[0], w[1]];
+                if f.closes != [None; 2] {
+                    // Either end of it on the side of the seam it is on.
+                    (a, b) = (f.beside(a, b, tolerance), f.beside(b, a, tolerance));
+                    w = [nodes.id(ids[k], a), nodes.id(ids[k + 1], b)];
+                }
                 let outside = (0..2).any(|d| {
                     (a[d] < f.dlo[d] - pad && b[d] < f.dlo[d] - pad)
                         || (a[d] > f.dhi[d] + pad && b[d] > f.dhi[d] + pad)
@@ -1492,7 +1912,15 @@ fn cells(
             if t > et && t < 1.0 - et && u > eu && u < 1.0 - eu {
                 let q = [a[0] + r[0] * t, a[1] + r[1] * t];
                 let p = if f.plane.is_some() {
-                    let (pa, pb) = (nodes.list[segs[i].0].point, nodes.list[segs[i].1].point);
+                    // On the cut, where one of them is: a side of the face
+                    // can be a chord of the curve it stands for, and a point
+                    // on it is as far off the face that cuts this one there.
+                    let (s, t) = if i < own && j >= own {
+                        (segs[j], u)
+                    } else {
+                        (segs[i], t)
+                    };
+                    let (pa, pb) = (nodes.list[s.0].point, nodes.list[s.1].point);
                     lerp3(pool.points[pa], pool.points[pb], t)
                 } else {
                     f.point(q)
@@ -1796,8 +2224,155 @@ fn ray_hits(surface: &Surface, p: V3, d: V3) -> Option<Vec<f64>> {
                 v3::dot(wr, wr) - k * h * h,
             )
         }
-        _ => return None,
+        Surface::Nurbs(n) => return nurbs_ray_hits(n, p, d),
+        Surface::Torus {
+            center,
+            axis,
+            major,
+            minor,
+            ..
+        } => {
+            // (|x|² + R² - r²)² = 4R²·|x across the axis|², along the ray.
+            let w = v3::sub(p, *center);
+            let (wr, dr) = (flat(w, *axis), flat(d, *axis));
+            let (a, b) = (v3::dot(d, d), 2.0 * v3::dot(w, d));
+            let c = v3::dot(w, w) + major * major - minor * minor;
+            let k = 4.0 * major * major;
+            let quartic = [
+                c * c - k * v3::dot(wr, wr),
+                2.0 * b * c - 2.0 * k * v3::dot(wr, dr),
+                b * b + 2.0 * a * c - k * v3::dot(dr, dr),
+                2.0 * a * b,
+                a * a,
+            ];
+            // Well within twice as far as the ball round it: a crossing may be
+            // at the very edge of that.
+            let reach = 2.0 * (v3::norm(w) + major + minor) / a.sqrt();
+            polynomial_roots(&quartic, -reach, reach)
+        }
     })
+}
+
+/// The real roots of a polynomial between `lo` and `hi`, lowest power first:
+/// it has at most one between any two of its derivative's. One where it
+/// touches nought without crossing is no crossing, and not told.
+fn polynomial_roots(c: &[f64], lo: f64, hi: f64) -> Vec<f64> {
+    if c.len() < 2 {
+        return Vec::new();
+    }
+    let at = |t: f64| c.iter().rev().fold(0.0, |s, k| s * t + k);
+    let slope: Vec<f64> = (1..c.len()).map(|i| c[i] * i as f64).collect();
+    let mut stops = vec![lo];
+    stops.extend(polynomial_roots(&slope, lo, hi));
+    stops.push(hi);
+    let mut out = Vec::new();
+    for w in stops.windows(2) {
+        let (mut a, mut b) = (w[0], w[1]);
+        let (fa, fb) = (at(a), at(b));
+        if fa == 0.0 || fa * fb >= 0.0 {
+            continue;
+        }
+        for _ in 0..200 {
+            let m = 0.5 * (a + b);
+            if m <= a || m >= b {
+                break;
+            }
+            if at(m) * fa > 0.0 {
+                a = m;
+            } else {
+                b = m;
+            }
+        }
+        out.push(0.5 * (a + b));
+    }
+    out
+}
+
+/// Where the ray `p + t·d` meets a NURBS surface: crossings of the
+/// triangles of its seed grid, each polished by Newton's method on
+/// `S(u, v) = p + t·d` until it lies on the surface itself. `None` where a
+/// crossing does not polish, so that the caller does not count on it.
+fn nurbs_ray_hits(s: &crate::nurbs::NurbsSurface, p: V3, d: V3) -> Option<Vec<f64>> {
+    let grid = super::surface::seed_grid(s);
+    let grid = &grid.points;
+    let (nu, nv) = super::surface::seed_counts(s);
+    let at = |i: usize, j: usize| grid[i * (nv + 1) + j];
+    let (u0, u1) = s.domain_u();
+    let (v0, v1) = s.domain_v();
+    let size = grid
+        .iter()
+        .fold(0.0f64, |m, q| m.max(v3::dot(q.0, q.0)))
+        .sqrt()
+        .max(1.0);
+    let mut hits: Vec<(f64, f64, f64)> = Vec::new();
+    // A crossing a little outside a triangle is still tried, so that one on
+    // a shared side is not missed by both.
+    const SLACK: f64 = 1e-6;
+    for i in 0..nu {
+        for j in 0..nv {
+            let corners = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
+            for tri in [[0, 1, 2], [0, 2, 3]] {
+                let [a, b, c] = tri.map(|k| corners[k]);
+                let (e1, e2) = (v3::sub(b.0, a.0), v3::sub(c.0, a.0));
+                let h = v3::cross(d, e2);
+                let det = v3::dot(e1, h);
+                if det.abs() <= 1e-300 {
+                    continue;
+                }
+                let inv = 1.0 / det;
+                let w = v3::sub(p, a.0);
+                let bu = v3::dot(w, h) * inv;
+                let q = v3::cross(w, e1);
+                let bv = v3::dot(d, q) * inv;
+                if bu < -SLACK || bv < -SLACK || bu + bv > 1.0 + SLACK {
+                    continue;
+                }
+                let t0 = v3::dot(e2, q) * inv;
+                let mut u = a.1 + bu * (b.1 - a.1) + bv * (c.1 - a.1);
+                let mut v = a.2 + bu * (b.2 - a.2) + bv * (c.2 - a.2);
+                let mut t = t0;
+                let mut converged = false;
+                for _ in 0..40 {
+                    let ders = s.derivatives(u, v, 1);
+                    let r = v3::sub(ders[0][0], v3::add(p, v3::scale(d, t)));
+                    if v3::dot(r, r).sqrt() <= 1e-11 * size {
+                        converged = true;
+                        break;
+                    }
+                    // [Su Sv −d] · (du, dv, dt) = −r, by Cramer's rule.
+                    let (su, sv, nd) = (ders[1][0], ders[0][1], v3::scale(d, -1.0));
+                    let det = v3::dot(su, v3::cross(sv, nd));
+                    if det.abs() <= 1e-300 {
+                        break;
+                    }
+                    let mr = v3::scale(r, -1.0);
+                    let du = v3::dot(mr, v3::cross(sv, nd)) / det;
+                    let dv = v3::dot(su, v3::cross(mr, nd)) / det;
+                    let dt = v3::dot(su, v3::cross(sv, mr)) / det;
+                    u = (u + du).clamp(u0, u1);
+                    v = (v + dv).clamp(v0, v1);
+                    t += dt;
+                }
+                if !converged {
+                    // A crossing of the grid only just: the surface may pass
+                    // by the ray, and a near miss is no hit.
+                    if bu.min(bv).min(1.0 - bu - bv) <= SLACK.sqrt() {
+                        continue;
+                    }
+                    return None;
+                }
+                let same = |h: &(f64, f64, f64)| {
+                    (h.0 - t).abs() <= 1e-9 * (1.0 + t.abs())
+                        && (h.1 - u).abs() <= 1e-9 * (1.0 + (u1 - u0))
+                        && (h.2 - v).abs() <= 1e-9 * (1.0 + (v1 - v0))
+                };
+                if !hits.iter().any(same) {
+                    hits.push((t, u, v));
+                }
+            }
+        }
+    }
+    Some(hits.into_iter().map(|h| h.0).collect())
 }
 
 /// Is `p` inside the solid bounded by these patches? By the parity of a ray
@@ -1805,17 +2380,25 @@ fn ray_hits(surface: &Surface, p: V3, d: V3) -> Option<Vec<f64>> {
 /// grazes a face or passes by the edge of one. `None` where a surface has no
 /// closed form, or no direction is clean.
 fn inside_exact(p: V3, faces: &[Patch], tolerance: f64) -> Option<bool> {
-    const DIRECTIONS: [V3; 7] = [
-        [0.531_9, 0.627_3, 0.569_1],
-        [-0.419_7, 0.733_1, 0.534_2],
-        [0.313_7, -0.681_9, 0.660_3],
-        [-0.645_1, -0.359_3, -0.674_3],
-        [0.152_9, 0.297_1, -0.942_5],
-        [0.871_3, -0.211_7, -0.442_6],
-        [-0.236_1, -0.918_4, 0.317_9],
-    ];
-    'direction: for d in DIRECTIONS {
-        let d = v3::normalize(d)?;
+    inside_exact_from(p, faces, tolerance, 0).map(|(inside, _)| inside)
+}
+
+/// The directions rays are cast in, in turn.
+const DIRECTIONS: [V3; 7] = [
+    [0.531_9, 0.627_3, 0.569_1],
+    [-0.419_7, 0.733_1, 0.534_2],
+    [0.313_7, -0.681_9, 0.660_3],
+    [-0.645_1, -0.359_3, -0.674_3],
+    [0.152_9, 0.297_1, -0.942_5],
+    [0.871_3, -0.211_7, -0.442_6],
+    [-0.236_1, -0.918_4, 0.317_9],
+];
+
+/// [`inside_exact`] from the `k`-th direction on: the parity of the first
+/// clean ray and the index of the direction after it.
+fn inside_exact_from(p: V3, faces: &[Patch], tolerance: f64, k: usize) -> Option<(bool, usize)> {
+    'direction: for (index, d) in DIRECTIONS.iter().enumerate().skip(k) {
+        let d = v3::normalize(*d)?;
         let mut crossings = 0;
         for f in faces {
             for t in ray_hits(&f.surface, p, d)? {
@@ -1844,16 +2427,54 @@ fn inside_exact(p: V3, faces: &[Patch], tolerance: f64) -> Option<bool> {
                 crossings += 1;
             }
         }
-        return Some(crossings % 2 == 1);
+        return Some((crossings % 2 == 1, index + 1));
     }
     None
+}
+
+/// [`inside_exact`] where faces are NURBS, whose ray hits are found
+/// numerically: the first two clean directions must agree. `None` where
+/// they do not, or fewer than two are clean.
+fn inside_curved(p: V3, faces: &[Patch], tolerance: f64) -> Option<bool> {
+    let (first, next) = inside_exact_from(p, faces, tolerance, 0)?;
+    let (second, _) = inside_exact_from(p, faces, tolerance, next)?;
+    (first == second).then_some(first)
 }
 
 enum Solid<'a> {
     Flat(&'a [Patch]),
     /// Bounded by surfaces a ray meets in closed form.
     Exact(&'a [Patch]),
+    /// Bounded by planes, quadrics and NURBS: rays at the surfaces where
+    /// two directions agree, a closed mesh of the body (made the first time
+    /// it is needed) where they do not.
+    Curved {
+        faces: &'a [Patch],
+        body: &'a Body,
+        /// As it was before its edges were refined.
+        plain: &'a Body,
+        tolerance: f64,
+        size: f64,
+        /// At each of [`COARSER`], and at the tolerance itself.
+        mesh: [std::cell::OnceCell<Vec<[V3; 3]>>; 3],
+    },
     Mesh(Vec<[V3; 3]>),
+}
+
+/// The coarser meshes a point well off a solid's surfaces is told by, as shares
+/// of the size of it all: a fine one takes far longer to make than all else.
+const COARSER: [f64; 2] = [1e-2, 1e-3];
+
+/// A closed mesh of `x` to cast rays at, however coarse it takes: one that
+/// does not close has no inside, and every point reads as outside it. A body
+/// cut several times over can fill its faces at a few ten-thousandths of its
+/// size and not at a millionth. Empty where none closes.
+fn closed_mesh(x: &Body, tolerance: f64, size: f64) -> Vec<[V3; 3]> {
+    [tolerance, tolerance * 10.0, tolerance * 100.0, size * 1e-3]
+        .into_iter()
+        .map(|t| x.solid_triangles(t))
+        .find(|tris| !tris.is_empty())
+        .unwrap_or_default()
 }
 
 impl Solid<'_> {
@@ -1861,6 +2482,36 @@ impl Solid<'_> {
         match self {
             Solid::Flat(faces) => inside_flat(p, faces, tolerance),
             Solid::Exact(faces) => inside_exact(p, faces, tolerance),
+            Solid::Curved {
+                faces,
+                body,
+                plain,
+                tolerance: t,
+                size,
+                mesh,
+            } => inside_curved(p, faces, tolerance).or_else(|| {
+                // No nearer than this to any of its faces, which may stop short
+                // of where their surfaces go.
+                let off = faces
+                    .iter()
+                    .map(|f| {
+                        let out = |k: usize| (f.lo[k] - p[k]).max(p[k] - f.hi[k]).max(0.0);
+                        f.surface.distance(p).max(v3::norm([0, 1, 2].map(out)))
+                    })
+                    .fold(f64::INFINITY, f64::min);
+                for (mesh, share) in mesh.iter().zip(COARSER) {
+                    let coarse = share * size;
+                    if coarse <= *t || off <= 4.0 * coarse {
+                        continue;
+                    }
+                    let tris = mesh.get_or_init(|| plain.solid_triangles(coarse));
+                    if !tris.is_empty() {
+                        return Some(point_in_mesh(tris, p));
+                    }
+                }
+                let tris = mesh[2].get_or_init(|| closed_mesh(body, *t, *size));
+                (!tris.is_empty()).then(|| point_in_mesh(tris, p))
+            }),
             Solid::Mesh(tris) => Some(point_in_mesh(tris, p)),
         }
     }
@@ -1882,6 +2533,8 @@ pub fn general(
     op: BooleanOp,
     tolerance: f64,
 ) -> Option<Result<Body, Declined>> {
+    // A face across the seam of a spline would be laid out torn.
+    let (a, b) = (&*a.off_seams(), &*b.off_seams());
     // Between flat faces nothing is sampled, so what the tolerance is for —
     // a chord's sag — does not arise, and welding at it only merges what is
     // thinner than it: a wall's 4 mm membrane cut at a tolerance of 4.7 came
@@ -1914,18 +2567,24 @@ pub fn general(
     };
     // Curved faces are laid out from their edges, so the edges first need to
     // be as close to the curves as the tolerance asks.
-    let refined = |x: &Body| {
+    let refined = |x: &Body, other: &Body| {
         let mut x = x.clone();
         if !is_flat(&x) {
             x.refine_edges(tolerance * 0.25);
+            x.meet(other, tolerance);
         }
         x
     };
-    let (ra, rb) = (refined(a), refined(b));
+    let (ra, rb) = (refined(a, b), refined(b, a));
     let pa = patches(&ra, tolerance)?;
     let pb = patches(&rb, tolerance)?;
     let origins = Origins::of(&[&ra, &rb], tolerance);
-    fn solid<'a>(x: &Body, p: &'a [Patch], tolerance: f64, size: f64) -> Option<Solid<'a>> {
+    fn solid<'a>(
+        (x, plain): (&'a Body, &'a Body),
+        p: &'a [Patch],
+        tolerance: f64,
+        size: f64,
+    ) -> Option<Solid<'a>> {
         if is_flat(x) {
             return Some(Solid::Flat(p));
         }
@@ -1936,24 +2595,38 @@ pub fn general(
                     | Surface::Cylinder { .. }
                     | Surface::Sphere { .. }
                     | Surface::Cone { .. }
+                    | Surface::Torus { .. }
             )
         }) {
             return Some(Solid::Exact(p));
         }
-        // A closed mesh to cast rays at, however coarse it takes: one that
-        // does not close has no inside, and every point reads as outside it.
-        // A body cut several times over can fill its faces at a few
-        // ten-thousandths of its size and not at a millionth.
-        [tolerance, tolerance * 10.0, tolerance * 100.0, size * 1e-3]
-            .into_iter()
-            .map(|t| x.solid_triangles(t))
-            .find(|tris| !tris.is_empty())
-            .map(Solid::Mesh)
+        if p.iter().all(|f| {
+            matches!(
+                f.surface,
+                Surface::Plane { .. }
+                    | Surface::Cylinder { .. }
+                    | Surface::Sphere { .. }
+                    | Surface::Cone { .. }
+                    | Surface::Torus { .. }
+                    | Surface::Nurbs(_)
+            )
+        }) {
+            return Some(Solid::Curved {
+                faces: p,
+                body: x,
+                plain,
+                tolerance,
+                size,
+                mesh: Default::default(),
+            });
+        }
+        let tris = closed_mesh(x, tolerance, size);
+        (!tris.is_empty()).then_some(Solid::Mesh(tris))
     }
-    let Some(sa) = solid(&ra, &pa, tolerance, size) else {
+    let Some(sa) = solid((&ra, a), &pa, tolerance, size) else {
         return Some(Err(Declined::NotWatertight { open_edges: 0 }));
     };
-    let Some(sb) = solid(&rb, &pb, tolerance, size) else {
+    let Some(sb) = solid((&rb, b), &pb, tolerance, size) else {
         return Some(Err(Declined::NotWatertight { open_edges: 0 }));
     };
     Some(fuse(&pa, &pb, &sa, &sb, &origins, op, tolerance))
@@ -2009,8 +2682,23 @@ fn fuse(
                         }
                     }
                 }
+                // The faces are left whole. What is inside is kept or not as
+                // a whole, but for what is cut *out* from within, whose
+                // hollow would come to the surface at a point.
+                Section::Nested(inner) => {
+                    if op == BooleanOp::Difference && inner == Inner::Second {
+                        return Err(Declined::TangentialContact {
+                            face_a: i,
+                            face_b: j - na,
+                        });
+                    }
+                }
                 Section::Cuts(cs) => {
                     for c in cs {
+                        // An edge that only comes up to a face cuts nothing.
+                        if rests(&c, all[i], pb, tolerance) || rests(&c, all[j], pa, tolerance) {
+                            continue;
+                        }
                         cuts[i].push(c.clone());
                         cuts[j].push(c);
                     }
@@ -2053,8 +2741,15 @@ fn fuse(
                     _ => (false, false),
                 },
                 None => {
+                    // Where the other solid only touches it, as with an edge, the
+                    // probe may be on the touch: any other place does as well.
                     let within = other
                         .contains(cell.probe, tolerance)
+                        .or_else(|| {
+                            elsewhere(&cell, tolerance)
+                                .into_iter()
+                                .find_map(|q| other.contains(f.point(q), tolerance))
+                        })
                         .ok_or(Declined::UnclassifiablePiece { face: i })?;
                     match (op, from_a) {
                         (BooleanOp::Union, _) => (!within, false),
@@ -2104,7 +2799,7 @@ fn rejoin_seams(all: &[&Patch], kept: Vec<Kept>, tolerance: f64) -> Vec<Kept> {
     let mut out: Vec<Kept> = Vec::new();
     let mut by_patch: HashMap<usize, Vec<Kept>> = HashMap::new();
     for k in kept {
-        if all[k.patch].wraps.iter().any(|&w| w) {
+        if all[k.patch].wraps.iter().any(|&w| w) && !super::settings().split_at_seams {
             by_patch.entry(k.patch).or_default().push(k);
         } else {
             out.push(k);
@@ -2904,7 +3599,7 @@ impl Origins {
 /// The circle a polyline's points all lie on, to rounding: centre, normal,
 /// radius, and the sag of its longest chord. `None` for a straight one, or
 /// one that is not a circle.
-fn circle_through(pts: &[V3]) -> Option<(V3, V3, f64, f64)> {
+pub(super) fn circle_through(pts: &[V3]) -> Option<(V3, V3, f64, f64)> {
     let n = pts.len();
     if n < 4 {
         return None;
@@ -3302,7 +3997,10 @@ fn settle(
         let q = if let Some(q) = tangent {
             q
         } else if ss.len() == 2 && cs.is_empty() {
-            match super::intersect::settle(surfaces[ss[0]], surfaces[ss[1]], p, tolerance) {
+            let (a, b) = (surfaces[ss[0]], surfaces[ss[1]]);
+            // As near as rounding lets it be, where it can.
+            let close = super::intersect::settle(a, b, p, 1e-10 * (1.0 + v3::norm(p)));
+            match close.or_else(|| super::intersect::settle(a, b, p, tolerance)) {
                 Some(q) => q,
                 None => continue,
             }
@@ -3373,7 +4071,11 @@ fn settle(
         } else {
             reach
         };
-        if v3::dist(p, q) <= far && worst(q) < was {
+        // Not for a rounding: where two of its surfaces touch, that is as good as
+        // any place along them, and a vertex slid away from the one above it
+        // for nothing.
+        let rounding = 1e-12 * (1.0 + v3::norm(p));
+        if v3::dist(p, q) <= far && worst(q) < was && was > rounding {
             moved.insert(v, q);
         }
         if std::env::var_os("THREERS_BREP_DEBUG").is_some() && worst(q) > 1e-9 {
@@ -3402,6 +4104,8 @@ fn settle(
                     continue;
                 };
                 let old = l.uv[k];
+                // On the seam of a spline, the side of it the ring is on.
+                let (u, w) = s.seam_near(*q, (u, w), (old[0], old[1]));
                 let near = |x: f64, a: f64| {
                     x - std::f64::consts::TAU * ((x - a) / std::f64::consts::TAU).round()
                 };
@@ -3446,6 +4150,23 @@ mod tests {
             (v - expected).abs() < 1e-9,
             "{op:?}: volume {v}, expected {expected}"
         );
+    }
+
+    /// A point between two others, each within the tolerance of it and not
+    /// of each other, stays the one it was first welded to.
+    #[test]
+    fn a_point_welds_to_one_place_for_good() {
+        // Whichever side of it the pool's grid looks at first.
+        for side in [-1.0, 1.0] {
+            let mut pool = Pool::new(1.0);
+            let first = pool.id([0.8 * side, 0.0, 0.0]);
+            let p = [0.0, 0.0, 0.0];
+            assert_eq!(pool.id(p), first);
+            let later = pool.id([-0.8 * side, 0.0, 0.0]);
+            assert_ne!(later, first);
+            assert_eq!(pool.id(p), first);
+            assert_eq!(pool.id([-0.0, 0.0, 0.0]), first);
+        }
     }
 
     #[test]
@@ -3565,6 +4286,140 @@ mod tests {
                 Some(Err(Declined::TangentialContact { .. }))
             ));
         }
+    }
+
+    /// A ray meets a torus where it stands, as often as it goes through.
+    #[test]
+    fn rays_meet_a_torus() {
+        let torus = Surface::Torus {
+            center: [1.0, -2.0, 0.5],
+            axis: [0.0, 0.0, 1.0],
+            x_dir: [1.0, 0.0, 0.0],
+            major: 3.0,
+            minor: 1.0,
+        };
+        let cases = [
+            // Straight through the middle: in and out of both sides.
+            (
+                [-9.0, -2.0, 0.5],
+                [1.0, 0.0, 0.0],
+                vec![6.0, 8.0, 12.0, 14.0],
+            ),
+            // Down the hole, down the tube, past it.
+            ([1.0, -2.0, 9.0], [0.0, 0.0, -1.0], vec![]),
+            ([4.0, -2.0, 9.0], [0.0, 0.0, -1.0], vec![7.5, 9.5]),
+            ([9.0, 9.0, 9.0], [0.0, 0.0, -1.0], vec![]),
+        ];
+        for (p, d, want) in cases {
+            let mut got = ray_hits(&torus, p, d).unwrap();
+            got.sort_by(f64::total_cmp);
+            assert_eq!(got.len(), want.len(), "{p:?} {d:?}: {got:?}");
+            for (g, w) in got.iter().zip(&want) {
+                assert!((g - w).abs() < 1e-9, "{g} for {w}");
+            }
+        }
+        // And any ray: on the surface wherever it says.
+        for k in 0..200 {
+            let t = f64::from(k);
+            let p = [
+                8.0 * (t * 0.7).sin(),
+                8.0 * (t * 1.3).cos(),
+                4.0 * (t * 0.9).sin(),
+            ];
+            let d =
+                v3::normalize([(t * 2.1).cos(), (t * 1.7).sin(), (t * 0.4).cos() + 0.1]).unwrap();
+            let hits = ray_hits(&torus, p, d).unwrap();
+            assert_eq!(hits.len() % 2, 0, "in as often as out");
+            for h in hits {
+                let q = v3::add(p, v3::scale(d, h));
+                assert!(torus.distance(q) < 1e-9, "{}", torus.distance(q));
+            }
+        }
+    }
+
+    /// A bar turned on its edge in a box: where that edge only comes to the
+    /// box's wall nothing is cut there, and where two of its edges are in the
+    /// wall, its faces off to either side, half of it is cut away.
+    #[test]
+    fn an_edge_resting_on_a_wall_cuts_nothing() {
+        let around = Body::cuboid([8.0, 8.0, 8.0]);
+        let r = std::f64::consts::SQRT_2;
+        // Square to z, and turned: reaching r either way along x.
+        let mut turned =
+            crate::math::Matrix4::translation(crate::math::Vector3::new(0.0, 0.0, 0.0));
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        (turned.elements[0], turned.elements[1]) = (h, h);
+        (turned.elements[4], turned.elements[5]) = (-h, h);
+        let bar = |x: f64| {
+            Body::cuboid([2.0, 2.0, 2.0])
+                .transform(&turned)
+                .unwrap()
+                .translated([x, 0.0, 0.0])
+                .unwrap()
+        };
+        // Within by a little more than the tolerance, or just there.
+        for (x, left) in [(4.0 - r, 0.0), (4.0, 4.0)] {
+            let bar = bar(x);
+            let cut = general(&around, &bar, BooleanOp::Difference, 1e-5)
+                .unwrap()
+                .unwrap();
+            assert!(cut.is_valid_solid(1e-5));
+            let want = 512.0 - (8.0 - left);
+            assert!((volume(&cut) - want).abs() < 1e-5, "{x}: {}", volume(&cut));
+            let both = general(&around, &bar, BooleanOp::Union, 1e-5)
+                .unwrap()
+                .unwrap();
+            assert!(
+                (volume(&both) - 512.0 - left).abs() < 1e-5,
+                "{x}: {}",
+                volume(&both)
+            );
+        }
+        // And from outside: neither is cut.
+        let beside = general(&around, &bar(4.0 + r), BooleanOp::Difference, 1e-5);
+        assert!((volume(&beside.unwrap().unwrap()) - 512.0).abs() < 1e-5);
+    }
+
+    /// A ball that just reaches the wall of the box it is in touches it at
+    /// one point, and cuts nothing there.
+    #[test]
+    fn a_ball_touching_its_box_from_within_is_whole() {
+        let ball = Body::sphere([0.0; 3], 1.0);
+        let around = Body::cuboid([4.0, 4.0, 4.0])
+            .translated([1.0, 0.0, 0.5])
+            .unwrap();
+        let whole = 4.0 / 3.0 * std::f64::consts::PI;
+        let volume = |x: &Body| {
+            let mut x = x.clone();
+            x.refine_edges(1e-4);
+            let (mesh, report) = x.tessellate(1e-4);
+            assert!(report.is_closed());
+            let at = &mesh.get_attribute("position").unwrap().array;
+            let p = |i: u32| [0, 1, 2].map(|k| f64::from(at[i as usize * 3 + k]));
+            mesh.index
+                .as_ref()
+                .unwrap()
+                .chunks(3)
+                .map(|t| v3::dot(p(t[0]), v3::cross(p(t[1]), p(t[2]))) / 6.0)
+                .sum::<f64>()
+        };
+        for (op, want) in [(BooleanOp::Intersection, whole), (BooleanOp::Union, 64.0)] {
+            let r = general(&ball, &around, op, 1e-4).unwrap().unwrap();
+            assert!(r.is_valid_solid(1e-4));
+            assert!(
+                (volume(&r) - want).abs() < 2e-3 * want,
+                "{op:?} {}",
+                volume(&r)
+            );
+        }
+        // All of it is inside: nothing is left.
+        let r = general(&ball, &around, BooleanOp::Difference, 1e-4);
+        assert!(r.unwrap().unwrap().faces().is_empty());
+        // And cut out of the box, its hollow comes to the wall at a point.
+        assert!(matches!(
+            general(&around, &ball, BooleanOp::Difference, 1e-4),
+            Some(Err(Declined::TangentialContact { .. }))
+        ));
     }
 
     /// The volume of a body bounded by planes and cylinders, from its faces:

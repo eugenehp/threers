@@ -171,16 +171,16 @@ fn symmetric_smoothing(face: &Face, ppem: u32) -> bool {
     if let Some(gasp) = face.table(b"gasp") {
         let u16_at = |i: usize| gasp.get(i..i + 2).map(|b| u16::from_be_bytes([b[0], b[1]]));
 
-        if let (Some(version), Some(count)) = (u16_at(0), u16_at(2)) {
-            if version >= 1 {
-                for r in 0..usize::from(count) {
-                    let (Some(max_ppem), Some(flags)) = (u16_at(4 + r * 4), u16_at(6 + r * 4)) else { break };
+        if let (Some(version), Some(count)) = (u16_at(0), u16_at(2))
+            && version >= 1
+        {
+            for r in 0..usize::from(count) {
+                let (Some(max_ppem), Some(flags)) = (u16_at(4 + r * 4), u16_at(6 + r * 4)) else { break };
 
-                    if ppem <= u32::from(max_ppem) {
-                        // GASP_SYMMETRIC_SMOOTHING
-                        symmetric = flags & 0x8 != 0;
-                        break;
-                    }
+                if ppem <= u32::from(max_ppem) {
+                    // GASP_SYMMETRIC_SMOOTHING
+                    symmetric = flags & 0x8 != 0;
+                    break;
                 }
             }
         }
@@ -1191,17 +1191,17 @@ impl<'a> Exec<'a> {
                 let zone = if glyph { &mut self.pts } else { &mut self.h.twilight };
                 let limit = if glyph { zone.len().saturating_sub(4) } else { zone.len() };
 
-                for i in 0..limit {
+                for (i, p) in zone.cur.iter_mut().enumerate().take(limit) {
                     if same_zone && refp == i {
                         continue;
                     }
 
                     if dx != 0 && !xb {
-                        zone.cur[i].0 = zone.cur[i].0.wrapping_add(dx);
+                        p.0 = p.0.wrapping_add(dx);
                     }
 
                     if dy != 0 && !yb {
-                        zone.cur[i].1 = zone.cur[i].1.wrapping_add(dy);
+                        p.1 = p.1.wrapping_add(dy);
                     }
                 }
             }

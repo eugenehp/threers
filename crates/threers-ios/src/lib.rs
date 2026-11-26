@@ -51,17 +51,21 @@ use std::sync::Mutex;
 pub use threers;
 
 pub mod app;
+mod gaze;
 #[cfg(all(target_os = "ios", target_arch = "aarch64"))]
 pub mod ar;
 pub mod bake;
+mod gestures;
 #[cfg(target_os = "visionos")]
 pub mod immersive;
+pub mod pieces;
 pub mod reality;
 mod surface_ui;
 pub mod view;
 pub mod volume;
 
-pub use app::{App, PanelSpec, Place, Surface};
+pub use app::{Align, App, Glass, KeyModifiers, PanelSpec, Piece, PieceIn, Place, Surface};
+pub use pieces::{PieceOf, PieceSet};
 pub use reality::{RealityLighting, VolumeDrawing};
 pub use view::{Key, Mode, View};
 
@@ -83,6 +87,12 @@ pub enum Request {
     EnterBackdrop = 5,
     /// Back to your surroundings.
     ExitBackdrop = 6,
+    /// The app's pieces that stand in the room ([`PieceIn::Room`]) appear
+    /// round you, beside its windows (visionOS). The room or the backdrop
+    /// closes for it. Not of a `vision-window` build.
+    EnterSpace = 7,
+    /// They go.
+    ExitSpace = 8,
 }
 
 /// What an app can ask of the window's camera ([`camera`]).
@@ -102,16 +112,20 @@ static VIEW_REQUEST: AtomicU32 = AtomicU32::new(0);
 static SHELL_REQUEST: AtomicU32 = AtomicU32::new(0);
 static IMMERSIVE: AtomicBool = AtomicBool::new(false);
 static BACKDROP: AtomicBool = AtomicBool::new(false);
+static SPACE: AtomicBool = AtomicBool::new(false);
 static MODE: AtomicU32 = AtomicU32::new(Mode::Window as u32);
 static SPINNING: AtomicBool = AtomicBool::new(false);
 static CAMERA: Mutex<Vec<CameraRequest>> = Mutex::new(Vec::new());
 static TAPS: Mutex<Vec<(f32, f32)>> = Mutex::new(Vec::new());
-static PRESSES: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+/// Any surface, where a press or a text does not say which.
+const ANY: u32 = u32::MAX;
+/// Presses on controls: the surface, the key.
+static PRESSES: Mutex<Vec<(u32, u64)>> = Mutex::new(Vec::new());
 /// A finger on a volume's UI surface: the surface, its phase, where, when.
 type Touch = (u32, u32, f32, f32, std::time::Instant);
 static TOUCHES: Mutex<Vec<Touch>> = Mutex::new(Vec::new());
 static VOLUME_SHOWN: AtomicBool = AtomicBool::new(false);
-static TEXTS: Mutex<Vec<(u64, String)>> = Mutex::new(Vec::new());
+static TEXTS: Mutex<Vec<(u32, u64, String)>> = Mutex::new(Vec::new());
 
 /// Ask for a mode; it happens at the next frame (the view's), or when the
 /// shell next polls (the immersive space). The last request wins.
@@ -121,7 +135,9 @@ pub fn request(r: Request) {
         Request::EnterImmersive
         | Request::ExitImmersive
         | Request::EnterBackdrop
-        | Request::ExitBackdrop => SHELL_REQUEST.store(r as u32, Ordering::Relaxed),
+        | Request::ExitBackdrop
+        | Request::EnterSpace
+        | Request::ExitSpace => SHELL_REQUEST.store(r as u32, Ordering::Relaxed),
     }
 }
 
@@ -179,6 +195,73 @@ pub fn backdrop_open() -> bool {
     BACKDROP.load(Ordering::Relaxed)
 }
 
+/// Whether the app's pieces stand in the room now ([`Request::EnterSpace`]).
+pub fn space_open() -> bool {
+    SPACE.load(Ordering::Relaxed)
+}
+
+/// The head's place and turn, as the shell last said, and when.
+static HEAD: Mutex<Option<(threers::math::Vector3, threers::math::Quaternion, std::time::Instant)>> = Mutex::new(None);
+
+/// The shell: where the head is in the room (its ARKit device anchor, in
+/// the space's coordinates: the floor where you stood as it opened, up `y`)
+/// and how it is turned (looking along its `-z`). For pieces pressed by
+/// looking ([`Piece::dwell`](crate::Piece::dwell)).
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_head(x: f32, y: f32, z: f32, qx: f32, qy: f32, qz: f32, qw: f32) {
+    let all = [x, y, z, qx, qy, qz, qw];
+    let head = all.iter().all(|v| v.is_finite()).then(|| {
+        let q = threers::math::Quaternion { x: qx, y: qy, z: qz, w: qw };
+        (threers::math::Vector3::new(x, y, z), q.normalize(), std::time::Instant::now())
+    });
+    *HEAD.lock().unwrap_or_else(|e| e.into_inner()) = head;
+}
+
+/// Where each piece in the room stands as the shell shows it (taken and
+/// moved by its bar, turned to face you), by id, and when it said.
+static POSES: Mutex<Vec<(u32, threers::math::Vector3, threers::math::Quaternion, f32, std::time::Instant)>> = Mutex::new(Vec::new());
+
+/// The shell: piece `id` stands at `x, y, z` turned by `q` and shown
+/// `scale` times its size, in the room's coordinates as it is shown now
+/// (where it was moved to, how a piece that faces you is turned, where a
+/// volume holding it is), for pieces pressed by looking.
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_piece_pose(id: u32, x: f32, y: f32, z: f32, qx: f32, qy: f32, qz: f32, qw: f32, scale: f32) {
+    if ![x, y, z, qx, qy, qz, qw, scale].iter().all(|v| v.is_finite()) || scale <= 0.0 {
+        return;
+    }
+    let q = threers::math::Quaternion { x: qx, y: qy, z: qz, w: qw }.normalize();
+    let mut p = POSES.lock().unwrap_or_else(|e| e.into_inner());
+    p.retain(|e| e.0 != id && e.4.elapsed().as_secs_f32() < 1.0);
+    p.push((id, threers::math::Vector3::new(x, y, z), q, scale, std::time::Instant::now()));
+}
+
+/// Where piece `id` stands as shown, and at what scale, if the shell said
+/// lately.
+pub(crate) fn piece_pose(id: u32) -> Option<(threers::math::Vector3, threers::math::Quaternion, f32)> {
+    let p = POSES.lock().unwrap_or_else(|e| e.into_inner());
+    p.iter().find(|e| e.0 == id && e.4.elapsed().as_secs_f32() < 0.5).map(|e| (e.1, e.2, e.3))
+}
+
+/// Where the head is and how it is turned, if the shell said within the
+/// last half second.
+pub(crate) fn head() -> Option<(threers::math::Vector3, threers::math::Quaternion)> {
+    let h = *HEAD.lock().unwrap_or_else(|e| e.into_inner());
+    h.filter(|h| h.2.elapsed().as_secs_f32() < 0.5).map(|h| (h.0, h.1))
+}
+
+/// The shell: the space the pieces stand in opened, or closed.
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_space(open: bool) {
+    SPACE.store(open, Ordering::Relaxed);
+}
+
+/// The shell: whether it is open, as it last said.
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_space_open() -> bool {
+    space_open()
+}
+
 /// The view's mode now.
 pub fn current_mode() -> Mode {
     if MODE.load(Ordering::Relaxed) == Mode::Ar as u32 {
@@ -231,6 +314,38 @@ pub extern "C" fn threers_ios_set_dark(dark: bool) {
     );
 }
 
+/// The system's accessibility settings that change how a UI looks, as the
+/// shell last said: every app's UI follows them as they change (and keeps
+/// what it sets itself in between).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Legibility {
+    pub bold_text: bool,
+    /// Increase Contrast (Darker System Colors on iOS).
+    pub increase_contrast: bool,
+    pub reduce_motion: bool,
+    /// Reduce Transparency: pieces' glass as it is, none thinned
+    /// ([`Piece::see_through`](crate::Piece::see_through)).
+    pub reduce_transparency: bool,
+    /// The text size chosen, as a multiple of the default's.
+    pub text_scale: f32,
+}
+
+static LEGIBILITY: std::sync::Mutex<Option<Legibility>> = std::sync::Mutex::new(None);
+
+/// The shell: the system's accessibility settings, at launch and whenever
+/// they change (`text_scale` the body text's size over the default's).
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_legibility(bold: bool, contrast: bool, motion: bool, transparency: bool, text_scale: f32) {
+    let text_scale = if text_scale.is_finite() { text_scale.clamp(0.5, 4.0) } else { 1.0 };
+    let now = Legibility { bold_text: bold, increase_contrast: contrast, reduce_motion: motion, reduce_transparency: transparency, text_scale };
+    *LEGIBILITY.lock().unwrap_or_else(|e| e.into_inner()) = Some(now);
+}
+
+/// The system's accessibility settings, if the shell has said.
+pub fn legibility() -> Option<Legibility> {
+    *LEGIBILITY.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// The system's appearance, if the shell has said.
 pub fn system_appearance() -> Option<threers::ui::states::Appearance> {
     use threers::ui::states::Appearance;
@@ -245,8 +360,16 @@ pub fn system_appearance() -> Option<threers::ui::states::Appearance> {
 /// `key` (`threers_vol_controls`). It reaches the app as a click there.
 #[unsafe(no_mangle)]
 pub extern "C" fn threers_ios_press(key: u64) {
+    threers_ios_press_on(ANY, key);
+}
+
+/// [`threers_ios_press`], on surface `which` (`volume::SURFACES`, or
+/// `volume::PIECES` and a piece's id): two surfaces' controls can be alike,
+/// and then have the same key.
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_press_on(which: u32, key: u64) {
     if let Ok(mut p) = PRESSES.lock() {
-        p.push(key);
+        p.push((which, key));
     }
 }
 
@@ -273,14 +396,17 @@ pub(crate) fn take_touches(which: u32) -> Vec<(u32, f32, f32, std::time::Instant
         .collect()
 }
 
-/// The presses on controls `mine` says are its; the rest stay queued.
-pub(crate) fn take_presses_for(mine: impl Fn(u64) -> bool) -> Vec<u64> {
+/// The presses on surface `which`'s controls, `mine` says; the rest stay
+/// queued.
+pub(crate) fn take_presses_for(which: u32, mine: impl Fn(u64) -> bool) -> Vec<u64> {
     let Ok(mut p) = PRESSES.lock() else {
         return vec![];
     };
-    let (taken, rest): (Vec<_>, Vec<_>) = p.drain(..).partition(|&k| mine(k));
+    let (taken, rest): (Vec<_>, Vec<_>) = p
+        .drain(..)
+        .partition(|&(w, k)| (w == ANY || w == which) && mine(k));
     *p = rest;
-    taken
+    taken.into_iter().map(|(_, k)| k).collect()
 }
 
 /// The shell: the native text field over the volume UI's text control
@@ -291,24 +417,36 @@ pub(crate) fn take_presses_for(mine: impl Fn(u64) -> bool) -> Vec<u64> {
 /// `text` must point to `len` readable bytes (or be null with `len` 0).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn threers_ios_text(key: u64, text: *const u8, len: usize) {
+    unsafe { threers_ios_text_on(ANY, key, text, len) }
+}
+
+/// [`threers_ios_text`], on surface `which` (see [`threers_ios_press_on`]).
+///
+/// # Safety
+/// As [`threers_ios_text`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn threers_ios_text_on(which: u32, key: u64, text: *const u8, len: usize) {
     let bytes = if text.is_null() || len == 0 {
         &[][..]
     } else {
         unsafe { std::slice::from_raw_parts(text, len) }
     };
     if let Ok(mut t) = TEXTS.lock() {
-        t.push((key, String::from_utf8_lossy(bytes).into_owned()));
+        t.push((which, key, String::from_utf8_lossy(bytes).into_owned()));
     }
 }
 
-/// The texts for controls `mine` says are its; the rest stay queued.
-pub(crate) fn take_texts_for(mine: impl Fn(u64) -> bool) -> Vec<(u64, String)> {
+/// The texts for surface `which`'s controls, `mine` says; the rest stay
+/// queued.
+pub(crate) fn take_texts_for(which: u32, mine: impl Fn(u64) -> bool) -> Vec<(u64, String)> {
     let Ok(mut t) = TEXTS.lock() else {
         return vec![];
     };
-    let (taken, rest): (Vec<_>, Vec<_>) = t.drain(..).partition(|(k, _)| mine(*k));
+    let (taken, rest): (Vec<_>, Vec<_>) = t
+        .drain(..)
+        .partition(|(w, k, _)| (*w == ANY || *w == which) && mine(*k));
     *t = rest;
-    taken
+    taken.into_iter().map(|(_, k, s)| (k, s)).collect()
 }
 
 /// The shell: the volume's window came on screen or went (visionOS).
@@ -425,6 +563,139 @@ pub unsafe extern "C" fn threers_ios_picked(path: *const u8, len: usize) {
     }
 }
 
+/// The files picked, by path: what finds each at a later launch.
+static BOOKMARKS: Mutex<Vec<(String, Vec<u8>)>> = Mutex::new(Vec::new());
+/// Bookmarks to open, and those opened, not yet taken.
+static OPENING: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+static OPENED: Mutex<Vec<Opened>> = Mutex::new(Vec::new());
+
+/// What a bookmark came to ([`open_bookmark`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Opened {
+    /// The one asked for.
+    pub bookmark: Vec<u8>,
+    /// Where its file is now, the app's to read and write while it runs.
+    pub path: Option<String>,
+    /// The file is not there any more (else, with no path, it was not
+    /// reached: its provider may be away).
+    pub gone: bool,
+}
+
+/// The bookmark of the file or folder picked at `path` ([`take_picked`]):
+/// kept, it opens it at a later launch ([`open_bookmark`]), when the path
+/// alone gives no leave to.
+pub fn bookmark(path: &str) -> Option<Vec<u8>> {
+    BOOKMARKS.lock().ok()?.iter().find(|(p, _)| p == path).map(|(_, b)| b.clone())
+}
+
+/// Ask for the file a [`bookmark`] is of; it arrives by [`take_opened`].
+pub fn open_bookmark(bookmark: &[u8]) {
+    if let (false, Ok(mut o)) = (bookmark.is_empty(), OPENING.lock()) {
+        o.push(bookmark.to_vec());
+    }
+}
+
+/// The bookmarks opened since the last call, oldest first.
+pub fn take_opened() -> Vec<Opened> {
+    OPENED.lock().map(|mut o| std::mem::take(&mut *o)).unwrap_or_default()
+}
+
+/// The shell: `path`'s bookmark.
+///
+/// # Safety
+/// `path` and `data` must be readable for their lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn threers_ios_bookmark(path: *const u8, len: usize, data: *const u8, data_len: usize) {
+    if path.is_null() || data.is_null() {
+        return;
+    }
+    let (path, data) = unsafe { (std::slice::from_raw_parts(path, len), std::slice::from_raw_parts(data, data_len)) };
+    if let (Ok(p), Ok(mut b)) = (std::str::from_utf8(path), BOOKMARKS.lock()) {
+        b.retain(|(q, _)| q != p);
+        b.push((p.to_owned(), data.to_vec()));
+    }
+}
+
+/// The shell's poll for [`open_bookmark`]: the oldest one's length, and it
+/// taken into `out` where `cap` holds it.
+///
+/// # Safety
+/// `out` must be null or writable for `cap` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn threers_ios_take_bookmark(out: *mut u8, cap: usize) -> usize {
+    let Ok(mut o) = OPENING.lock() else { return 0 };
+    let Some(first) = o.first() else { return 0 };
+    let n = first.len();
+    if !out.is_null() && cap >= n {
+        unsafe { std::ptr::copy_nonoverlapping(first.as_ptr(), out, n) };
+        o.remove(0);
+    }
+    n
+}
+
+/// The shell: the bookmark `data`'s file is at `path` (none: not found,
+/// `gone` where it is no more).
+///
+/// # Safety
+/// `data` and `path` must be readable for their lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn threers_ios_bookmark_opened(data: *const u8, data_len: usize, path: *const u8, len: usize, gone: bool) {
+    if data.is_null() {
+        return;
+    }
+    let bookmark = unsafe { std::slice::from_raw_parts(data, data_len) }.to_vec();
+    let path = (!path.is_null() && len > 0).then(|| unsafe { std::slice::from_raw_parts(path, len) });
+    let path = path.and_then(|p| std::str::from_utf8(p).ok()).map(str::to_owned);
+    if let Ok(mut o) = OPENED.lock() {
+        o.push(Opened { bookmark, path, gone });
+    }
+}
+
+/// Whether the app has every ⌘ shortcut ([`keep_chords`]).
+static CHORDS: AtomicBool = AtomicBool::new(false);
+
+/// Whether the app takes ⌘A, ⌘C, ⌘V, ⌘X and ⌘Z too while a text control's
+/// native field has the keyboard (for a control that stands for a whole
+/// document); else the field does its own editing. Every other ⌘ shortcut
+/// is the app's ([`App::key_with`]).
+pub fn keep_chords(on: bool) {
+    CHORDS.store(on, Ordering::Relaxed);
+}
+
+/// The shell: [`keep_chords`].
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_chords_kept() -> bool {
+    CHORDS.load(Ordering::Relaxed)
+}
+
+/// The on-screen keyboard asked for (1) or done with (2); how much of the
+/// view it covers (an `f32`'s bits).
+static KEYBOARD: AtomicU32 = AtomicU32::new(0);
+static COVERED: AtomicU32 = AtomicU32::new(0);
+
+/// Bring up the on-screen keyboard for the first of the UI's text controls,
+/// as a tap on it does, or (`false`) put it away.
+pub fn show_keyboard(on: bool) {
+    KEYBOARD.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+}
+
+/// How much of the view's foot the on-screen keyboard covers, in points.
+pub fn keyboard_height() -> f32 {
+    f32::from_bits(COVERED.load(Ordering::Relaxed))
+}
+
+/// The shell's poll for [`show_keyboard`].
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_take_keyboard() -> i32 {
+    KEYBOARD.swap(0, Ordering::Relaxed) as i32
+}
+
+/// The shell: [`keyboard_height`].
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_keyboard(height: f32) {
+    COVERED.store(height.to_bits(), Ordering::Relaxed);
+}
+
 /// Text the app put on the clipboard since the shell last looked.
 static COPIED: Mutex<Option<String>> = Mutex::new(None);
 
@@ -444,6 +715,68 @@ pub fn copy_text(text: &str) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn threers_ios_take_copy(out: *mut u8, cap: usize) -> usize {
     unsafe { hand_over(COPIED.lock().ok().and_then(|mut c| c.take()), out, cap) }
+}
+
+/// The shell: how many bytes [`copy_text`]'s text is (0: none), to make room
+/// for it.
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_copy_len() -> usize {
+    COPIED.lock().ok().and_then(|c| c.as_ref().map(String::len)).unwrap_or(0)
+}
+
+/// The clipboard asked for ([`ask_paste`]), and its text, not yet taken.
+static PASTE: AtomicBool = AtomicBool::new(false);
+static PASTED: Mutex<Option<String>> = Mutex::new(None);
+
+/// Ask for the clipboard's text (the system may ask the person first): it
+/// arrives by [`take_pasted`].
+pub fn ask_paste() {
+    PASTE.store(true, Ordering::Relaxed);
+}
+
+/// The clipboard's text asked for with [`ask_paste`], once.
+pub fn take_pasted() -> Option<String> {
+    PASTED.lock().ok().and_then(|mut p| p.take())
+}
+
+/// The shell's poll for [`ask_paste`].
+#[unsafe(no_mangle)]
+pub extern "C" fn threers_ios_take_paste() -> bool {
+    PASTE.swap(false, Ordering::Relaxed)
+}
+
+/// The shell: the clipboard's text (UTF-8).
+///
+/// # Safety
+/// `text` must be readable for `len` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn threers_ios_pasted(text: *const u8, len: usize) {
+    if text.is_null() {
+        return;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(text, len) };
+    if let (Ok(s), Ok(mut p)) = (std::str::from_utf8(bytes), PASTED.lock()) {
+        *p = Some(s.to_owned());
+    }
+}
+
+/// A word to look up ([`look_up`]), not yet taken by the shell.
+static LOOK_UP: Mutex<Option<String>> = Mutex::new(None);
+
+/// Show what the system's dictionaries say of `word`, over the app.
+pub fn look_up(word: &str) {
+    if let Ok(mut w) = LOOK_UP.lock() {
+        *w = Some(word.to_owned());
+    }
+}
+
+/// The shell's poll for [`look_up`], as [`threers_ios_take_copy`].
+///
+/// # Safety
+/// `out` must be writable for `cap` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn threers_ios_take_look_up(out: *mut u8, cap: usize) -> usize {
+    unsafe { hand_over(LOOK_UP.lock().ok().and_then(|mut w| w.take()), out, cap) }
 }
 
 /// A turn being recorded ([`record_turn`]): frames to make, made, the rate;
@@ -705,7 +1038,16 @@ pub extern "C" fn threers_ios_immersive_open() -> bool {
 }
 
 /// Makes an [`App`] the app: exports the C functions `app/Harness.swift`
-/// calls.
+/// calls (those for one app; the crate's own, `threers_ios_*`, are always
+/// there: a press on a control by its key, `threers_ios_press_on`; a
+/// finger on a surface, `threers_ios_touch`; a native field's text,
+/// `threers_ios_text_on`; the system's accessibility settings,
+/// `threers_ios_legibility`; the head's pose, `threers_ios_head`).
+///
+/// ```compile_fail
+/// struct NotAnApp;
+/// threers_ios::app!(NotAnApp); // the trait `App` is not implemented for `NotAnApp`
+/// ```
 ///
 /// ```c
 /// void *threers_view_create(void *metal_layer, uint32_t w, uint32_t h, uint32_t mode); // 0 window, 1 AR; NULL on failure
@@ -738,6 +1080,8 @@ pub extern "C" fn threers_ios_immersive_open() -> bool {
 /// bool  threers_vol_draw(void *vol, float qx, float qy, float qz, float qw, uint32_t size, void *mtl_texture, void *mtl_command_buffer); // the whole scene, drawn by threers, into a quad's texture
 /// const uint8_t *threers_vol_ui(void *vol, uint32_t which, uint32_t w, uint32_t h, float scale, size_t *len); // 0 card, 1 toolbar, 2 screen; NULL: unchanged, len 0: hidden
 /// const uint8_t *threers_vol_controls(void *vol, uint32_t which, size_t *len); // its controls, JSON; NULL: unchanged
+/// const float *threers_vol_pieces(void *vol, size_t *len);                          // 24 floats a piece; which: 256 + its id
+/// void  threers_vol_gaze(void *vol, float out[8]);                                  // where the head points: on (0, 0.5, 1), point, facing, dwell 0..1
 /// void  threers_vol_destroy(void *vol);
 ///
 /// void  threers_app_run(void *layer_renderer);                                         // visionOS: the immersive space
@@ -746,7 +1090,13 @@ pub extern "C" fn threers_ios_immersive_open() -> bool {
 /// Every view and volume function takes a null handle and does nothing.
 #[macro_export]
 macro_rules! app {
-    ($app:ty) => {
+    ($app:ty $(,)?) => {
+        // (said here, not deep in what follows: the type must be an `App`)
+        const _: fn() = || {
+            fn is_an_app<A: $crate::App>() {}
+            is_an_app::<$app>();
+        };
+
         /// # Safety
         /// `layer` must be a live `CAMetalLayer` that outlives the view.
         #[unsafe(no_mangle)]
@@ -946,6 +1296,21 @@ macro_rules! app {
             unsafe { $crate::volume::controls::<$app>(vol, which, len) }
         }
         /// # Safety
+        /// As `threers_vol_frame`; `len` writable.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn threers_vol_pieces(
+            vol: *mut ::core::ffi::c_void,
+            len: *mut usize,
+        ) -> *const f32 {
+            unsafe { $crate::volume::pieces::<$app>(vol, len) }
+        }
+        /// # Safety
+        /// As `threers_vol_frame`; `out` writable for 8 floats.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn threers_vol_gaze(vol: *mut ::core::ffi::c_void, out: *mut f32) {
+            unsafe { $crate::volume::gaze::<$app>(vol, out) }
+        }
+        /// # Safety
         /// As `threers_vol_frame`; `w`, `h`, `len` writable.
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn threers_vol_map(
@@ -1046,5 +1411,12 @@ macro_rules! app {
         pub unsafe extern "C" fn threers_app_run(layer_renderer: *mut ::core::ffi::c_void) {
             unsafe { $crate::immersive::run::<$app>(layer_renderer) }
         }
+    };
+    ($($other:tt)*) => {
+        ::core::compile_error!(::core::concat!(
+            "app! takes the app's type, `threers_ios::app!(MyApp);` (a type that implements `threers_ios::App`), not `",
+            ::core::stringify!($($other)*),
+            "`"
+        ));
     };
 }

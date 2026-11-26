@@ -7,6 +7,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use crate::environment::LayoutDirection;
 use crate::input::{Event, Input, Phase};
 use crate::tree::{NodeId, Ui};
 use crate::{style, Cursor, Length, Role, Semantics};
@@ -71,8 +72,8 @@ pub fn split<S: 'static>(
         handle,
         &[("background", crate::environment::Token::Separator)],
     );
-    ui.hover_style(handle, "background: #2563eb");
-    ui.focus_visible_style(handle, "background: #2563eb");
+    ui.hover_style(handle, "background: var(--accent)");
+    ui.focus_visible_style(handle, "background: var(--accent)");
     let start = size;
     let current = Rc::new(Cell::new(size));
     // Sets the first pane's size, inside the minimums, and says it.
@@ -117,7 +118,11 @@ pub fn split<S: 'static>(
         }
         Event::PointerMove { x, y } if d.get() => {
             let r = ui.rect(container);
-            let at = if horizontal { x - r.x } else { y - r.y } - 3.0;
+            let along = match ui.direction_of(container) {
+                LayoutDirection::LeftToRight => x - r.x,
+                LayoutDirection::RightToLeft => r.x + r.width - x,
+            };
+            let at = if horizontal { along } else { y - r.y } - 3.0;
             cur.set(s2(ui, at));
         }
         Event::PointerUp { .. } => d.set(false),
@@ -145,7 +150,7 @@ pub fn split<S: 'static>(
         } else {
             ("ArrowUp", "ArrowDown")
         };
-        let want = match key {
+        let want = match ui.reading_key(container, key) {
             k if k == less => cur.get() - STEP,
             k if k == more => cur.get() + STEP,
             "Home" => 0.0,

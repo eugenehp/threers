@@ -360,6 +360,14 @@ pub enum Position {
     /// Out of flow, placed by `left`/`top`/`right`/`bottom` in the nearest
     /// positioned ancestor's padding box.
     Absolute,
+    /// In flow, then kept in its scrolling box's view by `top` (or
+    /// `bottom`) as the box scrolls, as far as its parent's content box
+    /// goes: a section's header that stays while its section shows.
+    Sticky,
+    /// Out of flow, placed by `left`/`top`/`right`/`bottom` in the window,
+    /// where no scrolling box moves it, and painted over the rest outside
+    /// their clips (as [`Ui::defer`](crate::Ui::defer)).
+    Fixed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -531,6 +539,16 @@ impl TextAlign {
             TextAlign::End => spare.max(0.0),
         }
     }
+
+    /// [`offset`](Self::offset) in a layout that reads right to left
+    /// (`rtl`), where a line starts at the right end and ends at the left.
+    pub fn offset_in(self, rtl: bool, spare: f32) -> f32 {
+        match (self, rtl) {
+            (TextAlign::Start, true) => TextAlign::End.offset(spare),
+            (TextAlign::End, true) => TextAlign::Start.offset(spare),
+            _ => self.offset(spare),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -576,6 +594,25 @@ pub struct Style {
     pub max_width: Length,
     pub max_height: Length,
     pub margin: Edges,
+    /// `margin: auto`, side by side (top, right, bottom, left): in a flex
+    /// container, the free space along a line goes to them (before
+    /// `justify-content`), and across it they centre an item or push it to
+    /// an end; in a block, left and right centre a box of set width (or
+    /// push it right). Its `margin` there is 0.
+    pub margin_auto: [bool; 4],
+    /// `direction`: which way it and what is in it read; `None` as around
+    /// it (see [`Ui::set_layout_direction`](crate::Ui::set_layout_direction)).
+    pub direction: Option<crate::environment::LayoutDirection>,
+    /// `direction: auto`: it reads as the first letter in it that has a
+    /// direction does (what people write, in whatever language).
+    pub direction_auto: bool,
+    /// Placed by where things are on screen: its `left` is from its
+    /// parent's left whichever way that reads, rather than from its start.
+    pub unmirrored: bool,
+    /// The shapes in it drawn the other way round where it reads right to
+    /// left (an arrow, a chevron), as SwiftUI's
+    /// `flipsForRightToLeftLayoutDirection` (`rtl-flip: on`).
+    pub flips_rtl: bool,
     pub padding: Edges,
     pub border: Edges,
     pub border_color: Rgba,
@@ -591,6 +628,11 @@ pub struct Style {
     /// `font-family` was given; a box without one takes its parent's, as
     /// CSS inherits it (see [`Ui::set_style`](crate::Ui::set_style)).
     pub font_family_set: bool,
+    /// `letter-spacing`, in pixels, after each character (inherited, as
+    /// CSS's; `em` is taken at the font size given before it).
+    pub letter_spacing: f32,
+    /// `letter-spacing` was given (see [`font_family_set`](Self::font_family_set)).
+    pub letter_spacing_set: bool,
     /// These were given; a box without them takes its parent's, as CSS
     /// inherits them (line height only with the font size: threers keeps
     /// it in pixels, and a size of its own wants its own).
@@ -615,6 +657,11 @@ pub struct Style {
     /// `border-radius`, one value for every corner; a percentage is of the
     /// box's width horizontally and its height vertically, as in CSS.
     pub border_radius: Length,
+    /// Corners apart (`border-radius: 8px 0 0 8px`, `border-top-left-radius`):
+    /// top-left, top-right, bottom-right, bottom-left. The background (and a
+    /// uniform border over one) is drawn with them; the rest (a shadow, a
+    /// clip) goes by `border_radius`, then the smallest of them.
+    pub corner_radii: Option<[Length; 4]>,
     /// `text-decoration-line: line-through` (inherited by text, as the
     /// decoration propagates).
     pub line_through: bool,
@@ -687,6 +734,10 @@ pub struct Style {
     pub grid_columns: Vec<Track>,
     /// `grid-template-rows`; rows past these are `auto`.
     pub grid_rows: Vec<Track>,
+    /// `grid-template-columns: repeat(auto-fill, track)`: as many columns
+    /// of `track` as fit the grid's width (at least one), in place of
+    /// `grid_columns`.
+    pub grid_auto_fill: Option<Track>,
     /// `grid-column`, for an item of a grid.
     pub grid_column: GridPlacement,
     /// `grid-row`.
@@ -752,6 +803,11 @@ impl Default for Style {
             max_width: Length::Auto,
             max_height: Length::Auto,
             margin: Edges::ZERO,
+            margin_auto: [false; 4],
+            direction: None,
+            direction_auto: false,
+            unmirrored: false,
+            flips_rtl: false,
             padding: Edges::ZERO,
             border: Edges::ZERO,
             border_color: [0.0, 0.0, 0.0, 1.0],
@@ -761,6 +817,8 @@ impl Default for Style {
             color_set: false,
             font_family: "sans-serif".into(),
             font_family_set: false,
+            letter_spacing: 0.0,
+            letter_spacing_set: false,
             font_size_set: false,
             font_weight_set: false,
             line_height_set: false,
@@ -776,6 +834,7 @@ impl Default for Style {
             clip: false,
             opacity: 1.0,
             border_radius: Length::Auto,
+            corner_radii: None,
             line_through: false,
             background_gradient: Vec::new(),
             blur: 0.0,
@@ -806,6 +865,7 @@ impl Default for Style {
             line_clamp: None,
             scrollbar: Scrollbar::None,
             grid_columns: vec![],
+            grid_auto_fill: None,
             grid_rows: vec![],
             grid_column: GridPlacement::default(),
             grid_row: GridPlacement::default(),
@@ -844,6 +904,7 @@ impl Style {
         o.color_set = self.color_set;
         o.opacity = self.opacity;
         o.border_radius = self.border_radius;
+        o.corner_radii = self.corner_radii;
         o.line_through = self.line_through;
         o.background_gradient.clone_from(&self.background_gradient);
         o.blur = self.blur;

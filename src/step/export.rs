@@ -426,7 +426,21 @@ impl Writer {
         // Edges, shared by index for the same reason: two faces naming one
         // `EDGE_CURVE` is what tells a reader the solid is closed there.
         let mut edge_ids: Vec<Option<u64>> = Vec::with_capacity(body.edges().len());
-        for e in body.edges() {
+        // Seams the format states without: they are on no face it writes.
+        let unseamed: Vec<Option<crate::brep::Face>> = (0..body.faces().len())
+            .map(|fi| without_seam(body, fi, self.tolerance))
+            .collect();
+        let named: HashSet<usize> = body
+            .faces()
+            .iter()
+            .zip(&unseamed)
+            .flat_map(|(f, u)| u.as_ref().unwrap_or(f).edges.iter().copied())
+            .collect();
+        for (ei, e) in body.edges().iter().enumerate() {
+            if !named.contains(&ei) {
+                edge_ids.push(None);
+                continue;
+            }
             let pts: Vec<V3> = e
                 .vertices
                 .iter()
@@ -457,6 +471,7 @@ impl Writer {
         }
 
         for (fi, face) in body.faces().iter().enumerate() {
+            let face = unseamed[fi].as_ref().unwrap_or(face);
             let surface = &body.surfaces()[face.surface];
             let Some(surf_id) = self.surface(surface) else {
                 report.skipped.push(Unsupported::Surface {
@@ -1160,6 +1175,82 @@ fn degenerate(pts: &[V3]) -> bool {
 /// Consecutive edges share a vertex the ring names once, so each match advances
 /// by one less than the edge's length. `None` if the ring turns out not to be
 /// made of this face's edges, which is a decline rather than a guess.
+/// A sphere's face without the seam it keeps, where its region is stated
+/// without one.
+///
+/// The general fuse leaves such a face whole in its parameters: an outline up
+/// the seam, along a pole, down the seam and along the other, the pole one
+/// vertex named twice. The seam bounds nothing and a pole is no curve, so what
+/// is left to write is the face's real boundary. Over both poles it is
+/// everything except its holes, and the outline that then lies off its edges
+/// says so; up to one, it is the cap between a rim and that pole. Over
+/// neither it is a band, which needs its seam to be one ring.
+///
+/// A cap whose rim is not a parallel, and a hole that lies across the seam,
+/// are stated by neither: those keep no seam and no region either, and are
+/// named as ambiguous.
+fn without_seam(body: &Body, fi: usize, tolerance: f64) -> Option<crate::brep::Face> {
+    let face = &body.faces()[fi];
+    let surface = &body.surfaces()[face.surface];
+    if !matches!(surface, Surface::Sphere { .. }) {
+        return None;
+    }
+    let seams: HashSet<usize> = face
+        .edges
+        .iter()
+        .copied()
+        .filter(|e| face.edges.iter().filter(|x| *x == e).count() == 2)
+        .collect();
+    if seams.is_empty() {
+        return None;
+    }
+    let loops = face.loops.as_ref()?;
+    let ends = |l: &crate::brep::TrimLoop| {
+        let n = l.vertices.len();
+        (0..n)
+            .filter(|&k| l.vertices[k] == l.vertices[(k + 1) % n])
+            .count()
+    };
+    let poles: usize = loops.iter().map(ends).sum();
+    if poles == 0 {
+        return None;
+    }
+    let mut out = face.clone();
+    out.edges.retain(|e| !seams.contains(e));
+    let on_rims: HashSet<usize> = out
+        .edges
+        .iter()
+        .flat_map(|&e| body.edges()[e].vertices.iter().copied())
+        .collect();
+    if poles == 1 {
+        // A parallel, all of it: then the rim and the pole say the cap.
+        let mut heights = on_rims
+            .iter()
+            .filter_map(|&v| surface.invert(body.vertices()[v]))
+            .map(|q| q.1);
+        let first = heights.next()?;
+        let Surface::Sphere { radius, .. } = surface else {
+            return None;
+        };
+        if loops.len() == 1 && heights.all(|h| (h - first).abs() * radius <= tolerance) {
+            out.loops = None;
+        }
+        // Otherwise its ring keeps a pole no edge carries, which is how an
+        // ambiguous region reads.
+        return Some(out);
+    }
+    // A hole across the seam is part of the outline, and has no ring of its
+    // own for the outline to leave out.
+    let across = loops
+        .iter()
+        .filter(|l| ends(l) > 0)
+        .any(|l| l.vertices.iter().any(|v| on_rims.contains(v)));
+    if across {
+        out.loops = Some(loops.iter().filter(|l| ends(l) > 0).cloned().collect());
+    }
+    Some(out)
+}
+
 fn walk_ring(
     body: &Body,
     face: &crate::brep::Face,

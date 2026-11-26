@@ -147,7 +147,7 @@ pub fn data_table<S: 'static>(
     let mut sem = Semantics::new(Role::Table).label(label).tab_index(0);
     sem.row_index = Some((0, rows.get(state).len()));
     ui.set_semantics(table, sem);
-    ui.focus_visible_style(table, "box-shadow: 0 0 0 2px #93c5fd");
+    ui.focus_visible_style(table, "box-shadow: 0 0 0 2px var(--focus)");
     // The headings, over the scrolling body, on the same columns.
     let header = ui.add_box(table, row_style(&template));
     ui.update_style(header, |s| {
@@ -306,7 +306,7 @@ pub fn data_table<S: 'static>(
                 ui.add_text(cell, data[i].get(k).cloned().unwrap_or_default());
                 ui.set_semantics(cell, Semantics::new(Role::Cell));
             }
-            let mut sem = Semantics::new(Role::Row);
+            let mut sem = Semantics::new(Role::Row).label(data[i].join(", "));
             sem.row_index = Some((at + 2, count + 1));
             ui.set_semantics(row, sem);
             made.push((row, i));

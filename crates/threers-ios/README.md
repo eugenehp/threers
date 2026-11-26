@@ -71,8 +71,8 @@ SIGN_IDENTITY="Apple Development: …" PROFILE=my.mobileprovision \
   crates/threers-ios/app/build.sh path/to/my-app ios-device    # or ios-reality-device, vision-device
 ```
 
-The shell is two Swift files on iOS and visionOS (`app/Harness.swift` and
-`app/Reality.swift`) and two on the Mac (`app/MacHarness.swift` and
+The shell is three Swift files on iOS and visionOS (`app/Harness.swift`,
+`app/Reality.swift` and `app/Pieces.swift`) and two on the Mac (`app/MacHarness.swift` and
 `app/Reality.swift`).
 
 These variables change what it does:
@@ -196,6 +196,77 @@ Look on iOS, its own window in the shared space on visionOS, Preview on the
 Mac. `tests/realitykit_usdz.rs` opens what it writes with RealityKit
 itself (`Entity(contentsOf:)`) and finds the meshes, their PBR materials and
 their maps.
+
+## Pieces: UI in no window (visionOS)
+
+`App::pieces` lists the parts of the UI that stand by themselves, each a
+RealityKit entity with a threers-ui tree of its own. A `PieceSet` keeps them:
+describe each from your state, and it sizes it, centres what is in it, lays
+them out and handles what is done to them.
+
+```rust
+impl App for Mine {
+    fn setup(_: &mut Scene) -> Self {
+        let mut pieces = PieceSet::new(State::default());
+        pieces.glass(Glass::liquid(22.0));
+        pieces.add(|s: &State| vec![text(format!("Pressed {}", s.n)), button("Press", |s: &mut State| s.n += 1)]);
+        pieces.add(|_| vec![slider("Level", binding!(|s: State| s.level), 0.0..=1.0, 0.01)]).width(240.0);
+        pieces.arrange(PieceIn::Room, |p| Piece::row(p, Vector3::new(0.0, 1.4, -1.2), Default::default(), 0.03, Align::Center));
+        Mine { pieces }
+    }
+    fn update(&mut self, _: &mut Scene, f: &Frame) { self.pieces.step(f.time, f.dt as f32); }
+    threers_ios::piece_set!(pieces);
+}
+```
+
+A menu or a calendar opens inside its piece: give that one a `height`. An app
+that would rather keep the trees itself writes `pieces`, `ui` (for
+`Place::Piece(id)`) and `ui_event`.
+
+- `PieceIn::Volume` stands in the volume, its place from the middle, in
+  metres; the volume's walls cut off what reaches past them.
+- `PieceIn::Room` stands in the room, outside every window, while
+  `request(Request::EnterSpace)` is in force (`space_open()`). visionOS lets
+  an app place things outside its windows only in an immersive space, and
+  opens one at a time: the immersive room or the backdrop closes for it.
+- `Glass` is what it is made of: `Bare` (no pane: each control standing in
+  the room by itself, its words shaded to be read, solid where `raised`),
+  `None`, the system's (`System`, `Plate`,
+  `Feathered`), `Frosted`, `Clear`, `Liquid` or `Prism`. The last three have a
+  rounded slab behind them the room's light shines on; liquid's and a prism's
+  rims are bright. (SwiftUI's own `glassEffect` is not on visionOS.) Leave the
+  UI's background clear. On glass a UI in the default theme takes
+  `Tokens::glass()`, whose text reads on it. Liquid glass of a light colour
+  (`Glass::is_pale`) stays light, and takes `Tokens::pale_glass()`: dark text.
+- The system's Bold Text, text size, Increase Contrast and Reduce Motion
+  reach every UI the shell shows, as they change (`threers_ios::legibility`);
+  Reduce Transparency leaves no piece's glass thinned.
+- `dwell` (seconds) presses a room piece's control by pointing the head at
+  it: a ring follows where the head points and fills, then the control is
+  pressed once (look away and back to press again). The eyes stay
+  private to visionOS; a look and a pinch, and the system's Dwell Control,
+  work on every piece as ever. Where there is no head tracking (the
+  simulator reports the head at the floor), `THREERS_HEAD="x y z yaw
+  pitch"` fixes one. Pieces in the volume are pointed at too while the room
+  is open (the head is tracked only then); `THREERS_POSE_LOG=1` prints where
+  each piece stands in the room.
+- `THREERS_PRESS_TEST=1` in the app's environment presses every control of
+  every piece once, 20 s after launch, slides each slider a quarter along
+  and types in each field, through the same calls the views make, printing each: a check that
+  they all respond, where no hand can press them (the simulator, CI).
+  `THREERS_PRESS_TEST=all` presses one a frame instead, each control as it
+  shows (what a menu or a keyboard brings up), up to 60 a piece.
+- `see_through` (0 to 0.9) makes any glass thinner, more of the room showing,
+  with a soft halo behind the words; past about 0.5, how well they read
+  depends on the room.
+- `raised` (metres) makes its controls solid: blocks that are pushed in as
+  they are pressed, a ball for a slider's thumb. `movable` puts a bar under it
+  to take it by: moved, turned and drawn nearer with the hands.
+- `Piece::row`, `Piece::column` (by `Align`) and `Piece::around` lay them out.
+
+Its controls are native, as the volume's windows' are (a `ViewAttachmentComponent`
+holds them: `app/Pieces.swift`), and its events come to `App::ui_event` with
+its `Place::Piece`. Elsewhere than visionOS, pieces are not shown.
 
 ## The volume
 

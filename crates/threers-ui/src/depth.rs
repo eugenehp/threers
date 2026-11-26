@@ -378,6 +378,12 @@ impl Ui {
         }
     }
 
+    /// Whether `node` is drawn through a transform of its own: turned,
+    /// lifted or moved by parallax.
+    pub fn is_transformed(&self, node: NodeId) -> bool {
+        self.paint_transform(node).is_some()
+    }
+
     /// The transform to paint `node` through, its own and its parallax:
     /// exact (projective) and nearest 2D.
     pub(crate) fn paint_transform(&self, node: NodeId) -> Option<([f32; 9], [f32; 6])> {
@@ -477,13 +483,28 @@ impl Ui {
         let Some(t) = self.transform3d(node).filter(|t| t.shadow) else {
             return;
         };
+        let (rect, blur, alpha) = self.lift_shadow(node, t);
         let r = self.rect(node);
-        let lift = t.depth.max(0.0) + 4.0;
         let radius = self
             .style(node)
             .border_radius
             .resolve(Some(r.width.min(r.height)))
             .unwrap_or(0.0);
+        painter.shadow(rect, radius, blur, [0.0, 0.0, 0.0, alpha * opacity]);
+    }
+
+    /// The box its lift's shadow is seen in, if it casts one.
+    pub(crate) fn lift_shadow_box(&self, node: NodeId) -> Option<Rect> {
+        let t = self.transform3d(node).filter(|t| t.shadow)?;
+        let (r, blur, _) = self.lift_shadow(node, t);
+        let reach = 1.5 * blur + 2.0;
+        Some(Rect { x: r.x - reach, y: r.y - reach, width: r.width + 2.0 * reach, height: r.height + 2.0 * reach })
+    }
+
+    /// Its lift's shadow: its box, blur and darkness.
+    fn lift_shadow(&self, node: NodeId, t: Transform3d) -> (Rect, f32, f32) {
+        let r = self.rect(node);
+        let lift = t.depth.max(0.0) + 4.0;
         // As large as the box is drawn: a lifted box is drawn nearer, so
         // larger, and its shadow with it (a little smaller, as the light
         // is above).
@@ -504,12 +525,7 @@ impl Ui {
         } else {
             0.1
         };
-        painter.shadow(
-            rect,
-            radius,
-            4.0 + drop * 1.6,
-            [0.0, 0.0, 0.0, alpha * opacity],
-        );
+        (rect, 4.0 + drop * 1.6, alpha)
     }
 
     /// Over a shaded box: darker by how far it has turned from the light.
@@ -1007,7 +1023,7 @@ pub fn flip_card<S: 'static>(
     let mut sem = Semantics::new(Role::Button).label(label);
     sem.description = Some("Flips the card".into());
     ui.set_semantics(card, sem);
-    ui.focus_visible_style(card, "box-shadow: 0 0 0 2px #93c5fd");
+    ui.focus_visible_style(card, "box-shadow: 0 0 0 2px var(--focus)");
     let fl = flipped.clone();
     input.on_click(card, move |s, _, _| {
         let now = !fl.get(s);
@@ -1169,7 +1185,7 @@ pub fn card_deck<S: 'static>(
     use std::cell::RefCell;
     let deck = ui.add_box(parent, style! { position: relative; });
     ui.set_semantics(deck, Semantics::new(Role::List).label(label).tab_index(0));
-    ui.focus_visible_style(deck, "box-shadow: 0 0 0 2px #93c5fd");
+    ui.focus_visible_style(deck, "box-shadow: 0 0 0 2px var(--focus)");
     // The cards built, top first.
     let built: Rc<RefCell<Vec<(String, NodeId)>>> = Rc::default();
     let drag: Rc<Cell<Option<(f32, f32)>>> = Rc::default();
@@ -1227,6 +1243,7 @@ pub fn card_deck<S: 'static>(
                     let w = ui.rect(deck).width.max(1.0);
                     let (dx, dy) = (x - x0, y - y0);
                     ui.update_style(top, |st| {
+                        st.unmirrored = true;
                         st.left = crate::Length::Px(dx);
                         st.top = crate::Length::Px(dy * 0.3);
                     });
@@ -1293,8 +1310,10 @@ pub fn card_deck<S: 'static>(
             b.retain(|(id, n)| want.contains(id) && ui.contains(*n));
             for id in &want {
                 if !b.iter().any(|(k, _)| k == id) {
+                    // Thrown left or right, whichever way words read.
                     let card = ui.add_box(deck, style! { position: absolute; left: 0px; top: 0px; width: 100%; height: 100%; box-sizing: border-box; border-radius: 14px; overflow: hidden; });
                     ui.token_style(card, &[("background", crate::environment::Token::Raised), ("color", crate::environment::Token::Text)]);
+                    ui.update_style(card, |s| s.unmirrored = true);
                     build(ui, card, id);
                     ui.set_semantics(card, Semantics::new(Role::ListItem));
                     ui.combine_accessibility(card);
@@ -1372,7 +1391,7 @@ pub fn cube<S: 'static>(
     let n = faces.max(1);
     let cube = ui.add_box(parent, style! { position: relative; });
     ui.set_semantics(cube, Semantics::new(Role::Group).label(label).tab_index(0));
-    ui.focus_visible_style(cube, "box-shadow: 0 0 0 2px #93c5fd");
+    ui.focus_visible_style(cube, "box-shadow: 0 0 0 2px var(--focus)");
     let face_nodes: Vec<NodeId> = (0..n)
         .map(|k| {
             let f = ui.add_box(cube, style! { position: absolute; left: 0px; top: 0px; width: 100%; height: 100%; box-sizing: border-box; border-radius: 10px; overflow: hidden; });

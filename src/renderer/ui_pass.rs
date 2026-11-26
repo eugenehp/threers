@@ -69,7 +69,8 @@ struct VsIn {
     @location(0) rect: vec4<f32>,
     @location(1) color: vec4<f32>,
     @location(2) clip: vec4<f32>,
-    // radius, clip radius, kind (0 shape, 1 sprite, 2 image, 3 shadow,
+    // radius, clip radius, kind (0 shape, 1 sprite, 2 image, 3 shadow (3.25
+    // cut out where its box is),
     // 4 wavy line, 5 arc, 6 path fill, 7 path stroke, 8 gradient stretch,
     // 10 gradient of another shape), clipped
     @location(3) params: vec4<f32>,
@@ -468,6 +469,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         cover = wave_coverage(p, in.sprite.x, x1, in.sprite.y, in.sprite.z, in.sprite.w, in.params.x);
     } else if (in.params.z > 2.5) {
         cover = shadow_coverage(in.rect, p, in.sprite.x, in.params.x);
+        if (in.params.z > 3.1) {
+            // Round a box it is not under: sprite.yzw is how far down from
+            // its own box that one is, right and down, and the spread.
+            let s = in.sprite.w;
+            let hole = vec4<f32>(in.rect.xy + in.sprite.yz + vec2<f32>(s), in.rect.zw - vec2<f32>(2.0 * s));
+            cover = cover * (1.0 - coverage(p, hole, max(in.params.x - s, 0.0)));
+        }
     } else {
         // An image: bilinear within its own texels (half a texel in from
         // its edge, so neighbours in the atlas never bleed in).
@@ -485,6 +493,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
     if (globals.encode > 0.5) {
         rgb = encode_srgb(rgb);
+        if (in.params.z > 7.5 && alpha > 0.02) {
+            // A gradient of few steps would show them as bands: half a step
+            // of noise, the same for the same pixel, hides them (Jimenez's
+            // interleaved gradient noise). As much of it as is left of the
+            // colour once it is mixed.
+            let n = fract(52.9829189 * fract(dot(floor(screen), vec2<f32>(0.06711056, 0.00583715))));
+            rgb = clamp(rgb + (n - 0.5) / (255.0 * alpha), vec3<f32>(0.0), vec3<f32>(1.0));
+        }
     }
     return vec4<f32>(rgb, alpha * cover);
 }
@@ -1807,6 +1823,7 @@ impl UiPass {
             scale,
             false,
         );
+        builder.encoded = !format.is_srgb();
         if let Some(bg) = background {
             builder.fill_rect(whole, bg);
         }
@@ -1842,6 +1859,7 @@ impl UiPass {
                 scale,
                 true,
             );
+            builder.encoded = !format.is_srgb();
             if let Some(bg) = background {
                 builder.fill_rect(whole, bg);
             }
@@ -2767,6 +2785,8 @@ struct Builder<'a> {
     targets: Vec<Target>,
     /// The pass drawn into now.
     current: usize,
+    /// The target blends encoded values (see [`unbend`](Self::unbend)).
+    encoded: bool,
     /// Effects opened and not yet closed; `None` for one left out.
     open: Vec<Option<OpenLayer>>,
     effects: Vec<EffectDraw>,
@@ -2802,6 +2822,7 @@ impl<'a> Builder<'a> {
             images_overflowed: false,
             surfaces: vec![],
             drop_overflow,
+            encoded: false,
             targets: vec![Target::default()],
             current: 0,
             open: vec![],
@@ -2879,6 +2900,7 @@ impl<'a> Builder<'a> {
         &mut self,
         key: String,
         size: impl FnOnce() -> (u32, u32),
+        text: Option<Rgba>,
         draw: impl FnOnce(&mut OverlayPainter<'_>),
     ) -> Option<Slot> {
         if let Some(slot) = self.atlas.slots.get(&key) {
@@ -2895,18 +2917,132 @@ impl<'a> Builder<'a> {
         };
         let mut overlay = Overlay::new(w, h);
         draw(&mut OverlayPainter::with_scale(&mut overlay, self.scale));
-        let coverage: Vec<u8> = overlay
+        let mut coverage: Vec<u8> = overlay
             .pixels()
             .as_chunks::<4>()
             .0
             .iter()
             .map(|p| p[3])
             .collect();
+        if let Some(color) = text {
+            self.unbend(&mut coverage, color);
+        }
         self.uploads.sprites.push((x, y, w, h, coverage));
         self.stats.rasterized += 1;
         let slot = Slot { x, y, w, h };
         self.atlas.slots.insert(key, slot);
         Some(slot)
+    }
+
+    /// Text coverage in `color` as it was before the caption painter bent it
+    /// for a linear blend (its `text_coverage_table`): a target that blends
+    /// encoded values needs no bending, and bent too, light text on dark
+    /// comes out thin and dark text heavy.
+    fn unbend(&self, coverage: &mut [u8], color: Rgba) {
+        if !self.encoded {
+            return;
+        }
+        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let bent = crate::captions::raster::text_coverage_table([
+            byte(color[0]),
+            byte(color[1]),
+            byte(color[2]),
+            255,
+        ]);
+        // The table rises: the coverage bent nearest to each value.
+        let mut straight = [0u8; 256];
+        let mut i = 0usize;
+        for (v, out) in straight.iter_mut().enumerate() {
+            while i < 255 && bent[i + 1].abs_diff(v as u8) <= bent[i].abs_diff(v as u8) {
+                i += 1;
+            }
+            *out = i as u8;
+        }
+        straight[0] = 0;
+        for c in coverage {
+            *c = straight[*c as usize];
+        }
+    }
+
+    /// The sprites of a run with emoji: its letters' coverage, and the emoji
+    /// in their colours (empty when the run turns out to have none).
+    ///
+    /// Drawn twice, in the run's colour and in another: what came out the
+    /// same both times has a colour of its own.
+    fn emoji_sprites(
+        &mut self,
+        key: String,
+        (w, h): (u32, u32),
+        local: Rect,
+        text: &str,
+        style: &TextStyle,
+    ) -> (Option<Slot>, Option<Slot>) {
+        if let (Some(a), Some(b)) = (
+            self.atlas.slots.get(&key).copied(),
+            self.images.slots.get(&key).copied(),
+        ) {
+            return (Some(a), Some(b));
+        }
+        let draw = |style: &TextStyle| {
+            let mut overlay = Overlay::new(w, h);
+            OverlayPainter::with_scale(&mut overlay, self.scale).text(local, text, style);
+            overlay.pixels().to_vec()
+        };
+        let [r, g, b, _] = style.color;
+        let other = |v: f32| if v < 0.5 { 1.0 } else { 0.0 };
+        let drawn = draw(style);
+        let again = draw(&TextStyle {
+            color: [other(r), other(g), other(b), 1.0],
+            ..style.clone()
+        });
+        let mut letters = Vec::with_capacity((w * h) as usize);
+        let mut emoji = vec![0u8; drawn.len()];
+        let mut any = false;
+        for (i, (p, q)) in drawn.chunks_exact(4).zip(again.chunks_exact(4)).enumerate() {
+            let own = p[3] > 0 && p == q;
+            letters.push(if own { 0 } else { p[3] });
+            if own {
+                any = true;
+                emoji[i * 4..i * 4 + 4].copy_from_slice(p);
+            }
+        }
+        self.unbend(&mut letters, style.color);
+        let first = !self.atlas.slots.contains_key(&key);
+        if first {
+            match self.atlas.place(w, h) {
+                Some((x, y)) => {
+                    self.uploads.sprites.push((x, y, w, h, letters));
+                    self.stats.rasterized += 1;
+                    self.atlas.slots.insert(key.clone(), Slot { x, y, w, h });
+                }
+                None if self.drop_overflow || w > self.atlas.size || h > self.atlas.size => {
+                    self.stats.dropped += 1;
+                }
+                None => self.overflowed = true,
+            }
+        }
+        let none = Slot { x: 0, y: 0, w: 0, h: 0 };
+        let placed = if any { self.images.place(w, h) } else { Some((0, 0)) };
+        match placed {
+            Some((x, y)) => {
+                let slot = if any {
+                    self.uploads.images.push((x, y, w, h, emoji.into()));
+                    Slot { x, y, w, h }
+                } else {
+                    none
+                };
+                self.images.slots.insert(key.clone(), slot);
+            }
+            None if self.drop_overflow || w > self.images.size || h > self.images.size => {
+                self.stats.dropped += 1;
+                self.images.slots.insert(key.clone(), none);
+            }
+            None => self.images_overflowed = true,
+        }
+        (
+            self.atlas.slots.get(&key).copied(),
+            self.images.slots.get(&key).copied(),
+        )
     }
 
     /// A path drawn from its edges by the shader, subpath by subpath as the
@@ -2924,8 +3060,7 @@ impl<'a> Builder<'a> {
             };
             for sub in subpaths {
                 let closed = sub.curve_path.auto_close;
-                let points: Vec<(f32, f32)> = sub
-                    .get_points(crate::ui::curve_divisions(dev))
+                let points: Vec<(f32, f32)> = crate::ui::drawn_points(&sub, sx.max(sy), crate::ui::curve_divisions(dev))
                     .into_iter()
                     .map(|p| (dev.x + (p.x - vx) * sx, dev.y + (p.y - vy) * sy))
                     .collect();
@@ -3025,6 +3160,15 @@ impl<'a> Builder<'a> {
 }
 
 const WHITE: Rgba = [1.0, 1.0, 1.0, 1.0];
+
+/// Whether `text` may hold a glyph with colours of its own.
+fn may_have_emoji(text: &str) -> bool {
+    text.chars().any(|c| {
+        c == '\u{fe0f}'
+            || c == '\u{20e3}'
+            || (c >= '\u{2000}' && crate::captions::color_emoji::is_emoji_presentation(c))
+    })
+}
 
 /// Edge texels per row of the edge texture.
 const EDGE_ROW: u32 = 1024;
@@ -3268,14 +3412,18 @@ impl Painter for Builder<'_> {
             color: [r, g, b, 1.0],
             ..style.clone()
         };
-        let key = format!("T{k:?}|{fx:?}|{fy:?}|{:?}|{text}|{opaque:?}", dev.height);
-        let size = if self.atlas.slots.contains_key(&key) {
+        let mode = if self.encoded { 'E' } else { 'T' };
+        let key = format!("{mode}{k:?}|{fx:?}|{fy:?}|{:?}|{text}|{opaque:?}", dev.height);
+        let kept = self.atlas.slots.contains_key(&key)
+            && (!may_have_emoji(text) || self.images.slots.contains_key(&key));
+        let size = if kept {
             (0, 0)
         } else {
             let o = &mut *self.measure;
             o.text_size(style.font_size * k);
             o.text_weight(style.weight());
             o.text_italic(style.italic);
+            o.text_letter_spacing(style.letter_spacing * k);
             let (tw, th) = o.measure_text(text);
             // The overlay measures a run against 80% of its width and wraps
             // what is wider, so the sprite is wide enough that the run stays
@@ -3286,14 +3434,31 @@ impl Painter for Builder<'_> {
             let h = (dev.height.max(th) + fy).ceil() as u32 + 4 * pad as u32;
             (w, h)
         };
-        let size = || size;
         let local = Rect {
             x: (fx + pad as f32) / k,
             y: (fy + pad as f32) / k,
             width: line.width,
             height: line.height,
         };
-        if let Some(slot) = self.sprite(key, size, |p| p.text(local, text, &opaque)) {
+        // Emoji have colours of their own, which a coverage sprite drops:
+        // they are drawn apart, as an image over the letters.
+        if may_have_emoji(text) {
+            let (letters, emoji) = self.emoji_sprites(key, size, local, text, &opaque);
+            if let Some(slot) = letters {
+                self.push_sprite(slot, x0, y0, style.color);
+            }
+            if let Some(slot) = emoji.filter(|s| s.w > 0) {
+                let before = self.instances.len();
+                self.push_sprite(slot, x0, y0, [1.0, 1.0, 1.0, style.color[3]]);
+                if self.instances.len() > before {
+                    let last = self.instances.last_mut().expect("just pushed");
+                    last.params[2] = 2.0;
+                    last.sprite = [slot.x as f32, slot.y as f32, slot.w as f32, slot.h as f32];
+                }
+            }
+        } else if let Some(slot) = self.sprite(key, || size, Some(opaque.color), |p| {
+            p.text(local, text, &opaque)
+        }) {
             self.push_sprite(slot, x0, y0, style.color);
         }
     }
@@ -3337,7 +3502,7 @@ impl Painter for Builder<'_> {
             width: rect.width,
             height: rect.height,
         };
-        if let Some(slot) = self.sprite(key, size, |p| {
+        if let Some(slot) = self.sprite(key, size, None, |p| {
             p.path(local, d, view_box, stroke, fill, WHITE)
         }) {
             self.push_sprite(slot, x0, y0, color);
@@ -3379,6 +3544,35 @@ impl Painter for Builder<'_> {
             let last = self.instances.last_mut().expect("just pushed");
             last.params[2] = 3.0;
             last.sprite = [sigma, 0.0, 0.0, 0.0];
+        }
+    }
+
+    fn shadow_around(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        blur: f32,
+        color: Rgba,
+        hole: Rect,
+        hole_radius: f32,
+    ) {
+        let sigma = blur * self.scale / 2.0;
+        let before = self.instances.len();
+        self.shadow(rect, radius, blur, color);
+        if self.instances.len() > before {
+            let spread = (rect.width - hole.width) / 2.0;
+            let k = self.scale;
+            let last = self.instances.last_mut().expect("just pushed");
+            // Kind 3, cut out; the corner its own, so that the hole's
+            // (the spread less) is the box's.
+            last.params[0] = (hole_radius + spread).max(0.0) * k;
+            last.params[2] = 3.25;
+            last.sprite = [
+                sigma.max(0.5),
+                (hole.x - rect.x - spread) * k,
+                (hole.y - rect.y - spread) * k,
+                spread * k,
+            ];
         }
     }
 

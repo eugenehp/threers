@@ -51,7 +51,9 @@ impl Ui {
         container: NodeId,
         mut rules: Vec<(f32, Style)>,
     ) {
-        self.node(container);
+        if !self.check(container) || !self.check(node) {
+            return;
+        }
         rules.sort_by(|a, b| a.0.total_cmp(&b.0));
         let base = self.style(node).clone();
         self.node_mut(node).query = Some(Box::new(ContainerQuery {

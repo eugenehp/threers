@@ -1,5 +1,6 @@
-//! TrueType glyphs (`glyf`): read in font units, then scaled to 26.6
-//! pixels, hinted or not, as `FT_Load_Glyph` gives them.
+//! Glyphs (`glyf`, or CFF's charstrings): read in font units, then scaled
+//! to 26.6 pixels, hinted or not (TrueType's), as `FT_Load_Glyph` gives
+//! them.
 
 use crate::fixed::{mul_fix, pix_round};
 use crate::sfnt::{Error, Face, Reader};
@@ -7,6 +8,8 @@ use crate::size::Size;
 
 /// The tag of an on-curve point (`FT_CURVE_TAG_ON`).
 pub const TAG_ON: u8 = 1;
+/// The tag of a cubic curve's control point (`FT_CURVE_TAG_CUBIC`).
+pub const TAG_CUBIC: u8 = 2;
 
 /// A glyph's outline in 26.6 pixels: points, their tags, and the index of
 /// each contour's last point.
@@ -223,6 +226,9 @@ pub(crate) fn hypot(a: i64, b: i64) -> i64 {
 /// An unhinted outline in 26.6, before the move to the origin, with its
 /// four phantom points last.
 fn load_unhinted(face: &Face, size: &Size, gid: u16, depth: u32) -> Result<Outline, Error> {
+    if face.cff {
+        return load_cff(face, size, gid);
+    }
     if depth > 16 {
         return Err(Error::Unsupported("composite glyphs nested too deep"));
     }
@@ -313,9 +319,30 @@ fn load_unhinted(face: &Face, size: &Size, gid: u16, depth: u32) -> Result<Outli
     }
 }
 
+/// A CFF glyph's outline in 26.6 with its phantom points (the origin at
+/// the charstring's, the advance from `hmtx`).
+fn load_cff(face: &Face, size: &Size, gid: u16) -> Result<Outline, Error> {
+    let table = face.table(b"CFF ").ok_or(Error::MissingTable("CFF "))?;
+    let cff = crate::cff::Cff::new(table).ok_or(Error::Unsupported("a CFF table not read"))?;
+    let path = cff.path(gid).ok_or(Error::Unsupported("a charstring not read"))?;
+    let (xs, ys) = (size.metrics.x_scale, size.metrics.y_scale);
+    // 16.16 font units to whole ones as FreeType's CFF engine has them
+    // unhinted (at a scale of 1/64, then down to 26.6's whole units), then to 26.6
+    let scale = |v: i64, s: i64| mul_fix(crate::cff::whole_unit(v), s);
+    let mut outline = Outline { points: path.points.iter().map(|&(x, y)| (scale(x, xs), scale(y, ys))).collect(), tags: path.tags, contours: path.contours };
+    let advance = i64::from(face.h_metrics(gid).0);
+    outline.points.extend([(0, 0), (mul_fix(advance, xs), 0), (0, 0), (0, 0)]);
+    outline.tags.extend([0; 4]);
+    Ok(outline)
+}
+
 impl Glyph {
     /// `FT_Load_Glyph( FT_LOAD_NO_HINTING )`: the glyph scaled.
     pub fn load(face: &Face, size: &Size, gid: u16) -> Result<Glyph, Error> {
+        // a glyph past the face's (FreeType's invalid glyph index)
+        if gid >= face.num_glyphs {
+            return Err(Error::Unsupported("a glyph index past the face's glyphs"));
+        }
         let mut outline = load_unhinted(face, size, gid, 0)?;
         let n = outline.points.len() - 4;
         let pp1 = outline.points[n].0;
@@ -412,6 +439,8 @@ pub enum Segment {
     LineTo((i64, i64)),
     /// A quadratic curve: its control point and end.
     ConicTo((i64, i64), (i64, i64)),
+    /// A cubic curve: its two control points and end.
+    CubicTo((i64, i64), (i64, i64), (i64, i64)),
 }
 
 impl Outline {
@@ -492,7 +521,22 @@ impl Outline {
                             break;
                         }
                     }
-                    _ => return None,
+                    // a cubic curve: two controls, then its end (the start, at the end)
+                    _ => {
+                        if point + 1 > limit || tags[point + 1] != 2 {
+                            return None;
+                        }
+                        let (c1, c2) = (self.points[point], self.points[point + 1]);
+                        point += 1;
+                        if point < limit {
+                            point += 1;
+                            out.push(Segment::CubicTo(c1, c2, self.points[point]));
+                        } else {
+                            out.push(Segment::CubicTo(c1, c2, start));
+                            closed = true;
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -692,5 +736,34 @@ impl Outline {
         for p in &mut self.points {
             *p = transform(*p, m);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cff_glyph_is_as_freetype_loads_it_unhinted() {
+        // STIX's E at 12 points, as FT_Load_Glyph( FT_LOAD_NO_HINTING ) and
+        // FT_Outline_Decompose give it
+        let Ok(data) = std::fs::read("/System/Library/Fonts/Supplemental/STIXGeneral.otf") else { return };
+        let face = Face::new(data, 0).unwrap();
+        let size = Size::char_size(&face, 0, 768, 72, 72);
+        let g = Glyph::load(&face, &size, 38).unwrap();
+        let walk: Vec<String> = g
+            .outline
+            .decompose()
+            .unwrap()
+            .iter()
+            .map(|s| match *s {
+                Segment::MoveTo(p) => format!("M {} {}", p.0, p.1),
+                Segment::LineTo(p) => format!("L {} {}", p.0, p.1),
+                Segment::ConicTo(c, p) => format!("Q {} {} {} {}", c.0, c.1, p.0, p.1),
+                Segment::CubicTo(a, b, p) => format!("C {} {} {} {} {} {}", a.0, a.1, b.0, b.1, p.0, p.1),
+            })
+            .collect();
+        assert_eq!(walk.join(";"), "M 458 130;L 437 130;C 402 48 369 28 260 28;L 232 28;C 175 28 154 32 154 65;L 154 251;L 270 251;C 336 251 348 241 357 177;L 375 177;L 375 356;L 357 356;C 348 296 336 283 270 283;L 154 283;L 154 452;C 154 476 160 479 181 479;L 282 479;C 371 479 389 468 400 399;L 419 399;L 416 508;L 9 508;L 9 494;C 67 491 76 479 76 422;L 76 88;C 76 28 68 18 9 15;L 9 0;L 423 0;L 458 130");
+        assert_eq!(g.advance, 469);
     }
 }

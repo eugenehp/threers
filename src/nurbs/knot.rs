@@ -420,6 +420,92 @@ pub fn insert_knot_surface_v(surface: &NurbsSurface, v: f64, times: usize) -> Nu
     )
 }
 
+/// A clamped surface that closes on itself in `u`, opened at `u0` instead of
+/// at the ends of its knots: the same surface, its domain `[u0, u0 + span]`,
+/// with a parameter below `u0` a span further on. `None` where `u0` is not
+/// inside the domain, or the ends are not weighted alike up to one factor.
+pub fn reseam_u(surface: &NurbsSurface, u0: f64) -> Option<NurbsSurface> {
+    let p = surface.degree_u();
+    let (lo, hi) = surface.domain_u();
+    let span = hi - lo;
+    if !(u0 > lo + 1e-9 * span && u0 < hi - 1e-9 * span) {
+        return None;
+    }
+    // At a knot near enough rather than a sliver off it.
+    let u0 = surface
+        .knots_u()
+        .iter()
+        .copied()
+        .find(|k| (k - u0).abs() <= 1e-9 * span)
+        .unwrap_or(u0);
+    let times = p.saturating_sub(multiplicity(surface.knots_u(), u0));
+    let split = if times > 0 {
+        insert_knot_surface_u(surface, u0, times)
+    } else {
+        surface.clone()
+    };
+    let knots = split.knots_u();
+    let (n, rows) = (split.n_v(), split.n_u());
+    if knots[..=p].iter().any(|k| *k != lo) || knots[rows..].iter().any(|k| *k != hi) {
+        return None;
+    }
+    let a = knots.iter().position(|k| *k == u0)?;
+    let poles = split.homogeneous();
+    let row = |i: usize| &poles[i * n..(i + 1) * n];
+    // The end and the start are one row; it may be weighted otherwise.
+    let factor = row(rows - 1)[0][3] / row(0)[0][3];
+    let size = poles.iter().flatten().fold(0.0f64, |m, x| m.max(x.abs()));
+    let alike = row(rows - 1)
+        .iter()
+        .zip(row(0))
+        .all(|(e, s)| (0..4).all(|k| (e[k] - s[k] * factor).abs() <= 1e-9 * size));
+    if !alike {
+        return None;
+    }
+    let mut out: Vec<V4> = poles[(a - 1) * n..].to_vec();
+    out.extend(poles[n..a * n].iter().map(|h| h.map(|x| x * factor)));
+    let mut ks = vec![u0; p + 1];
+    ks.extend(&knots[a + p..rows]);
+    ks.extend(vec![hi; p]);
+    ks.extend(knots[p + 1..a].iter().map(|k| k + span));
+    ks.extend(vec![u0 + span; p + 1]);
+    let count = out.len() / n;
+    NurbsSurface::from_homogeneous(
+        p,
+        split.degree_v(),
+        ks,
+        split.knots_v().to_vec(),
+        count,
+        n,
+        out,
+    )
+    .ok()
+}
+
+/// [`reseam_u`] in `v`.
+pub fn reseam_v(surface: &NurbsSurface, v0: f64) -> Option<NurbsSurface> {
+    Some(transposed(&reseam_u(&transposed(surface)?, v0)?)?)
+}
+
+/// The surface with its parameters changed about.
+fn transposed(s: &NurbsSurface) -> Option<NurbsSurface> {
+    let (nu, nv) = (s.n_u(), s.n_v());
+    let poles = s.homogeneous();
+    let turned = (0..nv)
+        .flat_map(|j| (0..nu).map(move |i| poles[i * nv + j]))
+        .collect();
+    NurbsSurface::from_homogeneous(
+        s.degree_v(),
+        s.degree_u(),
+        s.knots_v().to_vec(),
+        s.knots_u().to_vec(),
+        nv,
+        nu,
+        turned,
+    )
+    .ok()
+}
+
 /// Remove the knot at `u` up to `times` times, keeping the curve within
 /// `tolerance` — Piegl & Tiller A5.8.
 ///
@@ -598,6 +684,34 @@ pub fn compact(curve: &NurbsCurve, tolerance: f64) -> NurbsCurve {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A closed surface opened elsewhere is the same surface, a turn further on
+    /// where its parameter was below.
+    #[test]
+    fn a_closed_surface_opens_anywhere() {
+        let s = crate::nurbs::construct::cylinder([1.0, 2.0, 3.0], [0.0, 0.0, 1.0], 2.5, 4.0);
+        let (lo, hi) = s.domain_u();
+        let span = hi - lo;
+        for share in [0.13, 0.25, 0.5, 0.91] {
+            let u0 = lo + span * share;
+            let t = reseam_u(&s, u0).unwrap();
+            let (a, b) = t.domain_u();
+            assert!((a - u0).abs() < 1e-12 && (b - u0 - span).abs() < 1e-12);
+            let (v0, v1) = s.domain_v();
+            for i in 0..=40 {
+                let u = lo + span * i as f64 / 40.0;
+                let w = if u < u0 { u + span } else { u };
+                for v in [v0, 0.3 * v0 + 0.7 * v1, v1] {
+                    let (p, q) = (s.point(u, v), t.point(w, v));
+                    let off = (0..3).map(|k| (p[k] - q[k]).abs()).fold(0.0, f64::max);
+                    assert!(off < 1e-12, "{off:e} at {u}");
+                }
+            }
+        }
+        let r = reseam_v(&transposed(&s).unwrap(), lo + 0.3 * span).unwrap();
+        let (p, q) = (s.point(lo + 0.1 * span, 0.5), r.point(0.5, lo + 1.1 * span));
+        assert!((0..3).all(|k| (p[k] - q[k]).abs() < 1e-12));
+    }
     use crate::nurbs::construct;
     use crate::nurbs::v3;
 

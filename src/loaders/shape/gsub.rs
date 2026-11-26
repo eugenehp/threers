@@ -184,6 +184,13 @@ impl<'a> Gsub<'a> {
         out
     }
 
+    /// Whether the table lists `script` itself (not falling back to `DFLT`):
+    /// which of a script's two tags a font was made for (`dev2` or `deva`).
+    #[must_use]
+    pub fn lists_script(&self, script: &[u8; 4]) -> bool {
+        self.features_of(script).is_some()
+    }
+
     /// Whether `script` registers `tag`.
     #[must_use]
     pub fn has(&self, script: &[u8; 4], tag: &[u8; 4]) -> bool {
@@ -218,18 +225,48 @@ impl<'a> Gsub<'a> {
         Some((real, out))
     }
 
+    /// Lookup `index`'s header: its type, where it starts, how many subtables.
+    fn lookup_header(&self, index: u16) -> Option<(u16, usize, usize)> {
+        let total = u16_at(self.data, self.lookup_list)?;
+        if index >= total {
+            return None;
+        }
+        let off = u16_at(self.data, self.lookup_list + 2 + 2 * usize::from(index))?;
+        let lookup = self.lookup_list + usize::from(off);
+        Some((u16_at(self.data, lookup)?, lookup, usize::from(u16_at(self.data, lookup + 4)?)))
+    }
+
+    /// The `j`th subtable of the lookup at `lookup` (of type `kind`): its real
+    /// type (an extension's, through it) and where it starts. As
+    /// [`subtables`](Self::subtables), one at a time: a lookup is tried at every
+    /// glyph, and a list made for each try was most of shaping's time.
+    fn subtable_of(&self, lookup: usize, kind: u16, j: usize) -> Option<(u16, usize)> {
+        let s = lookup + usize::from(u16_at(self.data, lookup + 6 + 2 * j)?);
+        if kind == 7 {
+            Some((u16_at(self.data, s + 2)?, s + u32_at(self.data, s + 4)? as usize))
+        } else {
+            Some((kind, s))
+        }
+    }
+
     /// Apply every lookup of `tag` across `buf`, left to right.
     ///
     /// One pass per lookup, which is what the specification describes: a feature's
     /// lookups are applied in lookup-list order, and each walks the buffer once.
     pub fn apply_feature(&self, script: &[u8; 4], tag: &[u8; 4], buf: &mut Buffer) {
+        // (no font makes a run more than this many times longer: past it, a
+        // lookup that keeps matching its own output is stopped)
+        let most = buf.len() * 8 + 64;
         for index in self.lookups_for_script(script, tag) {
             let mut at = 0;
-            while at < buf.len() {
+            while at < buf.len() && buf.len() <= most {
+                let before = buf.len();
                 if self.apply_at(index, buf, at, 0) {
-                    // A substitution may have shortened the buffer; carry on from here
-                    // rather than assuming a width.
-                    at += 1;
+                    // On past what it made: a substitution that made several glyphs
+                    // (a decomposition) isn't applied again to its own output, which
+                    // for a lookup matching that output would never end. One that
+                    // shortened the buffer (a ligature) goes on from the next glyph.
+                    at += 1 + buf.len().saturating_sub(before);
                 } else {
                     at += 1;
                 }
@@ -242,10 +279,13 @@ impl<'a> Gsub<'a> {
         if depth > MAX_DEPTH || at >= buf.len() {
             return false;
         }
-        let Some((kind, subs)) = self.subtables(index) else {
+        let Some((lookup_kind, lookup, n)) = self.lookup_header(index) else {
             return false;
         };
-        for sub in subs {
+        for j in 0..n {
+            let Some((kind, sub)) = self.subtable_of(lookup, lookup_kind, j) else {
+                continue;
+            };
             let did = match kind {
                 1 => self.single(sub, buf.glyphs[at]).map(|g| {
                     buf.glyphs[at] = g;
@@ -568,59 +608,49 @@ impl<'a> Gsub<'a> {
             3 => {}
             _ => return None,
         }
+        // The three coverage arrays read where they are (a list made of each
+        // for every glyph tried was most of shaping's time): each is a count
+        // and its offsets. A non-chaining context has no backtrack or lookahead.
         let mut p = sub + 2;
-        // A non-chaining context has no backtrack or lookahead.
-        let backtrack = if kind == 6 {
+        let mut array = |chaining: bool| -> Option<(usize, usize)> {
+            if !chaining {
+                return Some((0, 0));
+            }
             let n = usize::from(u16_at(self.data, p)?);
-            p += 2;
-            let offs: Vec<usize> = (0..n)
-                .map(|i| u16_at(self.data, p + 2 * i).map(usize::from))
-                .collect::<Option<Vec<usize>>>()?;
-            p += 2 * n;
-            offs
-        } else {
-            Vec::new()
+            let at = p + 2;
+            p = at + 2 * n;
+            Some((at, n))
         };
-        let input_n = usize::from(u16_at(self.data, p)?);
-        p += 2;
-        let input: Vec<usize> = (0..input_n)
-            .map(|i| u16_at(self.data, p + 2 * i).map(usize::from))
-            .collect::<Option<Vec<usize>>>()?;
-        p += 2 * input_n;
-        let lookahead = if kind == 6 {
-            let n = usize::from(u16_at(self.data, p)?);
-            p += 2;
-            let offs: Vec<usize> = (0..n)
-                .map(|i| u16_at(self.data, p + 2 * i).map(usize::from))
-                .collect::<Option<Vec<usize>>>()?;
-            p += 2 * n;
-            offs
-        } else {
-            Vec::new()
-        };
+        let (back_at, back_n) = array(kind == 6)?;
+        let (input_at, input_n) = array(true)?;
+        let (ahead_at, ahead_n) = array(kind == 6)?;
         let record_n = usize::from(u16_at(self.data, p)?);
         p += 2;
+        let cover = |base: usize, k: usize, glyph| -> Option<u16> {
+            let off = usize::from(u16_at(self.data, base + 2 * k)?);
+            coverage_index(self.data, sub + off, glyph)
+        };
 
         // The input sequence starts at `at`; the backtrack runs **backwards** from just
         // before it, which is why its coverage array is stored in reverse order.
-        if input.is_empty() || at + input.len() > buf.len() {
+        if input_n == 0 || at + input_n > buf.len() {
             return None;
         }
-        for (k, off) in input.iter().enumerate() {
-            coverage_index(self.data, sub + off, buf.glyphs[at + k])?;
+        for k in 0..input_n {
+            cover(input_at, k, buf.glyphs[at + k])?;
         }
-        if backtrack.len() > at {
+        if back_n > at {
             return None;
         }
-        for (k, off) in backtrack.iter().enumerate() {
-            coverage_index(self.data, sub + off, buf.glyphs[at - 1 - k])?;
+        for k in 0..back_n {
+            cover(back_at, k, buf.glyphs[at - 1 - k])?;
         }
-        let after = at + input.len();
-        if after + lookahead.len() > buf.len() {
+        let after = at + input_n;
+        if after + ahead_n > buf.len() {
             return None;
         }
-        for (k, off) in lookahead.iter().enumerate() {
-            coverage_index(self.data, sub + off, buf.glyphs[after + k])?;
+        for k in 0..ahead_n {
+            cover(ahead_at, k, buf.glyphs[after + k])?;
         }
 
         // Matched: apply the nested lookups at their positions inside the input.
@@ -726,13 +756,21 @@ pub fn coverage_index(d: &[u8], at: usize, glyph: u16) -> Option<u16> {
             None
         }
         2 => {
+            // ranges in glyph order (as the format requires): searched by
+            // halves, as format 1's glyphs are (each glyph tries every
+            // lookup's coverage, so this is shaping's inner loop)
             let n = usize::from(u16_at(d, at + 2)?);
-            for i in 0..n {
-                let rec = at + 4 + 6 * i;
-                let (first, last, start) =
-                    (u16_at(d, rec)?, u16_at(d, rec + 2)?, u16_at(d, rec + 4)?);
-                if glyph >= first && glyph <= last {
-                    return start.checked_add(glyph - first);
+            let (mut lo, mut hi) = (0usize, n);
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2;
+                let rec = at + 4 + 6 * mid;
+                let (first, last) = (u16_at(d, rec)?, u16_at(d, rec + 2)?);
+                if glyph < first {
+                    hi = mid;
+                } else if glyph > last {
+                    lo = mid + 1;
+                } else {
+                    return u16_at(d, rec + 4)?.checked_add(glyph - first);
                 }
             }
             None

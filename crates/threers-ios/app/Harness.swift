@@ -45,9 +45,32 @@ func threers_ios_rec_take(_ out: UnsafeMutableRawPointer, _ cap: Int) -> Bool
 func threers_ios_take_pick() -> Bool
 @_silgen_name("threers_ios_picked")
 func threers_ios_picked(_ path: UnsafePointer<UInt8>, _ len: Int)
+@_silgen_name("threers_ios_bookmark")
+func threers_ios_bookmark(_ path: UnsafePointer<UInt8>, _ len: Int, _ data: UnsafePointer<UInt8>, _ dataLen: Int)
+@_silgen_name("threers_ios_take_bookmark")
+func threers_ios_take_bookmark(_ out: UnsafeMutablePointer<UInt8>?, _ cap: Int) -> Int
+@_silgen_name("threers_ios_bookmark_opened")
+func threers_ios_bookmark_opened(_ data: UnsafePointer<UInt8>, _ dataLen: Int, _ path: UnsafePointer<UInt8>, _ len: Int, _ gone: Bool)
+@_silgen_name("threers_ios_take_keyboard")
+func threers_ios_take_keyboard() -> Int32
+@_silgen_name("threers_ios_keyboard")
+func threers_ios_keyboard(_ height: Float)
+@_silgen_name("threers_ios_chords_kept")
+func threers_ios_chords_kept() -> Bool
 
 @_silgen_name("threers_ios_take_copy")
 func threers_ios_take_copy(_ out: UnsafeMutablePointer<UInt8>, _ cap: Int) -> Int
+
+@_silgen_name("threers_ios_copy_len")
+func threers_ios_copy_len() -> Int
+
+@_silgen_name("threers_ios_take_paste")
+func threers_ios_take_paste() -> Bool
+@_silgen_name("threers_ios_pasted")
+func threers_ios_pasted(_ text: UnsafePointer<UInt8>, _ len: Int)
+
+@_silgen_name("threers_ios_take_look_up")
+func threers_ios_take_look_up(_ out: UnsafeMutablePointer<UInt8>, _ cap: Int) -> Int
 
 @_silgen_name("threers_ios_take_share")
 func threers_ios_take_share(_ out: UnsafeMutablePointer<UInt8>, _ cap: Int) -> Int
@@ -68,6 +91,8 @@ func threers_ios_audio_time(_ t: Double, _ playing: Bool)
     }
     pollShares()
     pollCopy()
+    pollPaste()
+    pollLookUp()
     pollPick()
     pollRecording()
     pollAudio()
@@ -127,18 +152,54 @@ func threers_ios_audio_time(_ t: Double, _ playing: Bool)
 /// file or a folder, read where it is (its access kept while the app runs).
 @MainActor private final class Picker: NSObject, UIDocumentPickerDelegate {
     static let shared = Picker()
-    private var held: [URL] = []
+    private var held: Set<URL> = []
+
+    /// `url` kept open while the app runs, its bookmark given to the app;
+    /// its path.
+    private func hold(_ url: URL) -> [UInt8] {
+        if !held.contains(url), url.startAccessingSecurityScopedResource() { held.insert(url) }
+        let path = Array(url.path.utf8)
+        if let data = try? url.bookmarkData() {
+            let bytes = Array(data)
+            threers_ios_bookmark(path, path.count, bytes, bytes.count)
+        }
+        return path
+    }
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         for url in urls {
-            if url.startAccessingSecurityScopedResource() { held.append(url) }
-            let path = Array(url.path.utf8)
-            path.withUnsafeBufferPointer { threers_ios_picked($0.baseAddress!, path.count) }
+            let path = hold(url)
+            threers_ios_picked(path, path.count)
+        }
+    }
+
+    /// A file picked at an earlier launch, found by its bookmark (off the
+    /// main thread: its provider may be slow).
+    func open(_ bytes: [UInt8]) {
+        Task {
+            let found = await Task.detached { () -> Result<URL, Error> in
+                var stale = false
+                return Result { try URL(resolvingBookmarkData: Data(bytes), bookmarkDataIsStale: &stale) }
+            }.value
+            switch found {
+            case .success(let url):
+                let path = hold(url)
+                threers_ios_bookmark_opened(bytes, bytes.count, path, path.count, false)
+            case .failure(let e):
+                let why = e as NSError
+                let gone = why.domain == NSCocoaErrorDomain && (why.code == NSFileNoSuchFileError || why.code == NSFileReadNoSuchFileError)
+                threers_ios_bookmark_opened(bytes, bytes.count, [], 0, gone)
+            }
         }
     }
 }
 
 @MainActor private func pollPick() {
+    let n = threers_ios_take_bookmark(nil, 0)
+    if n > 0 {
+        var bytes = [UInt8](repeating: 0, count: n)
+        if threers_ios_take_bookmark(&bytes, n) == n { Picker.shared.open(bytes) }
+    }
     guard threers_ios_take_pick() else { return }
     guard let top = frontController() else { return }
     let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data, .folder, .zip], asCopy: false)
@@ -226,11 +287,36 @@ func threers_ios_audio_time(_ t: Double, _ playing: Bool)
 
 /// Text the app copied (`threers_ios::copy_text`), on the clipboard.
 @MainActor private func pollCopy() {
-    var buf = [UInt8](repeating: 0, count: 16384)
+    // (as much room as it needs: a chapter copied is copied)
+    let need = threers_ios_copy_len()
+    guard need > 0 else { return }
+    var buf = [UInt8](repeating: 0, count: need)
     let n = threers_ios_take_copy(&buf, buf.count)
     if n > 0, let s = String(bytes: buf[0..<n], encoding: .utf8) {
         UIPasteboard.general.string = s
     }
+}
+
+/// The clipboard's text, where the app asked for it (`threers_ios::ask_paste`).
+@MainActor private func pollPaste() {
+    guard threers_ios_take_paste() else { return }
+    let text = Array((UIPasteboard.general.string ?? "").utf8)
+    threers_ios_pasted(text, text.count)
+}
+
+/// A word the app asked to look up (`threers_ios::look_up`), in the system's
+/// dictionaries.
+@MainActor private func pollLookUp() {
+    var buf = [UInt8](repeating: 0, count: 1024)
+    let n = threers_ios_take_look_up(&buf, buf.count)
+    guard n > 0, let word = String(bytes: buf[0..<n], encoding: .utf8) else { return }
+    #if os(iOS)
+    guard let top = frontController() else { return }
+    let entry = UIReferenceLibraryViewController(term: word)
+    // (an iPad's a sheet of its own)
+    entry.modalPresentationStyle = .formSheet
+    top.present(entry, animated: true)
+    #endif
 }
 
 /// Each file the app offered (`threers_ios::share`), in the system's share
@@ -267,6 +353,12 @@ func threers_ios_audio_time(_ t: Double, _ playing: Bool)
         if parts[0] == "pause" {
             audioPlayer?.pause()
         } else if parts.count == 3, let url = URL(string: parts[2]) {
+            #if os(iOS) || os(visionOS)
+            // heard with the silent switch on, as spoken audio (the
+            // default, ambient, is muted by it: no sound at all)
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
+            try? AVAudioSession.sharedInstance().setActive(true)
+            #endif
             if audioPlayer == nil || audioURL != parts[2] {
                 audioPlayer = AVPlayer(url: url)
                 audioURL = parts[2]
@@ -296,6 +388,26 @@ func threers_view_controls(_ view: UnsafeMutableRawPointer?, _ len: UnsafeMutabl
 func threersPressControl(_ key: UInt64)
 @_silgen_name("threers_ios_set_dark")
 func threers_ios_set_dark(_ dark: Bool)
+@_silgen_name("threers_ios_legibility")
+func threers_ios_legibility(_ bold: Bool, _ contrast: Bool, _ motion: Bool, _ transparency: Bool, _ textScale: Float)
+
+/// The body text's size at each of the system's text sizes, over the
+/// default's (17 points).
+private let bodySizes: [UIContentSizeCategory: Float] = [
+    .extraSmall: 14, .small: 15, .medium: 16, .large: 17, .extraLarge: 19, .extraExtraLarge: 21, .extraExtraExtraLarge: 23,
+    .accessibilityMedium: 28, .accessibilityLarge: 33, .accessibilityExtraLarge: 40, .accessibilityExtraExtraLarge: 47, .accessibilityExtraExtraExtraLarge: 53,
+]
+private var legibilitySent: [Float] = []
+
+/// Tells the app the system's accessibility settings, when they change
+/// (cheap: once a frame).
+@MainActor func sendLegibility() {
+    let scale = (bodySizes[UIApplication.shared.preferredContentSizeCategory] ?? 17) / 17
+    let now: [Float] = [UIAccessibility.isBoldTextEnabled, UIAccessibility.isDarkerSystemColorsEnabled, UIAccessibility.isReduceMotionEnabled, UIAccessibility.isReduceTransparencyEnabled].map { $0 ? 1 : 0 } + [scale]
+    guard now != legibilitySent else { return }
+    legibilitySent = now
+    threers_ios_legibility(now[0] == 1, now[1] == 1, now[2] == 1, now[3] == 1, scale)
+}
 
 /// An element assistive technology finds over a control of the UI the
 /// layer draws (VoiceOver, Voice Control, Switch Control): its name, what
@@ -349,6 +461,13 @@ final class Host: UIView {
     /// what the render thread left for the main one: the UI's controls
     /// (as JSON), when they changed
     private var pendingControls: Data?
+    /// Touches, pinches and pans as they came, for the render thread to put
+    /// in at its next frame: held by `inputLock` alone, for as long as an
+    /// append takes, so a gesture never waits on a frame being drawn (which
+    /// held up every event, and UIKit's delivery of the next, by up to a
+    /// frame: rotating and pinching lagged the fingers).
+    private let inputLock = NSLock()
+    private var pendingInput: [(UInt32, Float, Float, Float)] = []
     /// the main thread's own light tick: the controls and the app's
     /// requests (sheets, URLs, the room), which are UIKit's to act on
     private var poll: CADisplayLink?
@@ -366,6 +485,27 @@ final class Host: UIView {
         super.init(frame: .zero)
         backgroundColor = .black
         isMultipleTouchEnabled = true
+        for (name, at) in [(UIApplication.willResignActiveNotification, 0), (UIApplication.didBecomeActiveNotification, 1)] as [(Notification.Name, Float)] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.queue(7, at, 0, 0) }
+            }
+        }
+        #if os(iOS)
+        // how much of the view the on-screen keyboard covers
+        NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self] n in
+            let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue ?? .null
+            MainActor.assumeIsolated {
+                guard let self, let window = self.window else { return }
+                let r = self.convert(window.convert(end, from: nil), from: window)
+                // (one floating, or split, covers no edge)
+                let docked = !r.isNull && r.maxY >= self.bounds.maxY - 1
+                threers_ios_keyboard(docked ? Float(max(0, self.bounds.maxY - r.minY)) : 0)
+            }
+        }
+        NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { _ in
+            threers_ios_keyboard(0)
+        }
+        #endif
         surface.frame = bounds
         surface.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         surface.isUserInteractionEnabled = false
@@ -375,6 +515,10 @@ final class Host: UIView {
         pan.minimumNumberOfTouches = 2
         for g in [pinch, pan] as [UIGestureRecognizer] {
             g.cancelsTouchesInView = false
+            // both at once: two fingers pinch and move together (UIKit lets
+            // one recognizer of a view run alone, and a two-finger drag is
+            // nearly always a pinch first: the pan never came)
+            g.delegate = self
             addGestureRecognizer(g)
         }
     }
@@ -417,32 +561,107 @@ final class Host: UIView {
     override var canBecomeFirstResponder: Bool { true }
 
     /// A hardware keyboard's key: its character (the special keys as the
-    /// function-key code points, Escape as 27) and Shift, to the app.
+    /// function-key code points, Escape as 27) and the modifiers, to the app.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var took = false
         for p in presses {
-            guard let key = p.key else { continue }
-            let s = key.charactersIgnoringModifiers
-            let code: UInt32
-            switch s {
-            case UIKeyCommand.inputEscape: code = 27
-            case UIKeyCommand.inputUpArrow: code = 0xF700
-            case UIKeyCommand.inputDownArrow: code = 0xF701
-            case UIKeyCommand.inputLeftArrow: code = 0xF702
-            case UIKeyCommand.inputRightArrow: code = 0xF703
-            case UIKeyCommand.inputPageUp: code = 0xF72C
-            case UIKeyCommand.inputPageDown: code = 0xF72D
-            case UIKeyCommand.inputHome: code = 0xF729
-            case UIKeyCommand.inputEnd: code = 0xF72B
-            default:
-                // the character as typed (Shift's: `?`, `+`, `]`), not as unshifted
-                guard let c = (key.characters.isEmpty ? s : key.characters).unicodeScalars.first else { continue }
-                code = c.value
+            // (a text field's come on to here as well: typed there already)
+            if isFirstResponder, let key = p.key, press(key) {
+                took = true
+                heldKey = key.keyCode
             }
-            locked { threers_view_set(view, 6, Float(code), key.modifierFlags.contains(.shift) ? 1 : 0, 0) }
-            took = true
         }
         if !took { super.pressesBegan(presses, with: event) }
+    }
+
+    /// The key down, which repeats until it is let go.
+    private var heldKey: UIKeyboardHIDUsage?
+
+    private func letGo(_ presses: Set<UIPress>?) {
+        guard let k = heldKey, presses?.contains(where: { $0.key?.keyCode == k }) ?? true else { return }
+        heldKey = nil
+        queue(8, 0, 0, 0)
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        letGo(presses)
+        super.pressesEnded(presses, with: event)
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        letGo(presses)
+        super.pressesCancelled(presses, with: event)
+    }
+
+    override func resignFirstResponder() -> Bool {
+        letGo(nil)
+        return super.resignFirstResponder()
+    }
+
+    /// The shortcuts, ahead of the system's menus' own (⌘B and ⌘E never
+    /// come as keys): ⌘ and a key is the app's, but a text field's editing
+    /// ones where the app leaves them to it (`threers_ios::keep_chords`),
+    /// and those that close or hide the window. Escape too.
+    override var keyCommands: [UIKeyCommand]? {
+        let kept = isFirstResponder || threers_ios_chords_kept()
+        return Host.chords.filter { kept || !["a", "c", "v", "x", "z"].contains($0.input) }
+    }
+
+    private static let chords: [UIKeyCommand] = {
+        var keys = "abcdefgijklnoprstuvxyz0123456789,.;'/\\[]-=`".map { String($0) }
+        keys.append("\r")
+        let held: [UIKeyModifierFlags] = [.command, [.command, .shift], [.command, .alternate]]
+        var out = keys.flatMap { key in held.map { UIKeyCommand(input: key, modifierFlags: $0, action: #selector(chord(_:))) } }
+        out.forEach { $0.wantsPriorityOverSystemBehavior = true }
+        out.append(UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(chord(_:))))
+        return out
+    }()
+
+    @objc private func chord(_ c: UIKeyCommand) {
+        let code = c.input == UIKeyCommand.inputEscape ? 27 : c.input?.unicodeScalars.first?.value
+        if let code { send(code, c.modifierFlags) }
+    }
+
+    private func send(_ code: UInt32, _ m: UIKeyModifierFlags) {
+        let held: [(UIKeyModifierFlags, Int)] = [(.control, 1), (.alternate, 2), (.command, 4)]
+        let bits = held.reduce(0) { m.contains($1.0) ? $0 | $1.1 : $0 }
+        queue(6, Float(code), m.contains(.shift) ? 1 : 0, Float(bits))
+    }
+
+    /// `key` to the app, the modifiers with it; false for one that says
+    /// nothing (a modifier alone).
+    fileprivate func pressBackspace() { send(8, []) }
+
+    fileprivate func press(_ key: UIKey) -> Bool {
+        let s = key.charactersIgnoringModifiers
+        let m = key.modifierFlags
+        let code: UInt32
+        switch s {
+        case UIKeyCommand.inputEscape: code = 27
+        case UIKeyCommand.inputUpArrow: code = 0xF700
+        case UIKeyCommand.inputDownArrow: code = 0xF701
+        case UIKeyCommand.inputLeftArrow: code = 0xF702
+        case UIKeyCommand.inputRightArrow: code = 0xF703
+        case UIKeyCommand.inputPageUp: code = 0xF72C
+        case UIKeyCommand.inputPageDown: code = 0xF72D
+        case UIKeyCommand.inputHome: code = 0xF729
+        case UIKeyCommand.inputEnd: code = 0xF72B
+        default:
+            switch key.keyCode {
+            case .keyboardDeleteOrBackspace: code = 8
+            case .keyboardDeleteForward: code = 0xF728
+            case .keyboardTab: code = 9
+            default:
+                // the character as typed (Shift's: `?`, `+`, `]`), not as
+                // unshifted; a shortcut's, the key's own
+                let typed = key.characters.isEmpty || !m.isDisjoint(with: [.command, .control]) ? s : key.characters
+                // (a key with no character is named: `UIKeyInputF1`)
+                guard !typed.hasPrefix("UIKeyInput"), let c = typed.unicodeScalars.first else { return false }
+                code = c.value
+            }
+        }
+        send(code, m)
+        return true
     }
 
     override func layoutSubviews() {
@@ -488,7 +707,7 @@ final class Host: UIView {
         let edits = list.filter { $0.edit }
         for c in edits {
             let f = fields[c.key] ?? {
-                let f = ControlField(key: c.key, multiline: c.role == "textbox")
+                let f = ControlField(key: c.key, multiline: c.role == "textbox" && !c.secret)
                 f.addTarget(self, action: #selector(typed(_:)), for: .editingChanged)
                 f.delegate = self
                 addSubview(f)
@@ -503,8 +722,10 @@ final class Host: UIView {
             }
             f.frame = CGRect(x: c.x, y: c.y, width: max(1, right - c.x), height: c.h)
             f.accessibilityLabel = c.label
+            f.keepSecret(c.secret)
             // a text the UI changed itself (its clear button): the field follows
-            if !f.isFirstResponder { f.text = c.value ?? "" }
+            // (a password there is stays as it was typed here)
+            if !f.isFirstResponder, !c.secret || c.value != nil { f.whole = c.value ?? "" }
         }
         let keep = Set(edits.map { $0.key })
         for (k, f) in fields where !keep.contains(k) {
@@ -513,9 +734,9 @@ final class Host: UIView {
         }
     }
 
-    @objc private func typed(_ f: ControlField) {
+    @objc fileprivate func typed(_ f: ControlField) {
         guard let k = UInt64(f.key) else { return }
-        var bytes = Array((f.text ?? "").utf8)
+        var bytes = Array(f.whole.utf8)
         threers_ios_text(k, &bytes, bytes.count)
     }
 
@@ -556,6 +777,13 @@ final class Host: UIView {
             CFRunLoopStop(CFRunLoopGetCurrent())
             return
         }
+        inputLock.lock()
+        let input = pendingInput
+        pendingInput.removeAll(keepingCapacity: true)
+        inputLock.unlock()
+        for (key, a, b, c) in input {
+            threers_view_set(view, key, a, b, c)
+        }
         _ = threers_view_frame(view)
         var len = 0
         if let p = threers_view_controls(view, &len) {
@@ -567,11 +795,21 @@ final class Host: UIView {
     /// The main thread's tick: the UI's controls as native elements and
     /// fields, and the app's requests.
     @objc private func tick() {
+        // a frame being drawn: next tick (the main thread does not wait)
+        guard lock.try() else { return }
+        lock.unlock()
         let json = locked { () -> Data? in
             // a change to AR or back: UIKit's, so here on the main thread
             threers_view_requests(view)
             defer { pendingControls = nil }
             return pendingControls
+        }
+        sendLegibility()
+        // the keyboard, where the app asked for it or is done with it
+        switch threers_ios_take_keyboard() {
+        case 1: fields.values.min { ($0.frame.minY, $0.frame.minX) < ($1.frame.minY, $1.frame.minX) }?.becomeFirstResponder()
+        case 2: fields.values.first { $0.isFirstResponder }?.resignFirstResponder()
+        default: break
         }
         if let json, let list = try? JSONDecoder().decode([UiControl].self, from: json) {
             controlElements = list.map { UiControlElement(container: self, control: $0) }
@@ -586,21 +824,44 @@ final class Host: UIView {
     private func send(_ touch: UITouch, _ phase: Float) {
         let p = touch.location(in: self)
         let k = scale
-        locked { threers_view_set(view, 1, phase, Float(p.x * k), Float(p.y * k)) }
+        queue(1, phase, Float(p.x * k), Float(p.y * k))
+    }
+
+    /// An input for the next frame, as it came: the crate merges a pinch's
+    /// steps and a pan's moves (`gestures.rs`).
+    private func queue(_ key: UInt32, _ a: Float, _ b: Float, _ c: Float) {
+        inputLock.lock()
+        defer { inputLock.unlock() }
+        pendingInput.append((key, a, b, c))
+    }
+
+    /// The fingers on the view now (not lifted).
+    private func down(_ event: UIEvent?, _ touches: Set<UITouch>) -> Int {
+        event?.allTouches?.filter { $0.phase != .ended && $0.phase != .cancelled }.count ?? touches.count
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if finger == nil, let t = touches.first {
+        // one finger alone turns the brain (or works the UI); two — landing
+        // together, in one event, or the second after — are the pinch's and
+        // the pan's, and the one turning stops (it went on turning under a
+        // pinch whose fingers came down together)
+        if finger == nil, down(event, touches) == 1, let t = touches.first {
             finger = t
             send(t, 0)
         } else if let f = finger {
-            send(f, 3)  // a second finger: the gestures take over
+            send(f, 3)
             finger = nil
         }
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if let f = finger, touches.contains(f) { send(f, 1) }
+        guard let f = finger, touches.contains(f) else { return }
+        if down(event, touches) > 1 {
+            send(f, 3)
+            finger = nil
+            return
+        }
+        send(f, 1)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -611,16 +872,26 @@ final class Host: UIView {
         if let f = finger, touches.contains(f) { send(f, 3); finger = nil }
     }
 
+    /// THREERS_TOUCH_LOG: the gestures as UIKit reports them
+    private static let touchLog = ProcessInfo.processInfo.environment["THREERS_TOUCH_LOG"] != nil
+
     @objc private func pinched(_ g: UIPinchGestureRecognizer) {
+        if Host.touchLog { print("touchlog swift pinch state \(g.state.rawValue) scale \(g.scale) touches \(g.numberOfTouches)") }
         let z = Float(g.scale)
-        locked { threers_view_set(view, 2, z, 0, 0) }
+        // where the fingers are: the zoom goes toward what is under them
+        let at = g.location(in: self)
+        // (lifted to one finger, the place jumps to it: not said)
+        if g.numberOfTouches >= 2, z > 0 { queue(2, z, Float(at.x * scale), Float(at.y * scale)) }
         g.scale = 1
+        // the fingers lifted: the pinch over
+        if g.state == .ended || g.state == .cancelled || g.state == .failed { queue(2, 0, 0, 0) }
     }
 
     @objc private func panned(_ g: UIPanGestureRecognizer) {
+        if Host.touchLog { print("touchlog swift pan state \(g.state.rawValue) \(g.translation(in: self)) touches \(g.numberOfTouches)") }
         let d = g.translation(in: self)
         let k = scale
-        locked { threers_view_set(view, 3, Float(d.x * k), Float(d.y * k), 0) }
+        queue(3, Float(d.x * k), Float(d.y * k), 0)
         g.setTranslation(.zero, in: self)
     }
 
@@ -675,21 +946,30 @@ struct FlatWindow: View {
 
 /// What the app asked of the shell: into the room (3) or out of it (4).
 @MainActor func shellRequest(_ r: UInt32, open: OpenImmersiveSpaceAction, dismiss: DismissImmersiveSpaceAction) async {
-    // one immersive space at a time: the room or the backdrop
+    // one immersive space at a time: the room, the backdrop or the pieces
     func close() async {
         await dismiss()
         threers_ios_immersive(false)
         threers_ios_backdrop(false)
+        threers_ios_space(false)
     }
     switch r {
-    case 3, 5:
-        if threers_ios_immersive_open() || threers_ios_backdrop_open() { await close() }
-        let id = r == 3 ? "immersive" : "backdrop"
+    case 3, 5, 7:
+        #if THREERS_WINDOW
+        // the pieces are the volume's app's, which this build has not
+        if r == 7 { return }
+        #endif
+        if threers_ios_immersive_open() || threers_ios_backdrop_open() || threers_ios_space_open() { await close() }
+        let id = r == 3 ? "immersive" : r == 5 ? "backdrop" : "pieces"
         let result = await open(id: id)
         print("threers: \(id) space: \(result)")
         guard case .opened = result else { return }
-        if r == 3 { threers_ios_immersive(true) } else { threers_ios_backdrop(true) }
-    case 4, 6:
+        switch r {
+        case 3: threers_ios_immersive(true)
+        case 5: threers_ios_backdrop(true)
+        default: threers_ios_space(true)
+        }
+    case 4, 6, 8:
         await close()
     default:
         break
@@ -726,11 +1006,23 @@ struct NativeControl: Decodable, Identifiable {
     let on, toggle, disabled: Bool
     /// Typed into (a search box): a native text field stands over it.
     let edit: Bool
+    /// It holds a password: the field over it is a secure one. Its value is
+    /// not given: nil while there is one, empty when there is none.
+    let secret: Bool
     let value: String?
     /// Slid: a view over it shows the look's highlight and passes the drag on.
     let slide: Bool
     /// The UI's accent, 0–1 sRGB: the highlight's colour.
     let tint: [Double]
+    /// What it is painted on, and a slider's thumb (Pieces.swift).
+    let fill: [Double]?
+    let thumb: [CGFloat]?
+    /// What of it is raised: its box and corners.
+    let solid: [CGFloat]?
+    /// A slider's rail: its bars, `[x, y, w, h, r, g, b, a]`, track first.
+    let rails: [[CGFloat]]?
+    /// A knob's turn, radians right of up.
+    let dial: Double?
     var id: String { key }
     var color: Color { Color(.sRGB, red: tint[0], green: tint[1], blue: tint[2]) }
 }
@@ -797,6 +1089,8 @@ let uiLog = ProcessInfo.processInfo.environment["THREERS_UI_LOG"] != nil
     private static func pixels(for side: Float) -> Int { side > 0.8 ? 2048 : 1024 }
     /// The app's meshes, lights and environment as entities (Reality.swift).
     private(set) lazy var scene = RealityScene(vol: vol, model: model)
+    /// The parts of the UI that stand by themselves (Pieces.swift).
+    let pieces = Pieces()
     /// What each text control's native field holds, by key.
     @Published var texts: [String: String] = [:]
     /// Each surface's image (nil: not shown) and its controls.
@@ -804,6 +1098,8 @@ let uiLog = ProcessInfo.processInfo.environment["THREERS_UI_LOG"] != nil
     @Published var controls: [[NativeControl]] = [[], []]
     /// Each surface's size now (image pixels): its window's.
     @Published var uiSizes = uiDefaultSizes
+    /// The drag box is a sheet at the back.
+    private var thinHit = false
     /// The volume's side now (metres): its window's, resized.
     private(set) var side = volumeSide
     var onRequest: (UInt32) -> Void = { _ in }
@@ -834,7 +1130,11 @@ let uiLog = ProcessInfo.processInfo.environment["THREERS_UI_LOG"] != nil
         uiSizes[which] = px
     }
 
+    private var loaded = false
     func load() async {
+        // (the volume's view, and the space the pieces stand in)
+        if loaded { return }
+        loaded = true
         await scene.load()
         // threers' picture on a quad, unless the app asks for entities
         // (`VolumeDrawing::Entities`): RealityKit then draws each mesh
@@ -925,8 +1225,23 @@ let uiLog = ProcessInfo.processInfo.environment["THREERS_UI_LOG"] != nil
         dragging = false
     }
 
+    private var ticked = 0.0
     func tick() {
+        // once a frame, though the volume and the pieces' space both ask
+        let now = CACurrentMediaTime()
+        guard now - ticked > 0.004 else { return }
+        ticked = now
+        sendLegibility()
         let n = threers_vol_frame(vol)
+        pieces.sync(scene)
+        // what drags the model lands behind the pieces among it, not before
+        if pieces.inVolume != thinHit {
+            thinHit = pieces.inVolume
+            let s = volumeSide * 0.95
+            hit.components.set(CollisionComponent(shapes: [thinHit
+                ? .generateBox(size: SIMD3(s, s, 0.01)).offsetBy(translation: SIMD3(0, 0, -s / 2))
+                : .generateBox(size: SIMD3(repeating: s))]))
+        }
         var r = [Float](repeating: 0, count: 17)
         threers_vol_root(vol, &r)
         r.withUnsafeBufferPointer { model.transform = Transform(matrix: rkMatrix($0.baseAddress!)) }
@@ -959,7 +1274,8 @@ let uiLog = ProcessInfo.processInfo.environment["THREERS_UI_LOG"] != nil
                let list = try? JSONDecoder().decode([NativeControl].self, from: Data(bytes: p, count: len)) {
                 controls[i] = list
                 // a text the UI changed itself (its clear button): the field follows
-                for c in list where c.edit { texts[c.key] = c.value ?? "" }
+                // (a password there is stays as it was typed)
+                for c in list where c.edit && (!c.secret || c.value != nil) { texts[c.key] = c.value ?? "" }
             }
         }
         let req = threers_ios_take_request()
@@ -1000,7 +1316,15 @@ struct SurfaceImage: View {
             // keyboard, the text sent back; the UI draws it (clear here)
             ForEach(model.controls[which].filter { $0.edit }) { c in
                 // a text area takes line breaks; a search box, one line
-                TextField(c.label, text: Binding(get: { model.texts[c.key] ?? "" }, set: { model.type(c, $0) }), axis: c.role == "textbox" ? .vertical : .horizontal)
+                // (a password's is a secure one: hidden, not copied nor learnt)
+                let text = Binding(get: { model.texts[c.key] ?? "" }, set: { model.type(c, $0) })
+                Group {
+                    if c.secret {
+                        SecureField(c.label, text: text, prompt: Text(verbatim: "")).textContentType(.password)
+                    } else {
+                        TextField(c.label, text: text, prompt: Text(verbatim: ""), axis: c.role == "textbox" ? .vertical : .horizontal)
+                    }
+                }
                     .foregroundStyle(.clear)
                     .tint(.clear)
                     .textFieldStyle(.plain)
@@ -1102,6 +1426,7 @@ struct Volume: View {
             content.add(model.root)
             content.add(model.quad)
             content.add(model.hit)
+            content.add(model.pieces.volume)
             updates = content.subscribe(to: SceneEvents.Update.self) { _ in model.tick() }
         }
         // a tap: what is there (a soma, a region); two quickly, fly to it
@@ -1188,6 +1513,10 @@ struct ThreersApp: App {
             }
         }
         .immersionStyle(selection: $style, in: .mixed, .full)
+        #if !THREERS_WINDOW
+        ImmersiveSpace(id: "pieces") { PieceSpace() }
+            .immersionStyle(selection: .constant(.mixed), in: .mixed)
+        #endif
         ImmersiveSpace(id: "backdrop") { Backdrop() }
             .immersionStyle(selection: .constant(.mixed), in: .mixed)
             .immersiveEnvironmentBehavior(.coexist)
@@ -1297,12 +1626,59 @@ final class ControlField: UITextField {
     }
 
     required init?(coder: NSCoder) { fatalError("made in code") }
+
+    /// The lines before the one in the field (which holds only one: a line
+    /// break put in it is a space).
+    private var before = ""
+
+    /// All of the control's text.
+    var whole: String {
+        get { before + (text ?? "") }
+        set {
+            guard newValue != whole else { return }
+            let line = multiline ? newValue.lastIndex(of: "\n").map { newValue.index(after: $0) } : nil
+            before = String(newValue[..<(line ?? newValue.startIndex)])
+            text = String(newValue[(line ?? newValue.startIndex)...])
+        }
+    }
+
+    /// Nothing left in the field: into the line before; nothing there
+    /// either, the app's (what its control holds may be more).
+    override func deleteBackward() {
+        guard multiline, (text ?? "").isEmpty, let app = superview as? Host else { return super.deleteBackward() }
+        if before.isEmpty {
+            app.pressBackspace()
+        } else {
+            whole = String(before.dropLast())
+            app.typed(self)
+        }
+    }
+
+    /// A password's: the system hides it, and does not copy, suggest or learn
+    /// it. Emptied before it stops being one.
+    func keepSecret(_ secret: Bool) {
+        guard isSecureTextEntry != secret else { return }
+        if !secret { text = "" }
+        isSecureTextEntry = secret
+        textContentType = secret ? .password : nil
+    }
+
+    /// Its editing's shortcuts, the app's where it keeps them (the rest are
+    /// `Host.keyCommands`).
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let app = superview as? Host
+        let taken = presses.filter { p in
+            guard let key = p.key, key.modifierFlags.contains(.command), threers_ios_chords_kept() else { return false }
+            return ["a", "c", "v", "x", "z"].contains(key.charactersIgnoringModifiers.lowercased()) && app?.press(key) == true
+        }
+        if taken.isEmpty { super.pressesBegan(presses, with: event) }
+    }
 }
 
 extension Host: UITextFieldDelegate {
     func textFieldShouldReturn(_ f: UITextField) -> Bool {
         if let c = f as? ControlField, c.multiline {
-            c.text = (c.text ?? "") + "\n"
+            c.whole += "\n"
             typed(c)
             return false
         }
@@ -1333,5 +1709,14 @@ final class RenderTarget: NSObject {
             return
         }
         host.renderFrame(l, gen)
+    }
+}
+
+extension Host: UIGestureRecognizerDelegate {
+    func gestureRecognizer(
+        _ g: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool {
+        true
     }
 }

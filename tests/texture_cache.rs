@@ -124,3 +124,38 @@ fn a_preloaded_texture_outlives_the_retention() {
     hr.renderer().clear_texture_cache();
     assert_eq!(hr.renderer().cached_texture_count(), 0);
 }
+
+#[test]
+fn a_new_texture_leaves_the_other_materials_bind_groups() {
+    let Some(mut hr) = renderer() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    // Ten cubes that stay as they are, and one with a new texture each frame.
+    let (mut scene, camera, mut cube) = scene_with(texture(0));
+    for shade in 0..10 {
+        let material = StandardMaterial::new(Color::WHITE).with_map(texture(shade * 20));
+        scene.add(Object3D::mesh(Mesh::new(
+            BoxGeometry::new(1.0, 1.0, 1.0),
+            material.into(),
+        )));
+    }
+    hr.render(&mut scene, &camera);
+    let before = hr.renderer().texture_bind_groups_built();
+    // Past the retention, so that textures are leaving as well as arriving.
+    let frames = threers::renderer::DEFAULT_CACHE_RETENTION + 40;
+    for frame in 0..frames {
+        scene.arena.delete(cube);
+        let material = StandardMaterial::new(Color::WHITE).with_map(texture(frame as u8));
+        cube = scene.add(Object3D::mesh(Mesh::new(
+            BoxGeometry::new(1.0, 1.0, 1.0),
+            material.into(),
+        )));
+        hr.render(&mut scene, &camera);
+    }
+    let built = hr.renderer().texture_bind_groups_built() - before;
+    assert!(
+        built <= frames,
+        "{built} bind groups made for {frames} new textures"
+    );
+}

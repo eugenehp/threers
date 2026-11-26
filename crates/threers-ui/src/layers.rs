@@ -256,7 +256,12 @@ impl Ui {
                     ..r
                 })
             };
-            let Some(mut want) = place(a.corner, a.to, (false, false)) else {
+            // A menu hangs from its button's start, whichever side that is.
+            let rtl = match a.to {
+                AnchorTo::Node(n, _) if self.contains(n) => self.nodes[n.0].rtl,
+                _ => self.nodes[id.0].rtl,
+            };
+            let Some(mut want) = place(a.corner, a.to, (rtl, false)) else {
                 continue;
             };
             let over_x = |q: Rect| q.x < 0.0 || q.x + q.width > vw;
@@ -264,7 +269,7 @@ impl Ui {
             if a.fit == Fit::Flip {
                 let (fx, fy) = (over_x(want), over_y(want));
                 if (fx || fy)
-                    && let Some(flipped) = place(a.corner, a.to, (fx, fy))
+                    && let Some(flipped) = place(a.corner, a.to, (fx != rtl, fy))
                 {
                     // Keep a flip only on an axis where it helps.
                     if fx && !over_x(flipped) {

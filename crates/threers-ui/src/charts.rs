@@ -20,6 +20,7 @@
 use std::ops::RangeInclusive;
 
 use crate::environment::Token;
+use crate::i18n::{word, Word};
 use crate::style::Rgba;
 use crate::tree::{NodeId, Ui};
 use crate::{style, Length, Role, Semantics};
@@ -282,7 +283,7 @@ pub fn gauge_styled(
             parts.readout = Some(ui.children(value)[0]);
             if kind == GaugeKind::Linear {
                 let track = ui.add_box(node, style! { position: relative; height: 8px; border-radius: 4px; overflow: hidden; });
-                ui.token_style(track, &[("background", Token::Separator)]);
+                crate::pickers::outline_rail(ui, track);
                 let fill = ui.add_box(track, style! { position: absolute; left: 0px; top: 0px; height: 8px; width: 0%; border-radius: 4px; overflow: hidden; });
                 parts.fill = fill;
                 match &style.tint {
@@ -295,7 +296,7 @@ pub fn gauge_styled(
                         });
                         parts.inner = Some(inner);
                     }
-                    GaugeTint::Accent => ui.token_style(fill, &[("background", Token::Accent)]),
+                    GaugeTint::Accent => ui.token_style(fill, &[("background", Token::AccentText)]),
                     _ => {}
                 }
             } else {
@@ -313,12 +314,12 @@ pub fn gauge_styled(
                             s.gradient_shape = crate::GradientShape::Linear(90.0);
                         });
                     }
-                    _ => ui.token_style(bar, &[("background", Token::Separator)]),
+                    _ => crate::pickers::outline_rail(ui, bar),
                 }
                 let knob = ui.add_box(track, style! { position: absolute; top: 0px; left: 0%; margin-left: -8px; width: 10px; height: 10px; border: 3px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.35); });
                 ui.token_style(knob, &[("background", Token::Surface)]);
                 if style.tint == GaugeTint::Accent {
-                    ui.token_style(knob, &[("border-color", Token::Accent)]);
+                    ui.token_style(knob, &[("border-color", Token::AccentText)]);
                 }
                 parts.fill = knob;
                 parts.knob = Some(knob);
@@ -364,15 +365,22 @@ pub fn gauge_styled(
             } else {
                 (DIAL_START, DIAL_SWEEP)
             };
-            let track = ui.add_path(
-                dial,
-                whole(),
-                arc(start, sweep, 1.0),
-                [0.0, 0.0, 100.0, 100.0],
-                Some(10.0),
-                false,
-            );
-            ui.token_style(track, &[("color", Token::Separator)]);
+            let px = 100.0 / size;
+            let (edge, middle) = crate::pickers::ring_strokes(10.0 / px);
+            // (its ends are round, so the middle leaves their outline too)
+            for (width, token) in [(Some(edge), Token::Track), (middle, Token::Surface)] {
+                let Some(width) = width else { continue };
+                let rail = ui.add_path(
+                    dial,
+                    whole(),
+                    arc(start, sweep, 1.0),
+                    [0.0, 0.0, 100.0, 100.0],
+                    Some(width * px),
+                    false,
+                );
+                ui.token_style(rail, &[("color", token)]);
+                ui.semantics_mut(rail).hidden = true;
+            }
             let fill = ui.add_path(
                 dial,
                 whole(),
@@ -382,7 +390,7 @@ pub fn gauge_styled(
                 false,
             );
             if style.tint == GaugeTint::Accent {
-                ui.token_style(fill, &[("color", Token::Accent)]);
+                ui.token_style(fill, &[("color", Token::AccentText)]);
             }
             parts.fill = fill;
             // Marks inside the ring, from end to end.
@@ -482,7 +490,7 @@ pub fn gauge_styled(
                     Token::SecondaryText,
                 );
             }
-            for n in [track, fill, mid] {
+            for n in [fill, mid] {
                 ui.semantics_mut(n).hidden = true;
             }
             // The range's ends in the gap, under where the ring starts and stops.
@@ -707,13 +715,13 @@ fn summary(label: &str, points: &[(String, f32)]) -> String {
     let max = points.iter().max_by(|a, b| a.1.total_cmp(&b.1));
     let min = points.iter().min_by(|a, b| a.1.total_cmp(&b.1));
     match (max, min) {
-        (Some(hi), Some(lo)) => format!(
-            "{label}: {}. Highest {}, lowest {}.",
-            list.join(", "),
-            hi.1,
-            lo.1
-        ),
-        _ => format!("{label}: no values."),
+        (Some(hi), Some(lo)) => {
+            let range = word(Word::ChartRange)
+                .replace("{max}", &hi.1.to_string())
+                .replace("{min}", &lo.1.to_string());
+            format!("{label}: {}. {range}.", list.join(", "))
+        }
+        _ => format!("{label}: {}.", word(Word::NoValues)),
     }
 }
 
@@ -856,12 +864,28 @@ pub fn line_chart(
     values: &[f32],
     size: (f32, f32),
 ) -> NodeId {
+    line_chart_between(ui, parent, label, values, size, None)
+}
+
+/// A [`line_chart`] from the lowest of `range` at its bottom to the highest
+/// at its top (else its own values'): two on one scale can be compared.
+pub fn line_chart_between(
+    ui: &mut Ui,
+    parent: NodeId,
+    label: &str,
+    values: &[f32],
+    size: (f32, f32),
+    range: Option<(f32, f32)>,
+) -> NodeId {
     let (w, h) = size;
     let node = ui.add_box(parent, style! { position: relative; flex-shrink: 0; });
     ui.update_style(node, |s| {
+        // Its line is drawn left to right, whichever way words read.
+        s.direction = Some(crate::environment::LayoutDirection::LeftToRight);
         s.width = Length::Px(w);
         s.height = Length::Px(h);
     });
+    let thinned = thin(values, (w as usize).max(2));
     let points: Vec<(String, f32)> = values.iter().map(|v| (String::new(), *v)).collect();
     ui.set_semantics(
         node,
@@ -870,9 +894,12 @@ pub fn line_chart(
     if values.is_empty() {
         return node;
     }
+    let values = &thinned[..];
     let (lo, hi) = values
         .iter()
-        .fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+        .fold(range.unwrap_or((f32::MAX, f32::MIN)), |(a, b), &v| (a.min(v), b.max(v)));
+    // (one that never moved is drawn across the middle)
+    let (lo, hi) = if hi - lo < 1e-6 { (lo - 1.0, hi + 1.0) } else { (lo, hi) };
     let span = (hi - lo).max(1e-6);
     // In a view box the size of the chart, a little in from its edges.
     let pad = 2.0;
@@ -924,14 +951,43 @@ pub fn line_chart(
     node
 }
 
+/// At most `most` of `values`, in order: of each stretch of them its lowest
+/// and its highest, so no peak is lost (more than a chart has pixels cannot
+/// be seen, and takes long to draw).
+fn thin(values: &[f32], most: usize) -> Vec<f32> {
+    if values.len() <= most {
+        return values.to_vec();
+    }
+    let stretches = (most / 2).max(1);
+    let mut out = Vec::with_capacity(stretches * 2);
+    for k in 0..stretches {
+        let (a, b) = (k * values.len() / stretches, (k + 1) * values.len() / stretches);
+        let part = &values[a..b];
+        let by = |x: &(usize, &f32), y: &(usize, &f32)| x.1.total_cmp(y.1);
+        let lo = part.iter().enumerate().min_by(by);
+        let hi = part.iter().enumerate().max_by(by);
+        if let (Some((i, lo)), Some((j, hi))) = (lo, hi) {
+            let (first, then) = if i <= j { (*lo, *hi) } else { (*hi, *lo) };
+            out.extend([first, then]);
+        }
+    }
+    // The last is the latest.
+    if let (Some(last), Some(v)) = (out.last_mut(), values.last()) {
+        *last = *v;
+    }
+    out
+}
+
 /// SVG path data for a curve through `points` (in order along x): cubic
 /// pieces with slopes that keep it monotone between points (Fritsch and
 /// Carlson), so it never swings past a peak or below a trough the data do
-/// not have. One point is a point; two, a line.
+/// not have. One point is a point; two, a line; many, straight pieces.
 fn smooth_line(points: &[(f32, f32)]) -> String {
     let n = points.len();
     let mut d = format!("M{:.2} {:.2}", points[0].0, points[0].1);
-    if n < 3 {
+    // (a crowded one's pieces are a pixel or two each: curved, they look the
+    // same and are drawn in many times the pieces)
+    if n < 3 || n > 64 {
         for p in &points[1..] {
             d.push_str(&format!(" L{:.2} {:.2}", p.0, p.1));
         }
@@ -984,6 +1040,17 @@ fn smooth_line(points: &[(f32, f32)]) -> String {
 mod tests {
     use super::*;
     use crate::FixedWidthText;
+
+    #[test]
+    fn a_long_line_is_thinned_and_keeps_its_peaks() {
+        let mut v: Vec<f32> = (0..50_000).map(|i| (i % 7) as f32).collect();
+        v[31_234] = 900.0;
+        v[123] = -50.0;
+        let t = super::thin(&v, 300);
+        assert!(t.len() <= 300 && t.contains(&900.0) && t.contains(&-50.0));
+        assert_eq!(t.last(), v.last());
+        assert_eq!(super::thin(&v[..10], 300), v[..10]);
+    }
 
     #[test]
     fn a_smooth_line_stays_within_its_data() {

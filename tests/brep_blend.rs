@@ -569,10 +569,9 @@ fn a_blend_too_large_for_its_edge_is_declined() {
     assert!(thick.chamfer(&edge, 1.5, TOL).is_ok());
 }
 
-#[test]
-fn an_edge_ending_on_a_curved_face_is_declined() {
-    // Round the four upright edges of a box, then ask for the top: each top
-    // edge now ends on a cylinder, where the blend would have to be a torus.
+/// A box with its four upright edges rounded, and those of its top: four
+/// straight runs and four arcs, tangent all the way round.
+fn rounded_slab(corner: f64) -> (Body, Vec<usize>) {
     let slab = Body::cuboid([4.0, 3.0, 2.0]);
     let upright = edges_where(&slab, |_| true)
         .into_iter()
@@ -586,19 +585,119 @@ fn an_edge_ending_on_a_curved_face_is_declined() {
         })
         .collect::<Vec<_>>();
     assert_eq!(upright.len(), 4);
-    let r = 0.5;
-    let round = slab.fillet(&upright, r, TOL).unwrap();
-    assert_solid(&round, 24.0 - 4.0 * (1.0 - PI / 4.0) * r * r * 2.0, 1e-4);
-
+    let round = slab.fillet(&upright, corner, TOL).unwrap();
+    assert_solid(
+        &round,
+        24.0 - 4.0 * (1.0 - PI / 4.0) * corner * corner * 2.0,
+        1e-4,
+    );
     let top = edges_where(&round, |p| p[2] > 0.0);
     assert_eq!(top.len(), 8, "four straight runs and four arcs");
-    let got = round.fillet(&top, 0.2, TOL);
+    (round, top)
+}
+
+#[test]
+fn a_rounded_boxs_top_is_filleted_all_the_way_round() {
+    // Each top edge ends on a cylinder, so no edge can be rounded by itself;
+    // together they are one ring, cylinders along the runs and a torus at
+    // each corner.
+    let (corner, r) = (0.5, 0.2);
+    let (round, top) = rounded_slab(corner);
+    let got = round.fillet(&top, r, TOL).unwrap();
+    // What is taken off is the same section all the way: by Pappus, round the
+    // corners' full turn as far as its centroid travels.
+    let section = r * r * (1.0 - PI / 4.0);
+    let from_wall = (r.powi(3) / 2.0 - PI * r * r / 4.0 * (r - 4.0 * r / (3.0 * PI))) / section;
+    let runs = 2.0 * (4.0 - 2.0 * corner) + 2.0 * (3.0 - 2.0 * corner);
+    let off = section * (runs + 2.0 * PI * (corner - from_wall));
+    let before = 24.0 - 4.0 * (1.0 - PI / 4.0) * corner * corner * 2.0;
+    assert_solid(&got, before - off, 5e-5);
+    let kinds = |k: &str| {
+        got.faces()
+            .iter()
+            .filter(|f| got.surfaces()[f.surface].kind() == k)
+            .count()
+    };
+    assert_eq!(
+        (kinds("torus"), kinds("cylinder"), kinds("plane")),
+        (4, 8, 6)
+    );
+}
+
+#[test]
+fn joints_between_tangent_faces_are_refined() {
+    // Where a corner's torus runs out into the top, a chord of the joint lies
+    // in the top and leaves the torus only at second order: nothing of its
+    // distance from either says how far it is off the arc.
+    let (round, top) = rounded_slab(0.5);
+    let mut got = round.fillet(&top, 0.2, TOL).unwrap();
+    let tolerance = 1e-5;
+    got.refine_edges(tolerance);
+    let mut arcs = 0;
+    for e in got.edges() {
+        let kinds = [e.surfaces.0, e.surfaces.1].map(|s| got.surfaces()[s].kind());
+        let points: Vec<_> = e.vertices.iter().map(|&v| got.vertices()[v]).collect();
+        let on_top = points.iter().all(|p| (p[2] - 1.0).abs() < 1e-9);
+        if !(kinds.contains(&"torus") && kinds.contains(&"plane") && on_top) {
+            continue;
+        }
+        arcs += 1;
+        // Round the corner at (±1.5, ±1.0), 0.3 out.
+        let (cx, cy) = (1.5f64.copysign(points[0][0]), 1.0f64.copysign(points[0][1]));
+        for w in points.windows(2) {
+            let m = [
+                (w[0][0] + w[1][0]) / 2.0 - cx,
+                (w[0][1] + w[1][1]) / 2.0 - cy,
+            ];
+            let sag = 0.3 - m[0].hypot(m[1]);
+            assert!(sag <= tolerance * 1.01, "a chord {sag} off its arc");
+        }
+    }
+    assert_eq!(arcs, 4);
+}
+
+#[test]
+fn any_edge_of_a_smooth_ring_blends_all_of_it() {
+    // As a blend that follows tangent edges does: OpenCASCADE makes the same
+    // eighteen faces of one run, of all but one edge, and of them all.
+    let (round, top) = rounded_slab(0.5);
+    let straight = top
+        .iter()
+        .copied()
+        .find(|&e| round.edges()[e].vertices.len() == 2)
+        .expect("a straight run");
+    let whole = volume(&round.fillet(&top, 0.2, TOL).unwrap(), TOL);
+    for part in [&[straight][..], &top[1..]] {
+        let got = round.fillet(part, 0.2, TOL).unwrap();
+        assert_eq!(got.faces().len(), 18);
+        assert_solid(&got, whole, 1e-9);
+    }
+}
+
+#[test]
+fn an_edge_ending_on_a_curved_face_is_declined() {
+    // A corner bitten out of a box: the top edges beside it end square on the
+    // bite's round wall, which the blend would have to be trimmed by.
+    let slab = Body::cuboid([4.0, 3.0, 2.0]);
+    let bite = Body::cylinder([2.0, 1.5, -2.0], [0.0, 0.0, 1.0], 0.8, 4.0);
+    let bitten = slab.boolean(&bite, BooleanOp::Difference, TOL).unwrap();
+    let beside = edges_where(&bitten, |p| p[2] > 0.99 && (p[0] - 2.0).abs() < 1e-6);
+    assert_eq!(beside.len(), 1, "what is left of the top's x = 2 side");
+    let got = bitten.fillet(&beside, 0.2, TOL);
     assert!(
         matches!(
             got,
             Err(BlendDeclined::UnsupportedEdge { .. } | BlendDeclined::UnsupportedVertex { .. })
         ),
         "{got:?}"
+    );
+
+    // And a ring wider than its corners would turn inside out there.
+    let (round, top) = rounded_slab(0.5);
+    let wide = round.fillet(&top, 0.6, TOL);
+    assert!(
+        matches!(wide, Err(BlendDeclined::TooLarge { .. })),
+        "{wide:?}"
     );
 }
 

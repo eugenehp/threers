@@ -35,11 +35,13 @@ pub mod knot;
 pub mod surface;
 pub mod tessellate;
 
-pub use basis::{basis_funcs, ders_basis_funcs, find_span, uniform_clamped_knots};
+pub use basis::{
+    basis_funcs, ders_basis_funcs, ders_basis_funcs_fixed, find_span, uniform_clamped_knots,
+};
 pub use construct::{loft, loft_with_params, sweep};
 pub use curve::NurbsCurve;
-pub use knot::{compact, remove_knot};
-pub use surface::NurbsSurface;
+pub use knot::{compact, remove_knot, reseam_u, reseam_v};
+pub use surface::{AlongU, AtU, NurbsSurface};
 pub use tessellate::{tessellate_curve, tessellate_surface, TessellationOptions};
 
 /// A point or vector in f64. Deliberately the same shape as `exact_csg::V3`, so

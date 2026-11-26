@@ -50,6 +50,11 @@ pub struct Settings {
     /// before the face-splitting boolean, which then takes only what the fuse
     /// declines. Off, every boolean takes the older path.
     pub general_fuse: bool,
+    /// Whether the general fuse leaves the pieces of a face that closes on
+    /// itself apart at its seam, as OpenCASCADE's General Fuse does: one that
+    /// goes all the way round keeps the seam, two that meet across it are two
+    /// faces. Off, they are joined into one.
+    pub split_at_seams: bool,
 }
 
 impl Default for Settings {
@@ -59,6 +64,7 @@ impl Default for Settings {
             max_refine_depth: 10,
             chamfer_corner: ChamferCorner::Point,
             general_fuse: true,
+            split_at_seams: false,
         }
     }
 }

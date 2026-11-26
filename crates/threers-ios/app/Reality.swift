@@ -524,6 +524,9 @@ struct UiControl: Decodable, Identifiable {
     /// Typed into (a search box, a text area): a native text field stands
     /// over it, for the on-screen keyboard.
     let edit: Bool
+    /// It holds a password: the field over it is a secure one. Its value is
+    /// not given: nil while there is one, empty when there is none.
+    let secret: Bool
     let value: String?
     var id: String { key }
 }

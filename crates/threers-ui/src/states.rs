@@ -79,6 +79,9 @@ pub(crate) struct StateStyles {
     pub appearance: Vec<(Appearance, Declarations)>,
     /// Colours by purpose (see [`Ui::token_style`]).
     pub tokens: Vec<(String, super::environment::Token)>,
+    /// What its background token is painted as here (see
+    /// [`Ui::set_fill_in`](crate::Ui::set_fill_in)).
+    pub fill: Option<super::fill::Fill>,
     /// Seconds colours, opacity and 3D transforms take to move to a
     /// state's.
     pub transition: f32,
@@ -450,8 +453,12 @@ impl Ui {
         let mut style = states.base.clone()?;
         let mut transform = states.base_transform;
         let i = &self.interaction;
+        let appearance = self.appearance_of(id);
         let mut apply = |s: &mut Style, d: &Declarations| {
             for (name, value) in d {
+                // `var(--token)` and `color-mix(…)`: the theme's colours now.
+                let value =
+                    &*super::environment::resolve_colors(value, |t| self.token_in(appearance, t));
                 match transform.as_mut() {
                     Some(t) if super::depth::is_property(name) => {
                         super::depth::apply_property(t, name, value);
@@ -462,7 +469,6 @@ impl Ui {
         };
         // The appearance first (its own part's: see `theme`): states go
         // over it.
-        let appearance = self.appearance_of(id);
         for (a, d) in &states.appearance {
             if *a == appearance {
                 apply(&mut style, d);
@@ -474,6 +480,11 @@ impl Ui {
                 name,
                 &super::environment::css_color(self.token_in(appearance, *token)),
             );
+            if name == "background"
+                && let Some(fill) = states.fill.as_ref().or_else(|| self.token_fill(*token))
+            {
+                self.apply_fill(&mut style, fill, appearance, *token);
+            }
         }
         if i.hovered.contains(&id) {
             apply(&mut style, &states.hover);

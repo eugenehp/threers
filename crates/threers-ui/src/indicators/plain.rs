@@ -136,14 +136,14 @@ pub fn progress_view(
                 s.border_radius = Length::Px(r);
                 s.clip = true;
             });
-            ui.token_style(track, &[("background", Token::Separator)]);
+            crate::pickers::outline_rail(ui, track);
             ui.semantics_mut(track).hidden = true;
             let fill = ui.add_box(
                 track,
                 style! { position: absolute; top: 0px; height: 100%; },
             );
             ui.update_style(fill, |s| s.border_radius = Length::Px(r));
-            tint(ui, fill, "background", Token::Accent);
+            tint(ui, fill, "background", Token::AccentText);
             vec![fill]
         }
         PlainKind::Circular => {
@@ -153,15 +153,20 @@ pub fn progress_view(
             });
             let stroke = 100.0 * style.stroke / style.size;
             let r = 50.0 - stroke * 0.5;
-            let track = ui.add_path(
-                node,
-                whole(),
-                arc(r, 0.0, 1.0),
-                [0.0, 0.0, 100.0, 100.0],
-                Some(stroke),
-                false,
-            );
-            ui.token_style(track, &[("color", Token::Separator)]);
+            let (edge, middle) = crate::pickers::ring_strokes(style.stroke);
+            for (width, token) in [(Some(edge), Token::Track), (middle, Token::Surface)] {
+                let Some(width) = width else { continue };
+                let rail = ui.add_path(
+                    node,
+                    whole(),
+                    arc(r, 0.0, 1.0),
+                    [0.0, 0.0, 100.0, 100.0],
+                    Some(100.0 * width / style.size),
+                    false,
+                );
+                ui.token_style(rail, &[("color", token)]);
+                ui.semantics_mut(rail).hidden = true;
+            }
             let fill = ui.add_path(
                 node,
                 whole(),
@@ -170,7 +175,7 @@ pub fn progress_view(
                 Some(stroke),
                 false,
             );
-            tint(ui, fill, "color", Token::Accent);
+            tint(ui, fill, "color", Token::AccentText);
             vec![fill]
         }
         PlainKind::Spokes => {

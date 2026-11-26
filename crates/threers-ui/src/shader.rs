@@ -472,6 +472,9 @@ impl From<[f32; 4]> for ArgValue {
 /// in front: `ui_shader! { use Noise, Color; fn … }`.
 #[macro_export]
 macro_rules! ui_shader {
+    () => {
+        ::core::compile_error!("ui_shader! takes WGSL, its last function the effect: `ui_shader! { fn effect(...) -> vec4<f32> { ... } }`")
+    };
     (use $($lib:ident),+ ; $($wgsl:tt)*) => {
         $crate::shader::Shader::with_libraries(&[$($crate::shader_lib::Library::$lib),+], ::core::stringify!($($wgsl)*))
     };

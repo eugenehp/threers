@@ -26,6 +26,8 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 mod english;
+pub mod hyphenate;
+pub mod segment;
 
 /// The English word list, front-coded (see [`front_code`]).
 static EN: &[u8] = include_bytes!("../data/en.words");

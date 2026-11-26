@@ -397,6 +397,17 @@ fragment float4 fs_overlay(
     return float4(c.rgb * c.a, c.a);
 }
 
+/// `fs_overlay` from a texture smaller than the frame (a scene drawn at a
+/// share of its pixels while it moves): filtered up to fill it.
+fragment float4 fs_overlay_scaled(
+    FullscreenOut in [[stage_in]],
+    texture2d<float, access::sample> src [[texture(0)]])
+{
+    constexpr sampler s(coord::normalized, filter::linear, address::clamp_to_edge);
+    const float4 c = src.sample(s, in.uv);
+    return float4(c.rgb * c.a, c.a);
+}
+
 // ------------------------------------------------------------------ video YUV
 
 // A decoder's YUV planes into a video texture: the twin of `fs` in

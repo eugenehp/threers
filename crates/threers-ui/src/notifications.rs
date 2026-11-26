@@ -119,39 +119,43 @@ impl<S: 'static> Notifications<S> {
             self.stack,
             style! {
                 display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 10px; pointer-events: auto;
-                background: #22262f; border: 1px solid #3a4150; color: #e5e7eb; box-shadow: 0 8px 22px rgba(0,0,0,0.45);
+                border: 1px solid; box-shadow: 0 8px 22px rgba(0,0,0,0.45);
             },
         );
-        // The border's colour is the tone's (below).
+        let tone = match notice.tone {
+            Tone::Info => Token::Accent,
+            Tone::Success => Token::Success,
+            Tone::Error => Token::Destructive,
+        };
         ui.token_style(
             card,
-            &[("background", Token::Raised), ("color", Token::Text)],
+            &[
+                ("background", Token::Raised),
+                ("color", Token::Text),
+                ("border-color", tone),
+            ],
         );
         ui.appearance_style(
             card,
             Appearance::Light,
             "box-shadow: 0 8px 22px rgba(0,0,0,0.15)",
         );
-        let accent = match notice.tone {
-            Tone::Info => [0.145, 0.388, 0.922, 1.0],
-            Tone::Success => [0.06, 0.73, 0.51, 1.0],
-            Tone::Error => [0.94, 0.27, 0.27, 1.0],
-        };
         // Through the base style: the card has a light one over it.
-        ui.update_style(card, |s| {
-            s.border.left = 3.0;
-            s.border_color = accent;
-        });
+        ui.update_style(card, |s| s.border.left = 3.0);
         let head = ui.add_box(
             card,
             style! { display: flex; align-items: center; gap: 8px; },
         );
         let title = ui.add_box(head, style! { font-weight: bold; flex-grow: 1; });
         ui.add_text(title, notice.title.clone());
-        let close = ui.add_box(head, style! { padding: 0 4px; cursor: pointer; });
+        let close = ui.add_box(head, style! { display: flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; border-radius: 6px; cursor: pointer; });
+        ui.hover_style(close, "background: var(--hover)");
         ui.token_style(close, &[("color", Token::SecondaryText)]);
         ui.add_text(close, "✕");
-        ui.set_semantics(close, Semantics::new(Role::Button).label("Close"));
+        ui.set_semantics(
+            close,
+            Semantics::new(Role::Button).label(crate::i18n::word(crate::i18n::Word::Close)),
+        );
         if !notice.body.is_empty() {
             let body = ui.add_box(card, style! { font-size: 12px; white-space: normal; });
             ui.token_style(body, &[("color", Token::SecondaryText)]);
@@ -175,13 +179,13 @@ impl<S: 'static> Notifications<S> {
             cx.stop_propagation();
         });
         if let Some(label) = notice.action {
-            let b = ui.add_box(card, style! { align-self: flex-start; padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; });
-            ui.token_style(
-                b,
-                &[("background", Token::Accent), ("color", Token::OnAccent)],
+            let b = crate::components::button(
+                ui,
+                card,
+                &label,
+                crate::components::ButtonKind::Primary,
             );
-            ui.add_text(b, label.clone());
-            ui.set_semantics(b, Semantics::new(Role::Button).label(label));
+            ui.apply(b, &crate::patch::Patch::css("align-self: flex-start"));
             let mut f = on_action;
             input.on_click(b, move |s, ui, _| {
                 if let Some(f) = &mut f {

@@ -682,6 +682,30 @@ impl Painter for CanvasPainter {
         c.restore();
     }
 
+    fn shadow_around(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        blur: f32,
+        color: Rgba,
+        hole: Rect,
+        hole_radius: f32,
+    ) {
+        // Everything but the hole: round it the other way about.
+        let c = self.ctx();
+        c.save();
+        let at = (hole.x as f64, hole.y as f64, hole.width as f64, hole.height as f64);
+        rounded_path(c, at, (hole_radius as f64, hole_radius as f64));
+        c.move_to(-1e5, -1e5);
+        c.line_to(-1e5, 1e5);
+        c.line_to(1e5, 1e5);
+        c.line_to(1e5, -1e5);
+        c.close_path();
+        c.clip();
+        self.shadow(rect, radius, blur, color);
+        self.ctx().restore();
+    }
+
     fn underline(&mut self, x: f32, y: f32, width: f32, thickness: f32, color: Rgba, wavy: bool) {
         self.before_shape();
         let c = self.ctx();
@@ -932,7 +956,14 @@ impl Painter for CanvasPainter {
         c.set_text_baseline("alphabetic");
         c.set_text_align("left");
         c.set_fill_style_str(&css(style.color));
-        if let [(_, _, shift)] = pieces[..] {
+        // Told which way the line reads: a canvas does not look.
+        let right_to_left = crate::bidi::has_rtl(text)
+            && crate::bidi::base(text, Default::default())
+                == crate::environment::LayoutDirection::RightToLeft;
+        if right_to_left {
+            let text = format!("\u{202b}{text}\u{202c}");
+            let _ = c.fill_text(&text, line.x as f64, baseline);
+        } else if let [(_, _, shift)] = pieces[..] {
             let _ = c.fill_text(text, line.x as f64 + shift, baseline);
         } else {
             // Each piece where the canvas would put it within the run, moved

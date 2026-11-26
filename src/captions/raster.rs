@@ -116,6 +116,13 @@ impl CaptionPainter {
         layout(&mut self.font, text, &self.style, max_width)
     }
 
+    /// [`measure`](Self::measure)'s width and height alone, without copying
+    /// the lines out of the cache.
+    pub fn measure_size(&mut self, text: &str, width: u32) -> (f32, f32) {
+        let max_width = self.wrap_width(width);
+        super::layout::size(&mut self.font, text, &self.style, max_width)
+    }
+
     /// Draw `text` into `frame` using the style's own placement.
     ///
     /// `frame` must be `width * height * 4` bytes of tightly-packed RGBA8.
@@ -837,7 +844,7 @@ fn transform_1d(f: &[f32]) -> Vec<f32> {
 /// dark text, black behind light). The blend stays linear, so this is the
 /// same on the CPU and through the GPU caption pass; a mid-grey colour has
 /// no contrasting background and is left alone.
-fn text_coverage_table(color: [u8; 4]) -> [u8; 256] {
+pub(crate) fn text_coverage_table(color: [u8; 4]) -> [u8; 256] {
     let mut table = [0u8; 256];
     let lin = [0, 1, 2].map(|c| srgb_to_linear(color[c]));
     let src_lin = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
@@ -874,21 +881,43 @@ fn blend_mask(
         return;
     }
     let table = text_coverage_table(color);
+    // (its light once, not at every pixel)
+    let light = [0, 1, 2].map(|c| srgb_to_linear(color[c]));
     for my in 0..mask_h as i32 {
         let y = oy + my;
         if y < 0 || y >= height as i32 {
             continue;
         }
-        for mx in 0..mask_w as i32 {
+        // the columns in the frame, and their row
+        let (from, to) = ((-ox).max(0), (width as i32 - ox).min(mask_w as i32));
+        if from >= to {
+            continue;
+        }
+        let row = &mask[my as usize * mask_w as usize..][..mask_w as usize];
+        for mx in from..to {
             let x = ox + mx;
-            if x < 0 || x >= width as i32 {
-                continue;
-            }
-            let coverage = table[mask[(my as u32 * mask_w + mx as u32) as usize] as usize];
+            let coverage = table[row[mx as usize] as usize];
             if coverage == 0 {
                 continue;
             }
             let alpha = (color[3] as u32 * coverage as u32) / 255;
+            let i = ((y as u32 * width + x as u32) * 4) as usize;
+            // Over what's opaque (a panel, nearly always), as `blend_pixel`
+            // does: the same arithmetic, its constant parts left out.
+            if let Some(px) = frame.get_mut(i..i + 4).filter(|px| px[3] == 255 && alpha > 0) {
+                if alpha == 255 {
+                    px[..3].copy_from_slice(&color[..3]);
+                } else {
+                    let sa = alpha as u8 as f32 / 255.0;
+                    let out_a = sa + 1.0 * (1.0 - sa);
+                    for c in 0..3 {
+                        let dst = srgb_to_linear(px[c]);
+                        px[c] = crate::overlay::srgb_encode((light[c] * sa + dst * (1.0 - sa)) / out_a);
+                    }
+                    px[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
+                }
+                continue;
+            }
             blend_pixel(frame, width, x as u32, y as u32, color, alpha as u8);
         }
     }
@@ -1487,6 +1516,25 @@ mod tests {
             edge_ink(0.3) < edge_ink(0.6),
             "and 0.6 should thicken it more"
         );
+    }
+
+    /// Text over what's opaque is mixed as pixel by pixel.
+    #[test]
+    fn a_mask_over_what_is_opaque_is_blended_as_pixels_are() {
+        let mask: Vec<u8> = (0..=255).collect();
+        for color in [[255, 255, 255, 255], [20, 90, 200, 255], [0, 0, 0, 180], [250, 10, 128, 7]] {
+            for under in [[0, 0, 0, 255], [255, 255, 255, 255], [13, 17, 23, 255], [200, 100, 50, 255], [9, 8, 7, 100]] {
+                let mut a: Vec<u8> = under.iter().copied().cycle().take(256 * 4).collect();
+                let mut b = a.clone();
+                blend_mask(&mut a, 256, 1, &mask, 256, 1, 0, 0, color);
+                let table = text_coverage_table(color);
+                for x in 0..256u32 {
+                    let alpha = (color[3] as u32 * table[x as usize] as u32) / 255;
+                    blend_pixel(&mut b, 256, x, 0, color, alpha as u8);
+                }
+                assert_eq!(a, b, "{color:?} over {under:?}");
+            }
+        }
     }
 
     #[test]

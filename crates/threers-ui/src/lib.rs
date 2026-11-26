@@ -52,7 +52,7 @@
 //!   animations and transitions, and `needs_frame` says when to draw.
 //! - **Layout, scrolling and text:** CSS Grid. [`scrolling`] has scroll
 //!   handles and draggable scrollbars. [`text_hit`] selects text with the
-//!   pointer.
+//!   pointer, [`range_drag`] changes a selection by its ends, in any content.
 //! - **Keymaps and focus:** [`keymap`] has context expressions and JSON
 //!   files. `Input::set_modal` traps focus in a dialog, and
 //!   `on_click_outside` closes popups.
@@ -98,10 +98,14 @@ pub mod components;
 pub mod content_transition;
 pub mod controls;
 pub mod css;
+pub mod mistake;
 pub mod damage;
 pub mod debug_overlay;
 pub mod depth;
 pub mod environment;
+pub mod bidi;
+pub mod fields;
+pub mod fill;
 pub mod fits;
 pub mod flicker;
 pub mod focus_state;
@@ -130,6 +134,7 @@ pub mod nav_stack;
 pub mod navigation;
 pub mod notifications;
 mod paint;
+pub mod number_stepper;
 pub mod palette;
 pub mod patch;
 pub mod pickers;
@@ -140,6 +145,7 @@ pub mod prompt;
 pub mod region;
 pub mod responsive;
 pub mod rich_text;
+pub mod rich_text_area;
 pub mod scene;
 pub mod scroll_snap;
 pub mod scroll_transition;
@@ -169,6 +175,8 @@ pub mod text_shortcuts;
 pub mod text_hit;
 #[cfg(feature = "text-touch")]
 pub mod text_touch;
+pub mod page_range;
+pub mod range_drag;
 pub mod theme;
 pub mod transform;
 pub mod transitions;
@@ -177,6 +185,7 @@ pub mod undo;
 pub mod view;
 pub mod virtual_keyboard;
 pub mod virtual_list;
+pub mod window_drag;
 
 pub use a11y::{contrast_ratio, AccessNode, ContrastIssue, Role, Semantics};
 pub use layout::{layout_unit, FixedWidthText, TextMeasure};

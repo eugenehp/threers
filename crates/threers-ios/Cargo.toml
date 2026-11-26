@@ -17,12 +17,12 @@ crate-type = ["rlib"]
 [dependencies]
 # the Metal renderer and the UI; `xr` for the frame an app sees (the head,
 # pointers, the room's panel), which is plain data
-threers = { path = "../..", version = "0.1.1", default-features = false, features = ["metal", "ui", "xr", "usd"] }
+threers = { path = "../..", version = "0.1.2", default-features = false, features = ["metal", "ui", "xr", "usd"] }
 objc2 = "0.6"
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes", "objc2"] }
 
 [target.'cfg(target_os = "visionos")'.dependencies]
-threers = { path = "../..", version = "0.1.1", default-features = false, features = ["metal", "ui", "xr", "usd", "visionos"] }
+threers = { path = "../..", version = "0.1.2", default-features = false, features = ["metal", "ui", "xr", "usd", "visionos"] }
 
 # The view driven for real on a Mac: CAMetalLayer is the same class there.
 [target.'cfg(target_os = "macos")'.dev-dependencies]

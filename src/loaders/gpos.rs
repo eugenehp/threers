@@ -44,12 +44,112 @@ enum PairTable {
 #[derive(Debug, Clone, Default)]
 pub struct GposKerning {
     lookups: Vec<Vec<PairTable>>,
+    /// Read from the font's bytes pair by pair instead; `lookups` is empty.
+    in_place: Option<std::sync::Arc<InPlace>>,
+}
+
+/// A font's `kern` lookups left where they are: reading them all is most of
+/// what an instance of a variable font costs beside its glyphs.
+#[derive(Debug)]
+struct InPlace {
+    bytes: std::sync::Arc<[u8]>,
+    /// Each lookup's pair-adjustment subtables.
+    lookups: Vec<Vec<usize>>,
+    /// The variation store, with its scalars at the font's location.
+    store: Option<(usize, Vec<f32>)>,
+}
+
+impl InPlace {
+    fn kern(&self, left: u16, right: u16) -> f32 {
+        let store = self
+            .store
+            .as_ref()
+            .map(|(off, scalars)| ItemVariationStore::with_scalars(&self.bytes, *off, scalars));
+        self.lookups
+            .iter()
+            .filter_map(|subs| {
+                subs.iter()
+                    .find_map(|&sub| pair_in_place(&self.bytes, sub, left, right, store.as_ref()))
+            })
+            .sum()
+    }
+}
+
+/// What the pair-adjustment subtable at `sub` gives a pair, or `None` where
+/// it leaves it to the next: [`pair_table`] and then
+/// [`GposKerning::kern`], for one pair.
+fn pair_in_place(
+    b: &[u8],
+    sub: usize,
+    left: u16,
+    right: u16,
+    store: Option<&ItemVariationStore>,
+) -> Option<f32> {
+    let covered = super::shape::gsub::coverage_index(b, sub + u16_at(b, sub + 2)? as usize, left)?;
+    let (vf1, vf2) = (u16_at(b, sub + 4)?, u16_at(b, sub + 6)?);
+    let rec = (vf1.count_ones() + vf2.count_ones()) as usize * 2;
+    match u16_at(b, sub)? {
+        1 => {
+            if covered >= u16_at(b, sub + 8)? {
+                return None;
+            }
+            let set = sub + u16_at(b, sub + 10 + 2 * covered as usize)? as usize;
+            let rec = 2 + rec;
+            // In order of the second glyph, as the format requires.
+            let (mut lo, mut hi) = (0, u16_at(b, set)? as usize);
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                let r = set + 2 + mid * rec;
+                match u16_at(b, r)?.cmp(&right) {
+                    std::cmp::Ordering::Less => lo = mid + 1,
+                    std::cmp::Ordering::Greater => hi = mid,
+                    std::cmp::Ordering::Equal => return x_advance(b, r + 2, vf1, set, store),
+                }
+            }
+            None
+        }
+        2 => {
+            let c1 = class_of(b, sub + u16_at(b, sub + 8)? as usize, left);
+            let c2 = class_of(b, sub + u16_at(b, sub + 10)? as usize, right);
+            let (c1n, c2n) = (u16_at(b, sub + 12)?, u16_at(b, sub + 14)?);
+            if c1 >= c1n || c2 >= c2n {
+                return Some(0.0);
+            }
+            let r = sub + 16 + (c1 as usize * c2n as usize + c2 as usize) * rec;
+            x_advance(b, r, vf1, sub, store)
+        }
+        _ => None,
+    }
+}
+
+/// [`parse`], leaving the pairs in `bytes` until they are asked for.
+/// `store` is the variation store's offset and its scalars.
+pub(crate) fn parse_in_place(
+    bytes: &std::sync::Arc<[u8]>,
+    gpos: usize,
+    store: Option<(usize, Vec<f32>)>,
+) -> Option<GposKerning> {
+    let mut lookups = Vec::new();
+    for index in feature_lookups(bytes, gpos, &[b"kern"])? {
+        let subs: Vec<usize> = lookup_subtables(bytes, gpos, index, 9)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(kind, sub)| (kind == 2).then_some(sub))
+            .collect();
+        if !subs.is_empty() {
+            lookups.push(subs);
+        }
+    }
+    let in_place = (!lookups.is_empty()).then(|| {
+        std::sync::Arc::new(InPlace { bytes: bytes.clone(), lookups, store })
+    });
+    Some(GposKerning { lookups: Vec::new(), in_place })
 }
 
 impl GposKerning {
     /// Whether the font had any pair kerning in `GPOS`.
     pub fn is_empty(&self) -> bool {
-        self.lookups.is_empty()
+        self.lookups.is_empty() && self.in_place.is_none()
     }
 
     /// The x-advance adjustment between two glyphs, in font units.
@@ -58,6 +158,9 @@ impl GposKerning {
     /// (and, for explicit pairs, lists `right`) decides, as a shaper applies
     /// it.
     pub fn kern(&self, left: u16, right: u16) -> f32 {
+        if let Some(p) = &self.in_place {
+            return p.kern(left, right);
+        }
         let mut total = 0.0;
         for lookup in &self.lookups {
             for table in lookup {
@@ -466,6 +569,7 @@ mod tests {
         };
         let k = GposKerning {
             lookups: vec![vec![first, second]],
+            in_place: None,
         };
         assert_eq!(k.kern(1, 2), 0.0);
     }

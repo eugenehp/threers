@@ -426,6 +426,29 @@ impl Painter for VectorPainter {
         }
     }
 
+    fn shadow_around(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        blur: f32,
+        color: Rgba,
+        hole: Rect,
+        hole_radius: f32,
+    ) {
+        // Everything but the hole, by the even-odd rule.
+        let mut p = rounded(hole, hole_radius, hole_radius);
+        let (x, y, far) = (rect.x as f64 - 1e4, rect.y as f64 - 1e4, 2e4);
+        p.move_to([x, y]);
+        p.line_to([x + far + rect.width as f64, y]);
+        p.line_to([x + far + rect.width as f64, y + far + rect.height as f64]);
+        p.line_to([x, y + far + rect.height as f64]);
+        p.close();
+        let clip = self.doc.clip_path(p, SvgFillRule::EvenOdd);
+        self.open(None, SvgStyle { clip: Some(clip), ..SvgStyle::default() });
+        self.shadow(rect, radius, blur, color);
+        self.close();
+    }
+
     fn underline(&mut self, x: f32, y: f32, width: f32, thickness: f32, color: Rgba, wavy: bool) {
         if !wavy {
             return self.fill_rect(Rect { x, y: y - thickness / 2.0, width, height: thickness }, color);

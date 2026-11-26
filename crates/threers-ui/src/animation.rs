@@ -200,7 +200,9 @@ impl Ui {
     /// Starts `animation` on `id`, replacing one already moving the same
     /// property there. The property takes its `from` value now.
     pub fn animate(&mut self, id: NodeId, animation: Animation) {
-        self.node(id);
+        if !self.check(id) {
+            return;
+        }
         // A spring on the property gives way.
         self.springs
             .retain(|s| !(s.node == id && s.property == animation.property));
@@ -234,7 +236,18 @@ impl Ui {
 
     /// Moves every animation on by `dt` seconds and writes their values.
     /// Returns whether any is still running (draw another frame).
+    ///
+    /// A host that calls [`Input::tick`](crate::input::Input::tick) every
+    /// frame need not call this: the tick moves them on by the time since
+    /// the last, unless this was called since (so a host stepping them its
+    /// own way is not stepped twice).
     pub fn step(&mut self, dt: f32) -> bool {
+        self.host_steps = true;
+        self.advance(dt)
+    }
+
+    /// [`step`](Self::step), as the input's tick does it.
+    pub(crate) fn advance(&mut self, dt: f32) -> bool {
         self.clock += dt.max(0.0) as f64;
         crate::charts::step_glides(self, dt);
         let mut running = std::mem::take(&mut self.animations);

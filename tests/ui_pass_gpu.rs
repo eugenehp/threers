@@ -453,8 +453,7 @@ fn paths_drawn_on_the_gpu_match_the_overlay() {
 }
 
 /// A box turned in 3D is drawn in true perspective on the GPU: its nearer
-/// edge taller than its far one (the keystone the CPU painters cannot
-/// draw), exactly where its homography takes its corners.
+/// edge taller than its far one, exactly where its homography takes its corners.
 #[test]
 fn a_turned_box_is_drawn_in_perspective() {
     use threers::ui::depth::{apply_homography, Transform3d};
@@ -531,6 +530,80 @@ fn a_turned_box_is_drawn_in_perspective() {
         "{near} vs {expect}"
     );
     assert!(!covered(((lx + rx) / 2.0) as u32, 2), "nothing above it");
+}
+
+/// Turned cards as the CPU paints them and as the GPU does: text, rounded
+/// corners, a clip, glare, shadows, one inside another, and all in a box
+/// that clips.
+#[test]
+fn turned_boxes_are_the_same_on_both() {
+    use threers::ui::depth::Transform3d;
+    let Some(gpu) = threers::gpu::testing::context("the UI pass") else {
+        return;
+    };
+    let (device, queue) = (&gpu.device, &gpu.queue);
+    let t = Transform3d { perspective: 400.0, ..Transform3d::default() };
+    for (name, one, two) in [
+        ("about the vertical", Transform3d { rotate_y: 0.8, ..t }, None),
+        ("the other way, glare", Transform3d { rotate_y: -0.8, glare: true, ..t }, None),
+        ("tipped", Transform3d { rotate_x: 0.6, rotate_y: 0.3, ..t }, None),
+        ("rolled", Transform3d { rotate_z: 0.5, ..t }, None),
+        ("lifted, with its shadow", Transform3d { depth: 60.0, shadow: true, ..t }, None),
+        ("one in another", Transform3d { rotate_y: 0.5, ..t }, Some(Transform3d { rotate_z: 0.3, rotate_x: 0.4, ..t })),
+    ] {
+        for scale in [1.0f32, 2.0] {
+            let mut pass = UiPass::new(device);
+            let mut ui = Ui::new();
+            let root = ui.root();
+            let frame = ui.add_box(root, style! { position: absolute; left: 20px; top: 16px; width: 180px; height: 180px; overflow: hidden; background: #202428; });
+            let card = ui.add_box(frame, style! { position: absolute; left: 30px; top: 40px; width: 150px; height: 100px; background: #3b6fd8; border-radius: 12px; overflow: hidden; color: white; font-size: 18px; padding: 12px; });
+            ui.add_text(card, "Turned");
+            let inner = ui.add_box(card, style! { width: 90px; height: 40px; background: #e5c07b; border-radius: 8px; });
+            ui.set_transform3d(card, one);
+            if let Some(t) = two {
+                ui.set_transform3d(inner, t);
+            }
+            ui.layout(W as f32, H as f32, &mut pass.text_measure(scale));
+            let (w, h) = ((W as f32 * scale) as u32, (H as f32 * scale) as u32);
+            let a = cpu(&ui, scale);
+            let b = pass.render_to_rgba(device, queue, &ui.scene(), scale, (w, h), [0.0; 4]);
+            // Where nothing is shown, colour means nothing.
+            let over = |p: &[u8]| -> Vec<f32> {
+                p.as_chunks::<4>().0.iter().flat_map(|c| [0, 1, 2, 3].map(|i| f32::from(c[i]) * if i < 3 { f32::from(c[3]) / 255.0 } else { 1.0 })).collect()
+            };
+            let (a, b) = (over(&a), over(&b));
+            let diff: Vec<f32> = a.chunks(4).zip(b.chunks(4)).map(|(p, q)| (0..4).map(|i| (p[i] - q[i]).abs()).fold(0.0, f32::max)).collect();
+            let mean = diff.iter().sum::<f32>() / diff.len() as f32;
+            let far = diff.iter().filter(|d| **d > 64.0).count() as f32 / diff.len() as f32;
+            eprintln!("{name} at {scale}: mean {mean:.2}, {:.2} % far off", far * 100.0);
+            // Edges and letters are sampled differently; the rest is alike.
+            assert!(mean < 2.0 && far < 0.01, "{name} at {scale}: mean {mean}, {far} far off");
+        }
+    }
+}
+
+/// An image in a rounded box that clips: the same on both.
+#[test]
+fn a_rounded_clip_cuts_images_the_same_on_both() {
+    let Some(gpu) = threers::gpu::testing::context("the UI pass") else {
+        return;
+    };
+    let (device, queue) = (&gpu.device, &gpu.queue);
+    for scale in [1.0f32, 2.0] {
+        let mut pass = UiPass::new(device);
+        let mut ui = Ui::new();
+        let root = ui.root();
+        let card = ui.add_box(root, style! { position: absolute; left: 20px; top: 16px; width: 160px; height: 120px; border-radius: 30px; overflow: hidden; background: #202428; });
+        let image = threers::ui::image::Image::new(2, 2, [220, 60, 30, 255].repeat(4)).unwrap();
+        ui.add_image(card, style! { width: 160px; height: 120px; }, image);
+        ui.layout(W as f32, H as f32, &mut pass.text_measure(scale));
+        let size = ((W as f32 * scale) as u32, (H as f32 * scale) as u32);
+        let b = pass.render_to_rgba(device, queue, &ui.scene(), scale, size, [0.0; 4]);
+        let a = cpu(&ui, scale);
+        let far = a.chunks(4).zip(b.chunks(4)).filter(|(p, q)| p[3].abs_diff(q[3]) > 24).count();
+        eprintln!("clip at {scale}: {far} pixels far off");
+        assert!(far < 40, "{far} pixels differ");
+    }
 }
 
 /// A box drawn and put back through `effect`, at `scale`, over black, as
@@ -1092,7 +1165,8 @@ fn arcs_are_smooth_and_match_the_cpu() {
     let (w, h) = (270u32, 170u32);
     ui.layout(w as f32, h as f32, &mut pass.text_measure(1.0));
     let scene = ui.scene();
-    let arcs: Vec<(threers::ui::ArcShape, f32)> = scene
+    // (the rails round and under them are longer arcs)
+    let all: Vec<(threers::ui::ArcShape, f32)> = scene
         .items
         .iter()
         .filter_map(|i| match i {
@@ -1102,6 +1176,14 @@ fn arcs_are_smooth_and_match_the_cpu() {
             _ => None,
         })
         .collect();
+    let mut arcs: Vec<(threers::ui::ArcShape, f32)> = vec![];
+    for (arc, width) in all {
+        match arcs.iter_mut().find(|(a, _)| (a.cx - arc.cx).hypot(a.cy - arc.cy) < 1.0) {
+            Some(a) if arc.sweep.abs() < a.0.sweep.abs() => *a = (arc, width),
+            Some(_) => {}
+            None => arcs.push((arc, width)),
+        }
+    }
     assert_eq!(arcs.len(), 2, "both fills drawn as arcs");
     let gpu_image = pass.render_to_rgba(device, queue, &scene, 1.0, (w, h), [0.0; 4]);
     let cpu_image = threers::ui::paint_to_rgba(&ui, 1.0, w, h);
@@ -1214,4 +1296,108 @@ fn overlapping_rounded_clips_both_cut() {
     // And the edge between: the inner box's own side, half way down it,
     // filled to the outer box's edge.
     assert!(at(&gpu_image, 100, 85) > 250 && at(&gpu_image, 112, 85) < 10);
+}
+
+/// Emoji keep their own colours (they were drawn in the text's, as a shape).
+#[test]
+fn emoji_are_drawn_in_their_colours() {
+    let Ok(gpu) = threers::gpu::GpuContext::headless_blocking() else {
+        return;
+    };
+    if !threers::CaptionFont::use_color_emoji() {
+        return; // no colour emoji on this system
+    }
+    let mut ui = Ui::new();
+    let root = ui.root();
+    let b = ui.add_box(root, style! { color: #808080; font-size: 24px; });
+    ui.add_text(b, "\u{26a0}\u{fe0f} ok");
+    let mut pass = UiPass::new(&gpu.device);
+    ui.layout(120.0, 40.0, &mut pass.text_measure(1.0));
+    let image = pass.render_to_rgba(
+        &gpu.device,
+        &gpu.queue,
+        &ui.scene(),
+        1.0,
+        (120, 40),
+        [0.0, 0.0, 0.0, 1.0],
+    );
+    let (mut coloured, mut grey) = (0, 0);
+    for p in image.chunks_exact(4) {
+        match p[0].abs_diff(p[2]) {
+            60.. => coloured += 1,
+            _ if p[0] > 60 => grey += 1,
+            _ => {}
+        }
+    }
+    assert!(coloured > 40, "the sign is yellow: {coloured}");
+    assert!(grey > 10, "the letters are in the text's colour: {grey}");
+}
+
+/// Glass's shadow is round it, up to its corners, and not under it.
+#[test]
+fn glass_has_its_shadow_round_it_to_the_corners() {
+    let Ok(gpu) = threers::gpu::GpuContext::headless_blocking() else {
+        return;
+    };
+    let draw = |backdrop: &str| {
+        let mut ui = Ui::new();
+        let root = ui.root();
+        let b = ui.add_box(root, Default::default());
+        ui.apply(
+            b,
+            &threers::ui::patch::Patch::css(&format!(
+                "position: absolute; left: 40px; top: 40px; width: 60px; height: 60px; \
+                 border-radius: 20px; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.8); {backdrop}"
+            )),
+        );
+        let mut pass = UiPass::new(&gpu.device);
+        ui.layout(140.0, 140.0, &mut pass.text_measure(1.0));
+        pass.render_to_rgba(&gpu.device, &gpu.queue, &ui.scene(), 1.0, (140, 140), [1.0, 1.0, 1.0, 1.0])
+    };
+    let (plain, glass) = (draw(""), draw("backdrop-filter: blur(2px)"));
+    let at = |im: &[u8], x: usize, y: usize| im[(y * 140 + x) * 4] as i32;
+    // The middle: white, glass or not: an outer shadow is outside its box
+    // (CSS clips it there), and this box has nothing of its own.
+    let (a, b) = (at(&plain, 70, 70), at(&glass, 70, 70));
+    assert!(a > 250 && b > 250, "the middle: {a} and {b}");
+    // In the box's corner but outside its round, and just past its edges:
+    // the same shadow as ever.
+    for (x, y) in [(41, 98), (98, 98), (42, 41), (70, 104), (36, 70)] {
+        let (a, b) = (at(&plain, x, y), at(&glass, x, y));
+        assert!(a < 250 && (a - b).abs() < 8, "{x},{y}: {a} and {b}");
+    }
+}
+
+/// A piece of right-to-left text keeps the space at either end of it: its
+/// letters are where they are in the whole.
+#[test]
+fn right_to_left_pieces_keep_their_spaces() {
+    let Ok(gpu) = threers::gpu::GpuContext::headless_blocking() else {
+        return;
+    };
+    let mut pass = UiPass::new(&gpu.device);
+    let mut draw = |runs: bool| {
+        let mut ui = Ui::new();
+        ui.set_layout_direction(threers::ui::environment::LayoutDirection::RightToLeft);
+        let root = ui.root();
+        let b = ui.add_box(root, style! { width: 200px; color: #ffffff; font-size: 20px; });
+        let s = "\u{5d0}\u{5d1} EEG \u{5d2}\u{5d3}";
+        let t = ui.add_text(b, s);
+        if runs {
+            ui.set_text_runs(t, vec![threers::ui::rich_text::TextRun::new(s.len())]);
+        }
+        ui.layout(200.0, 40.0, &mut pass.text_measure(1.0));
+        let image = pass.render_to_rgba(&gpu.device, &gpu.queue, &ui.scene(), 1.0, (200, 40), [0.0, 0.0, 0.0, 1.0]);
+        // Which columns have ink.
+        (0..200)
+            .filter(|x| (0..40).any(|y| image[(y * 200 + x) * 4] > 100))
+            .collect::<Vec<_>>()
+    };
+    let (whole, pieces) = (draw(false), draw(true));
+    assert!(whole.len() > 20);
+    let (a, b) = (whole[0].abs_diff(pieces[0]), whole.len().abs_diff(pieces.len()));
+    assert!(a <= 1 && b <= 4, "{whole:?} {pieces:?}");
+    // As many gaps between letters, as wide.
+    let gaps = |v: &[usize]| v.windows(2).map(|w| w[1] - w[0]).filter(|g| *g > 3).count();
+    assert_eq!(gaps(&whole), gaps(&pieces));
 }

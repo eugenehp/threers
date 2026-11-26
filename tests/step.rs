@@ -180,12 +180,17 @@ fn a_part_built_by_several_cuts_round_trips() {
             .count(),
         3
     );
-    let before = volume(&part, 1e-3);
-    let after = volume(&back, 1e-3);
-    assert!(
-        (before - after).abs() / before < 1e-9,
-        "{before} out, {after} back"
-    );
+    // Both against the solid itself, and so near each other. Not to the digit:
+    // a file carries circles and not samples of them, and how finely each
+    // side draws one — the fuse, the reader — is its own affair, held to the
+    // tolerance.
+    let exact = 40.0 * 24.0 * 4.0 - 3.0 * std::f64::consts::PI * 2.5 * 2.5 * 4.0;
+    for (which, got) in [("out", volume(&part, 1e-3)), ("back", volume(&back, 1e-3))] {
+        assert!(
+            (got - exact).abs() / exact < 5e-5,
+            "{got} {which}, the solid is {exact}"
+        );
+    }
 }
 
 #[test]
@@ -557,7 +562,10 @@ fn a_band_bounded_by_its_own_seam_survives_a_file_round_trip() {
         .iter()
         .find(|f| (1..f.edges.len()).any(|i| f.edges[i..].contains(&f.edges[i - 1])))
         .expect("the sphere's face runs along its own seam");
-    assert!(face.edges.len() >= 14, "{} edges", face.edges.len());
+    // The seam twice, and the column's eight arcs, one of either end's cut in
+    // two where the seam meets it. (An arc the seam does not meet needs no
+    // cutting; the older path cut more of them.)
+    assert!(face.edges.len() >= 12, "{} edges", face.edges.len());
 
     let (text, ex) = export(&cut, "ball-and-column", 1e-3);
     assert!(ex.skipped.is_empty(), "{:?}", ex.skipped);

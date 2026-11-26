@@ -87,7 +87,14 @@ impl Ui {
                     .children(container)
                     .iter()
                     .filter(|&&c| self.style(c).display != crate::Display::None)
-                    .map(|&c| (self.rect(c).x - start + scrolled).clamp(0.0, max))
+                    .map(|&c| {
+                        let q = self.rect(c);
+                        let along = match self.nodes[container.0].rtl {
+                            false => q.x - start,
+                            true => r.x + r.width - s.border.left - s.padding.left - q.x - q.width,
+                        };
+                        (along + scrolled).clamp(0.0, max)
+                    })
                     .collect();
                 p.push(max);
                 p

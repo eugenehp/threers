@@ -26,6 +26,7 @@
 use std::ops::RangeInclusive;
 use std::rc::Rc;
 
+use crate::environment::LayoutDirection;
 use crate::a11y::RangeValue;
 use crate::animation::{Animation, Property, Repeat, Value};
 use crate::binding::Binding;
@@ -92,13 +93,13 @@ pub fn segmented<S: 'static>(
             let b = ui.add_box(row, style! { position: relative; flex-grow: 1; padding: 4px 12px; border-radius: 6px; cursor: pointer; display: flex; justify-content: center; align-items: center; min-height: 24px; box-sizing: border-box; });
             ui.add_text(b, *c);
             ui.set_semantics(b, Semantics::new(Role::Radio).label(*c).checked(false));
-            ui.focus_visible_style(b, "box-shadow: 0 0 0 2px #93c5fd");
+            ui.focus_visible_style(b, "box-shadow: 0 0 0 2px var(--focus)");
             let sel = selected.clone();
             input.on_click(b, move |s, _, _| sel.set(s, i));
             let sel = selected.clone();
-            input.on_key(b, move |s, _, key, _, _| {
+            input.on_key(b, move |s, ui, key, _, _| {
                 let k = sel.get(s).min(n - 1);
-                let to = match key {
+                let to = match ui.reading_key(b, key) {
                     "ArrowRight" | "ArrowDown" => (k + 1) % n,
                     "ArrowLeft" | "ArrowUp" => (k + n - 1) % n,
                     _ => return false,
@@ -164,7 +165,7 @@ pub fn stepper<S: 'static>(
         now: 0.0,
     });
     ui.set_semantics(row, sem);
-    ui.focus_visible_style(row, "box-shadow: 0 0 0 2px #93c5fd");
+    ui.focus_visible_style(row, "box-shadow: 0 0 0 2px var(--focus)");
     let bump = move |v: &Binding<S, i64>, s: &mut S, by: i64| {
         let now = v.get(s);
         v.set(s, (now + by).clamp(lo, hi));
@@ -175,7 +176,7 @@ pub fn stepper<S: 'static>(
         ui.add_text(b, glyph);
         // The row is the control; its buttons are for the pointer.
         ui.set_semantics(b, Semantics::new(Role::Generic).hidden());
-        ui.hover_style(b, "background: rgba(128,138,160,0.3)");
+        ui.hover_style(b, "background: var(--hover)");
         let v = value.clone();
         input.on_click(b, move |s, _, _| bump(&v, s, sign * step));
         ends.push(b);
@@ -227,13 +228,13 @@ pub fn slider<S: 'static>(
         style! { position: relative; height: 24px; cursor: pointer; },
     );
     let rail = ui.add_box(track, style! { position: absolute; left: 0px; top: 10px; width: 100%; height: 4px; border-radius: 2px; });
-    ui.token_style(rail, &[("background", Token::Separator)]);
+    ui.token_style(rail, &[("background", Token::Track)]);
     let fill = ui.add_box(
         track,
         style! { position: absolute; left: 0px; top: 10px; height: 4px; border-radius: 2px; },
     );
     ui.token_style(fill, &[("background", Token::Accent)]);
-    let thumb = ui.add_box(track, style! { position: absolute; top: 2px; width: 20px; height: 20px; border-radius: 10px; background: #ffffff; box-shadow: 0 1px 4px rgba(0,0,0,0.4); });
+    let thumb = slider_thumb(ui, track);
     let mut sem = Semantics::new(Role::Slider).label(label);
     sem.range = Some(RangeValue {
         min: lo,
@@ -241,7 +242,7 @@ pub fn slider<S: 'static>(
         now: lo,
     });
     ui.set_semantics(track, sem);
-    ui.focus_visible_style(track, "box-shadow: 0 0 0 2px #93c5fd");
+    ui.focus_visible_style(track, "box-shadow: 0 0 0 2px var(--focus)");
     let snap = move |v: f32| {
         let v = if step > 0.0 {
             lo + ((v - lo) / step).round() * step
@@ -253,7 +254,11 @@ pub fn slider<S: 'static>(
     let at = move |ui: &Ui, x: f32| {
         let r = ui.rect(track);
         let usable = (r.width - 20.0).max(1.0);
-        snap(lo + ((x - r.x - 10.0) / usable).clamp(0.0, 1.0) * span)
+        let along = match ui.direction_of(track) {
+            LayoutDirection::LeftToRight => x - r.x,
+            LayoutDirection::RightToLeft => r.x + r.width - x,
+        };
+        snap(lo + ((along - 10.0) / usable).clamp(0.0, 1.0) * span)
     };
     let v = value.clone();
     let dragging = Rc::new(std::cell::Cell::new(false));
@@ -282,7 +287,104 @@ pub fn slider<S: 'static>(
         _ => {}
     });
     let v = value.clone();
-    input.on_key(track, move |s, _, key, _, _| {
+    input.on_key(track, move |s, ui, key, _, _| {
+        let now = v.get(s);
+        let to = match ui.reading_key(track, key) {
+            "ArrowRight" | "ArrowUp" => now + step,
+            "ArrowLeft" | "ArrowDown" => now - step,
+            "PageUp" => now + step * 10.0,
+            "PageDown" => now - step * 10.0,
+            "Home" => lo,
+            "End" => hi,
+            _ => return false,
+        };
+        v.set(s, snap(to));
+        true
+    });
+    let say = said(step);
+    follow(ui, input, state, track, value, move |ui, &v| {
+        let t = ((v - lo) / span).clamp(0.0, 1.0);
+        // Placed by share of the width, so it needs no layout to be right.
+        ui.update_style(thumb, |s| s.left = Length::Percent(t * 100.0));
+        ui.update_style(thumb, |s| s.margin.left = -20.0 * t);
+        ui.update_style(fill, |s| s.width = Length::Percent(t * 100.0));
+        let sem = ui.semantics_mut(track);
+        sem.value = Some(say(v));
+        if let Some(r) = &mut sem.range {
+            r.now = v;
+        }
+    });
+    track
+}
+
+/// How far round a knob turns: from 135° left of up to 135° right of it.
+pub const KNOB_SWEEP: f32 = 270.0;
+
+/// A knob (a rotary dial, as on a mixer or in a spatial UI): a value in
+/// `range`, `step` at a time, turned by dragging up or right (and down or
+/// left), the arrows, Page Up and Down, Home and End. Its mark points from
+/// 135° left of up, at the low end, round to 135° right. A slider to
+/// assistive technology. Returns the knob.
+#[allow(clippy::too_many_arguments)]
+pub fn knob<S: 'static>(
+    ui: &mut Ui,
+    input: &mut Input<S>,
+    state: &S,
+    parent: NodeId,
+    label: &str,
+    value: Binding<S, f32>,
+    range: RangeInclusive<f32>,
+    step: f32,
+    size: f32,
+) -> NodeId {
+    let (lo, hi) = (*range.start(), *range.end());
+    let span = (hi - lo).max(f32::EPSILON);
+    let size = size.max(32.0);
+    let b = ui.add_box(parent, style! { position: relative; flex-shrink: 0; cursor: ns-resize; box-sizing: border-box; border: 2px solid; });
+    ui.update_style(b, |s| {
+        (s.width, s.height) = (Length::Px(size), Length::Px(size));
+        s.border_radius = Length::Px(size / 2.0);
+    });
+    ui.token_style(b, &[("background", Token::Surface), ("border-color", Token::Track)]);
+    ui.focus_visible_style(b, "box-shadow: 0 0 0 2px var(--focus)");
+    // its mark: a dot near the rim, where it points
+    let dot = (size * 0.16).max(6.0);
+    let mark = ui.add_box(b, style! { position: absolute; });
+    ui.update_style(mark, |s| {
+        (s.width, s.height) = (Length::Px(dot), Length::Px(dot));
+        s.border_radius = Length::Px(dot / 2.0);
+    });
+    ui.token_style(mark, &[("background", Token::Accent)]);
+    let mut sem = Semantics::new(Role::Slider).label(label);
+    sem.range = Some(RangeValue { min: lo, max: hi, now: lo });
+    ui.set_semantics(b, sem);
+    let snap = move |v: f32| {
+        let v = if step > 0.0 { lo + ((v - lo) / step).round() * step } else { v };
+        v.clamp(lo, hi)
+    };
+    // a drag: from where it was, a full turn's worth in 200 px
+    let start: Rc<std::cell::Cell<Option<(f32, f32, f32)>>> = Rc::default();
+    let (v, st) = (value.clone(), start.clone());
+    input.on(b, Phase::Bubble, move |s, _, e, cx| match *e {
+        Event::PointerDown { x, y, .. } => {
+            cx.capture_pointer();
+            st.set(Some((x, y, v.get(s))));
+        }
+        Event::PointerMove { x, y, .. } => {
+            if let Some((x0, y0, was)) = st.get() {
+                v.set(s, snap(was + ((x - x0) - (y - y0)) / 200.0 * span));
+            }
+        }
+        Event::PointerUp { .. } => st.set(None),
+        Event::PointerCancel => {
+            if let Some((_, _, was)) = st.take() {
+                v.set(s, was);
+            }
+        }
+        _ => {}
+    });
+    let v = value.clone();
+    input.on_key(b, move |s, _, key, _, _| {
         let now = v.get(s);
         let to = match key {
             "ArrowRight" | "ArrowUp" => now + step,
@@ -296,17 +398,290 @@ pub fn slider<S: 'static>(
         v.set(s, snap(to));
         true
     });
-    follow(ui, input, state, track, value, move |ui, &v| {
+    let say = said(step);
+    follow(ui, input, state, b, value, move |ui, &v| {
         let t = ((v - lo) / span).clamp(0.0, 1.0);
-        // Placed by share of the width, so it needs no layout to be right.
-        ui.update_style(thumb, |s| s.left = Length::Percent(t * 100.0));
-        ui.update_style(thumb, |s| s.margin.left = -20.0 * t);
-        ui.update_style(fill, |s| s.width = Length::Percent(t * 100.0));
-        let sem = ui.semantics_mut(track);
-        sem.value = Some(format!("{v}"));
+        let turn = (t - 0.5) * KNOB_SWEEP.to_radians();
+        // (the dot's middle on a circle inside the rim)
+        let r = size / 2.0 - 2.0 - dot * 0.9;
+        let (cx, cy) = (size / 2.0 - 2.0 + turn.sin() * r, size / 2.0 - 2.0 - turn.cos() * r);
+        ui.update_style(mark, |s| {
+            s.left = Length::Px(cx - dot / 2.0);
+            s.top = Length::Px(cy - dot / 2.0);
+        });
+        let sem = ui.semantics_mut(b);
+        sem.value = Some(say(v));
         if let Some(r) = &mut sem.range {
             r.now = v;
         }
+    });
+    b
+}
+
+/// A pad that holds a point (a trackpad, a joystick's square, a colour's
+/// two axes): `value` is `(x, y)`, each 0 to 1 from the left and the top,
+/// set where it is pressed and dragged, and moved a twentieth by the
+/// arrows. Its dot is round, a slider's thumb to a shell that raises one.
+/// A slider to assistive technology, its value said as both. Returns the
+/// pad.
+pub fn xy_pad<S: 'static>(
+    ui: &mut Ui,
+    input: &mut Input<S>,
+    state: &S,
+    parent: NodeId,
+    label: &str,
+    value: Binding<S, (f32, f32)>,
+    size: f32,
+) -> NodeId {
+    let size = size.max(60.0);
+    let b = ui.add_box(parent, style! { position: relative; flex-shrink: 0; cursor: crosshair; border-radius: 12px; box-sizing: border-box; border: 1px solid; });
+    ui.update_style(b, |s| (s.width, s.height) = (Length::Px(size), Length::Px(size)));
+    ui.token_style(b, &[("background", Token::Separator), ("border-color", Token::Track)]);
+    ui.focus_visible_style(b, "box-shadow: 0 0 0 2px var(--focus)");
+    // the cross through the middle
+    for vertical in [false, true] {
+        let line = ui.add_box(b, style! { position: absolute; });
+        ui.update_style(line, |s| {
+            if vertical {
+                (s.left, s.top, s.width, s.height) = (Length::Percent(50.0), Length::Px(8.0), Length::Px(1.0), Length::Px(size - 18.0));
+            } else {
+                (s.left, s.top, s.width, s.height) = (Length::Px(8.0), Length::Percent(50.0), Length::Px(size - 18.0), Length::Px(1.0));
+            }
+        });
+        ui.token_style(line, &[("background", Token::Separator)]);
+    }
+    let dot = slider_thumb(ui, b);
+    let mut sem = Semantics::new(Role::Slider).label(label);
+    sem.range = Some(RangeValue { min: 0.0, max: 1.0, now: 0.0 });
+    ui.set_semantics(b, sem);
+    let at = move |ui: &Ui, x: f32, y: f32| {
+        let r = ui.rect(b);
+        let usable = (size - 20.0).max(1.0);
+        (((x - r.x - 10.0) / usable).clamp(0.0, 1.0), ((y - r.y - 10.0) / usable).clamp(0.0, 1.0))
+    };
+    let held = Rc::new(std::cell::Cell::new(None::<(f32, f32)>));
+    let (v, h) = (value.clone(), held.clone());
+    input.on(b, Phase::Bubble, move |s, ui, e, cx| match *e {
+        Event::PointerDown { x, y, .. } => {
+            cx.capture_pointer();
+            h.set(Some(v.get(s)));
+            v.set(s, at(ui, x, y));
+        }
+        Event::PointerMove { x, y, .. } if h.get().is_some() => v.set(s, at(ui, x, y)),
+        Event::PointerUp { .. } => h.set(None),
+        Event::PointerCancel => {
+            if let Some(was) = h.take() {
+                v.set(s, was);
+            }
+        }
+        _ => {}
+    });
+    let v = value.clone();
+    input.on_key(b, move |s, _, key, _, _| {
+        let (x, y) = v.get(s);
+        let (dx, dy) = match key {
+            "ArrowRight" => (0.05, 0.0),
+            "ArrowLeft" => (-0.05, 0.0),
+            "ArrowUp" => (0.0, -0.05),
+            "ArrowDown" => (0.0, 0.05),
+            _ => return false,
+        };
+        v.set(s, ((x + dx).clamp(0.0, 1.0), (y + dy).clamp(0.0, 1.0)));
+        true
+    });
+    follow(ui, input, state, b, value, move |ui, &(x, y)| {
+        let usable = size - 22.0;
+        ui.update_style(dot, |s| {
+            s.left = Length::Px(1.0 + x.clamp(0.0, 1.0) * usable);
+            s.top = Length::Px(1.0 + y.clamp(0.0, 1.0) * usable - 2.0);
+        });
+        let pct = |v: f32| (v.clamp(0.0, 1.0) * 100.0).round() as i32;
+        let sem = ui.semantics_mut(b);
+        sem.value = Some(format!("{}%, {}%", pct(x), pct(y)));
+        if let Some(r) = &mut sem.range {
+            r.now = x;
+        }
+    });
+    b
+}
+
+/// A slider's thumb, 20 px across in its 24.
+fn slider_thumb(ui: &mut Ui, track: NodeId) -> NodeId {
+    let thumb = ui.add_box(track, style! { position: absolute; top: 2px; width: 20px; height: 20px; border-radius: 10px; box-sizing: border-box; background: #ffffff; box-shadow: 0 1px 4px rgba(0,0,0,0.4); });
+    // White on a light page: an edge that can be seen.
+    ui.appearance_style(
+        thumb,
+        crate::states::Appearance::Light,
+        "border: 1px solid; border-color: var(--track)",
+    );
+    thumb
+}
+
+/// A value as it is said, to `step`'s precision (0.7, not 0.70000005).
+fn said(step: f32) -> impl Fn(f32) -> String {
+    let places = (0..6)
+        .find(|&d| {
+            let x = step * 10f32.powi(d);
+            (x - x.round()).abs() < 1e-3
+        })
+        .filter(|_| step >= 1e-6);
+    move |v| match places {
+        Some(d) => format!("{v:.*}", d as usize),
+        None => format!("{v}"),
+    }
+}
+
+/// A low and a high value in `range`, each set by its own thumb (named
+/// `names`, in a group named `label`), the rail filled between them.
+/// Neither passes the other. A press moves the nearer; a thumb's keys are a
+/// [`slider`]'s.
+#[allow(clippy::too_many_arguments)]
+pub fn range_slider<S: 'static>(
+    ui: &mut Ui,
+    input: &mut Input<S>,
+    state: &S,
+    parent: NodeId,
+    label: &str,
+    names: (&str, &str),
+    value: Binding<S, (f32, f32)>,
+    range: RangeInclusive<f32>,
+    step: f32,
+) -> NodeId {
+    let (lo, hi) = (*range.start(), *range.end());
+    let span = (hi - lo).max(f32::EPSILON);
+    let track = ui.add_box(
+        parent,
+        style! { position: relative; height: 24px; cursor: pointer; },
+    );
+    ui.set_semantics(track, Semantics::new(Role::Group).label(label));
+    let rail = ui.add_box(track, style! { position: absolute; left: 0px; top: 10px; width: 100%; height: 4px; border-radius: 2px; });
+    ui.token_style(rail, &[("background", Token::Track)]);
+    let fill = ui.add_box(
+        track,
+        style! { position: absolute; top: 10px; height: 4px; border-radius: 2px; },
+    );
+    ui.token_style(fill, &[("background", Token::Accent)]);
+    let thumbs = [names.0, names.1].map(|name| {
+        let t = slider_thumb(ui, track);
+        // The target is 24 px, the drawing 20.
+        let hit = ui.add_box(
+            t,
+            style! { position: absolute; left: -2px; top: -2px; width: 24px; height: 24px; },
+        );
+        let mut sem = Semantics::new(Role::Slider).label(name);
+        sem.range = Some(RangeValue {
+            min: lo,
+            max: hi,
+            now: lo,
+        });
+        ui.set_semantics(hit, sem);
+        ui.focus_visible_style(hit, "border-radius: 12px; box-shadow: 0 0 0 2px var(--focus)");
+        hit
+    });
+    let drawn = thumbs.map(|t| ui.parent(t).unwrap_or(t));
+    let snap = move |v: f32| {
+        let v = if step > 0.0 {
+            lo + ((v - lo) / step).round() * step
+        } else {
+            v
+        };
+        v.clamp(lo, hi)
+    };
+    let at = move |ui: &Ui, x: f32| {
+        let r = ui.rect(track);
+        let usable = (r.width - 20.0).max(1.0);
+        let along = match ui.direction_of(track) {
+            LayoutDirection::LeftToRight => x - r.x,
+            LayoutDirection::RightToLeft => r.x + r.width - x,
+        };
+        snap(lo + ((along - 10.0) / usable).clamp(0.0, 1.0) * span)
+    };
+    // One end moved to `to`, no further than the other.
+    let put = {
+        let value = value.clone();
+        Rc::new(move |s: &mut S, end: usize, to: f32| {
+            let (a, b) = value.get(s);
+            value.set(s, if end == 0 { (to.min(b), b) } else { (a, to.max(a)) });
+        })
+    };
+    let held = Rc::new(std::cell::Cell::new(None::<usize>));
+    let before = Rc::new(std::cell::Cell::new(None::<(f32, f32)>));
+    let (h, p, v) = (held, put.clone(), value.clone());
+    input.on(track, Phase::Bubble, move |s, ui, e, cx| match *e {
+        Event::PointerDown { x, .. } => {
+            let to = at(ui, x);
+            let now = v.get(s);
+            let (a, b) = now;
+            // The nearer; where they are together, the one that can go there.
+            let end = if a == b {
+                usize::from(to > a)
+            } else {
+                usize::from((to - a).abs() > (b - to).abs())
+            };
+            h.set(Some(end));
+            before.set(Some(now));
+            cx.capture_pointer();
+            cx.prevent_default();
+            cx.focus(thumbs[end]);
+            p(s, end, to);
+        }
+        Event::PointerMove { x, .. } => {
+            if let Some(end) = h.get() {
+                p(s, end, at(ui, x));
+            }
+        }
+        Event::PointerUp { .. } => {
+            h.set(None);
+            before.set(None);
+        }
+        Event::PointerCancel => {
+            h.set(None);
+            if let Some(was) = before.take() {
+                v.set(s, was);
+            }
+        }
+        _ => {}
+    });
+    for (end, &t) in thumbs.iter().enumerate() {
+        let (p, v) = (put.clone(), value.clone());
+        input.on_key(t, move |s, ui, key, _, _| {
+            let (a, b) = v.get(s);
+            let now = if end == 0 { a } else { b };
+            let to = match ui.reading_key(track, key) {
+                "ArrowRight" | "ArrowUp" => now + step,
+                "ArrowLeft" | "ArrowDown" => now - step,
+                "PageUp" => now + step * 10.0,
+                "PageDown" => now - step * 10.0,
+                "Home" => lo,
+                "End" => hi,
+                _ => return false,
+            };
+            p(s, end, snap(to));
+            true
+        });
+    }
+    let say = said(step);
+    follow(ui, input, state, track, value, move |ui, &(a, b)| {
+        let along = [a, b].map(|v| ((v - lo) / span).clamp(0.0, 1.0));
+        for end in 0..2 {
+            let (t, v) = (along[end], [a, b][end]);
+            ui.update_style(drawn[end], |s| {
+                s.left = Length::Percent(t * 100.0);
+                s.margin.left = -20.0 * t;
+            });
+            let sem = ui.semantics_mut(thumbs[end]);
+            sem.value = Some(say(v));
+            // Each as far as the other lets it.
+            sem.range = Some(RangeValue {
+                min: if end == 0 { lo } else { a },
+                max: if end == 0 { b } else { hi },
+                now: v,
+            });
+        }
+        ui.update_style(fill, |s| {
+            s.left = Length::Percent(along[0] * 100.0);
+            s.width = Length::Percent((along[1] - along[0]) * 100.0);
+        });
     });
     track
 }
@@ -357,6 +732,31 @@ impl Progress {
     }
 }
 
+/// The empty part of a progress bar: the surface, in an outline that shows
+/// how long the bar is (outside it: it takes no room). What fills it is
+/// [`Token::AccentText`], which is told from the surface in any theme.
+pub(crate) fn outline_rail(ui: &mut Ui, rail: NodeId) {
+    ui.token_style(rail, &[("background", Token::Surface)]);
+    for a in [
+        crate::states::Appearance::Light,
+        crate::states::Appearance::Dark,
+    ] {
+        ui.appearance_style(rail, a, "box-shadow: 0 0 0 1px var(--track)");
+    }
+}
+
+/// The strokes a ring's empty part is drawn in, the filled one's `stroke`
+/// pixels wide: [`Token::Track`], and [`Token::Surface`] inside it, as
+/// [`outline_rail`]'s. One too thin to outline is a hairline, told from
+/// what fills it by its width too.
+pub(crate) fn ring_strokes(stroke: f32) -> (f32, Option<f32>) {
+    if stroke >= 3.0 {
+        (stroke, Some(stroke - 2.0))
+    } else {
+        ((stroke * 0.5).min(1.0), None)
+    }
+}
+
 /// A bar showing how far along something is (`value` 0 to 1), or that it
 /// is under way when `None`.
 pub fn progress(ui: &mut Ui, parent: NodeId, label: &str, value: Option<f32>) -> Progress {
@@ -364,12 +764,12 @@ pub fn progress(ui: &mut Ui, parent: NodeId, label: &str, value: Option<f32>) ->
         parent,
         style! { position: relative; height: 6px; border-radius: 3px; overflow: hidden; },
     );
-    ui.token_style(bar, &[("background", Token::Separator)]);
+    outline_rail(ui, bar);
     let fill = ui.add_box(
         bar,
         style! { position: absolute; top: 0px; height: 100%; border-radius: 3px; },
     );
-    ui.token_style(fill, &[("background", Token::Accent)]);
+    ui.token_style(fill, &[("background", Token::AccentText)]);
     ui.set_semantics(bar, Semantics::new(Role::ProgressBar).label(label));
     let p = Progress { bar, fill };
     p.set(ui, value);
@@ -404,16 +804,8 @@ pub fn empty_state<S: 'static>(
     ui.token_style(m, &[("color", Token::SecondaryText)]);
     ui.add_text(m, message);
     if let Some((label, mut f)) = action {
-        let a = ui.add_box(
-            b,
-            style! { margin-top: 4px; padding: 4px 12px; border-radius: 6px; cursor: pointer; },
-        );
-        ui.token_style(
-            a,
-            &[("background", Token::Accent), ("color", Token::OnAccent)],
-        );
-        ui.add_text(a, label);
-        ui.set_semantics(a, Semantics::new(Role::Button).label(label));
+        let a = crate::components::button(ui, b, label, crate::components::ButtonKind::Primary);
+        ui.update_style(a, |s| s.margin.top = 4.0);
         input.on_click(a, move |s, ui, _| f(s, ui));
     }
     b
@@ -431,7 +823,7 @@ pub fn search_field<S: 'static>(
 ) -> NodeId {
     let b = ui.add_box(parent, style! { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 8px; cursor: text; });
     ui.token_style(b, &[("background", Token::Separator)]);
-    ui.focus_style(b, "box-shadow: 0 0 0 2px #2563eb");
+    ui.focus_style(b, "box-shadow: 0 0 0 2px var(--accent)");
     ui.set_semantics(b, Semantics::new(Role::SearchBox).label(placeholder));
     // A magnifier, drawn (not every face has a glyph for one).
     let icon = ui.add_path(
@@ -451,11 +843,15 @@ pub fn search_field<S: 'static>(
     let text = ui.add_text(text_box, "");
     let clear = ui.add_box(
         b,
-        style! { padding: 0 2px; cursor: pointer; display: none; },
+        // (a 24 px target in a 17 px line)
+        style! { padding: 4px 5px; margin: -4px -2px; cursor: pointer; display: none; },
     );
     ui.token_style(clear, &[("color", Token::SecondaryText)]);
     ui.add_text(clear, "✕");
-    ui.set_semantics(clear, Semantics::new(Role::Button).label("Clear"));
+    ui.set_semantics(
+        clear,
+        Semantics::new(Role::Button).label(crate::i18n::word(crate::i18n::Word::Clear)),
+    );
     let q = query.clone();
     input.on_click(clear, move |s, _, cx| {
         q.set(s, String::new());
@@ -567,11 +963,12 @@ pub fn text_area<S: 'static>(
 ) -> NodeId {
     let b = ui.add_box(parent, style! { display: flex; padding: 7px 8px; border-radius: 7px; cursor: text; overflow-y: auto; });
     let line = 12.0 * 1.4;
+    // (the content's height: the padding is outside it)
     ui.update_style(b, |s| {
-        s.min_height = Length::Px(rows.max(1) as f32 * line + 14.0)
+        s.min_height = Length::Px(rows.max(1) as f32 * line)
     });
     ui.token_style(b, &[("background", Token::Separator)]);
-    ui.focus_style(b, "box-shadow: 0 0 0 2px #2563eb");
+    ui.focus_style(b, "box-shadow: 0 0 0 2px var(--accent)");
     ui.set_semantics(b, Semantics::new(Role::TextArea).label(placeholder));
     // a box per line, each wrapping (the layout breaks lines at spaces, not
     // at the text's own line breaks)
@@ -634,7 +1031,16 @@ pub fn text_area<S: 'static>(
                 shown,
                 style! { min-height: 16.8px; font-size: 12px; line-height: 1.4; },
             );
-            ui.add_text(row, l);
+            let line = ui.add_text(row, l);
+            // A placeholder in a box of several rows wraps, so a long hint
+            // (or a long translation of one) is read whole; typed text
+            // keeps its own line breaks.
+            if now.is_empty() && rows > 1 {
+                ui.update_style(line, |s| {
+                    s.wrap = true;
+                    s.white_space_set = true;
+                });
+            }
         }
         let color = if now.is_empty() {
             Token::SecondaryText

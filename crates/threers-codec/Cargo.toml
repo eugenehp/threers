@@ -37,7 +37,7 @@ vaapi = ["decode"]
 v4l2 = ["dep:libc"]
 
 [dependencies]
-threers-captions = { path = "../threers-captions", version = "0.1.1" }
+threers-captions = { path = "../threers-captions", version = "0.1.2" }
 rayon = { version = "1.10", optional = true }
 libc = { version = "0.2", optional = true }
 

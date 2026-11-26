@@ -20,6 +20,7 @@
 //! assert_eq!(ui.text_selection_rects(t, 6, 11, m)[0].width, 35.0);
 //! ```
 
+use super::environment::LayoutDirection;
 use super::layout::TextMeasure;
 use super::rich_text::split;
 use super::style::Style;
@@ -32,6 +33,16 @@ struct Line {
     end: usize,
 }
 
+/// A stretch of a line that reads one way: its bytes, and where it is
+/// across the line (its width only measured where the line reads both).
+struct Span {
+    start: usize,
+    end: usize,
+    rtl: bool,
+    x: f32,
+    width: f32,
+}
+
 impl Ui {
     /// The node's drawn lines, as painting places them.
     fn text_lines(&self, id: NodeId) -> (String, Vec<Line>) {
@@ -41,11 +52,27 @@ impl Ui {
         };
         let s = &n.style;
         let r = n.rect;
+        let left = match n.rtl {
+            false => s.border.left + s.padding.left,
+            true => s.border.right + s.padding.right,
+        };
         let content = Rect {
-            x: r.x + s.border.left + s.padding.left,
+            x: r.x + left,
             y: r.y + s.border.top + s.padding.top,
             width: (r.width - s.border.horizontal() - s.padding.horizontal()).max(0.0),
             height: (r.height - s.border.vertical() - s.padding.vertical()).max(0.0),
+        };
+        // A line across its box by `text-align`, as painting has it.
+        let aligned = |i: usize, r: Rect| {
+            let shift = n
+                .line_widths
+                .get(i)
+                .map_or(0.0, |w| s.text_align.offset_in(n.rtl, r.width - w));
+            Rect {
+                x: r.x + shift,
+                width: r.width - shift,
+                ..r
+            }
         };
         let wrapped: Vec<&String> = if n.lines.len() > 1 && n.lines.concat() == *text {
             n.lines.iter().collect()
@@ -56,7 +83,7 @@ impl Ui {
             return (
                 text.clone(),
                 vec![Line {
-                    rect: content,
+                    rect: aligned(0, content),
                     start: 0,
                     end: text.len(),
                 }],
@@ -72,11 +99,14 @@ impl Ui {
                 // not where a caret at its end goes.
                 let shown = l.trim_end_matches([' ', '\u{200b}']).len();
                 let line = Line {
-                    rect: Rect {
-                        y: content.y + i as f32 * h,
-                        height: h,
-                        ..content
-                    },
+                    rect: aligned(
+                        i,
+                        Rect {
+                            y: content.y + i as f32 * h,
+                            height: h,
+                            ..content
+                        },
+                    ),
                     start: at,
                     end: at + shown,
                 };
@@ -85,6 +115,82 @@ impl Ui {
             })
             .collect();
         (text.clone(), lines)
+    }
+
+    /// Whether `text`, node `id`'s, reads right to left.
+    fn reads_rtl(&self, id: NodeId, text: &str) -> bool {
+        let layout = match self.node(id).rtl {
+            true => LayoutDirection::RightToLeft,
+            false => LayoutDirection::LeftToRight,
+        };
+        crate::bidi::base(text, layout) == LayoutDirection::RightToLeft
+    }
+
+    /// `line`'s runs from left to right, and where each is across it.
+    fn line_spans(
+        &self,
+        id: NodeId,
+        text: &str,
+        line: &Line,
+        measure: &mut dyn TextMeasure,
+    ) -> Vec<Span> {
+        let shown = &text[line.start..line.end];
+        if !crate::bidi::has_rtl(shown) {
+            return vec![Span {
+                start: line.start,
+                end: line.end,
+                rtl: false,
+                x: 0.0,
+                width: 0.0,
+            }];
+        }
+        let layout = match self.node(id).rtl {
+            true => LayoutDirection::RightToLeft,
+            false => LayoutDirection::LeftToRight,
+        };
+        let of = if text.contains('\n') { shown } else { text };
+        let mut x = 0.0;
+        crate::bidi::runs(shown, crate::bidi::base(of, layout))
+            .into_iter()
+            .map(|r| {
+                let (start, end) = (line.start + r.bytes.start, line.start + r.bytes.end);
+                let width = self.span_width(id, text, start, end, measure);
+                let s = Span {
+                    start,
+                    end,
+                    rtl: r.rtl,
+                    x,
+                    width,
+                };
+                x += width;
+                s
+            })
+            .collect()
+    }
+
+    /// How far across its line the caret before byte `at` is.
+    fn caret_across(
+        &self,
+        id: NodeId,
+        text: &str,
+        spans: &[Span],
+        at: usize,
+        measure: &mut dyn TextMeasure,
+    ) -> f32 {
+        // In the run it is before a character of; after the last, that
+        // character's.
+        let Some(s) = spans
+            .iter()
+            .find(|s| s.start <= at && at < s.end)
+            .or_else(|| spans.iter().max_by_key(|s| s.end))
+        else {
+            return 0.0;
+        };
+        let w = self.span_width(id, text, s.start, at.min(s.end), measure);
+        match s.rtl {
+            false => s.x + w,
+            true => s.x + s.width - w,
+        }
     }
 
     /// How wide `text[start..end]` draws, each run in its own style.
@@ -140,11 +246,20 @@ impl Ui {
         if !matches!(self.kind(hit), crate::NodeKind::Text(_)) {
             return None;
         }
+        self.text_selectable(hit).then_some(hit)
+    }
+
+    /// Whether text node `id`'s text can be selected (see
+    /// [`selectable_text_at`](Self::selectable_text_at)).
+    pub fn text_selectable(&self, id: NodeId) -> bool {
+        if !self.text_selection || !matches!(self.kind(id), crate::NodeKind::Text(_)) {
+            return false;
+        }
         use crate::{Role, UserSelect};
-        for n in self.ancestors(hit) {
+        for n in self.ancestors(id) {
             match self.style(n).user_select {
-                UserSelect::Text => return Some(hit),
-                UserSelect::None => return None,
+                UserSelect::Text => return true,
+                UserSelect::None => return false,
                 UserSelect::Auto => {}
             }
             let control = self.semantics(n).is_some_and(|s| {
@@ -161,10 +276,10 @@ impl Ui {
                 )
             });
             if control {
-                return None;
+                return false;
             }
         }
-        Some(hit)
+        true
     }
 
     pub fn text_index_at(
@@ -183,18 +298,20 @@ impl Ui {
             return 0;
         };
         let target = x - line.rect.x;
+        let spans = self.line_spans(id, &text, line, measure);
         let (mut best, mut best_d) = (line.start, f32::INFINITY);
         let bounds = text[line.start..line.end]
             .char_indices()
             .map(|(i, _)| line.start + i)
             .chain(std::iter::once(line.end));
         for b in bounds {
-            let w = self.span_width(id, &text, line.start, b, measure);
+            let w = self.caret_across(id, &text, &spans, b, measure);
             let d = (w - target).abs();
             if d < best_d {
                 (best, best_d) = (b, d);
             }
-            if w > target {
+            // (in a line that reads one way, further on is further off)
+            if w > target && spans.len() < 2 && !spans.iter().any(|s| s.rtl) {
                 break;
             }
         }
@@ -212,14 +329,9 @@ impl Ui {
         let Some(line) = lines.iter().find(|l| byte <= l.end).or(lines.last()) else {
             return Rect::default();
         };
-        let x = line.rect.x
-            + self.span_width(
-                id,
-                &text,
-                line.start,
-                byte.clamp(line.start, line.end),
-                measure,
-            );
+        let spans = self.line_spans(id, &text, line, measure);
+        let at = byte.clamp(line.start, line.end);
+        let x = line.rect.x + self.caret_across(id, &text, &spans, at, measure);
         Rect {
             x,
             width: 1.0,
@@ -248,18 +360,50 @@ impl Ui {
                 continue;
             }
             let (lo, hi) = (lo.min(line.end), hi.min(line.end));
-            let x0 = self.span_width(id, &text, line.start, lo, measure);
-            let mut x1 = self.span_width(id, &text, line.start, hi, measure);
+            // A stretch of each run it covers, those that meet as one.
+            let spans = self.line_spans(id, &text, line, measure);
+            let mut parts: Vec<(f32, f32)> = vec![];
+            for sp in &spans {
+                let (a, b) = (lo.max(sp.start), hi.min(sp.end));
+                if a >= b {
+                    continue;
+                }
+                let before = self.span_width(id, &text, sp.start, a, measure);
+                let to = self.span_width(id, &text, sp.start, b, measure);
+                let (x0, x1) = match sp.rtl {
+                    false => (sp.x + before, sp.x + to),
+                    true => (sp.x + sp.width - to, sp.x + sp.width - before),
+                };
+                match parts.last_mut() {
+                    Some(p) if (p.1 - x0).abs() < 0.01 => p.1 = x1,
+                    _ => parts.push((x0, x1)),
+                }
+            }
             // A selection running on past the line's end shows a space's
             // worth, as editors mark the newline.
             if bb > line.end && k + 1 < lines.len() {
-                x1 += measure.measure(" ", &self.node(id).style).0;
+                let space = measure.measure(" ", &self.node(id).style).0;
+                if self.reads_rtl(id, &text) {
+                    match parts.first_mut() {
+                        Some(p) => p.0 -= space,
+                        None => parts.push((-space, 0.0)),
+                    }
+                } else {
+                    match parts.last_mut() {
+                        Some(p) => p.1 += space,
+                        None => parts.push((0.0, space)),
+                    }
+                }
             }
-            out.push(Rect {
+            if parts.is_empty() {
+                let x = self.caret_across(id, &text, &spans, lo, measure);
+                parts.push((x, x));
+            }
+            out.extend(parts.into_iter().map(|(x0, x1)| Rect {
                 x: line.rect.x + x0,
                 width: (x1 - x0).max(0.0),
                 ..line.rect
-            });
+            }));
         }
         out
     }

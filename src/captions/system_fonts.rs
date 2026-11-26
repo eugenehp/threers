@@ -63,8 +63,8 @@ impl CaptionFont {
 }
 
 impl CaptionFont {
-    /// The system's ordinary sans-serif face, for a user interface: SF Compact where the system has it
-    /// (macOS), otherwise the first of Noto Sans, Ubuntu, Liberation Sans, DejaVu Sans, Droid Sans,
+    /// The system's ordinary sans-serif face, for a user interface: SF Compact on macOS or
+    /// SF Pro on iOS and its kin, otherwise the first of Noto Sans, Ubuntu, Liberation Sans, DejaVu Sans, Droid Sans,
     /// Segoe UI, Arial or Helvetica that is installed and covers Latin and Cyrillic. `None` where there is
     /// none; [`CaptionFont::ui`] then gives the bitmap face, which is monospaced and wide.
     ///
@@ -73,10 +73,41 @@ impl CaptionFont {
     /// better face asks for this one.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn system_sans() -> Option<Self> {
-        if let Some(font) = Self::try_sf_compact() {
+        if let Some(font) = Self::apple_ui() {
             return Some(font);
         }
         family_from(&generic_paths(Generic::Sans), INTERFACE_SAMPLE)
+    }
+
+    /// Makes the system's sans-serif face the UI face — what [`ui`](Self::ui)
+    /// returns from now on, everywhere in the process, with its bold and
+    /// italic files: Segoe UI on Windows; Noto Sans, Ubuntu, Liberation Sans
+    /// or DejaVu Sans on Linux. Elsewhere `ui` is otherwise the built-in
+    /// bitmap face; on Apple platforms it already is the system's, and
+    /// this leaves it. Returns whether the UI face is now the system's.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn use_system_ui_face() -> bool {
+        if Self::apple_ui().is_some() {
+            return true;
+        }
+        for path in generic_paths(Generic::Sans) {
+            // `set_ui` takes one face; a collection's would need picking out.
+            if path.ends_with(".ttc") {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(&path) else { continue };
+            if CaptionFont::from_collection(&bytes, INTERFACE_SAMPLE).is_none() || Self::set_ui(&bytes).is_err() {
+                continue;
+            }
+            let [bold, italic, bold_italic] = siblings(&path);
+            for (b, i, file) in [(true, false, bold), (false, true, italic), (true, true, bold_italic)] {
+                if let Some(style) = file.and_then(|p| std::fs::read(p).ok()) {
+                    let _ = Self::set_ui_style(b, i, &style);
+                }
+            }
+            return true;
+        }
+        false
     }
 
     /// The system's monospaced face (Menlo, DejaVu Sans Mono, Liberation Mono, Noto Sans Mono, Ubuntu Mono, Consolas
@@ -108,32 +139,18 @@ impl CaptionFont {
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub fn with_system_fallbacks(mut self, preferred: &[&str]) -> Self {
-        // A few letters every face for the script has, to take the first face that is one.
-        const SAMPLES: [(&str, &str); 7] = [
-            ("ja", "日本語かな"),
-            ("zh", "中文"),
-            ("ko", "한국어"),
-            ("hi", "हिन्दी"),
-            ("th", "ไทย"),
-            ("he", "שלום"),
-            ("ar", "مرحبا"),
-        ];
-        let base = |tag: &str| {
-            tag.split(['-', '_'])
-                .next()
-                .unwrap_or("")
-                .to_ascii_lowercase()
-        };
         let mut order: Vec<(String, &str)> = Vec::new();
         for tag in preferred {
-            if let Some(&(b, sample)) = SAMPLES.iter().find(|(b, _)| *b == base(tag))
-                && !order.iter().any(|(t, _)| base(t) == b)
+            if let Some(sample) = script_sample(tag)
+                && !order
+                    .iter()
+                    .any(|(t, _)| base_language(t) == base_language(tag))
             {
                 order.push(((*tag).to_string(), sample));
             }
         }
-        for &(b, sample) in &SAMPLES {
-            if !order.iter().any(|(t, _)| base(t) == b) {
+        for &(b, sample) in &SCRIPT_SAMPLES {
+            if !order.iter().any(|(t, _)| base_language(t) == b) {
                 order.push((b.to_string(), sample));
             }
         }
@@ -144,6 +161,67 @@ impl CaptionFont {
         }
         self
     }
+}
+
+impl CaptionFont {
+    /// Also fall back to the installed face for `language`'s script, for faces made by
+    /// [`ui`](Self::ui) from now on — what an interface does when it is shown in Japanese,
+    /// Chinese (`zh-TW`, `zh-Hant`, `zh-HK` for Traditional), Korean, Hindi, Thai, Hebrew or
+    /// Arabic, which the UI face has no letters for.
+    ///
+    /// The face goes ahead of the faces asked for before, so where scripts overlap the latest
+    /// language wins: Han characters are drawn in Japanese forms after `"ja"`, in Chinese ones
+    /// after `"zh"`. Returns whether this machine has such a face; `false` too for a language
+    /// the UI face covers itself (Latin, Cyrillic, Greek), which needs none.
+    ///
+    /// The file is read once and shared; asking again only moves it to the front. Painters
+    /// made before keep the faces they had: make them again after a change of language.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn use_system_fallback_for(language: &str) -> bool {
+        let Some(sample) = script_sample(language) else {
+            return false;
+        };
+        let Some(face) = system_font_paths(language)
+            .into_iter()
+            .find_map(|p| shared_covering(&p.to_string_lossy(), sample))
+        else {
+            return false;
+        };
+        super::font::put_ui_script_fallback(language, face);
+        true
+    }
+}
+
+/// The languages whose script the UI face lacks, each with a few letters every face for it
+/// has (to take the first file that is one).
+#[cfg(not(target_arch = "wasm32"))]
+const SCRIPT_SAMPLES: [(&str, &str); 7] = [
+    ("ja", "日本語かな"),
+    ("zh", "中文"),
+    ("ko", "한국어"),
+    ("hi", "हिन्दी"),
+    ("th", "ไทย"),
+    ("he", "שלום"),
+    ("ar", "مرحبا"),
+];
+
+/// `ja` of `ja-JP`, lower case.
+#[cfg(not(target_arch = "wasm32"))]
+fn base_language(tag: &str) -> String {
+    tag.split(['-', '_'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+}
+
+/// [`SCRIPT_SAMPLES`]' letters for `tag`'s language, if it needs a face of its own.
+#[cfg(not(target_arch = "wasm32"))]
+fn script_sample(tag: &str) -> Option<&'static str> {
+    let base = base_language(tag);
+    SCRIPT_SAMPLES
+        .iter()
+        .find(|(b, _)| *b == base)
+        .map(|&(_, s)| s)
 }
 
 /// Letters an interface face must have: Latin with accents, digits, punctuation, Cyrillic.
@@ -172,6 +250,12 @@ fn generic_paths(kind: Generic) -> Vec<String> {
     let in_roots = |sub: &str, file: &str| -> Vec<String> {
         roots.iter().map(|r| format!("{r}/{sub}/{file}")).collect()
     };
+    // Nothing on a Mac, whose one folder is listed below.
+    let dirs = CaptionFont::apple_font_dirs(match std::env::consts::OS {
+        "macos" => "",
+        os => os,
+    });
+    let in_ios = |file: &'static str| dirs.iter().map(move |d| d.join(file).to_string_lossy().into_owned());
     let mut paths: Vec<String> = Vec::new();
     match kind {
         Generic::Sans => {
@@ -205,6 +289,7 @@ fn generic_paths(kind: Generic) -> Vec<String> {
                 ["Menlo.ttc", "Monaco.ttf", "Courier.ttc"]
                     .map(|f| format!("/System/Library/Fonts/{f}")),
             );
+            paths.extend(in_ios("Menlo.ttc").chain(in_ios("CourierNew.ttf")));
             for (sub, file) in [
                 ("dejavu", "DejaVuSansMono.ttf"),
                 ("liberation", "LiberationMono-Regular.ttf"),
@@ -224,6 +309,7 @@ fn generic_paths(kind: Generic) -> Vec<String> {
                 ]
                 .map(String::from),
             );
+            paths.extend(in_ios("NewYork.ttf").chain(in_ios("TimesNewRoman.ttf")));
             for (sub, file) in [
                 ("noto", "NotoSerif-Regular.ttf"),
                 ("liberation", "LiberationSerif-Regular.ttf"),
@@ -514,6 +600,17 @@ pub fn system_font_paths(language: &str) -> Vec<std::path::PathBuf> {
             }
         }
         _ => {}
+    }
+    // iOS keeps the same files in folders of their own under the Mac's
+    // (Core: SFHebrew, SFArabic, SFIndia, ThonburiUI, Hiragino…;
+    // LanguageSupport: Kohinoor…): each Mac path looked for there too
+    let ios_dirs = ["Core", "CoreUI", "CoreAddition", "LanguageSupport", "AppFonts"];
+    let mac_paths: Vec<String> = paths.iter().filter(|p| p.starts_with("/System/Library/Fonts/")).cloned().collect();
+    for p in mac_paths {
+        let name = p.rsplit('/').next().unwrap_or("");
+        for d in ios_dirs {
+            paths.push(format!("/System/Library/Fonts/{d}/{name}"));
+        }
     }
     // Where the packages name their files differently (Noto has Thai as `NotoSansThai`, `NotoLoopedThai` or
     // `NotoSansThaiUI`, by distribution), look in the folders for the script's name.
@@ -862,5 +959,26 @@ mod tests {
         }
         // A language that needs none gets none.
         assert!(CaptionFont::system_for_language("en", "abc").is_none());
+    }
+
+    /// An interface switched to Hebrew or Japanese draws its letters, not boxes: the
+    /// language's face joins the UI face's fallbacks, the one asked for last first.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_language_asked_for_puts_its_face_behind_the_ui_face() {
+        assert!(
+            !CaptionFont::use_system_fallback_for("en"),
+            "Latin needs no face"
+        );
+        for (tag, text) in [("he", "הגדרות"), ("ja", "設定かな"), ("ko", "설정")] {
+            if CaptionFont::use_system_fallback_for(tag) {
+                let ui = CaptionFont::ui();
+                assert!(text.chars().all(|c| ui.can_draw(c)), "{tag}: {text}");
+            }
+        }
+        // Asked again, nothing is added: it moves to the front.
+        let n = super::super::font::ui_script_fallback_count();
+        CaptionFont::use_system_fallback_for("he");
+        assert_eq!(super::super::font::ui_script_fallback_count(), n);
     }
 }

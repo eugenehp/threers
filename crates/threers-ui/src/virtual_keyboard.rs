@@ -141,6 +141,8 @@ const HOLD: f64 = 0.45;
 const WORDS_AFTER: u32 = 12;
 /// Pixels the finger moves on the space bar's trackpad per caret step.
 const TRACKPAD_STEP: f32 = 12.0;
+/// The most steps of one move: no finger goes further, a bad coordinate does.
+const TRACKPAD_MOST: usize = 500;
 
 /// The modifier that makes Backspace delete a word on this platform's
 /// text shortcuts: ⌥ on Apple's, Ctrl on the rest.
@@ -236,9 +238,6 @@ pub const TRAIL_SECONDS: f64 = 1.2;
 /// Points of a swipe's path its trail shows at most.
 #[cfg(feature = "swipe")]
 const TRAIL_POINTS: usize = 240;
-/// Strokes a trail is drawn in, stacked toward the finger.
-#[cfg(feature = "swipe")]
-const TRAIL_BANDS: usize = 8;
 /// Seconds a trail takes to fade once the finger lifts.
 #[cfg(feature = "swipe")]
 pub const TRAIL_FADE: f64 = 0.3;
@@ -307,6 +306,9 @@ struct Board {
     /// What this keyboard typed lately, for the period shortcut without a
     /// context.
     recent: String,
+    /// The focused field holds a secret: nothing of it is read, kept,
+    /// predicted, swiped or previewed.
+    secret: bool,
     /// Words offered for the one being typed.
     suggest: Option<Suggester>,
     /// Words offered from the text before the caret, ahead of `suggest`.
@@ -349,19 +351,16 @@ enum FieldKeyboard {
 }
 
 impl Board {
-    /// The config `field` shows (the default for `None`), with the tweaks.
+    /// The config `field` shows (the default for `None`), before the tweaks:
+    /// those are the app's, to be run with the board let go.
     fn config_for(&self, field: Option<NodeId>) -> KeyboardConfig {
         let own = field.and_then(|f| self.per_field.iter().find(|(n, _)| *n == f));
-        let mut c = match own.map(|(_, k)| k) {
+        match own.map(|(_, k)| k) {
             Some(FieldKeyboard::Config(c)) => (**c).clone(),
             Some(FieldKeyboard::Type(t)) => t.config(self.resolved),
             None if self.device.is_some() => KeyboardConfig::for_device(self.resolved),
             None => self.default.clone(),
-        };
-        for t in &self.tweaks {
-            t(&mut c);
         }
-        c
     }
 
     fn placement(&self) -> Placement {
@@ -373,6 +372,18 @@ impl Board {
             .get(self.current)
             .cloned()
             .unwrap_or_else(KeyboardLayout::english)
+    }
+}
+
+/// A UI's own keyboard, on or not: set on its root
+/// ([`Ui::environment`](crate::Ui::environment)) by [`VirtualKeyboard`].
+#[derive(Clone)]
+pub struct OwnKeyboard(Rc<Cell<bool>>);
+
+impl OwnKeyboard {
+    /// Whether it types into the UI's text controls now.
+    pub fn on(&self) -> bool {
+        self.0.get()
     }
 }
 
@@ -430,6 +441,19 @@ fn paint(ui: &mut Ui, node: NodeId, property: &str, color: KeyColor, appearance:
             s.color_set = true;
         }
     });
+}
+
+/// Which of a theme's two looks the keys take: the dark one where
+/// the UI's words are light (a dark appearance, or glass, whose theme has
+/// light words either way), the light one where they are dark, so the
+/// keyboard's bar (in the UI's colours) reads on it.
+fn drawn_for(ui: &Ui) -> Appearance {
+    let [r, g, b, _] = ui.token(Token::Text);
+    if crate::contrast_ratio([r, g, b], [0.0; 3]) > crate::contrast_ratio([r, g, b], [1.0; 3]) {
+        Appearance::Dark
+    } else {
+        Appearance::Light
+    }
 }
 
 /// A colour as it shows now (a token as black: for shadows).
@@ -513,7 +537,7 @@ impl VirtualKeyboard {
             })
             .collect();
         let done = ui.add_box(bar, style! { padding: 4px 12px; border-radius: 6px; font-weight: bold; font-size: 15px; cursor: pointer; min-height: 24px; box-sizing: border-box; });
-        ui.token_style(done, &[("color", Token::Accent)]);
+        ui.token_style(done, &[("color", Token::AccentText)]);
         ui.add_text(done, "Done");
         ui.set_semantics(
             done,
@@ -590,6 +614,7 @@ impl VirtualKeyboard {
             before: None,
             auto_shift: false,
             recent: String::new(),
+            secret: false,
             suggest: None,
             predict: None,
             offered: (String::new(), vec![]),
@@ -627,6 +652,9 @@ impl VirtualKeyboard {
             queue: Rc::default(),
             swiping: Rc::default(),
         };
+        // What a native layer reads: while it is on, the UI's text controls
+        // are typed into here, not through a platform keyboard
+        ui.set_environment(root, OwnKeyboard(kb.enabled.clone()));
         {
             let b = kb.board.clone();
             input.on(done, Phase::Bubble, move |_, _, e, cx| {
@@ -676,7 +704,8 @@ impl VirtualKeyboard {
                 input.set_focus(ui, s, None);
             }
             let window = ui.rect(ui.root());
-            me.follow(input.focused(), window.width, window.height);
+            let secret = input.focused_text_is_secret(ui);
+            me.follow(input.focused(), secret, window.width, window.height);
             me.serve_requests(input);
             // The keys, for the config, layout, page and appearance now.
             me.build(ui, input);
@@ -740,16 +769,22 @@ impl VirtualKeyboard {
 
     /// The focused field's config, or the default, for the device the
     /// window is, showing.
-    fn follow(&self, focused: Option<NodeId>, width: f32, height: f32) {
+    fn follow(&self, focused: Option<NodeId>, secret: bool, width: f32, height: f32) {
         let mut b = self.board.borrow_mut();
         let device = b
             .device
             .map_or(b.resolved, |d| d.resolve(width.max(1.0), height.max(1.0)));
-        if focused != b.focused {
+        if focused != b.focused || secret != b.secret {
             // Another field: what was typed and read was the last one's.
             b.focused = focused;
+            b.secret = secret;
             b.recent.clear();
             b.before = None;
+            #[cfg(feature = "swipe")]
+            {
+                b.swiped = None;
+                b.auto_space = false;
+            }
             if b.auto_shift {
                 b.shift = Shift::Off;
                 b.auto_shift = false;
@@ -761,7 +796,15 @@ impl VirtualKeyboard {
             return;
         }
         b.resolved = device;
-        b.active = b.config_for(field);
+        let mut config = b.config_for(field);
+        let tweaks = b.tweaks.clone();
+        drop(b);
+        // (with the board let go: one may ask the keyboard something)
+        for t in &tweaks {
+            t(&mut config);
+        }
+        let mut b = self.board.borrow_mut();
+        b.active = config;
         b.active_field = field;
         b.page = b.active.start_page;
         b.generation += 1;
@@ -770,6 +813,11 @@ impl VirtualKeyboard {
     /// Reads the text before the caret, if the app said how: Shift on for a
     /// new sentence (off again when it is not), words for the one typed.
     fn read_context<S: 'static>(&self, ui: &mut Ui, s: &S, field: NodeId) {
+        if self.board.borrow().secret {
+            // Nothing is read, and no words are offered.
+            self.offer_words(ui, "");
+            return;
+        }
         let reader = self.board.borrow().context.clone();
         let Some(reader) = reader else {
             return;
@@ -810,6 +858,8 @@ impl VirtualKeyboard {
     fn offer_words(&self, ui: &mut Ui, word: &str) {
         // What a chip replaces: the word being typed, or a swiped word
         // and the space after it.
+        // (changed only by a swipe)
+        #[cfg_attr(not(feature = "swipe"), allow(unused_mut))]
         let mut replaces = word.to_owned();
         #[cfg(feature = "swipe")]
         let swiped = {
@@ -844,6 +894,8 @@ impl VirtualKeyboard {
             (b.suggest.clone(), b.predict.clone())
         };
         let words = match (&swiped, &suggest) {
+            // A secret: a predictor may learn from what it is asked about.
+            _ if self.board.borrow().secret => vec![],
             (Some(others), _) => others.iter().take(SUGGESTIONS).cloned().collect(),
             (None, _) if predict.is_some() => {
                 let f = predict.as_ref().expect("checked");
@@ -998,7 +1050,7 @@ impl VirtualKeyboard {
     /// appearance changed: every page at once, so a page shows by being
     /// shown, without building keys or changing the tree's shape.
     fn build<S: 'static>(&self, ui: &mut Ui, input: &mut Input<S>) {
-        let appearance = ui.appearance_of(self.panel);
+        let appearance = drawn_for(ui);
         let (want, page) = {
             let b = self.board.borrow();
             ((b.generation, b.current, Page::Letters, appearance), b.page)
@@ -1504,7 +1556,7 @@ impl VirtualKeyboard {
     /// Each key's label for Shift, and its colours: on the page showing,
     /// and only where they change.
     fn relabel(&self, ui: &mut Ui) {
-        let appearance = ui.appearance_of(self.panel);
+        let appearance = drawn_for(ui);
         let mut b = self.board.borrow_mut();
         let theme = b.active.theme;
         let accent_return = b.active.return_key.accent();
@@ -1617,7 +1669,7 @@ impl VirtualKeyboard {
             {
                 typed.insert(0, "Backspace".into());
             }
-            if typed == [" "] && b.active.period_shortcut {
+            if typed == [" "] && b.active.period_shortcut && !b.secret {
                 // The field's text if the app tells it, else what this
                 // keyboard typed.
                 let before = b.before.clone().unwrap_or_else(|| b.recent.clone());
@@ -1625,7 +1677,9 @@ impl VirtualKeyboard {
                     typed = vec!["Backspace".into(), ".".into(), " ".into()];
                 }
             }
-            for t in &typed {
+            // (what is typed of a secret is not kept)
+            let kept = !b.secret;
+            for t in typed.iter().filter(|_| kept) {
                 if t == "Backspace" {
                     b.recent.pop();
                 } else if t.chars().count() == 1 {
@@ -1787,7 +1841,7 @@ impl VirtualKeyboard {
             let path = {
                 let letter = b.page == Page::Letters
                     && matches!(&key.action, KeyAction::Text(t) if swipe_letter(t).is_some());
-                (types && letter && b.swipe.is_some())
+                (types && letter && b.swipe.is_some() && !b.secret)
                     .then(|| (vec![SwipePoint { x, y, t: b.clock }], 0.0))
             };
             b.press = Some(Press {
@@ -1834,6 +1888,9 @@ impl VirtualKeyboard {
     }
 
     fn slide(&self, ui: &mut Ui, x: f32, y: f32) {
+        if !x.is_finite() || !y.is_finite() {
+            return;
+        }
         let mut b = self.board.borrow_mut();
         let Some(press) = b.press.as_mut() else {
             return;
@@ -1848,7 +1905,7 @@ impl VirtualKeyboard {
             drop(b);
             let step = |n: f32, more: &str, less: &str| {
                 let key = if n > 0.0 { more } else { less };
-                std::iter::repeat_n(key.to_owned(), n.abs() as usize)
+                std::iter::repeat_n(key.to_owned(), (n.abs() as usize).min(TRACKPAD_MOST))
             };
             self.send(step(across, "ArrowRight", "ArrowLeft"));
             self.send(step(down, "ArrowDown", "ArrowUp"));
@@ -2098,7 +2155,7 @@ impl VirtualKeyboard {
 
     fn close(&self, ui: &mut Ui, press: &Press) {
         self.unlight_bubble(ui);
-        if press.trackpad.is_some() {
+        if press.trackpad.is_some() && ui.contains(self.body) {
             ui.update_style(self.body, |s| s.opacity = 1.0);
         }
         if press.popup.is_some() {
@@ -2107,7 +2164,7 @@ impl VirtualKeyboard {
     }
 
     fn hide(&self, ui: &mut Ui, node: NodeId) {
-        if ui.style(node).display != Display::None {
+        if ui.contains(node) && ui.style(node).display != Display::None {
             ui.update_style(node, |s| s.display = Display::None);
         }
     }
@@ -2116,6 +2173,10 @@ impl VirtualKeyboard {
     /// bubble made opaque, which is drawn without laying anything out.
     fn preview(&self, ui: &mut Ui, index: usize) {
         self.unlight_bubble(ui);
+        if self.board.borrow().secret {
+            // Not for whoever looks over a shoulder.
+            return;
+        }
         let bubble = self.board.borrow().keys.get(index).and_then(|k| k.bubble);
         if let Some((b, _)) = bubble {
             ui.update_style(b, |s| s.opacity = 1.0);
@@ -2166,7 +2227,7 @@ impl VirtualKeyboard {
             (k.face, options, b.active.theme)
         };
         self.unlight_bubble(ui);
-        let appearance = ui.appearance_of(self.panel);
+        let appearance = drawn_for(ui);
         let (r, panel) = (ui.rect(face), ui.rect(self.panel));
         let w = r.width.max(28.0);
         let total = w * options.len() as f32 + 12.0;
@@ -2217,6 +2278,9 @@ impl VirtualKeyboard {
 
     /// The space bar held: the keys fade, and sliding moves the caret.
     fn start_trackpad(&self, ui: &mut Ui, index: usize) {
+        if !ui.contains(self.body) {
+            return;
+        }
         let key = {
             let mut b = self.board.borrow_mut();
             let Some(press) = b.press.as_mut().filter(|p| p.index == index) else {
@@ -2235,7 +2299,7 @@ impl VirtualKeyboard {
 
     /// The alternates `which` lit if chosen, plain if not.
     fn light_options(&self, ui: &mut Ui, which: &[usize], chosen: usize) {
-        let appearance = ui.appearance_of(self.panel);
+        let appearance = drawn_for(ui);
         let theme = self.board.borrow().active.theme;
         for &i in which {
             let Some(&(n, _)) = self.options.get(i) else {
@@ -2264,15 +2328,18 @@ impl VirtualKeyboard {
                 let Some((px, py)) = self.board.borrow().drag else {
                     return;
                 };
+                if !x.is_finite() || !y.is_finite() {
+                    return;
+                }
                 let (sheet, panel, root) =
                     (ui.rect(self.sheet), ui.rect(self.panel), ui.rect(ui.root()));
                 let (ox, oy) = self.board.borrow().offset;
                 // Where it would be undragged, and how far it may go.
                 let (x0, y0) = (sheet.x - ox, sheet.y - oy);
-                let nx =
-                    (ox + x - px).clamp(panel.x - x0, panel.x + panel.width - sheet.width - x0);
-                let ny =
-                    (oy + y - py).clamp(root.y - y0, panel.y + panel.height - sheet.height - y0);
+                // (in a window smaller than it, its top left is what shows)
+                let within = |v: f32, least: f32, most: f32| v.min(most).max(least);
+                let nx = within(ox + x - px, panel.x - x0, panel.x + panel.width - sheet.width - x0);
+                let ny = within(oy + y - py, root.y - y0, panel.y + panel.height - sheet.height - y0);
                 {
                     let mut b = self.board.borrow_mut();
                     b.offset = (nx, ny);
@@ -2291,7 +2358,10 @@ impl VirtualKeyboard {
         }
     }
 
-    /// Turns it on or off. On, it shows while a text control has focus.
+    /// Turns it on or off. On, it shows while a text control has focus, and
+    /// a native layer ([`native::controls`](crate::native::controls)) puts
+    /// no platform keyboard's field over the UI's text controls: they are
+    /// pressed to be typed into here.
     pub fn set_enabled(&self, on: bool) {
         self.enabled.set(on);
     }
@@ -2556,32 +2626,31 @@ impl VirtualKeyboard {
         if pts.len() < 2 {
             return fade < 1.0;
         }
-        // Layers, each one stroke from further along to the finger: they
-        // stack, so the newest stretch is under all of them (widest,
-        // strongest) and the oldest under one; each is continuous, so no
-        // seams where translucent ends would overlap.
-        let segments = pts.len() - 1;
-        let layers = TRAIL_BANDS.min(segments);
-        let alpha = 1.0 - (1.0 - 0.8 * fade).powf(1.0 / layers as f32);
-        for k in 0..layers {
-            let lo = k * segments / layers;
-            let width = 2.0 + 6.0 * (k + 1) as f32 / layers as f32;
-            let colour: crate::Rgba = [0.0, 0.48, 1.0, alpha];
-            let layer = &pts[lo..];
-            let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-            let mut d = String::with_capacity(layer.len() * 16);
-            for (i, p) in layer.iter().enumerate() {
-                (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y));
-                d.push_str(&format!("{}{:.1} {:.1} ", if i == 0 { 'M' } else { 'L' }, p.x, p.y));
+        // Round dots along it, near enough to be a stroke, larger toward the
+        // finger: each costs its own few pixels, so a long swipe draws as
+        // fast as a short one. (Strokes of all of it, stacked, worked out
+        // every pixel round it against every piece of it, eight times over.)
+        let length: f32 = pts.windows(2).map(|w| (w[1].x - w[0].x).hypot(w[1].y - w[0].y)).sum();
+        // each place is under about this many of them
+        const OVER: f32 = 4.0;
+        let alpha = 1.0 - (1.0 - 0.8 * fade).powf(1.0 / OVER);
+        let colour: crate::Rgba = [0.0, 0.48, 1.0, alpha];
+        let size = |at: f32| 2.0 + 6.0 * at / length.max(1.0);
+        let mut dot = |x: f32, y: f32, d: f32| {
+            let r = crate::Rect { x: x - d / 2.0, y: y - d / 2.0, width: d, height: d };
+            painter.fill_rounded_rect(r, d / 2.0, d / 2.0, colour);
+        };
+        let (mut along, mut next) = (0.0f32, 0.0f32);
+        for w in pts.windows(2) {
+            let (dx, dy) = (w[1].x - w[0].x, w[1].y - w[0].y);
+            let l = dx.hypot(dy);
+            while next <= along + l {
+                let t = if l > 0.0 { (next - along) / l } else { 0.0 };
+                let d = size(next);
+                dot(w[0].x + dx * t, w[0].y + dy * t, d);
+                next += (d / OVER).max(0.75);
             }
-            let rect = crate::Rect {
-                x: x0 - width,
-                y: y0 - width,
-                width: x1 - x0 + 2.0 * width,
-                height: y1 - y0 + 2.0 * width,
-            };
-            let view = [rect.x, rect.y, rect.width, rect.height];
-            painter.path(rect, &[d], view, Some(width), false, colour);
+            along += l;
         }
         true
     }
@@ -2657,7 +2726,7 @@ impl VirtualKeyboard {
 
     /// Whether it is showing now.
     pub fn showing(&self, ui: &Ui) -> bool {
-        ui.style(self.panel).display != Display::None
+        ui.contains(self.panel) && ui.style(self.panel).display != Display::None
     }
 
     /// Its panel (to measure, or keep content clear of).

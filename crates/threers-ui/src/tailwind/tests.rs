@@ -149,7 +149,6 @@ fn several_classes_make_one_property() {
 fn unsupported_classes_are_named_with_a_reason() {
     let t = Tailwind::default();
     for bad in [
-        "fixed",
         "z-10",
         "mx-auto",
         "space-x-2",
@@ -168,7 +167,7 @@ fn unsupported_classes_are_named_with_a_reason() {
         assert_eq!(e.class, bad);
         assert!(!e.reason.is_empty());
     }
-    assert_eq!(t.parse("p-4 flex sticky").unwrap_err().class, "sticky");
+    assert_eq!(t.parse("p-4 flex isolate").unwrap_err().class, "isolate");
     assert!(t
         .parse("mx-auto")
         .unwrap_err()

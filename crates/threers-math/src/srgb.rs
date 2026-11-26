@@ -21,10 +21,20 @@ pub fn srgb_to_linear(byte: u8) -> f32 {
 /// encoding rounds to it, found among the 255 points where the rounding
 /// changes (no power function per call, and the same byte as computing the
 /// curve and rounding).
+///
+/// The inner loop of blending text and shapes (three channels a pixel), so
+/// not a search of the 255: where `value`'s 1/4096th of the range starts is
+/// a byte found once, and the one or two thresholds past it in the bucket
+/// stepped over — the same byte, from a load and a compare or two.
 pub fn linear_to_srgb(value: f32) -> u8 {
     let c = value.clamp(0.0, 1.0);
-    // NaN clamps to NaN, which is below every threshold: 0, as before.
-    tables().steps.partition_point(|&t| c >= t) as u8
+    let t = tables();
+    // NaN clamps to NaN, bucket 0, and is below every threshold: 0, as before.
+    let mut b = t.start[((c * 4096.0) as usize).min(4095)] as usize;
+    while b < 255 && c >= t.steps[b] {
+        b += 1;
+    }
+    b as u8
 }
 
 /// What the curve takes from each byte, and where encoding moves from one
@@ -33,6 +43,8 @@ struct Tables {
     decode: [f32; 256],
     /// `steps[k]`: the least linear value encoding to byte `k + 1` or more.
     steps: [f32; 255],
+    /// The byte each 1/4096th of `[0, 1]` starts at.
+    start: [u8; 4096],
 }
 
 fn tables() -> &'static Tables {
@@ -53,7 +65,8 @@ fn tables() -> &'static Tables {
             }
             hi
         });
-        Tables { decode, steps }
+        let start = std::array::from_fn(|i| steps.partition_point(|&t| i as f32 / 4096.0 >= t) as u8);
+        Tables { decode, steps, start }
     })
 }
 
@@ -81,6 +94,24 @@ pub fn srgb_to_linear_f32(value: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bucketed encode is the search it replaced, everywhere: a dense
+    /// sweep of `[0, 1]`, each threshold and its neighbours, the ends, NaN.
+    #[test]
+    fn the_buckets_give_the_search() {
+        let search = |c: f32| {
+            let c = c.clamp(0.0, 1.0);
+            tables().steps.partition_point(|&t| c >= t) as u8
+        };
+        let mut probes: Vec<f32> = (0..=1_000_000).map(|i| i as f32 / 1_000_000.0).collect();
+        for &t in tables().steps.iter() {
+            probes.extend([t, f32::from_bits(t.to_bits() - 1), f32::from_bits(t.to_bits() + 1)]);
+        }
+        probes.extend([-1.0, 0.0, 1.0, 2.0, f32::NAN, f32::INFINITY]);
+        for v in probes {
+            assert_eq!(linear_to_srgb(v), search(v), "at {v}");
+        }
+    }
 
     /// The tables give what the curve gives: every byte decoded, and
     /// encoding a dense sweep (plus each step and its neighbours) rounding

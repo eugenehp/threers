@@ -12,7 +12,7 @@ pub enum Error {
     NotAFont,
     /// A table glyphs need is missing.
     MissingTable(&'static str),
-    /// Outlines that are not TrueType quadratics (CFF).
+    /// What is not read: a glyph or table of a kind not known.
     Unsupported(&'static str),
 }
 
@@ -68,6 +68,7 @@ impl<'a> Reader<'a> {
 }
 
 /// One face of a font file.
+#[derive(Clone)]
 pub struct Face {
     data: Vec<u8>,
     tables: BTreeMap<[u8; 4], (usize, usize)>,
@@ -99,9 +100,17 @@ pub struct Face {
     pub os2: Option<Os2>,
     /// The Unicode subtable chosen for `glyph_index`.
     cmap: Option<(usize, u16)>,
-    /// Whether the outlines are CFF (read for their tables only; their
-    /// glyphs do not load).
+    /// A symbol font's subtable (platform 3, encoding 0), where it has no
+    /// Unicode one.
+    symbol: Option<(usize, u16)>,
+    /// Whether the outlines are CFF (Type 2 charstrings: loaded unhinted).
     pub cff: bool,
+    /// A variable font's instance: its normalized coordinates (empty, or
+    /// all 0, for the default instance).
+    coords: Vec<f32>,
+    /// The size in points Apple's tracking (`trak`) is for; 0 for 12, as
+    /// HarfBuzz and CoreText take it when not told.
+    pub point_size: f32,
 }
 
 /// The `OS/2` fields metrics and matching use.
@@ -180,7 +189,10 @@ impl Face {
             number_of_h_metrics: 0,
             os2: None,
             cmap: None,
+            symbol: None,
             cff,
+            coords: Vec::new(),
+            point_size: 0.0,
         };
 
         let head = tab(b"head").ok_or(Error::MissingTable("head"))?;
@@ -237,6 +249,9 @@ impl Face {
         f.tables = tables;
         let mut face = f;
         face.cmap = face.find_unicode_cmap();
+        if face.cmap.is_none() {
+            face.symbol = face.find_symbol_cmap();
+        }
         Ok(face)
     }
 
@@ -276,6 +291,22 @@ impl Face {
         full.or(bmp)
     }
 
+    /// The symbol subtable (platform 3, encoding 0) of a format we read.
+    fn find_symbol_cmap(&self) -> Option<(usize, u16)> {
+        let cmap = self.table(b"cmap")?;
+        let r = Reader::new(cmap);
+        let count = r.u16(2).ok()? as usize;
+        (0..count).find_map(|i| {
+            let at = 4 + 8 * i;
+            if r.u16(at).ok()? != 3 || r.u16(at + 2).ok()? != 0 {
+                return None;
+            }
+            let offset = r.u32(at + 4).ok()? as usize;
+            let format = r.u16(offset).ok()?;
+            matches!(format, 4 | 12 | 13).then_some((offset, format))
+        })
+    }
+
     /// Whether the face's character map is a symbol one (platform 3,
     /// encoding 0, and no Unicode one FreeType would take instead).
     pub fn has_symbol_cmap(&self) -> bool {
@@ -290,22 +321,123 @@ impl Face {
     }
 
     /// `FT_Get_Char_Index`: the glyph of a character, 0 for none.
+    ///
+    /// A symbol font (no Unicode subtable): its own codes, and U+0000 to
+    /// U+00FF at U+F000 to U+F0FF where they are, as HarfBuzz and Windows
+    /// read them.
     pub fn glyph_index(&self, c: u32) -> u16 {
-        let Some((offset, format)) = self.cmap else { return 0 };
         let Some(cmap) = self.table(b"cmap") else { return 0 };
         let r = Reader::new(cmap);
-
-        let found = match format {
-            4 => cmap4(r, offset, c),
-            13 => cmap13(r, offset, c),
-            _ => cmap12(r, offset, c),
+        let find = |(offset, format): (usize, u16), c: u32| -> u16 {
+            let found = match format {
+                4 => cmap4(r, offset, c),
+                13 => cmap13(r, offset, c),
+                _ => cmap12(r, offset, c),
+            };
+            found.ok().flatten().filter(|g| *g < self.num_glyphs).unwrap_or(0)
         };
-
-        found.ok().flatten().filter(|g| *g < self.num_glyphs).unwrap_or(0)
+        if let Some(sub) = self.cmap {
+            return find(sub, c);
+        }
+        let Some(sub) = self.symbol else { return 0 };
+        match find(sub, c) {
+            0 if c <= 0xFF => find(sub, 0xF000 + c),
+            g => g,
+        }
     }
 
-    /// `hmtx`: the advance and left side bearing of a glyph.
+    /// A variable font's instance at these axis values (`wght` 650…; the
+    /// axes not given at their defaults): its advances and GPOS values
+    /// with their deltas.
+    pub fn set_variations(&mut self, values: &[([u8; 4], f32)]) {
+        self.coords = match self.table(b"fvar") {
+            Some(fvar) => crate::var::normalize(fvar, self.table(b"avar"), values),
+            None => Vec::new(),
+        };
+        if self.coords.iter().all(|c| *c == 0.0) {
+            self.coords.clear();
+        }
+    }
+
+    /// `trak`: the normal track's horizontal tracking at the face's point
+    /// size, in font units (interpolated between the sizes and the tracks
+    /// the table has, as HarfBuzz does).
+    pub fn tracking(&self) -> f32 {
+        let Some(trak) = self.table(b"trak") else { return 0.0 };
+        let r = Reader::new(trak);
+        let ptem = if self.point_size > 0.0 { self.point_size } else { 12.0 };
+        let Ok(h) = r.u16(6) else { return 0.0 };
+        if h == 0 {
+            return 0.0;
+        }
+        let h = h as usize;
+        let (Ok(tracks), Ok(sizes), Ok(size_table)) = (r.u16(h), r.u16(h + 2), r.u32(h + 4)) else { return 0.0 };
+        let fixed = |at: usize| r.u32(at).map(|v| v as i32 as f32 / 65536.0).unwrap_or(0.0);
+        let n = sizes as usize;
+        let size = |i: usize| fixed(size_table as usize + 4 * i);
+        // a track's value at the point size, between the sizes it has
+        let at_size = |track: usize| -> f32 {
+            let values = r.u16(h + 8 + 8 * track + 6).unwrap_or(0) as usize;
+            let value = |i: usize| f32::from(r.i16(values + 2 * i).unwrap_or(0));
+            match n {
+                0 => 0.0,
+                1 => value(0),
+                _ => match (0..n).find(|&i| size(i) >= ptem) {
+                    None => value(n - 1),
+                    Some(0) => value(0),
+                    Some(i) => {
+                        let (s0, s1) = (size(i - 1), size(i));
+                        let t = if s1 == s0 { 0.0 } else { (ptem - s0) / (s1 - s0) };
+                        t * value(i) + (1.0 - t) * value(i - 1)
+                    }
+                },
+            }
+        };
+        // the normal track (0), or between the two either side of it, or the only one
+        let count = tracks as usize;
+        let track = |i: usize| fixed(h + 8 + 8 * i);
+        match count {
+            0 => 0.0,
+            1 => at_size(0),
+            _ => {
+                let mut i = 0;
+                while i + 1 < count && track(i + 1) <= 0.0 {
+                    i += 1;
+                }
+                let mut j = count - 1;
+                while j > 0 && track(j - 1) >= 0.0 {
+                    j -= 1;
+                }
+                if i == j {
+                    at_size(i)
+                } else {
+                    let (t0, t1) = (track(i), track(j));
+                    let t = (0.0 - t0) / (t1 - t0);
+                    let (a, b) = (at_size(i), at_size(j));
+                    a + t * (b - a)
+                }
+            }
+        }
+    }
+
+    /// The instance's normalized coordinates (empty for the default one).
+    pub fn coords(&self) -> &[f32] {
+        &self.coords
+    }
+
+    /// `hmtx`: the advance and left side bearing of a glyph (the advance
+    /// with `HVAR`'s delta for the instance).
     pub fn h_metrics(&self, gid: u16) -> (u16, i16) {
+        let (advance, lsb) = self.default_h_metrics(gid);
+        if self.coords.is_empty() {
+            return (advance, lsb);
+        }
+        let Some(hvar) = self.table(b"HVAR") else { return (advance, lsb) };
+        let d = crate::var::advance_delta(hvar, gid, &self.coords);
+        ((f32::from(advance) + crate::var::hb_round(d)).max(0.0) as u16, lsb)
+    }
+
+    fn default_h_metrics(&self, gid: u16) -> (u16, i16) {
         let Some(hmtx) = self.table(b"hmtx") else { return (0, 0) };
         let r = Reader::new(hmtx);
         let n = self.number_of_h_metrics.max(1);

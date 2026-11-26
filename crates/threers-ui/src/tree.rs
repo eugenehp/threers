@@ -83,6 +83,11 @@ pub(crate) struct Node {
     pub runs: Option<Vec<super::rich_text::TextRun>>,
     /// Where each run's piece of each line goes, as last laid out.
     pub pieces: Vec<super::rich_text::Piece>,
+    /// It reads right to left, as last laid out.
+    pub rtl: bool,
+    /// Its shape is drawn the other way round (`rtl-flip`, here or round
+    /// it, where it reads right to left).
+    pub flipped: bool,
     /// What it means to assistive technology (see [`super::a11y`]).
     pub semantics: Option<super::a11y::Semantics>,
     /// Which tenant of the slot this is (see [`NodeId`]).
@@ -157,6 +162,8 @@ impl Node {
             line_widths: vec![],
             runs: None,
             pieces: vec![],
+            rtl: false,
+            flipped: false,
             semantics: None,
             generation,
             dirty: true,
@@ -183,6 +190,9 @@ impl Node {
 #[derive(Debug, Clone)]
 pub struct Ui {
     pub(crate) nodes: Vec<Node>,
+    /// What a gone node's id gets in a release build (see
+    /// [`crate::mistake`]): read as an empty box, its changes dropped.
+    pub(crate) scratch: Box<Node>,
     /// Removed slots, for the next nodes added.
     pub(crate) free: Vec<usize>,
     /// Whether layout puts boxes on Blink's 1/64 px grid (see
@@ -193,6 +203,14 @@ pub struct Ui {
     /// Text already broken into lines, across layouts (`layout::WrapMemo`):
     /// a tree built again, or laid out again, wraps only what changed.
     pub(crate) wrap_memo: crate::layout::WrapMemo,
+    /// Scrolling boxes moved since the last layout and nothing else
+    /// ([`set_scroll_top`](Self::set_scroll_top)): the next layout moves
+    /// their content instead of laying the tree out again.
+    pub(crate) scrolls_pending: Vec<NodeId>,
+    /// Sticky boxes moved to stay in view, and by how much, as last placed.
+    pub(crate) stuck: Vec<(NodeId, f32)>,
+    /// Fixed boxes this deferred (to undo when they stop being fixed).
+    pub(crate) fixed_deferred: Vec<NodeId>,
     /// The viewport of the last layout.
     pub(crate) viewport: (f32, f32),
     /// Built on the first hit test after the boxes change.
@@ -238,6 +256,9 @@ pub struct Ui {
     /// Seconds stepped so far (see [`Ui::step`]), the clock `auto`
     /// scrollbars fade by.
     pub(crate) clock: f64,
+    /// The host called [`Ui::step`] since the input's last tick: the tick
+    /// leaves the animations to it.
+    pub(crate) host_steps: bool,
     /// Nodes that flicker (see [`flicker`](super::flicker)).
     pub(crate) flickers: Vec<(NodeId, super::flicker::Flicker)>,
     /// For each scrolling box with an `auto` scrollbar: the scroll offset it
@@ -266,10 +287,14 @@ impl Ui {
     pub fn new() -> Self {
         Self {
             nodes: vec![Node::new(Style::default(), NodeKind::Box, None, 0)],
+            scratch: Box::new(Node::new(Style::default(), NodeKind::Box, None, u32::MAX)),
             free: vec![],
             layout_units: false,
             pass: 0,
             wrap_memo: Default::default(),
+            scrolls_pending: Vec::new(),
+            stuck: Vec::new(),
+            fixed_deferred: Vec::new(),
             viewport: (0.0, 0.0),
             hits: std::sync::OnceLock::new(),
             animations: vec![],
@@ -291,6 +316,7 @@ impl Ui {
             announced: 0,
             focus_ring: true,
             clock: 0.0,
+            host_steps: false,
             flickers: vec![],
             scrollbar_use: Default::default(),
         }
@@ -342,20 +368,40 @@ impl Ui {
     /// another).
     #[track_caller]
     pub(crate) fn node(&self, id: NodeId) -> &Node {
-        assert!(
-            self.contains(id),
+        if self.contains(id) {
+            return &self.nodes[id.0];
+        }
+        crate::mistake::report(format_args!(
             "{id:?} is not in this Ui: it was removed, or is another tree's"
-        );
-        &self.nodes[id.0]
+        ));
+        &self.scratch
     }
 
     #[track_caller]
     pub(crate) fn node_mut(&mut self, id: NodeId) -> &mut Node {
-        assert!(
-            self.contains(id),
+        if self.contains(id) {
+            return &mut self.nodes[id.0];
+        }
+        crate::mistake::report(format_args!(
             "{id:?} is not in this Ui: it was removed, or is another tree's"
-        );
-        &mut self.nodes[id.0]
+        ));
+        // (fresh each time: nothing written to it is kept)
+        *self.scratch = Node::new(Style::default(), NodeKind::Box, None, u32::MAX);
+        &mut self.scratch
+    }
+
+    /// Whether `id` is in this tree; where it isn't, the mistake reported
+    /// (a panic in debug builds: see [`crate::mistake`]) for the caller to
+    /// skip what it was doing.
+    #[track_caller]
+    pub(crate) fn check(&self, id: NodeId) -> bool {
+        if self.contains(id) {
+            return true;
+        }
+        crate::mistake::report(format_args!(
+            "{id:?} is not in this Ui: it was removed, or is another tree's"
+        ));
+        false
     }
 
     /// How many nodes the tree has (the root included).
@@ -378,6 +424,9 @@ impl Ui {
     /// an ancestor can be dirty already (a `display: none` box is never laid
     /// out, so never cleaned) and still have clean ancestors above it.
     pub(crate) fn touch(&mut self, id: NodeId) {
+        if !self.contains(id) {
+            return;
+        }
         self.invalidate_hits();
         self.env.beams_stale = true;
         let mut at = Some(id.0);
@@ -387,6 +436,120 @@ impl Ui {
             n.measured.clear();
             at = n.parent.map(|p| p.0);
         }
+    }
+
+    /// Scrolls `id` to `top` (as `scroll_top`) without laying the tree out
+    /// again: a scroll moves what the box holds and nothing else, so the
+    /// next [`layout`](Self::layout) moves its content's boxes by as much —
+    /// a frame of a long sidebar scrolled costs a walk of its boxes, not a
+    /// layout of them, text and all. A box with scroll-driven transitions
+    /// is laid out again as before.
+    pub(crate) fn set_scroll_top(&mut self, id: NodeId, top: f32) {
+        if !self.check(id) {
+            return;
+        }
+        if self.style(id).scroll_top == top {
+            return;
+        }
+        if self.env.scroll_transitions.iter().any(|(c, _)| *c == id)
+            || !self.env.carousels.is_empty()
+            || !self.env.cylinders.is_empty()
+        {
+            self.style_mut(id).scroll_top = top;
+            return;
+        }
+        self.nodes[id.0].style.scroll_top = top;
+        // what layout caches around it hold has it where it was
+        for a in self.ancestors(id).collect::<Vec<_>>() {
+            self.nodes[a.0].cache = None;
+        }
+        self.invalidate_hits();
+        if !self.scrolls_pending.contains(&id) {
+            self.scrolls_pending.push(id);
+        }
+        self.env.repaint.set(true);
+    }
+
+    /// Whether all that changed of `id`'s style (it was `was`) is where it's
+    /// scrolled, or the `top` of an absolute box: then it's moved, with no
+    /// layout. (A scroll bar's thumb is, at every step of a scroll: the
+    /// whole tree was laid out for it.)
+    fn only_moved(&mut self, id: NodeId, was: &Style) -> bool {
+        let is = &self.nodes[id.0].style;
+        let (top, scroll_top) = (is.top, is.scroll_top);
+        let same = |s: &Style| {
+            let mut s = s.clone();
+            (s.top, s.scroll_top) = (was.top, was.scroll_top);
+            s.same_layout(was)
+        };
+        if self.pass == 0 || self.nodes[id.0].dirty || self.nodes[0].dirty || !same(is) {
+            return false;
+        }
+        if top == was.top {
+            // (as `set_scroll_top` is told of it)
+            self.nodes[id.0].style.scroll_top = was.scroll_top;
+            self.set_scroll_top(id, scroll_top);
+            return true;
+        }
+        let (super::style::Length::Px(to), super::style::Length::Px(from)) = (top, was.top) else { return false };
+        // (in a box that scrolls, where it is may be how far that goes; and
+        // what's placed by it, or sized by both its ends, isn't only moved)
+        let absolute = is.position == crate::style::Position::Absolute && is.bottom == super::style::Length::Auto;
+        if scroll_top != was.scroll_top || !absolute || self.ancestors(id).any(|a| self.style(a).clip) {
+            return false;
+        }
+        let by = to - from;
+        let mut stack = vec![id.0];
+        while let Some(i) = stack.pop() {
+            let s = &self.nodes[i].style;
+            if s.display == crate::style::Display::None || (i != id.0 && s.position == crate::style::Position::Fixed) {
+                continue;
+            }
+            self.nodes[i].rect.y += by;
+            stack.extend(self.nodes[i].children.iter().map(|c| c.0));
+        }
+        for a in self.ancestors(id).collect::<Vec<_>>() {
+            self.nodes[a.0].cache = None;
+        }
+        self.place_anchored();
+        self.touch_paint();
+        true
+    }
+
+    /// The pending scrolls applied: each box's offset worked out as layout
+    /// does (clamped to its content, on whole device pixels but at its end),
+    /// its content moved by the change.
+    fn apply_scrolls(&mut self) {
+        self.unstick();
+        for id in std::mem::take(&mut self.scrolls_pending) {
+            if !self.contains(id) {
+                continue;
+            }
+            let n = &self.nodes[id.0];
+            let s = &n.style;
+            let visible = (n.rect.height - s.border.vertical()).max(0.0);
+            let end = (n.scroll_height - visible).max(0.0);
+            let scrolled = s.scroll_top.clamp(0.0, end);
+            let ratio = self.pixel_ratio;
+            let scrolled = if scrolled < end { ((scrolled * ratio).round() / ratio).min(end) } else { end };
+            let delta = scrolled - n.scrolled;
+            if delta == 0.0 {
+                continue;
+            }
+            self.nodes[id.0].scrolled = scrolled;
+            let mut stack: Vec<usize> = self.nodes[id.0].children.iter().map(|c| c.0).collect();
+            while let Some(i) = stack.pop() {
+                let s = &self.nodes[i].style;
+                if s.display == crate::style::Display::None || s.position == crate::style::Position::Fixed {
+                    continue;
+                }
+                self.nodes[i].rect.y -= delta;
+                stack.extend(self.nodes[i].children.iter().map(|c| c.0));
+            }
+        }
+        self.place_sticky();
+        self.place_anchored();
+        self.invalidate_hits();
     }
 
     /// How many layout passes have run: what a test reads to see that a
@@ -425,7 +588,10 @@ impl Ui {
     /// cannot know is that the [`TextMeasure`] passed to [`Ui::layout`]
     /// measures as it did last time: when that changes, call
     /// [`Ui::invalidate_layout`]. The result is the same layout either way —
-    /// the cache only skips work whose answer is already known.
+    /// the cache only skips work whose answer is already known. A boundary
+    /// given the same box moved is put back moved (with layout units, only by
+    /// whole device pixels), its places then within float rounding of what
+    /// laying it out gives.
     pub fn cache_layout(&mut self, id: NodeId, on: bool) {
         let n = self.node_mut(id);
         n.cache_boundary = on;
@@ -445,7 +611,8 @@ impl Ui {
 
     #[track_caller]
     fn add(&mut self, parent: NodeId, mut style: Style, kind: NodeKind) -> NodeId {
-        self.node(parent);
+        // (a parent gone: the root, in a release build)
+        let parent = if self.check(parent) { parent } else { self.root() };
         // A box without a font of its own: its parent's (CSS inherits it).
         let inherits = if matches!(kind, NodeKind::Box) {
             inheritable(&style)
@@ -565,6 +732,9 @@ impl Ui {
     /// Replaces a path node's data (`d`), keeping its view box, stroke and
     /// fill. Does nothing to a node that is not a path.
     pub fn set_path_data(&mut self, id: NodeId, d: Vec<String>) {
+        if !self.check(id) {
+            return;
+        }
         if let NodeKind::Path {
             view_box,
             stroke,
@@ -622,7 +792,9 @@ impl Ui {
     /// Moves `id` and everything inside it by `(dx, dy)` after layout (for
     /// an app placing something as a renderer would, by its own rounding).
     pub fn offset(&mut self, id: NodeId, dx: f32, dy: f32) {
-        self.node(id);
+        if !self.check(id) {
+            return;
+        }
         // The next layout puts it back where layout would, so it must run.
         self.touch(id);
         self.offset_laid_out(id, dx, dy);
@@ -654,7 +826,9 @@ impl Ui {
     /// Moves `child` from wherever it is to the end of `parent`'s children
     /// (the DOM's `appendChild` of an attached node).
     pub fn reparent(&mut self, child: NodeId, parent: NodeId) {
-        self.node(parent);
+        if !self.check(parent) || !self.check(child) {
+            return;
+        }
         if let Some(p) = self.node(child).parent {
             self.nodes[p.0].children.retain(|&c| c != child);
             self.touch(p);
@@ -680,7 +854,10 @@ impl Ui {
     /// not anything is then changed.
     #[track_caller]
     pub fn style_mut(&mut self, id: NodeId) -> &mut Style {
-        self.node(id);
+        if !self.contains(id) {
+            // (the scratch node's, dropped)
+            return &mut self.node_mut(id).style;
+        }
         self.touch(id);
         &mut self.nodes[id.0].style
     }
@@ -691,6 +868,9 @@ impl Ui {
     /// would not: the next change of state puts that back), and they go
     /// over it again.
     pub fn update_style(&mut self, id: NodeId, f: impl FnOnce(&mut Style)) {
+        if !self.check(id) {
+            return;
+        }
         let font_before = inherited_of(&self.node(id).style);
         if let Some(base) = self
             .node_mut(id)
@@ -708,6 +888,7 @@ impl Ui {
                 if was != self.nodes[id.0].style {
                     self.touch_paint();
                 }
+            } else if self.only_moved(id, &was) {
             } else {
                 self.touch(id);
             }
@@ -722,6 +903,9 @@ impl Ui {
     }
 
     pub fn set_style(&mut self, id: NodeId, mut style: Style) {
+        if !self.check(id) {
+            return;
+        }
         // A box without a font family of its own takes its parent's (before
         // comparing, or every restyle would look like a change).
         let font_before = inherited_of(&self.nodes[id.0].style);
@@ -858,7 +1042,9 @@ impl Ui {
     }
 
     pub(crate) fn set_kind(&mut self, id: NodeId, kind: NodeKind) {
-        self.node(id);
+        if !self.check(id) {
+            return;
+        }
         self.touch(id);
         self.nodes[id.0].kind = kind;
     }
@@ -877,6 +1063,9 @@ impl Ui {
     }
 
     pub fn set_text(&mut self, id: NodeId, text: impl Into<String>) {
+        if !self.check(id) {
+            return;
+        }
         let kind = NodeKind::Text(text.into());
         if self.node(id).kind != kind {
             self.touch(id);
@@ -916,8 +1105,16 @@ impl Ui {
         // A frame is coming: what asked for a repaint gets it.
         self.env.repaint.set(false);
         if self.pass > 0 && !self.nodes[0].dirty && self.viewport == (width, height) {
+            // only scrolled: the content moved, the rest as it was
+            if !self.scrolls_pending.is_empty() {
+                self.apply_scrolls();
+            }
             return;
         }
+        self.scrolls_pending.clear();
+        // laid out afresh: sticky boxes back where the flow has them
+        self.stuck.clear();
+        self.defer_fixed();
         let new_width = self.viewport.0 != width;
         self.viewport = (width, height);
         // Styles for window widths (`When::min_width`) before the layout
@@ -925,6 +1122,7 @@ impl Ui {
         if new_width {
             self.restyle_for_width();
         }
+        self.resolve_directions();
         super::layout::layout(self, width, height, text);
         // Container queries restyle by what layout found, and a restyle can
         // move what they read: lay out again until they settle (in two
@@ -947,8 +1145,30 @@ impl Ui {
             super::layout::layout(self, width, height, text);
             self.mirror_layout();
         }
+        self.place_sticky();
         self.place_anchored();
         self.invalidate_hits();
+        // What asked to be shown (a field's caret), where this layout put
+        // it: laid out again if that scrolled its line (once: the second
+        // has nothing to show)
+        let reveal = std::mem::take(&mut self.env.reveal_x);
+        for &id in &reveal {
+            if self.contains(id) {
+                self.scroll_into_view_x(id);
+            }
+        }
+        if !reveal.is_empty() && self.nodes[0].dirty {
+            self.layout(width, height, text);
+        }
+    }
+
+    /// Scrolls `id` into view sideways after the next layout, with the
+    /// places it gives (a caret moved by the text that is laid out then).
+    pub(crate) fn reveal_x_after_layout(&mut self, id: NodeId) {
+        if !self.env.reveal_x.contains(&id) {
+            self.env.reveal_x.push(id);
+        }
+        self.touch(id);
     }
 
     /// The deepest visible node containing `(x, y)`, last painted first —
@@ -1069,8 +1289,8 @@ impl Ui {
 
     /// `id` and its ancestors, innermost first.
     pub fn ancestors(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
-        self.node(id);
-        std::iter::successors(Some(id), move |n| self.nodes[n.0].parent)
+        let first = self.check(id).then_some(id);
+        std::iter::successors(first, move |n| self.nodes[n.0].parent)
     }
 }
 
@@ -1084,6 +1304,7 @@ fn inherited_of(
     Option<u32>,
     crate::style::TextAlign,
     (bool, bool),
+    u32,
 ) {
     (
         s.font_family.clone(),
@@ -1092,6 +1313,7 @@ fn inherited_of(
         s.line_height.map(f32::to_bits),
         s.text_align,
         (s.wrap, s.keep_newlines),
+        s.letter_spacing.to_bits(),
     )
 }
 
@@ -1102,6 +1324,7 @@ const WEIGHT: u8 = 8;
 const ALIGN: u8 = 16;
 /// `white-space`: `wrap` and `keep_newlines` together.
 const WHITE_SPACE: u8 = 32;
+const LETTER_SPACING: u8 = 64;
 
 /// Which parts of its font a box given `s` takes from its parent: those
 /// neither given in CSS (`*_set`) nor given another value than the default
@@ -1129,6 +1352,9 @@ pub(crate) fn inheritable(s: &Style) -> u8 {
     if !s.white_space_set && s.wrap == d.wrap && s.keep_newlines == d.keep_newlines {
         m |= WHITE_SPACE;
     }
+    if !s.letter_spacing_set && s.letter_spacing == d.letter_spacing {
+        m |= LETTER_SPACING;
+    }
     m
 }
 
@@ -1152,6 +1378,9 @@ pub(crate) fn inherit_into(parent: &Style, s: &mut Style, inherits: u8) {
     if inherits & WHITE_SPACE != 0 {
         s.wrap = parent.wrap;
         s.keep_newlines = parent.keep_newlines;
+    }
+    if inherits & LETTER_SPACING != 0 {
+        s.letter_spacing = parent.letter_spacing;
     }
 }
 

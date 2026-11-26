@@ -110,6 +110,8 @@ pub enum Item {
         radius: f32,
         blur: f32,
         color: Rgba,
+        /// Where none of it is, and how round that is.
+        hole: Option<(Rect, f32)>,
     },
     /// A line under text (see [`Painter::underline`]).
     Underline {
@@ -215,7 +217,15 @@ impl Scene {
                     radius,
                     blur,
                     color,
+                    hole: None,
                 } => painter.shadow(*rect, *radius, *blur, *color),
+                Item::Shadow {
+                    rect,
+                    radius,
+                    blur,
+                    color,
+                    hole: Some((hole, r)),
+                } => painter.shadow_around(*rect, *radius, *blur, *color, *hole, *r),
                 Item::Underline {
                     x,
                     y,
@@ -230,6 +240,77 @@ impl Scene {
 }
 
 impl Scene {
+    /// The box all it draws is in (`None`: it draws nothing), no larger
+    /// than `view`.
+    pub fn bounds(&self, view: Rect) -> Option<Rect> {
+        let mut w = Walk::new(view);
+        self.items
+            .iter()
+            .filter_map(|i| w.step(i))
+            .reduce(super::damage::union)
+    }
+
+    /// Moves all it draws by `dx`, `dy`.
+    pub fn translate(&mut self, dx: f32, dy: f32) {
+        // Only what is outermost moves: what is inside a transform is in
+        // that one's space.
+        let mut inside = 0usize;
+        let items = std::mem::take(&mut self.items);
+        self.items.reserve(items.len());
+        for mut item in items {
+            let by = |r: &mut Rect| {
+                r.x += dx;
+                r.y += dy;
+            };
+            match &mut item {
+                Item::PushTransform(m) if inside == 0 => {
+                    m[4] += dx;
+                    m[5] += dy;
+                }
+                Item::PushProjective { h, affine } if inside == 0 => {
+                    for k in 0..3 {
+                        h[k] += dx * h[6 + k];
+                        h[3 + k] += dy * h[6 + k];
+                    }
+                    affine[4] += dx;
+                    affine[5] += dy;
+                }
+                _ if inside > 0 => {}
+                Item::Rect { rect, .. }
+                | Item::Gradient { rect, .. }
+                | Item::ShapedGradient { rect, .. }
+                | Item::Text { line: rect, .. }
+                | Item::Path { rect, .. }
+                | Item::PushClip { rect, .. }
+                | Item::PushEffect { rect, .. }
+                | Item::Surface { rect, .. }
+                | Item::Backdrop { rect, .. }
+                | Item::Image { rect, .. } => by(rect),
+                Item::Shadow { rect, hole, .. } => {
+                    by(rect);
+                    if let Some((r, _)) = hole {
+                        by(r);
+                    }
+                }
+                Item::Arc { arc, .. } => {
+                    arc.cx += dx;
+                    arc.cy += dy;
+                }
+                Item::Underline { x, y, .. } => {
+                    *x += dx;
+                    *y += dy;
+                }
+                _ => {}
+            }
+            match &item {
+                Item::PushTransform(_) | Item::PushProjective { .. } => inside += 1,
+                Item::PopTransform => inside = inside.saturating_sub(1),
+                _ => {}
+            }
+            self.items.push(item);
+        }
+    }
+
     /// A painter that appends to this scene: for painting more over a
     /// recorded frame (an inspector highlight, the debug overlay).
     pub fn recorder(&mut self) -> SceneRecorder<'_> {
@@ -380,6 +461,25 @@ impl Painter for SceneRecorder<'_> {
             radius,
             blur,
             color,
+            hole: None,
+        });
+    }
+
+    fn shadow_around(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        blur: f32,
+        color: Rgba,
+        hole: Rect,
+        hole_radius: f32,
+    ) {
+        self.0.items.push(Item::Shadow {
+            rect,
+            radius,
+            blur,
+            color,
+            hole: Some((hole, hole_radius)),
         });
     }
 

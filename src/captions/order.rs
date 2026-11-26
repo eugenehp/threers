@@ -72,8 +72,21 @@ pub fn visual(text: &str, font: &CaptionFont, size: f32) -> Vec<Placed> {
     if chars.is_empty() {
         return Vec::new();
     }
-    let classes: Vec<bidi::Class> = chars.iter().map(|c| bidi::class(*c)).collect();
-    let levels = bidi::resolve_classes(&classes, bidi::Direction::Auto);
+    // With the characters, so that brackets pair (N0).
+    let text: String = chars.iter().collect();
+    let mut levels = bidi::resolve(&text, bidi::Direction::Auto);
+    // Marks, embeddings and isolates have done their part: not drawn.
+    // Clusters are still of the composed text.
+    let control = |c: char| matches!(c, '\u{200e}' | '\u{200f}' | '\u{61c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
+    let mut of: Vec<usize> = (0..chars.len()).collect();
+    if chars.iter().any(|c| control(*c)) {
+        of.retain(|i| !control(chars[*i]));
+        levels.levels = of.iter().map(|i| levels.levels.get(*i).copied().unwrap_or(0)).collect();
+        chars = of.iter().map(|i| chars[*i]).collect();
+        if chars.is_empty() {
+            return Vec::new();
+        }
+    }
     for (i, c) in chars.iter_mut().enumerate() {
         *c = bidi::mirror::at_level(*c, levels.levels.get(i).copied().unwrap_or(0));
     }
@@ -105,7 +118,7 @@ pub fn visual(text: &str, font: &CaptionFont, size: f32) -> Vec<Placed> {
             .zip(marks)
             .map(|((gid, cluster), m)| Placed {
                 gid,
-                cluster: a + cluster,
+                cluster: of.get(a + cluster).copied().unwrap_or(a + cluster),
                 attach: m.to.map(|t| (usize::from(t), m.dx, m.dy)),
                 rtl,
             })

@@ -1501,6 +1501,8 @@ pub struct Renderer {
     /// keyed on exactly those and invalidated whenever a texture is uploaded,
     /// evicted, or re-registered as a render target.
     tex_bg_cache: HashMap<TexBgKey, std::sync::Arc<wgpu::BindGroup>>,
+    /// How many of them have been made.
+    tex_bgs_built: u64,
     /// The main shader module, on the legacy material-map layout — the module
     /// a material shader variant replaces.
     main_shader: wgpu::ShaderModule,

@@ -73,8 +73,11 @@ fn dashed(v: &str) -> Option<bool> {
     }
 }
 
-fn bad(name: &str, value: &str) -> ! {
-    panic!("style!: unsupported `{name}: {value}`")
+/// An unsupported declaration: a panic in debug builds, else reported and
+/// left out (see [`crate::mistake`]).
+#[track_caller]
+fn bad(name: &str, value: &str) {
+    crate::mistake::report(format_args!("style!: unsupported `{name}: {value}`"))
 }
 
 /// `stringify!` spaces tokens apart (`sans - serif`, `- 1px`, `# 222`,
@@ -554,6 +557,29 @@ fn edges(v: &str) -> Option<Edges> {
     })
 }
 
+/// Corners' radii: one `border_radius` where they're the same; else each
+/// kept apart, and `border_radius` the smallest (pixels; none where any is
+/// a percentage), for what draws by one radius.
+fn set_corners(s: &mut Style, c: [Length; 4]) {
+    if c.iter().all(|r| *r == c[0]) {
+        s.border_radius = c[0];
+        s.corner_radii = None;
+        return;
+    }
+    let px = |l: &Length| match l {
+        Length::Px(p) => Some(*p),
+        Length::Auto => Some(0.0),
+        _ => None,
+    };
+    let least = c
+        .iter()
+        .map(px)
+        .collect::<Option<Vec<f32>>>()
+        .map_or(0.0, |v| v.into_iter().fold(f32::MAX, f32::min));
+    s.border_radius = Length::Px(least);
+    s.corner_radii = Some(c);
+}
+
 fn edge(e: &mut Edges, side: &str, v: f32) -> bool {
     match side {
         "top" => e.top = v,
@@ -577,7 +603,33 @@ fn align(v: &str) -> Option<AlignItems> {
 }
 
 /// Sets property `name` from CSS text.
+#[track_caller]
 pub fn apply(s: &mut Style, name: &str, value: &str) {
+    // Logical sides: a style's left is its start (see `direction`).
+    let logical;
+    let name = if name.contains("inline") {
+        match name {
+            "margin-inline" | "padding-inline" | "inset-inline" => {
+                let base = name.trim_end_matches("-inline");
+                let ws = words(value);
+                if let [a, .., b] | [a @ b] = ws[..] {
+                    apply(s, &format!("{base}-inline-start"), a);
+                    apply(s, &format!("{base}-inline-end"), b);
+                }
+                return;
+            }
+            _ => {
+                logical = name
+                    .replace("inset-inline-start", "left")
+                    .replace("inset-inline-end", "right")
+                    .replace("inline-start", "left")
+                    .replace("inline-end", "right");
+                logical.as_str()
+            }
+        }
+    } else {
+        name
+    };
     if !try_apply(s, name, value) {
         bad(name, &normalize(value));
     }
@@ -604,11 +656,30 @@ pub fn try_apply(s: &mut Style, name: &str, value: &str) -> bool {
                     "static" => Position::Static,
                     "relative" => Position::Relative,
                     "absolute" => Position::Absolute,
+                    "sticky" | "-webkit-sticky" => Position::Sticky,
+                    "fixed" => Position::Fixed,
                     _ => return None,
                 }
             }
             "cursor" => s.cursor = Cursor::parse(v)?,
-            "grid-template-columns" => s.grid_columns = tracks(v)?,
+            "grid-template-columns" => {
+                // `repeat(auto-fill, …)` (or `auto-fit`): counted at layout.
+                let fill = v
+                    .strip_prefix("repeat(")
+                    .and_then(|r| r.strip_suffix(')'))
+                    .and_then(|r| r.split_once(','))
+                    .filter(|(n, _)| matches!(n.trim(), "auto-fill" | "auto-fit"));
+                match fill {
+                    Some((_, t)) => {
+                        s.grid_auto_fill = Some(track(t.trim())?);
+                        s.grid_columns = vec![];
+                    }
+                    None => {
+                        s.grid_columns = tracks(v)?;
+                        s.grid_auto_fill = None;
+                    }
+                }
+            }
             "grid-template-rows" => s.grid_rows = tracks(v)?,
             "grid-column" => s.grid_column = placement(v)?,
             "grid-row" => s.grid_row = placement(v)?,
@@ -774,9 +845,37 @@ pub fn try_apply(s: &mut Style, name: &str, value: &str) -> bool {
             "min-height" => s.min_height = length(v)?,
             "max-width" => s.max_width = length(v)?,
             "max-height" => s.max_height = length(v)?,
-            "margin" => s.margin = edges(v)?,
+            // (`auto` sides: see `margin_auto`)
+            "margin" => {
+                let ws = words(v);
+                let auto: Vec<bool> = ws.iter().map(|w| *w == "auto").collect();
+                let plain = ws
+                    .iter()
+                    .map(|w| if *w == "auto" { "0" } else { w })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                s.margin = edges(&plain)?;
+                s.margin_auto = match auto[..] {
+                    [a] => [a; 4],
+                    [v, h] => [v, h, v, h],
+                    [t, h, b] => [t, h, b, h],
+                    [t, r, b, l] => [t, r, b, l],
+                    _ => return None,
+                };
+            }
             "padding" => s.padding = edges(v)?,
             "border-width" => s.border = edges(v)?,
+            "border-top-width"
+            | "border-right-width"
+            | "border-bottom-width"
+            | "border-left-width" => {
+                let side = name
+                    .trim_start_matches("border-")
+                    .trim_end_matches("-width");
+                if !edge(&mut s.border, side, px(v)?) {
+                    return None;
+                }
+            }
             "border-color" => s.border_color = color(v)?,
             "border-style" => s.border_dashed = dashed(v)?,
             // `border: <width> [solid|dashed] [<color>]`.
@@ -809,7 +908,54 @@ pub fn try_apply(s: &mut Style, name: &str, value: &str) -> bool {
                     }
                 }
             }
-            "border-radius" => s.border_radius = length(v)?,
+            // one radius, or a corner's each (top-left, top-right,
+            // bottom-right, bottom-left, as margin's sides go round)
+            "border-radius" => {
+                let all: Vec<Length> = words(v).iter().map(|w| length(w)).collect::<Option<_>>()?;
+                let corners = match all[..] {
+                    [a] => [a; 4],
+                    [a, b] => [a, b, a, b],
+                    [a, b, c] => [a, b, c, b],
+                    [a, b, c, d] => [a, b, c, d],
+                    _ => return None,
+                };
+                set_corners(s, corners);
+            }
+            "border-top-left-radius"
+            | "border-top-right-radius"
+            | "border-bottom-right-radius"
+            | "border-bottom-left-radius" => {
+                let l = length(v)?;
+                let i = ["top-left", "top-right", "bottom-right", "bottom-left"]
+                    .iter()
+                    .position(|c| name == format!("border-{c}-radius"))?;
+                let mut corners = s.corner_radii.unwrap_or([s.border_radius; 4]);
+                corners[i] = l;
+                set_corners(s, corners);
+            }
+            // `inset: <top> [<right> [<bottom> [<left>]]]`, as margin's
+            "inset" => {
+                let all: Vec<Length> = words(v).iter().map(|w| length(w)).collect::<Option<_>>()?;
+                let [t, r, b, l] = match all[..] {
+                    [a] => [a; 4],
+                    [v, h] => [v, h, v, h],
+                    [t, h, b] => [t, h, b, h],
+                    [t, r, b, l] => [t, r, b, l],
+                    _ => return None,
+                };
+                (s.top, s.right, s.bottom, s.left) = (t, r, b, l);
+            }
+            // no outline is drawn: none is what there is
+            "outline" | "outline-style" if v == "none" || v == "0" => {}
+            // hidden: not seen, nor hit (its box still laid out, as CSS's)
+            "visibility" => match v {
+                "visible" => s.pointer_events = true,
+                "hidden" | "collapse" => {
+                    s.opacity = 0.0;
+                    s.pointer_events = false;
+                }
+                _ => return None,
+            },
             "background" | "background-color" | "background-image" if v.contains("gradient(") => {
                 let (shape, stops) = gradient(v)?;
                 s.gradient_shape = shape;
@@ -867,12 +1013,32 @@ pub fn try_apply(s: &mut Style, name: &str, value: &str) -> bool {
                 }
             }
             "font-style" => s.italic = v == "italic" || v == "oblique",
+            "letter-spacing" => {
+                s.letter_spacing = if v == "normal" {
+                    0.0
+                } else if let Some(em) = v.strip_suffix("em") {
+                    em.trim().parse::<f32>().ok()? * s.font_size
+                } else {
+                    v.trim_end_matches("px").trim().parse().ok()?
+                };
+                s.letter_spacing_set = true;
+            }
             "text-overflow" => s.ellipsis = v == "ellipsis",
             "white-space" => {
                 s.wrap = v != "nowrap" && v != "pre";
                 s.keep_newlines = matches!(v, "pre" | "pre-wrap" | "pre-line" | "break-spaces");
                 s.white_space_set = true;
             }
+            "direction" => {
+                s.direction_auto = v == "auto";
+                s.direction = match v {
+                    "ltr" => Some(crate::environment::LayoutDirection::LeftToRight),
+                    "rtl" => Some(crate::environment::LayoutDirection::RightToLeft),
+                    "inherit" | "auto" => None,
+                    _ => return None,
+                }
+            }
+            "rtl-flip" => s.flips_rtl = v == "on",
             "text-align" => {
                 s.text_align = match v {
                     "center" => crate::style::TextAlign::Center,
@@ -985,7 +1151,14 @@ pub fn try_apply(s: &mut Style, name: &str, value: &str) -> bool {
             _ => {
                 let (base, side) = name.rsplit_once('-')?;
                 match base {
-                    "margin" => edge(&mut s.margin, side, px(v)?).then_some(())?,
+                    "margin" => {
+                        let i = ["top", "right", "bottom", "left"]
+                            .iter()
+                            .position(|x| *x == side)?;
+                        s.margin_auto[i] = v == "auto";
+                        edge(&mut s.margin, side, if v == "auto" { 0.0 } else { px(v)? })
+                            .then_some(())?
+                    }
                     "padding" => edge(&mut s.padding, side, px(v)?).then_some(())?,
                     _ => return None,
                 }
@@ -1132,14 +1305,19 @@ pub fn set(s: &mut Style, name: &str, value: Value) {
         _ => false,
     };
     if !ok {
-        panic!("style!: `{name}` does not take that kind of value");
+        crate::mistake::report(format_args!(
+            "style!: `{name}` does not take that kind of value"
+        ));
     }
 }
 
 fn set_length(s: &mut Style, name: &str, l: Length) -> bool {
     let px = |l: Length| match l {
         Length::Px(p) => p,
-        _ => panic!("style!: `{name}` takes pixels"),
+        _ => {
+            crate::mistake::report(format_args!("style!: `{name}` takes pixels"));
+            0.0
+        }
     };
     match name {
         "width" => s.width = l,
@@ -1153,7 +1331,10 @@ fn set_length(s: &mut Style, name: &str, l: Length) -> bool {
         "left" => s.left = l,
         "right" => s.right = l,
         "bottom" => s.bottom = l,
-        "border-radius" => s.border_radius = l,
+        "border-radius" => {
+            s.border_radius = l;
+            s.corner_radii = None;
+        }
         "margin" => s.margin = Edges::all(px(l)),
         "padding" => s.padding = Edges::all(px(l)),
         "border-width" => s.border = Edges::all(px(l)),
@@ -1170,6 +1351,163 @@ fn set_length(s: &mut Style, name: &str, l: Length) -> bool {
         }
     }
     true
+}
+
+/// The properties [`style!`](crate::style) knows (it checks names as it
+/// compiles; values are read as it runs): [`try_apply`]'s, the sides of
+/// `margin` and `padding`, the logical ones, and `border-beam-*`.
+#[doc(hidden)]
+pub const KNOWN_PROPERTIES: &[&str] = &[
+    "align-content",
+    "align-items",
+    "align-self",
+    "aspect-ratio",
+    "backdrop-filter",
+    "background",
+    "background-clip",
+    "background-color",
+    "background-image",
+    "border",
+    "border-bottom",
+    "border-bottom-left-radius",
+    "border-bottom-right-radius",
+    "border-bottom-width",
+    "border-color",
+    "border-left",
+    "border-left-width",
+    "border-radius",
+    "border-right",
+    "border-right-width",
+    "border-style",
+    "border-top",
+    "border-top-left-radius",
+    "border-top-right-radius",
+    "border-top-width",
+    "border-width",
+    "bottom",
+    "box-shadow",
+    "box-sizing",
+    "clip-path",
+    "color",
+    "column-gap",
+    "cursor",
+    "direction",
+    "display",
+    "filter",
+    "flex",
+    "flex-basis",
+    "flex-direction",
+    "flex-flow",
+    "flex-grow",
+    "flex-shrink",
+    "flex-wrap",
+    "font-family",
+    "font-size",
+    "font-style",
+    "font-weight",
+    "gap",
+    "grid-column",
+    "grid-row",
+    "grid-template-columns",
+    "grid-template-rows",
+    "height",
+    "inset",
+    "inset-inline",
+    "inset-inline-end",
+    "inset-inline-start",
+    "justify-content",
+    "left",
+    "letter-spacing",
+    "line-clamp",
+    "line-height",
+    "margin",
+    "margin-bottom",
+    "margin-inline",
+    "margin-inline-end",
+    "margin-inline-start",
+    "margin-left",
+    "margin-right",
+    "margin-top",
+    "mask",
+    "mask-image",
+    "max-height",
+    "max-width",
+    "min-height",
+    "min-width",
+    "mix-blend-mode",
+    "object-fit",
+    "opacity",
+    "order",
+    "outline",
+    "outline-style",
+    "overflow",
+    "overflow-wrap",
+    "overflow-x",
+    "overflow-y",
+    "padding",
+    "padding-bottom",
+    "padding-inline",
+    "padding-inline-end",
+    "padding-inline-start",
+    "padding-left",
+    "padding-right",
+    "padding-top",
+    "pointer-events",
+    "position",
+    "right",
+    "row-gap",
+    "rtl-flip",
+    "scroll-top",
+    "scrollbar-color",
+    "scrollbar-fade",
+    "scrollbar-visibility",
+    "scrollbar-width",
+    "text-align",
+    "text-decoration",
+    "text-decoration-color",
+    "text-decoration-line",
+    "text-decoration-style",
+    "text-overflow",
+    "top",
+    "user-select",
+    "visibility",
+    "white-space",
+    "width",
+    "word-wrap",
+    "writing-mode",
+];
+
+/// Whether `name` (one `-` at its end allowed) is a property
+/// [`style!`](crate::style) knows.
+#[doc(hidden)]
+pub const fn __known_property(name: &str) -> bool {
+    let n = name.as_bytes();
+    let len = if !n.is_empty() && n[n.len() - 1] == b'-' { n.len() - 1 } else { n.len() };
+    const fn same(a: &[u8], len: usize, b: &[u8]) -> bool {
+        if len != b.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < len {
+            if a[i] != b[i] {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+    const BEAM: &[u8] = b"border-beam";
+    if len >= BEAM.len() && same(n, BEAM.len(), BEAM) {
+        return true;
+    }
+    let mut k = 0;
+    while k < KNOWN_PROPERTIES.len() {
+        if same(n, len, KNOWN_PROPERTIES[k].as_bytes()) {
+            return true;
+        }
+        k += 1;
+    }
+    false
 }
 
 /// Builds a [`Style`] from CSS declarations.
@@ -1221,11 +1559,26 @@ macro_rules! __style_declarations {
         $crate::__style_declarations!($s; $($rest)*);
     };
     ($s:ident; $($name:ident)-+ : { $value:expr } $(; $($rest:tt)*)?) => {
+        $crate::__style_known!($($name)-+);
         $crate::css::set(&mut $s, &[$(stringify!($name)),+].join("-"), $crate::css::Value::from($value));
         $crate::__style_declarations!($s; $($($rest)*)?);
     };
     ($s:ident; $($name:ident)-+ : $($rest:tt)*) => {
+        $crate::__style_known!($($name)-+);
         $crate::__style_value!($s; [$(stringify!($name)),+] [] $($rest)*);
+    };
+}
+
+/// A property's name, checked as it compiles: a misspelt one is an error
+/// that names it.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __style_known {
+    ($first:ident $(- $rest:ident)*) => {
+        const _: () = ::core::assert!(
+            $crate::css::__known_property(::core::concat!(::core::stringify!($first) $(, "-", ::core::stringify!($rest))*)),
+            ::core::concat!("style!: no CSS property `", ::core::stringify!($first) $(, "-", ::core::stringify!($rest))*, "`"),
+        );
     };
 }
 
@@ -1283,6 +1636,15 @@ macro_rules! __style_value {
 /// tree.layout(400.0, 300.0, &mut FixedWidthText(7.0));
 /// assert_eq!(tree.style(card).padding.top, 16.0);
 /// ```
+///
+/// A property's name is checked as it compiles (as [`style!`]'s), and
+/// anything not a node is an error that says what a node is:
+///
+/// ```compile_fail
+/// let mut tree = threers_ui::Ui::new();
+/// let root = tree.root();
+/// threers_ui::ui!(tree, root, span(color: red) {});
+/// ```
 #[macro_export]
 macro_rules! ui {
     ($tree:expr, $parent:expr, $($nodes:tt)+) => {{
@@ -1328,10 +1690,89 @@ macro_rules! __ui_nodes {
         $first.get_or_insert(node);
         $crate::__ui_nodes!($tree, $parent, $first; $($rest)*);
     };
+    ($tree:ident, $parent:ident, $first:ident; $other:tt $($rest:tt)*) => {
+        ::core::compile_error!(::core::concat!(
+            "ui!: a node is `div(<css>) { <children> }`, `div[\"<classes>\"] { <children> }`, a \"string\" or `{expr}`; `",
+            ::core::stringify!($other),
+            "` is none of them"
+        ));
+    };
 }
 
 #[cfg(test)]
 mod tests {
+
+    /// `letter-spacing` in pixels or `em` (of the size given before it),
+    /// `normal` none; a child box takes its parent's.
+    #[test]
+    fn letter_spacing_is_read_and_inherited() {
+        let mut s = Style::default();
+        assert!(try_apply(&mut s, "letter-spacing", "1.5px"));
+        assert_eq!(s.letter_spacing, 1.5);
+        s.font_size = 20.0;
+        assert!(try_apply(&mut s, "letter-spacing", "0.1em"));
+        assert!((s.letter_spacing - 2.0).abs() < 1e-5);
+        assert!(try_apply(&mut s, "letter-spacing", "normal"));
+        assert_eq!(s.letter_spacing, 0.0);
+        let mut ui = crate::Ui::new();
+        let root = ui.root();
+        let parent = ui.add_box(root, crate::style! { font-size: 12px; });
+        ui.set_style(parent, {
+            let mut p = ui.style(parent).clone();
+            assert!(try_apply(&mut p, "letter-spacing", "2px"));
+            p
+        });
+        let child = ui.add_box(parent, Style::default());
+        assert_eq!(ui.style(child).letter_spacing, 2.0, "inherited");
+    }
+
+    #[test]
+    fn inset_side_borders_equal_radii_outline_none_visibility() {
+        let mut s = Style::default();
+        assert!(try_apply(&mut s, "inset", "1px 2px"));
+        assert_eq!(
+            (s.top, s.right, s.bottom, s.left),
+            (
+                Length::Px(1.0),
+                Length::Px(2.0),
+                Length::Px(1.0),
+                Length::Px(2.0)
+            )
+        );
+        assert!(try_apply(&mut s, "inset", "0"));
+        assert_eq!(s.left, Length::Px(0.0));
+        assert!(try_apply(&mut s, "border-left-width", "3px"));
+        assert_eq!((s.border.left, s.border.top), (3.0, 0.0));
+        assert!(try_apply(&mut s, "border-radius", "6px 6px 6px 6px"));
+        assert_eq!((s.border_radius, s.corner_radii), (Length::Px(6.0), None));
+        assert!(try_apply(&mut s, "border-radius", "8px 0 0 8px"));
+        assert_eq!(
+            s.corner_radii,
+            Some([
+                Length::Px(8.0),
+                Length::Px(0.0),
+                Length::Px(0.0),
+                Length::Px(8.0)
+            ])
+        );
+        assert_eq!(
+            s.border_radius,
+            Length::Px(0.0),
+            "the smallest, for a shadow or a clip"
+        );
+        assert!(try_apply(&mut s, "border-top-right-radius", "4px"));
+        assert_eq!(s.corner_radii.unwrap()[1], Length::Px(4.0));
+        assert!(try_apply(&mut s, "border-radius", "3px"));
+        assert_eq!((s.border_radius, s.corner_radii), (Length::Px(3.0), None));
+        assert!(try_apply(&mut s, "outline", "none"));
+        assert!(!try_apply(&mut s, "outline", "2px solid red"));
+        s.opacity = 0.5;
+        assert!(try_apply(&mut s, "visibility", "visible"));
+        assert_eq!(s.opacity, 0.5);
+        assert!(try_apply(&mut s, "visibility", "hidden"));
+        assert!(s.opacity == 0.0 && !s.pointer_events);
+    }
+
     use super::*;
 
     #[test]
@@ -1378,6 +1819,34 @@ mod tests {
         assert_eq!(normalize("sans - serif"), "sans-serif");
         assert_eq!(normalize("0 - 5px"), "0 -5px");
         assert_eq!(normalize("flex - start"), "flex-start");
+    }
+
+    /// Every property the parser reads, `style!` knows (and so lets it
+    /// compile): the list kept as the parser grows.
+    #[test]
+    fn the_macro_knows_every_property() {
+        let src = include_str!("css.rs");
+        let body = &src[src.find("pub fn try_apply(").unwrap()..];
+        let body = &body[..body[10..].find("\npub fn ").unwrap() + 10];
+        let mut missing = vec![];
+        for line in body.lines().filter(|l| l.starts_with("            \"") && l.contains("=>")) {
+            // (the names, not what a guard compares the value with)
+            let arm = line.split("=>").next().unwrap().split(" if ").next().unwrap();
+            for name in arm.split('"').skip(1).step_by(2).filter(|n| !n.starts_with('-')) {
+                if !__known_property(name) {
+                    missing.push(name.to_owned());
+                }
+            }
+        }
+        assert!(missing.is_empty(), "add to KNOWN_PROPERTIES: {missing:?}");
+        // and nothing it knows that the parser does not read: a name of its
+        // own, or a side of `margin` or `padding`, or a logical one
+        for name in KNOWN_PROPERTIES {
+            let side = name.starts_with("margin-") || name.starts_with("padding-") || name.contains("inline");
+            assert!(side || src.contains(&format!("\"{name}\"")), "{name} is known but never read");
+        }
+        assert!(__known_property("font-size-") && __known_property("margin-inline-start-") && __known_property("border-beam-speed-"));
+        assert!(!__known_property("font-sise-") && !__known_property("colour-"));
     }
 
     #[test]

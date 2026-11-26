@@ -13,7 +13,7 @@ native.
 
 ```toml
 # Cargo.toml
-threers = { version = "0.1.1", features = ["rlx", "rlx-geo"] }
+threers = { version = "0.1.2", features = ["rlx", "rlx-geo"] }
 ```
 
 ```rust

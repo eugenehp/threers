@@ -660,6 +660,11 @@ mod web {
             self.app.wants_text()
         }
 
+        /// Whether it holds a password: the page's input is one's too.
+        pub fn text_is_secret(&self) -> bool {
+            self.app.text_is_secret()
+        }
+
         /// The focused text control's text (the field's when none has
         /// focus), for the page's text input to mirror.
         pub fn field_text(&self) -> String {

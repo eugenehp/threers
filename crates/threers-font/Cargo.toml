@@ -7,7 +7,7 @@ license = "MIT"
 authors = ["Eugene Hauptmann"]
 repository = "https://github.com/eugenehp/threers"
 documentation = "https://docs.rs/threers-font"
-description = "TrueType fonts as FreeType and HarfBuzz render and shape them: sfnt tables, scaled and hinted glyph outlines (a TrueType bytecode interpreter), text shaping and font matching, with no dependencies"
+description = "OpenType and TrueType fonts as FreeType and HarfBuzz render and shape them: sfnt tables, scaled glyph outlines (TrueType hinted by a bytecode interpreter, CFF), text shaping horizontal and vertical, variable fonts, and font matching, with no dependencies"
 keywords = ["font", "truetype", "hinting", "shaping", "glyph"]
 categories = ["text-processing", "graphics"]
 

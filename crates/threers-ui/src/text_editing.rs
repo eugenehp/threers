@@ -15,16 +15,21 @@
 //! back as [`Request`]s ([`take_requests`](TextEditing::take_requests)).
 //!
 //! On a finger, the gestures are [`TouchSelection`]'s; page text follows
-//! [`Ui::selectable_text_at`] (`user-select`).
+//! [`Ui::selectable_text_at`] (`user-select`). A page selection runs from
+//! one piece of text to the next (those of the scrolling box it began in,
+//! else the window's), pulled by its handles or dragged, and held at the
+//! box's edge scrolls it on ([`range_drag`](crate::range_drag)).
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::input::{Event, Gesture, Input, Phase, PointerButton, TouchPhase};
+use crate::page_range::{scope_of, PageText};
+use crate::range_drag::{EdgeConfig, EdgeScroll};
 use crate::rich_text::TextRun;
 use crate::text_field::{KeyModifiers, TextField};
 use crate::text_touch::{EditAction, Request, TouchConfig, TouchSelection};
-use crate::tree::{NodeId, NodeKind, Rect, Ui};
+use crate::tree::{NodeId, Rect, Ui};
 use crate::{style, Display, Length, Role, Semantics, TextMeasure};
 
 /// A text field: its box, its text node, its caret, and where its
@@ -38,10 +43,10 @@ struct Field<S> {
     scroll: f32,
 }
 
-/// Text selected on the page: which text node, its text and selection, and
-/// the touch editing of it.
+/// Text selected on the page: what it can run through, that as one text
+/// with a selection in it, and the touch editing of it.
 struct PageSelection {
-    node: NodeId,
+    page: PageText,
     model: TextField,
     touch: TouchSelection,
 }
@@ -72,6 +77,11 @@ pub struct TextEditing<S> {
     page_template: TouchSelection,
     page_finger: Option<u64>,
     page_dragging: bool,
+    /// The drag selecting page text: where it is, and how it scrolls at an
+    /// edge; the time last ticked.
+    page_at: Option<(f32, f32)>,
+    edge: EdgeScroll,
+    time: Option<f64>,
     /// A finger has been used: handles and the menu show.
     touch_mode: bool,
     handles: [NodeId; 2],
@@ -168,6 +178,9 @@ impl<S: 'static> TextEditing<S> {
             page_template: TouchSelection::with_config(config).into_read_only(),
             page_finger: None,
             page_dragging: false,
+            page_at: None,
+            edge: EdgeScroll::new(),
+            time: None,
             touch_mode: false,
             handles,
             menu,
@@ -299,19 +312,55 @@ impl<S: 'static> TextEditing<S> {
         if self.field_at(ui, Some(node)).is_some() {
             return false;
         }
-        let NodeKind::Text(text) = ui.kind(node) else {
+        let page = self.page_text(ui, scope_of(ui, node));
+        let Some((from, to)) = page.span(node) else {
             return false;
         };
-        let mut model = TextField::new(text.clone());
-        let i = ui.text_index_at(node, x, y, measure);
+        let mut model = TextField::new(page.text());
+        let i = (from + ui.text_index_at(node, x, y, measure)).min(to);
         model.anchor = i;
         model.caret = i;
         self.page = Some(PageSelection {
-            node,
+            page,
             model,
             touch: self.page_template.clone(),
         });
         true
+    }
+
+    /// The text a selection in `scope` can run through (not fields', which
+    /// is edited).
+    fn page_text(&self, ui: &Ui, scope: NodeId) -> PageText {
+        PageText::of(ui, scope, &|_, n| {
+            n == self.menu || self.fields.iter().any(|f| f.boxed == n)
+        })
+    }
+
+    /// The page selection's end being dragged, to where the drag is.
+    fn page_drag(&mut self, ui: &Ui, x: f32, y: f32, measure: &mut dyn TextMeasure) {
+        self.page_at = Some((x, y));
+        if let Some(p) = &mut self.page {
+            let i = p.page.index(ui, x, y, measure);
+            p.model.pointer_drag(i);
+        }
+    }
+
+    /// A drag selecting page text begins at `(x, y)`.
+    fn begin_page_drag(&mut self, x: f32, y: f32, finger: bool) {
+        self.edge = if finger {
+            EdgeScroll::new()
+        } else {
+            EdgeScroll::with_config(EdgeConfig::past())
+        };
+        self.edge.begin(x, y);
+        self.page_at = None;
+    }
+
+    /// Where the page selection's scrolling box shows, if it scrolls.
+    fn page_view(&self, ui: &Ui) -> Option<(NodeId, Rect)> {
+        let p = self.page.as_ref()?;
+        let scope = p.page.scope();
+        (ui.contains(scope) && ui.style(scope).scroll).then(|| (scope, p.page.view(ui)))
     }
 
     /// The mouse pressed: in a field it places the caret (two clicks a
@@ -333,10 +382,16 @@ impl<S: 'static> TextEditing<S> {
         if shift
             && button == PointerButton::Primary
             && let Some(p) = &mut self.page
-            && ui.selectable_text_at(x, y) == Some(p.node)
+            && let Some(n) = ui.selectable_text_at(x, y)
+            && p.page.span(n).is_some()
         {
-            p.model.caret = ui.text_index_at(p.node, x, y, measure);
+            let i = p.page.index(ui, x, y, measure);
+            // (from its anchor, by characters: it can shrink too)
+            let anchor = p.model.anchor;
+            p.model.pointer_down(anchor, 1, false);
+            p.model.pointer_drag(i);
             self.page_dragging = true;
+            self.begin_page_drag(x, y, false);
             return;
         }
         if !on_menu {
@@ -355,6 +410,7 @@ impl<S: 'static> TextEditing<S> {
                 p.model.pointer_down(i, clicks, false);
             }
             self.page_dragging = true;
+            self.begin_page_drag(x, y, false);
         }
         if let (Some(k), PointerButton::Primary) = (field, button) {
             let f = &self.fields[k];
@@ -375,10 +431,8 @@ impl<S: 'static> TextEditing<S> {
         measure: &mut dyn TextMeasure,
     ) {
         input.dispatch(ui, state, Event::PointerMove { x, y });
-        if self.page_dragging
-            && let Some(p) = &mut self.page
-        {
-            p.model.caret = ui.text_index_at(p.node, x, y, measure);
+        if self.page_dragging {
+            self.page_drag(ui, x, y, measure);
         }
         if self.selecting
             && let Some(k) = self.focused(input)
@@ -407,6 +461,7 @@ impl<S: 'static> TextEditing<S> {
         if std::mem::take(&mut self.page_dragging)
             && let Some(p) = &mut self.page
         {
+            self.page_at = None;
             p.model.pointer_up();
             if p.model.anchor == p.model.caret {
                 // A click, not a selection.
@@ -459,6 +514,7 @@ impl<S: 'static> TextEditing<S> {
             return;
         }
         if self.page_finger == Some(id) {
+            self.page_at = (phase == TouchPhase::Move).then_some((x, y));
             if ends {
                 self.page_finger = None;
             }
@@ -470,11 +526,14 @@ impl<S: 'static> TextEditing<S> {
             && !on_menu
             && let Some(p) = &self.page
         {
-            let node = p.node;
             let m = RefCell::new(&mut *measure);
-            let mut caret_at = |i: usize| ui.text_caret(node, i, *m.borrow_mut());
-            if p.touch.wants(&p.model, x, y, false, &mut caret_at) {
+            let mut caret_at = |i: usize| p.page.caret(ui, i, *m.borrow_mut());
+            // (a handle scrolled out of sight takes nothing)
+            let clip = p.page.view(ui);
+            let seen = y >= clip.y - 24.0 && y <= clip.y + clip.height + 24.0;
+            if seen && p.touch.wants(&p.model, x, y, false, &mut caret_at) {
                 self.page_finger = Some(id);
+                self.begin_page_drag(x, y, true);
                 self.page_gesture(ui, phase, x, y, time, measure);
                 return;
             }
@@ -582,19 +641,14 @@ impl<S: 'static> TextEditing<S> {
         measure: &mut dyn TextMeasure,
     ) {
         let Some(p) = &mut self.page else { return };
-        let node = p.node;
+        // (its model is the touch editing's while its pieces place it)
+        let mut model = std::mem::take(&mut p.model);
+        let mut touch = std::mem::take(&mut p.touch);
         let m = RefCell::new(measure);
-        let mut index_at = |x: f32, y: f32| ui.text_index_at(node, x, y, *m.borrow_mut());
-        let mut caret_at = |i: usize| ui.text_caret(node, i, *m.borrow_mut());
-        p.touch.touch(
-            &mut p.model,
-            phase,
-            x,
-            y,
-            time,
-            &mut index_at,
-            &mut caret_at,
-        );
+        let mut index_at = |x: f32, y: f32| p.page.index(ui, x, y, *m.borrow_mut());
+        let mut caret_at = |i: usize| p.page.caret(ui, i, *m.borrow_mut());
+        touch.touch(&mut model, phase, x, y, time, &mut index_at, &mut caret_at);
+        (p.model, p.touch) = (model, touch);
     }
 
     /// A tap on the edit menu: carried out now, while the host still
@@ -641,6 +695,9 @@ impl<S: 'static> TextEditing<S> {
             }
             None => self.field_touch.dismiss(),
         }
+        let dt = self.time.map_or(0.0, |t| (time - t).clamp(0.0, 0.1)) as f32;
+        self.time = Some(time);
+        self.scroll_at_edge(ui, dt, time, measure);
         if let Some((x, y)) = self.long_press.take()
             && self.select_page_at(ui, x, y, measure)
             && let Some(p) = &mut self.page
@@ -651,9 +708,36 @@ impl<S: 'static> TextEditing<S> {
         }
     }
 
-    /// Whether frames are wanted (a finger is held, waiting to be long).
+    /// A drag selecting page text held at its scrolling box's edge scrolls
+    /// it, and the selection goes on.
+    fn scroll_at_edge(&mut self, ui: &mut Ui, dt: f32, time: f64, measure: &mut dyn TextMeasure) {
+        let (Some((x, y)), Some((scroller, view))) = (self.page_at, self.page_view(ui)) else {
+            return;
+        };
+        let by = self.edge.lines(view, y, 1.0, dt);
+        if by == 0 {
+            return;
+        }
+        // What the last scroll brought into view, then on.
+        let inside = y.clamp(view.y + 1.0, view.y + view.height - 1.0);
+        if self.page_finger.is_some() {
+            self.page_gesture(ui, TouchPhase::Move, x, inside, time, measure);
+        } else if let Some(p) = &mut self.page {
+            let i = p.page.index(ui, x, inside, measure);
+            p.model.pointer_drag(i);
+        }
+        let (content, shown, _) = ui.scroll_extent(scroller);
+        let now = ui.style(scroller).scroll_top;
+        let to = (now + by as f32).clamp(0.0, (content - shown).max(0.0));
+        if to != now {
+            ui.set_scroll_top(scroller, to);
+        }
+    }
+
+    /// Whether frames are wanted (a finger is held, waiting to be long; a
+    /// drag may be held at an edge).
     pub fn needs_frame(&self) -> bool {
-        self.field_touch.needs_frame()
+        self.field_touch.needs_frame() || self.page_at.is_some()
     }
 
     /// Shows what editing and selecting look like now (call after each
@@ -671,10 +755,7 @@ impl<S: 'static> TextEditing<S> {
         for k in 0..self.fields.len() {
             self.place_field(ui, input, state, k, focused == Some(k), measure);
         }
-        if self.page.as_ref().is_some_and(|p| !ui.contains(p.node)) {
-            // Its text went (a list row scrolled out of sight).
-            self.page = None;
-        }
+        self.keep_page(ui);
         self.place_highlights(ui, measure);
         self.place_handles_and_menu(ui, state, focused, measure);
     }
@@ -736,7 +817,10 @@ impl<S: 'static> TextEditing<S> {
         let t = ui.rect(text);
         let bs = ui.style(boxed);
         let width = (r.width - bs.padding.horizontal() - bs.border.horizontal() - 1.0).max(1.0);
-        let at = caret.x - t.x;
+        // From the line's start: its right, right to left.
+        let rtl = ui.direction_of(boxed) == crate::environment::LayoutDirection::RightToLeft;
+        let along = |x: f32| if rtl { t.x + t.width - x } else { x - t.x };
+        let at = along(caret.x);
         let mut scroll = scrolled;
         if self.native {
             scroll = 0.0;
@@ -745,10 +829,12 @@ impl<S: 'static> TextEditing<S> {
         } else if at < scroll {
             scroll = at;
         }
-        let end = ui.text_caret(text, f.text.chars().count(), measure).x - t.x;
+        let n = f.text.chars().count();
+        let end = [0, n].map(|i| along(ui.text_caret(text, i, measure).x));
+        let end = end[0].max(end[1]);
         let scroll = scroll.clamp(0.0, (end - width).max(0.0)).round();
         if scroll != scrolled {
-            caret.x -= scroll - scrolled;
+            caret.x -= (scroll - scrolled) * if rtl { -1.0 } else { 1.0 };
             scrolled = scroll;
             let st = ui.style_mut(text);
             st.position = crate::Position::Relative;
@@ -761,6 +847,7 @@ impl<S: 'static> TextEditing<S> {
         } else {
             Display::None
         };
+        s.unmirrored = true;
         s.left = Length::Px(caret.x - r.x - 1.0);
         s.top = Length::Px(caret.y - r.y - 1.0 + (caret.height - 16.0) / 2.0);
         s.background = Some(ui.color_of(text));
@@ -772,27 +859,25 @@ impl<S: 'static> TextEditing<S> {
         }
     }
 
-    /// The box that clips `node`: the intersection of its clipping
-    /// ancestors (a scrolling list, a panel), or the window.
-    fn clip_of(ui: &Ui, node: NodeId) -> Rect {
-        let mut r = ui.rect(ui.root());
-        for a in ui.ancestors(node).skip(1) {
-            if ui.style(a).clip {
-                let c = ui.rect(a);
-                let (x0, y0) = (r.x.max(c.x), r.y.max(c.y));
-                let (x1, y1) = (
-                    (r.x + r.width).min(c.x + c.width),
-                    (r.y + r.height).min(c.y + c.height),
-                );
-                r = Rect {
-                    x: x0,
-                    y: y0,
-                    width: (x1 - x0).max(0.0),
-                    height: (y1 - y0).max(0.0),
-                };
+    /// The page's selection kept through its text changing: its ends where
+    /// they were in their nodes, if those are there still and say the same
+    /// up to there (text that's added to grows); else put away.
+    fn keep_page(&mut self, ui: &Ui) {
+        let Some(mut old) = self.page.take() else { return };
+        if !old.page.holds(ui) {
+            if !ui.contains(old.page.scope()) {
+                return;
             }
+            let new = self.page_text(ui, old.page.scope());
+            let at = |i| old.page.place_in(&new, i);
+            let (Some(anchor), Some(caret)) = (at(old.model.anchor), at(old.model.caret)) else {
+                return;
+            };
+            old.model = TextField::new(new.text());
+            (old.model.anchor, old.model.caret) = (anchor, caret);
+            old.page = new;
         }
-        r
+        self.page = Some(old);
     }
 
     /// Translucent boxes over the page's selected text, inside what clips
@@ -801,23 +886,7 @@ impl<S: 'static> TextEditing<S> {
         let rects: Vec<Rect> = match &self.page {
             Some(p) => {
                 let (lo, hi) = p.model.selection();
-                let clip = Self::clip_of(ui, p.node);
-                ui.text_selection_rects(p.node, lo, hi, measure)
-                    .into_iter()
-                    .filter_map(|b| {
-                        let (x0, y0) = (b.x.max(clip.x), b.y.max(clip.y));
-                        let (x1, y1) = (
-                            (b.x + b.width).min(clip.x + clip.width),
-                            (b.y + b.height).min(clip.y + clip.height),
-                        );
-                        (x1 > x0 && y1 > y0).then_some(Rect {
-                            x: x0,
-                            y: y0,
-                            width: x1 - x0,
-                            height: y1 - y0,
-                        })
-                    })
-                    .collect()
+                p.page.rects(ui, lo, hi, measure)
             }
             None => vec![],
         };
@@ -832,6 +901,7 @@ impl<S: 'static> TextEditing<S> {
             match rects.get(k) {
                 Some(r) => {
                     s.display = Display::Block;
+                    s.unmirrored = true;
                     s.left = Length::Px(r.x);
                     s.top = Length::Px(r.y);
                     s.width = Length::Px(r.width);
@@ -855,13 +925,13 @@ impl<S: 'static> TextEditing<S> {
         measure: &mut dyn TextMeasure,
     ) {
         let field_model;
-        let (text, model, sel, area, editing): (NodeId, &TextField, &TouchSelection, Rect, bool) =
+        let (text, model, sel, area, editing): (Option<NodeId>, &TextField, &TouchSelection, Rect, bool) =
             match &self.page {
                 Some(p) => (
-                    p.node,
+                    None,
                     &p.model,
                     &p.touch,
-                    Self::clip_of(ui, p.node),
+                    p.page.view(ui),
                     self.touch_mode,
                 ),
                 None => match focused {
@@ -869,7 +939,7 @@ impl<S: 'static> TextEditing<S> {
                         let f = &self.fields[k];
                         field_model = (f.model)(state).clone();
                         (
-                            f.text,
+                            Some(f.text),
                             &field_model,
                             &self.field_touch,
                             ui.rect(f.boxed),
@@ -883,7 +953,12 @@ impl<S: 'static> TextEditing<S> {
                 },
             };
         let m = RefCell::new(&mut *measure);
-        let mut caret_at = |i: usize| ui.text_caret(text, i, *m.borrow_mut());
+        let page_of = self.page.as_ref();
+        let mut caret_at = |i: usize| match (text, page_of) {
+            (Some(t), _) => ui.text_caret(t, i, *m.borrow_mut()),
+            (None, Some(p)) => p.page.caret(ui, i, *m.borrow_mut()),
+            (None, None) => Rect::default(),
+        };
         let handles = sel.handles(model, &mut caret_at).filter(|_| editing);
         let page = sel.menu_page(model, MENU_PER_PAGE).filter(|_| editing);
         let labels: Vec<String> = page
@@ -899,17 +974,23 @@ impl<S: 'static> TextEditing<S> {
                 (clamp(h.start.x), h.start.y, h.start.height),
                 (clamp(h.end.x), h.end.y, h.end.height),
             ]
+            // (a page's end scrolled out of view has none)
+            .map(|at| (text.is_some() || (at.1 + at.2 > area.y && at.1 < area.y + area.height)).then_some(at))
         });
         let menu_at = page
             .as_ref()
-            .map(|_| ((clamp(a.x) + clamp(b.x)) / 2.0, a.y, a.y + a.height));
+            .map(|_| {
+                // (a selection larger than its view: the menu inside that)
+                let inside = |y: f32| if text.is_some() { y } else { y.clamp(area.y, area.y + area.height) };
+                ((clamp(a.x) + clamp(b.x)) / 2.0, inside(a.y), inside(a.y + a.height))
+            });
         self.menu_field = if self.page.is_some() { None } else { focused };
         for (k, &h) in self.handles.iter().enumerate() {
             let mut s = ui.style(h).clone();
-            match handles_at {
-                Some(at) => {
-                    let (x, y, height) = at[k];
+            match handles_at.and_then(|at| at[k]) {
+                Some((x, y, height)) => {
                     s.display = Display::Block;
+                    s.unmirrored = true;
                     s.left = Length::Px(x - 1.0);
                     s.top = Length::Px(y);
                     s.height = Length::Px(height);
@@ -987,6 +1068,7 @@ impl<S: 'static> TextEditing<S> {
         if s.display != display || s.left != left || s.top != top {
             ui.update_style(self.menu, |s| {
                 s.display = display;
+                s.unmirrored = true;
                 s.left = left;
                 s.top = top;
             });

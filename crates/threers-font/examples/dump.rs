@@ -124,6 +124,7 @@ fn main() {
                                 threers_font::glyph::Segment::MoveTo(p) => writeln!(out, "M {} {}", p.0, p.1).unwrap(),
                                 threers_font::glyph::Segment::LineTo(p) => writeln!(out, "L {} {}", p.0, p.1).unwrap(),
                                 threers_font::glyph::Segment::ConicTo(c, p) => writeln!(out, "Q {} {} {} {}", c.0, c.1, p.0, p.1).unwrap(),
+                                threers_font::glyph::Segment::CubicTo(c1, c2, p) => writeln!(out, "C {} {} {} {} {} {}", c1.0, c1.1, c2.0, c2.1, p.0, p.1).unwrap(),
                             }
                         }
                     }

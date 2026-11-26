@@ -21,6 +21,7 @@ use std::rc::Rc;
 
 use crate::binding::Binding;
 use crate::environment::Token;
+use crate::i18n::{word, Word};
 use crate::input::Input;
 use crate::rich_text::TextRun;
 use crate::tree::{NodeId, Ui};
@@ -139,7 +140,7 @@ pub fn searchable<S: 'static>(
     );
     ui.set_semantics(
         results,
-        Semantics::new(Role::List).label(format!("Results for {placeholder}")),
+        Semantics::new(Role::List).label(word(Word::ResultsFor).replace("{query}", placeholder)),
     );
     let items = Rc::new(items);
     let pick = Rc::new(pick);
@@ -170,7 +171,7 @@ pub fn searchable<S: 'static>(
                     row,
                     Semantics::new(Role::ListItem).label(items[*i].as_str()),
                 );
-                ui.hover_style(row, "background: rgba(128,138,160,0.2)");
+                ui.hover_style(row, "background: var(--hover)");
                 let (i, pick) = (*i, pick.clone());
                 input.on_click(row, move |s, _, _| pick(s, i));
                 sh.rows.push((row, i));
@@ -178,7 +179,7 @@ pub fn searchable<S: 'static>(
             if found.is_empty() {
                 let none = ui.add_box(results, style! { padding: 5px 8px; font-size: 12px; });
                 ui.token_style(none, &[("color", Token::SecondaryText)]);
-                ui.add_text(none, "No results");
+                ui.add_text(none, word(Word::NoResults));
                 sh.rows.push((none, usize::MAX));
             }
             ui.semantics_mut(results).value = Some(format!("{} found", found.len()));
@@ -196,9 +197,11 @@ pub fn searchable<S: 'static>(
                     continue;
                 }
                 let on = k == sh.marked;
-                ui.update_style(row, |s| {
-                    s.background = on.then_some([0.145, 0.388, 0.922, 0.16])
-                });
+                if on {
+                    ui.token_style(row, &[("background", Token::Hover)]);
+                } else {
+                    ui.clear_token_style(row, "background");
+                }
                 ui.semantics_mut(row).selected = Some(on);
             }
         }

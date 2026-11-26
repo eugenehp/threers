@@ -6,6 +6,11 @@
 use threers_ui::a11y::AccessNode;
 use threers_ui::binding::Binding;
 use threers_ui::components::{avatar, badge, disclosure, popover, switch, tabs};
+use threers_ui::components::{
+    button, card, choices, confirm, on_press, section, set_enabled, setting, steps, switch_row,
+    ButtonKind,
+};
+use threers_ui::environment::Token;
 use threers_ui::input::{Event, Input, PointerButton};
 use threers_ui::navigation::{ListNavigation, Nav};
 use threers_ui::notifications::{Notice, Notifications, Tone};
@@ -814,4 +819,225 @@ fn the_palette_fits_a_narrow_window_and_follows_it() {
     ui.layout(1000.0, 600.0, &mut FixedWidthText(7.0));
     let r = ui.rect(panel);
     assert_eq!((r.x, r.width), (280.0, 440.0));
+}
+
+/// A button is pressed by a click, Space and Enter; disabled, it is not
+/// (and Tab skips it), and it shows so.
+#[test]
+fn a_button_presses_unless_disabled() {
+    let mut ui = Ui::new();
+    let mut input: Input<Log> = Input::new();
+    let mut log = vec![];
+    let root = ui.root();
+    let b = button(&mut ui, root, "Save", ButtonKind::Primary);
+    on_press(&mut input, b, |log: &mut Log| log.push("save".into()));
+    layout(&mut ui);
+    let a = node(&ui, b);
+    assert_eq!(
+        (a.role, a.name.as_str(), a.focusable),
+        (Role::Button, "Save", true)
+    );
+    assert_eq!(
+        ui.style(b).background,
+        Some(ui.token(Token::Accent)),
+        "filled with the accent"
+    );
+    tap(&mut input, &mut ui, &mut log, b);
+    input.set_focus(&mut ui, &mut log, Some(b));
+    keys(&mut input, &mut ui, &mut log, "space enter");
+    assert_eq!(log, ["save", "save", "save"]);
+
+    set_enabled(&mut ui, b, false);
+    layout(&mut ui);
+    assert!(!node(&ui, b).focusable, "Tab skips it");
+    assert_eq!(
+        ui.style(b).color,
+        ui.token(Token::SecondaryText),
+        "it looks disabled"
+    );
+    tap(&mut input, &mut ui, &mut log, b);
+    assert_eq!(log.len(), 3, "not pressed");
+    set_enabled(&mut ui, b, true);
+    tap(&mut input, &mut ui, &mut log, b);
+    assert_eq!(log.len(), 4);
+}
+
+/// The kinds take the theme's colours, and follow new ones.
+#[test]
+fn buttons_and_cards_take_the_themes_colours() {
+    let mut ui = Ui::new();
+    let root = ui.root();
+    let col = ui.add_box(root, style! { display: flex; flex-direction: column; });
+    let text = ui.add_box(col, Default::default());
+    ui.add_text(text, "Archived");
+    let plain = button(&mut ui, col, "Restore", ButtonKind::Plain);
+    let delete = button(&mut ui, root, "Delete", ButtonKind::Destructive);
+    let c = card(&mut ui, root);
+    layout(&mut ui);
+    assert_eq!(ui.style(plain).color, ui.token(Token::SecondaryText));
+    assert_eq!(ui.style(delete).color, ui.token(Token::Destructive));
+    assert_eq!(ui.style(c).background, Some(ui.token(Token::Surface)));
+    // In a column, a text button's label lines up with the text above it.
+    assert_eq!(
+        ui.rect(plain).x + ui.style(plain).padding.left,
+        ui.rect(text).x
+    );
+
+    let mut tokens = *ui.tokens();
+    tokens.dark.surface = [0.2, 0.4, 0.6, 1.0];
+    tokens.light.surface = [0.2, 0.4, 0.6, 1.0];
+    ui.set_tokens(tokens);
+    assert_eq!(
+        ui.style(c).background,
+        Some([0.2, 0.4, 0.6, 1.0]),
+        "a new theme restyles it"
+    );
+}
+
+/// Choices: a radio group, the selected one checked and in the accent.
+#[test]
+fn choices_are_a_radio_group_with_one_checked() {
+    let mut ui = Ui::new();
+    let root = ui.root();
+    let (group, items) = choices(&mut ui, root, &["Small", "Medium", "Large"], Some(1));
+    layout(&mut ui);
+    assert_eq!(node(&ui, group).role, Role::RadioGroup);
+    let checked: Vec<_> = items.iter().map(|&i| node(&ui, i).checked).collect();
+    assert_eq!(checked, [Some(false), Some(true), Some(false)]);
+    assert_eq!(with_role(&ui, Role::Radio).len(), 3);
+    assert_eq!(ui.style(items[1]).background, Some(ui.token(Token::Accent)));
+}
+
+/// A confirmation: the question said at once, then Cancel before the
+/// destructive button.
+#[test]
+fn a_confirmation_puts_the_safe_choice_first() {
+    let mut ui = Ui::new();
+    let root = ui.root();
+    let c = confirm(&mut ui, root, "Delete this file?", "Cancel", "Delete");
+    layout(&mut ui);
+    assert_eq!(with_role(&ui, Role::Alert)[0].name, "Delete this file?");
+    assert!(ui.rect(c.cancel).x < ui.rect(c.yes).x, "Cancel first");
+    assert_eq!(ui.style(c.yes).color, ui.token(Token::Destructive));
+}
+
+/// A hovered button shows the theme's hover colour, and a new theme's
+/// at once; a destructive one a faint wash of its red.
+#[test]
+fn a_buttons_hover_follows_the_theme() {
+    let mut ui = Ui::new();
+    let mut input: Input<Log> = Input::new();
+    let mut log = vec![];
+    let root = ui.root();
+    let b = button(&mut ui, root, "Open", ButtonKind::Secondary);
+    let d = button(&mut ui, root, "Delete", ButtonKind::Destructive);
+    layout(&mut ui);
+    let (x, y) = centre(&ui, b);
+    input.dispatch(&mut ui, &mut log, Event::PointerMove { x, y });
+    let (bg, hover) = (ui.style(b).background.unwrap(), ui.token(Token::Hover));
+    assert!(
+        (0..4).all(|i| (bg[i] - hover[i]).abs() < 0.01),
+        "{bg:?} {hover:?}"
+    );
+
+    let mut tokens = *ui.tokens();
+    tokens.dark.hover = [0.2, 0.4, 0.6, 1.0];
+    tokens.light.hover = [0.2, 0.4, 0.6, 1.0];
+    ui.set_tokens(tokens);
+    assert_eq!(
+        ui.style(b).background,
+        Some([0.2, 0.4, 0.6, 1.0]),
+        "the new theme's hover"
+    );
+
+    let (x, y) = centre(&ui, d);
+    input.dispatch(&mut ui, &mut log, Event::PointerMove { x, y });
+    let wash = ui.style(d).background.unwrap();
+    let red = ui.token(Token::Destructive);
+    assert!((wash[3] - 0.12).abs() < 0.01, "{wash:?}");
+    assert!(
+        (0..3).all(|i| (wash[i] - red[i]).abs() < 0.01),
+        "{wash:?} {red:?}"
+    );
+}
+
+/// A switch row is one control: named by its label, checked as shown,
+/// pressed anywhere on it by pointer or keys; on, its track is the accent.
+#[test]
+fn a_switch_row_is_one_control() {
+    let mut ui = Ui::new();
+    let mut input: Input<Log> = Input::new();
+    let mut log = vec![];
+    let root = ui.root();
+    let off = switch_row(&mut ui, root, "Auto-connect", "Scan every 10 s.", false);
+    let on = switch_row(&mut ui, root, "Sounds", "", true);
+    on_press(&mut input, off, |log: &mut Log| log.push("toggle".into()));
+    layout(&mut ui);
+    let a = node(&ui, off);
+    assert_eq!(
+        (a.role, a.name.as_str(), a.checked, a.focusable),
+        (Role::Switch, "Auto-connect", Some(false), true)
+    );
+    assert_eq!(node(&ui, on).checked, Some(true));
+    tap(&mut input, &mut ui, &mut log, off);
+    input.set_focus(&mut ui, &mut log, Some(off));
+    keys(&mut input, &mut ui, &mut log, "space");
+    assert_eq!(log, ["toggle", "toggle"]);
+    let track = |row| *ui.children(row).last().unwrap();
+    assert_eq!(
+        ui.style(track(on)).background,
+        Some(ui.token(Token::Accent))
+    );
+    assert_eq!(
+        ui.style(track(off)).background,
+        Some(ui.token(Token::SecondaryText))
+    );
+}
+
+/// A section is a card under a heading; a setting names itself, shows its
+/// value and says what it does.
+#[test]
+fn a_section_of_settings_reads_as_headed() {
+    let mut ui = Ui::new();
+    let root = ui.root();
+    let sec = section(&mut ui, root, "Timing");
+    let s = setting(
+        &mut ui,
+        sec,
+        "Focus",
+        Some("25 min"),
+        "How long a focus phase lasts.",
+    );
+    layout(&mut ui);
+    let h = with_role(&ui, Role::Heading(2));
+    assert_eq!(h[0].name, "Timing");
+    let texts = ui.text_content(s);
+    assert!(
+        texts.contains("Focus") && texts.contains("25 min") && texts.contains("How long"),
+        "{texts}"
+    );
+}
+
+/// A stepper's buttons are named for what they do, and the end of the
+/// range greys its side out (not pressed, skipped by Tab).
+#[test]
+fn a_steppers_buttons_are_named_and_stop_at_the_ends() {
+    let mut ui = Ui::new();
+    let mut input: Input<Log> = Input::new();
+    let mut log = vec![];
+    let root = ui.root();
+    let s = steps(&mut ui, root, "1", (false, true), ("Decrease", "Increase"));
+    on_press(&mut input, s.down, |log: &mut Log| log.push("down".into()));
+    on_press(&mut input, s.up, |log: &mut Log| log.push("up".into()));
+    layout(&mut ui);
+    assert_eq!(node(&ui, s.down).name, "Decrease");
+    assert_eq!(
+        (node(&ui, s.up).name.as_str(), node(&ui, s.up).focusable),
+        ("Increase", true)
+    );
+    assert!(!node(&ui, s.down).focusable, "at the start");
+    tap(&mut input, &mut ui, &mut log, s.down);
+    tap(&mut input, &mut ui, &mut log, s.up);
+    assert_eq!(log, ["up"]);
+    assert!(ui.text_content(s.root).contains('1'));
 }

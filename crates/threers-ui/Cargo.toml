@@ -38,8 +38,10 @@ swipe = []
 [dependencies]
 # Easing curves for `anim`, and WCAG contrast for `a11y`; neither has
 # dependencies of its own.
-threers-math = { path = "../threers-math", version = "0.1.1" }
-threers-captions = { path = "../threers-captions", version = "0.1.1" }
+threers-math = { path = "../threers-math", version = "0.1.2" }
+threers-captions = { path = "../threers-captions", version = "0.1.2" }
+# Autocorrect and spelling for `rich_text_area`; no dependencies of its own.
+threers-spell = { path = "../threers-spell", version = "0.1.2" }
 serde_json = { version = "1", optional = true }
 accesskit = { version = "0.25", optional = true }
 

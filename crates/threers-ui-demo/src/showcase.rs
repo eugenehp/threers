@@ -311,7 +311,7 @@ pub fn build(ui: &mut Ui, input: &mut Input<State>, state: &State, pages: &Pages
         |ui, input, _, page, screen| {
             ui.add_text(screen, format!("Messages in {page}"));
             let more = ui.add_box(screen, style! { padding: 6px 0; cursor: pointer; });
-            ui.token_style(more, &[("color", threers_ui::environment::Token::Accent)]);
+            ui.token_style(more, &[("color", threers_ui::environment::Token::AccentText)]);
             ui.add_text(more, "Open the first one ›");
             ui.set_semantics(
                 more,

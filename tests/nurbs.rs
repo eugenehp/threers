@@ -659,3 +659,41 @@ fn a_traced_curve_can_be_read_as_a_curve() {
         "the curve wanders {worst} off the circle it interpolates"
     );
 }
+
+/// Summed over in `v` once and asked at many `u`, a surface says what it says
+/// asked all at once.
+#[test]
+fn a_surface_along_u_is_the_surface() {
+    let (n_u, n_v) = (6, 5);
+    let poles: Vec<[f64; 4]> = (0..n_u)
+        .flat_map(|i| (0..n_v).map(move |j| (i as f64, j as f64)))
+        .map(|(i, j)| {
+            let w = 1.0 + 0.3 * ((i * 1.7 + j).sin());
+            let (x, y, z) = (i + 0.2 * j, j - 0.1 * i, (i * j * 0.6).cos());
+            [x * w, y * w, z * w, w]
+        })
+        .collect();
+    let surface = threers::nurbs::NurbsSurface::from_homogeneous(
+        3,
+        2,
+        vec![0.0, 0.0, 0.0, 0.0, 0.4, 0.7, 1.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+        n_u,
+        n_v,
+        poles,
+    )
+    .unwrap();
+    for v in [0.0, 0.13, 0.5, 0.77, 1.0] {
+        let row = surface.along_u(v);
+        for u in [0.0, 0.2, 0.4, 0.55, 0.9, 1.0] {
+            let d = surface.derivatives(u, v, 1);
+            let (got, again) = (row.frame(u), row.frame_at(&surface.at_u(u)));
+            let want = [d[0][0], d[1][0], d[0][1]];
+            for (a, b) in got.iter().chain(&again).zip(want.iter().chain(&want)) {
+                for k in 0..3 {
+                    assert!((a[k] - b[k]).abs() < 1e-11, "{u} {v}: {a:?} and {b:?}");
+                }
+            }
+        }
+    }
+}

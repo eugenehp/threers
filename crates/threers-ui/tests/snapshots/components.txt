@@ -5,8 +5,8 @@ group @0,0 600x400 fg #ffffff
   tablist @8,40 584x34 fg #ffffff
     tab "One" selected=true @8,40 45x33 fg #ffffff
       statictext "One" @20,46 21x19 fg #ffffff
-    tab "Two" selected=false @55,40 45x33 fg #ffffff
-      statictext "Two" @67,46 21x19 fg #ffffff
+    tab "Two" selected=false @55,40 45x33 fg #979eaf
+      statictext "Two" @67,46 21x19 fg #979eaf
   tabpanel "One" @8,82 584x16 fg #ffffff
 == 600x400 Light text 1
 group @0,0 600x400 fg #ffffff
@@ -15,8 +15,8 @@ group @0,0 600x400 fg #ffffff
   tablist @8,40 584x34 fg #ffffff
     tab "One" selected=true @8,40 45x33 fg #ffffff
       statictext "One" @20,46 21x19 fg #ffffff
-    tab "Two" selected=false @55,40 45x33 fg #ffffff
-      statictext "Two" @67,46 21x19 fg #ffffff
+    tab "Two" selected=false @55,40 45x33 fg #5b6270
+      statictext "Two" @67,46 21x19 fg #5b6270
   tabpanel "One" @8,82 584x16 fg #ffffff
 == 600x400 Dark text 1.5
 group @0,0 600x400 fg #ffffff
@@ -25,8 +25,8 @@ group @0,0 600x400 fg #ffffff
   tablist @8,45 584x44 fg #ffffff
     tab "One" selected=true @8,45 45x43 fg #ffffff
       statictext "One" @20,51 21x29 fg #ffffff
-    tab "Two" selected=false @55,45 45x43 fg #ffffff
-      statictext "Two" @67,51 21x29 fg #ffffff
+    tab "Two" selected=false @55,45 45x43 fg #979eaf
+      statictext "Two" @67,51 21x29 fg #979eaf
   tabpanel "One" @8,97 584x16 fg #ffffff
 == 600x400 Light text 1.5
 group @0,0 600x400 fg #ffffff
@@ -35,8 +35,8 @@ group @0,0 600x400 fg #ffffff
   tablist @8,45 584x44 fg #ffffff
     tab "One" selected=true @8,45 45x43 fg #ffffff
       statictext "One" @20,51 21x29 fg #ffffff
-    tab "Two" selected=false @55,45 45x43 fg #ffffff
-      statictext "Two" @67,51 21x29 fg #ffffff
+    tab "Two" selected=false @55,45 45x43 fg #5b6270
+      statictext "Two" @67,51 21x29 fg #5b6270
   tabpanel "One" @8,97 584x16 fg #ffffff
 == 600x400 Dark text 1
 group @0,0 600x400 fg #ffffff

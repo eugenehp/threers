@@ -199,7 +199,21 @@ Pieces are classified exactly where the other solid is bounded by planes, cylind
 and spheres: a ray against the surfaces themselves, retried in another direction where it
 grazes. A body cut many times over may not tessellate closed at a fine tolerance, and a mesh
 that does not close has no inside — every point read as outside it, and a hole's wall went
-missing. Tori and splines still go by the mesh, the coarsest closed one if need be.
+missing. Tori still go by the mesh, the coarsest closed one if need be; splines by rays
+first (below).
+
+Solids with NURBS faces are classified by rays as well (2026-11-22, the first part of stage
+E). A ray's hits on a NURBS face are the crossings of its seed grid's triangles, each polished
+by Newton's method on `S(u, v) = p + t·d` onto the surface; a crossing that does not polish
+gives no answer. With such faces two clean directions must agree, and where they do not, or a
+hit is unsure, the closed mesh is made then and asked instead, once per boolean. On the
+drilled CAM test part (`Drilling_1`, a pad with two extruded spline faces cut by eighteen
+holes) a boolean took about 120 s, all of it tessellating at five millionths of the model
+and inverting points against the mesh; it now takes under a second, at 77 MB, and the
+shapes are the ones FreeCAD makes. Point inversion on a NURBS surface keeps the seed grid of
+each surface it has seen (per thread, found again by the surface's whole definition) and
+picks its four best seeds without sorting them all; `NurbsSurface::point` evaluates its basis
+on the stack below degree 16.
 
 Flat faces weld at a millionth of the model: inputs arrive agreeing only to single
 precision (a face at y = 2199.99949 against 2200), and at a ten-millionth the cut between

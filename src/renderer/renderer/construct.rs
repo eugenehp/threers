@@ -3769,6 +3769,7 @@ impl Renderer {
             wire_span_cache: IdentityKeyed::default(),
             tex_cache: HashMap::new(),
             tex_last_used: HashMap::new(),
+            tex_bgs_built: 0,
             cache_retention: DEFAULT_CACHE_RETENTION,
             tex_pinned: std::collections::HashSet::new(),
             stream_uploads: HashMap::new(),

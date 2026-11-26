@@ -17,12 +17,23 @@ pub fn find_span(degree: usize, n_ctrl: usize, knots: &[f64], u: f64) -> usize {
     debug_assert!(n_ctrl > degree, "need at least degree + 1 control points");
     let n = n_ctrl - 1;
 
-    // Clamp to the domain [knots[degree], knots[n + 1]].
+    // Clamp to the domain [knots[degree], knots[n + 1]], in the outermost
+    // span that has a length: an unclamped knot vector — a periodic spline
+    // unrolled over its period — may repeat a knot at either end of the
+    // domain, and the span between the two copies has no basis (0/0).
     if u >= knots[n + 1] {
-        return n;
+        let mut span = n;
+        while span > degree && knots[span] >= knots[n + 1] {
+            span -= 1;
+        }
+        return span;
     }
     if u <= knots[degree] {
-        return degree;
+        let mut span = degree;
+        while span < n && knots[span + 1] <= knots[degree] {
+            span += 1;
+        }
+        return span;
     }
 
     let mut low = degree;
@@ -62,6 +73,31 @@ pub fn basis_funcs(span: usize, u: f64, degree: usize, knots: &[f64]) -> Vec<f64
         n[j] = saved;
     }
     n
+}
+
+/// [`basis_funcs`] into a fixed buffer, for degrees below 16: the same
+/// arithmetic in the same order, without the three allocations. `None` for
+/// a higher degree.
+pub fn basis_funcs_fixed(span: usize, u: f64, degree: usize, knots: &[f64]) -> Option<[f64; 16]> {
+    if degree >= 16 {
+        return None;
+    }
+    let mut n = [0.0f64; 16];
+    let mut left = [0.0f64; 16];
+    let mut right = [0.0f64; 16];
+    n[0] = 1.0;
+    for j in 1..=degree {
+        left[j] = u - knots[span + 1 - j];
+        right[j] = knots[span + j] - u;
+        let mut saved = 0.0;
+        for r in 0..j {
+            let temp = n[r] / (right[r + 1] + left[j - r]);
+            n[r] = saved + right[r + 1] * temp;
+            saved = left[j - r] * temp;
+        }
+        n[j] = saved;
+    }
+    Some(n)
 }
 
 /// Basis functions and their derivatives up to order `n_ders` — A2.3.
@@ -164,6 +200,85 @@ pub fn ders_basis_funcs(
     ders
 }
 
+/// [`ders_basis_funcs`] up to the second derivative into fixed buffers, for
+/// degrees below 16: the same arithmetic in the same order, without the
+/// allocations. `None` for a higher degree.
+pub fn ders_basis_funcs_fixed(
+    span: usize,
+    u: f64,
+    degree: usize,
+    n_ders: usize,
+    knots: &[f64],
+) -> Option<[[f64; 16]; 3]> {
+    ders_sized::<16>(span, u, degree, n_ders, knots)
+}
+
+/// [`ders_basis_funcs_fixed`] in buffers of `N`, for degrees below it: most
+/// splines are cubics or less, and clearing room for a fifteenth degree each
+/// time cost more than the arithmetic.
+pub(crate) fn ders_sized<const N: usize>(
+    span: usize,
+    u: f64,
+    degree: usize,
+    n_ders: usize,
+    knots: &[f64],
+) -> Option<[[f64; N]; 3]> {
+    let p = degree;
+    if p >= N || n_ders > 2 {
+        return None;
+    }
+    let mut ders = [[0.0f64; N]; 3];
+    let mut left = [0.0f64; N];
+    let mut right = [0.0f64; N];
+    // The functions of one degree and then the next; what the last two
+    // degrees' were made of is all that two derivatives take.
+    let mut n = [0.0f64; N];
+    n[0] = 1.0;
+    let mut below = [[0.0f64; N]; 2];
+    let mut widths = [[0.0f64; N]; 2];
+    for j in 1..=p {
+        left[j] = u - knots[span + 1 - j];
+        right[j] = knots[span + j] - u;
+        let from_top = p - j;
+        if from_top < 2 {
+            below[from_top] = n;
+        }
+        let mut saved = 0.0;
+        for r in 0..j {
+            let width = right[r + 1] + left[j - r];
+            if from_top < 2 {
+                widths[from_top][r] = width;
+            }
+            let temp = n[r] / width;
+            n[r] = saved + right[r + 1] * temp;
+            saved = left[j - r] * temp;
+        }
+        n[j] = saved;
+    }
+    ders[0] = n;
+    // The slopes of functions of a degree, from those of the degree below and
+    // the widths they were divided by.
+    let slopes = |of: &[f64; N], widths: &[f64; N], degree: usize| {
+        let mut out = [0.0f64; N];
+        let mut before = 0.0;
+        for r in 0..degree {
+            let x = degree as f64 * (of[r] / widths[r]);
+            out[r] = before - x;
+            before = x;
+        }
+        out[degree] = before;
+        out
+    };
+    if n_ders >= 1 && p >= 1 {
+        ders[1] = slopes(&below[0], &widths[0], p);
+    }
+    if n_ders >= 2 && p >= 2 {
+        let first = slopes(&below[1], &widths[1], p - 1);
+        ders[2] = slopes(&first, &widths[0], p);
+    }
+    Some(ders)
+}
+
 /// Binomial coefficient `n choose k`, exact for the small `n` derivative
 /// formulas use (nothing here goes past a handful of orders).
 pub fn binomial(n: usize, k: usize) -> f64 {
@@ -212,9 +327,56 @@ pub fn knots_valid(degree: usize, n_ctrl: usize, knots: &[f64]) -> bool {
 mod tests {
     use super::*;
 
+    /// Two derivatives the short way are those the long way has.
+    #[test]
+    fn two_derivatives_by_the_degrees_below() {
+        for degree in 1..=11usize {
+            let mut knots = vec![0.0; degree + 1];
+            knots.extend([0.2, 0.2, 0.5, 0.9]);
+            knots.extend(vec![1.3; degree + 1]);
+            let n = knots.len() - degree - 1;
+            for i in 0..=26 {
+                let u = i as f64 * 0.05;
+                let span = find_span(degree, n, &knots, u);
+                let k = 2.min(degree);
+                let want = ders_basis_funcs(span, u, degree, k, &knots);
+                let got = ders_sized::<16>(span, u, degree, 2, &knots).unwrap();
+                for d in 0..=k {
+                    let size = want[d].iter().fold(1.0f64, |m, x| m.max(x.abs()));
+                    for j in 0..=degree {
+                        assert!(
+                            (got[d][j] - want[d][j]).abs() <= 1e-12 * size,
+                            "{degree} {u} {d} {j}: {} and {}",
+                            got[d][j],
+                            want[d][j]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     fn open_knots() -> Vec<f64> {
         // degree 3, 7 control points → 11 knots.
         vec![0.0, 0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 1.0, 1.0]
+    }
+
+    #[test]
+    fn repeated_knots_at_an_unclamped_domains_ends() {
+        // A periodic cubic with double knots where it closes, unrolled over
+        // one period: the ends of the domain are knots 0, 0 and 4, 4.
+        let knots = [-2.0, -1.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0, 7.0];
+        let n_ctrl = knots.len() - 4;
+        assert_eq!(find_span(3, n_ctrl, &knots, 4.0), 6);
+        let shifted = [
+            -3.0, -2.0, -1.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0,
+        ];
+        assert_eq!(find_span(3, n_ctrl, &shifted, 0.0), 4);
+        for (k, u) in [(&knots, 4.0), (&shifted, 0.0)] {
+            let basis = basis_funcs(find_span(3, n_ctrl, k, u), u, 3, k);
+            let sum: f64 = basis.iter().sum();
+            assert!((sum - 1.0).abs() < 1e-12, "{basis:?}");
+        }
     }
 
     #[test]

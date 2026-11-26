@@ -570,7 +570,7 @@ pub fn default_substitute(pattern: &mut Pattern, lang: &str) {
 // --- the installed faces ---------------------------------------------------------
 
 /// A scanned face: what matching compares.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct FontEntry {
     pub path: PathBuf,
     /// The face's index, a named instance's number in the high bits.
@@ -911,10 +911,59 @@ impl FontEntry {
 
 /// Every face in the directories, in fontconfig's order: the directories
 /// as given, then their subdirectories, the files of each sorted by name.
+/// The files are read on as many threads as there are cores.
 pub fn scan(dirs: &[PathBuf]) -> Vec<FontEntry> {
+    scan_files(&font_files(dirs)).into_iter().flatten().collect()
+}
+
+/// [`scan`], with what was found kept in the file `cache`: the next time,
+/// only the files that are new or changed since (their size, or when they
+/// were written) are read. A cache there is not, or that is not whole, is
+/// as one that says nothing.
+pub fn scan_cached(dirs: &[PathBuf], cache: &std::path::Path) -> Vec<FontEntry> {
+    let files = font_files(dirs);
+    let stamps: Vec<Option<Stamp>> = files.iter().map(|f| Stamp::of(f)).collect();
+    let mut known = std::fs::read(cache).ok().and_then(|b| read_cache(&b)).unwrap_or_default();
+    let kept = known.len();
+    let mut found: Vec<Option<Vec<FontEntry>>> = files
+        .iter()
+        .zip(&stamps)
+        .map(|(f, stamp)| {
+            let (was, _) = known.get(f)?;
+            if Some(*was) != *stamp { None } else { known.remove(f).map(|k| k.1) }
+        })
+        .collect();
+
+    let missing: Vec<usize> = (0..files.len()).filter(|&i| found[i].is_none()).collect();
+    // (and none there are no longer)
+    let changed = !missing.is_empty() || kept != files.len();
+    let paths: Vec<PathBuf> = missing.iter().map(|&i| files[i].clone()).collect();
+
+    for (i, e) in missing.into_iter().zip(scan_files(&paths)) {
+        found[i] = Some(e);
+    }
+
+    let found: Vec<Vec<FontEntry>> = found.into_iter().map(Option::unwrap_or_default).collect();
+
+    if changed {
+        let bytes = write_cache(&files, &stamps, &found);
+        // (whole, or not at all: two started at once write the same)
+        let part = cache.with_extension(format!("part{}", std::process::id()));
+        let _ = cache.parent().map(std::fs::create_dir_all);
+
+        if std::fs::write(&part, bytes).is_err() || std::fs::rename(&part, cache).is_err() {
+            let _ = std::fs::remove_file(&part);
+        }
+    }
+
+    found.into_iter().flatten().collect()
+}
+
+/// The files of the directories, in fontconfig's order.
+fn font_files(dirs: &[PathBuf]) -> Vec<PathBuf> {
     let mut queue: std::collections::VecDeque<PathBuf> = dirs.iter().cloned().collect();
     let mut seen = std::collections::BTreeSet::new();
-    let mut out = Vec::new();
+    let mut files = Vec::new();
 
     while let Some(dir) = queue.pop_front() {
         if !seen.insert(dir.clone()) {
@@ -928,30 +977,288 @@ pub fn scan(dirs: &[PathBuf]) -> Vec<FontEntry> {
         for path in entries {
             if path.is_dir() {
                 queue.push_back(path);
-                continue;
-            }
-
-            let Ok(data) = std::fs::read(&path) else { continue };
-
-            let count = if data.starts_with(b"ttcf") {
-                Reader::new(&data).u32(8).unwrap_or(0)
             } else {
-                1
-            };
-
-            for i in 0..count {
-                out.extend(FontEntry::scan(&path, &data, i));
+                files.push(path);
             }
         }
     }
 
+    files
+}
+
+/// Each file's faces.
+fn scan_files(files: &[PathBuf]) -> Vec<Vec<FontEntry>> {
+    let threads = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()) };
+    let threads = threads.min(files.len());
+
+    if threads < 2 {
+        return files.iter().map(|f| scan_file(f)).collect();
+    }
+
+    // (each takes the next file there is: a collection is read as long as
+    // twenty single faces)
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut found: Vec<(usize, Vec<FontEntry>)> = std::thread::scope(|on| {
+        let each: Vec<_> = (0..threads)
+            .map(|_| {
+                on.spawn(|| {
+                    let mut mine = Vec::new();
+
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(f) = files.get(i) else { return mine };
+                        mine.push((i, scan_file(f)));
+                    }
+                })
+            })
+            .collect();
+        each.into_iter().flat_map(|t| t.join().unwrap_or_default()).collect()
+    });
+    found.sort_by_key(|(i, _)| *i);
+    let mut out = vec![Vec::new(); files.len()];
+
+    for (i, e) in found {
+        out[i] = e;
+    }
+
     out
+}
+
+/// What says a file is as it was: its length, when it was written, and when
+/// anything of it was changed (where the system says).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Stamp([u64; 3]);
+
+impl Stamp {
+    fn of(path: &std::path::Path) -> Option<Stamp> {
+        let m = std::fs::metadata(path).ok()?;
+        let written = m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
+        #[cfg(unix)]
+        let changed = {
+            use std::os::unix::fs::MetadataExt;
+            (m.ctime() as u64).wrapping_mul(1_000_000_000).wrapping_add(m.ctime_nsec() as u64)
+        };
+        #[cfg(not(unix))]
+        let changed = 0;
+        Some(Stamp([m.len(), written, changed]))
+    }
+}
+
+/// The cache's first bytes: what it is, and which making of it (changed
+/// with what [`FontEntry::scan`] finds, or how it is written here).
+const CACHE: &[u8; 8] = b"tfonts\0\x01";
+
+fn write_cache(files: &[PathBuf], stamps: &[Option<Stamp>], found: &[Vec<FontEntry>]) -> Vec<u8> {
+    fn num(out: &mut Vec<u8>, v: u64) {
+        out.extend(v.to_le_bytes());
+    }
+    fn text(out: &mut Vec<u8>, s: &str) {
+        num(out, s.len() as u64);
+        out.extend(s.as_bytes());
+    }
+    fn pair(out: &mut Vec<u8>, p: Option<(f64, f64)>) {
+        out.push(u8::from(p.is_some()));
+        let (a, b) = p.unwrap_or_default();
+        num(out, a.to_bits());
+        num(out, b.to_bits());
+    }
+
+    let mut out = CACHE.to_vec();
+
+    for ((path, stamp), faces) in files.iter().zip(stamps).zip(found) {
+        // (one whose name is not text, or that is gone already: not kept)
+        let (Some(name), Some(stamp)) = (path.to_str(), stamp) else { continue };
+        text(&mut out, name);
+        stamp.0.iter().for_each(|v| num(&mut out, *v));
+        num(&mut out, faces.len() as u64);
+
+        for e in faces {
+            num(&mut out, u64::from(e.index));
+            num(&mut out, e.families.len() as u64);
+            e.families.iter().for_each(|f| text(&mut out, f));
+            text(&mut out, &e.style);
+            [e.weight, e.width].iter().for_each(|v| num(&mut out, v.to_bits()));
+            [e.slant, e.version].iter().for_each(|v| num(&mut out, *v as u64));
+            out.extend([e.english, e.symbol, e.variable, e.decorative].map(u8::from));
+            pair(&mut out, e.weight_range);
+            pair(&mut out, e.width_range);
+        }
+    }
+
+    // what it all sums to: one cut short, or spoiled, is not taken
+    let sum = checksum(&out);
+    num(&mut out, sum);
+    out
+}
+
+/// FNV-1a.
+fn checksum(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
+}
+
+/// The faces a cache says each file has, and the file's stamp then.
+fn read_cache(bytes: &[u8]) -> Option<std::collections::HashMap<PathBuf, (Stamp, Vec<FontEntry>)>> {
+    struct In<'a>(&'a [u8]);
+
+    impl In<'_> {
+        fn num(&mut self) -> Option<u64> {
+            let (n, rest) = self.0.split_first_chunk::<8>()?;
+            self.0 = rest;
+            Some(u64::from_le_bytes(*n))
+        }
+        fn float(&mut self) -> Option<f64> {
+            self.num().map(f64::from_bits)
+        }
+        fn flag(&mut self) -> Option<bool> {
+            let (b, rest) = self.0.split_first()?;
+            self.0 = rest;
+            Some(*b != 0)
+        }
+        fn text(&mut self) -> Option<String> {
+            let n = usize::try_from(self.num()?).ok()?;
+            let (s, rest) = self.0.split_at_checked(n)?;
+            self.0 = rest;
+            String::from_utf8(s.to_vec()).ok()
+        }
+        fn pair(&mut self) -> Option<Option<(f64, f64)>> {
+            let (is, a, b) = (self.flag()?, self.float()?, self.float()?);
+            Some(is.then_some((a, b)))
+        }
+    }
+
+    let (body, sum) = bytes.split_last_chunk::<8>()?;
+
+    if checksum(body) != u64::from_le_bytes(*sum) {
+        return None;
+    }
+
+    let mut b = In(body.strip_prefix(CACHE)?);
+    let mut out = std::collections::HashMap::new();
+
+    while !b.0.is_empty() {
+        let path = PathBuf::from(b.text()?);
+        let stamp = Stamp([b.num()?, b.num()?, b.num()?]);
+        let mut faces = Vec::new();
+
+        for _ in 0..b.num()? {
+            let index = u32::try_from(b.num()?).ok()?;
+            let families = (0..b.num()?).map(|_| b.text()).collect::<Option<_>>()?;
+            faces.push(FontEntry {
+                path: path.clone(),
+                index,
+                families,
+                style: b.text()?,
+                weight: b.float()?,
+                width: b.float()?,
+                slant: b.num()? as i64,
+                version: b.num()? as i64,
+                english: b.flag()?,
+                symbol: b.flag()?,
+                variable: b.flag()?,
+                decorative: b.flag()?,
+                weight_range: b.pair()?,
+                width_range: b.pair()?,
+            });
+        }
+
+        out.insert(path, (stamp, faces));
+    }
+
+    Some(out)
+}
+
+/// A font file as long as it is, but with only what says what its faces are
+/// read: nothing (zeros) where its outlines, pictures and layout are, which
+/// are nearly all of it. All of it, where it is not laid out as expected.
+fn read_tables(path: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    /// Tables that say nothing of what a face is called or is like.
+    const NOT: [&[u8; 4]; 34] = [
+        b"glyf", b"loca", b"CFF ", b"CFF2", b"gvar", b"sbix", b"CBDT", b"CBLC", b"EBDT", b"EBLC", b"SVG ", b"COLR", b"CPAL", b"GSUB", b"GPOS", b"GDEF", b"BASE",
+        b"JSTF", b"morx", b"mort", b"kerx", b"kern", b"hmtx", b"vmtx", b"VORG", b"fpgm", b"prep", b"cvt ", b"hdmx", b"VDMX", b"just", b"feat", b"Zapf", b"MATH",
+    ];
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len() as usize;
+
+    // (a small one: whole, sooner)
+    if len < 64 * 1024 {
+        let mut all = Vec::with_capacity(len);
+        file.read_to_end(&mut all).ok()?;
+        return Some(all);
+    }
+
+    let mut data = vec![0u8; len];
+    let mut part = |data: &mut [u8], at: usize, n: usize| -> Option<()> {
+        let to = data.get_mut(at..at.checked_add(n)?)?;
+        file.seek(SeekFrom::Start(at as u64)).ok()?;
+        file.read_exact(to).ok()
+    };
+    let word = |data: &[u8], at: usize| Some(u32::from_be_bytes(data.get(at..at + 4)?.try_into().ok()?) as usize);
+    let sparse = (|| {
+        part(&mut data, 0, 12)?;
+        let mut faces = vec![0];
+
+        if data.starts_with(b"ttcf") {
+            let n = word(&data, 8)?;
+
+            if n > 1024 {
+                return None;
+            }
+
+            part(&mut data, 12, 4 * n)?;
+            faces = (0..n).map(|i| word(&data, 12 + 4 * i)).collect::<Option<_>>()?;
+        } else if !(data.starts_with(&[0, 1, 0, 0]) || data.starts_with(b"OTTO") || data.starts_with(b"true")) {
+            return None;
+        }
+
+        let mut read = std::collections::BTreeSet::new();
+
+        for at in faces {
+            part(&mut data, at, 12)?;
+            let n = usize::from(u16::from_be_bytes([data[at + 4], data[at + 5]]));
+            part(&mut data, at + 12, 16 * n)?;
+
+            for t in 0..n {
+                let d = at + 12 + 16 * t;
+                let tag: [u8; 4] = data[d..d + 4].try_into().ok()?;
+                let (off, size) = (word(&data, d + 8)?, word(&data, d + 12)?);
+
+                if !NOT.contains(&&tag) && read.insert((off, size)) {
+                    part(&mut data, off, size)?;
+                }
+            }
+        }
+
+        Some(())
+    })();
+
+    match sparse {
+        Some(()) => Some(data),
+        None => std::fs::read(path).ok(),
+    }
+}
+
+/// A file's faces.
+fn scan_file(path: &std::path::Path) -> Vec<FontEntry> {
+    let Some(data) = read_tables(path) else { return Vec::new() };
+
+    let count = if data.starts_with(b"ttcf") {
+        Reader::new(&data).u32(8).unwrap_or(0)
+    } else {
+        1
+    };
+
+    (0..count).flat_map(|i| FontEntry::scan(path, &data, i)).collect()
 }
 
 // --- matching ----------------------------------------------------------------------
 
 /// `FcFontMatch`: the face whose scores, element by element in
 /// fontconfig's priority order, are least; the first such.
+/// (The pattern as fontconfig has it by then: substituted, defaults
+/// included. A weight or slant left out counts for nothing; [`find`] does
+/// the whole of it.)
 pub fn font_match<'a>(fonts: &'a [FontEntry], pattern: &Pattern) -> Option<&'a FontEntry> {
     let families = pattern.get("family");
     let number = |name: &str| pattern.get(name).iter().filter_map(|(v, _)| v.number()).collect::<Vec<f64>>();
@@ -1014,7 +1321,26 @@ pub fn font_match<'a>(fonts: &'a [FontEntry], pattern: &Pattern) -> Option<&'a F
     chosen.map(|(f, _)| f)
 }
 
+/// The face among `fonts` for a family, bold or italic, as fontconfig would
+/// choose it with no configuration file: [`find_pattern`], then
+/// [`default_substitute`] (regular weight, roman slant, normal width where
+/// not asked for), then [`font_match`]. `None` only when `fonts` is empty.
+///
+/// ```no_run
+/// use threers_font::fontconfig::{find, scan};
+/// let fonts = scan(&["/System/Library/Fonts/Supplemental".into()]);
+/// let georgia_bold = find(&fonts, "Georgia", true, false);
+/// ```
+pub fn find<'a>(fonts: &'a [FontEntry], family: &str, bold: bool, italic: bool) -> Option<&'a FontEntry> {
+    let mut p = find_pattern(family, bold, italic);
+    default_substitute(&mut p, "en");
+    font_match(fonts, &p)
+}
+
 /// A pattern for a family, bold or italic as `FONTCONFIG::FindFont` asks.
+/// What is not asked for is left out, as fontconfig leaves it to the
+/// configuration and then [`default_substitute`]: matched without those,
+/// every weight and slant is as good as another (see [`find`]).
 pub fn find_pattern(family: &str, bold: bool, italic: bool) -> Pattern {
     let mut p = Pattern::default();
 
@@ -1028,4 +1354,117 @@ pub fn find_pattern(family: &str, bold: bool, italic: bool) -> Pattern {
 
     p.elements.insert("family".into(), vec![(Value::Str(family.to_string()), Binding::Strong)]);
     p
+}
+
+#[cfg(test)]
+mod find_tests {
+    use super::*;
+
+    fn entry(name: &str, weight: f64, slant: i64) -> FontEntry {
+        FontEntry { path: name.into(), families: vec!["Georgia".into()], weight, slant, width: 100.0, english: true, ..FontEntry::default() }
+    }
+
+    #[test]
+    fn a_plain_request_finds_the_regular_face() {
+        let fonts = [entry("bi", 200.0, 100), entry("b", 200.0, 0), entry("i", 80.0, 100), entry("r", 80.0, 0)];
+        let got = |b, i| find(&fonts, "Georgia", b, i).unwrap().path.to_string_lossy().into_owned();
+        assert_eq!(got(false, false), "r");
+        assert_eq!(got(true, false), "b");
+        assert_eq!(got(false, true), "i");
+        assert_eq!(got(true, true), "bi");
+    }
+}
+
+#[cfg(test)]
+mod scan_tests {
+    use super::*;
+
+    /// Kept, what a scan found is what the next finds; a file changed, gone
+    /// or new is seen to be; a cache spoiled is done without.
+    #[test]
+    fn a_scan_kept_is_the_scan() {
+        let home = std::env::temp_dir().join(format!("tfonts-{}", std::process::id()));
+        let (dir, cache) = (home.join("fonts"), home.join("cache/fonts"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let from = PathBuf::from("/System/Library/Fonts/Supplemental");
+        let mut some: Vec<PathBuf> = std::fs::read_dir(&from).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
+        some.sort();
+
+        if some.len() < 12 {
+            return;
+        }
+
+        for f in &some[..10] {
+            std::fs::copy(f, dir.join(f.file_name().unwrap())).unwrap();
+        }
+
+        let dirs = [dir.clone()];
+        let say = |e: Vec<FontEntry>| format!("{e:?}");
+        let whole = say(scan(&dirs));
+        assert_eq!(say(scan_cached(&dirs, &cache)), whole, "none kept yet");
+        let written = std::fs::read(&cache).unwrap();
+        assert_eq!(say(scan_cached(&dirs, &cache)), whole, "kept");
+        // it is what is kept that is used: said otherwise, it is said so
+        let mut known = read_cache(&written).unwrap();
+        assert_eq!(known.len(), 10);
+        let files = font_files(&dirs);
+        known.get_mut(&files[0]).unwrap().1[0].style = "Kept".into();
+        let (stamps, found): (Vec<_>, Vec<_>) = files.iter().map(|f| known.remove(f).map(|(s, e)| (Some(s), e)).unwrap()).unzip();
+        std::fs::write(&cache, write_cache(&files, &stamps, &found)).unwrap();
+        assert!(say(scan_cached(&dirs, &cache)).contains("\"Kept\""));
+        // that file written again: read again
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::copy(&some[0], &files[0]).unwrap();
+        assert_eq!(say(scan_cached(&dirs, &cache)), whole, "changed");
+        // another there, one gone
+        std::fs::copy(&some[10], dir.join(some[10].file_name().unwrap())).unwrap();
+        std::fs::remove_file(&files[3]).unwrap();
+        assert_eq!(say(scan_cached(&dirs, &cache)), say(scan(&dirs)), "new and gone");
+        assert_eq!(read_cache(&std::fs::read(&cache).unwrap()).unwrap().len(), 10);
+        // spoiled, cut short, not one
+        let good = std::fs::read(&cache).unwrap();
+        let mut bad = good.clone();
+        bad[good.len() / 2] ^= 1;
+
+        for b in [bad, good[..good.len() / 3].to_vec(), b"nothing of the kind".to_vec(), Vec::new()] {
+            std::fs::write(&cache, b).unwrap();
+            assert_eq!(say(scan_cached(&dirs, &cache)), say(scan(&dirs)));
+        }
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// What only its tables read says of a font, all of it read says.
+    #[test]
+    fn a_font_by_its_tables_is_as_it_is_whole() {
+        let mut files = 0;
+        for dir in ["/System/Library/Fonts", "/System/Library/Fonts/Supplemental", "/Library/Fonts"] {
+            for f in std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_file()) {
+                let Ok(data) = std::fs::read(&f) else { continue };
+                let count = if data.starts_with(b"ttcf") { Reader::new(&data).u32(8).unwrap_or(0) } else { 1 };
+                let whole: Vec<FontEntry> = (0..count).flat_map(|i| FontEntry::scan(&f, &data, i)).collect();
+                assert_eq!(format!("{:?}", scan_file(&f)), format!("{whole:?}"), "{f:?}");
+                files += 1;
+            }
+        }
+        println!("{files} files");
+    }
+
+    /// Read on many threads, the faces come in the order they are met in.
+    #[test]
+    fn the_faces_are_in_their_files_order() {
+        let dir = PathBuf::from("/System/Library/Fonts/Supplemental");
+        if !dir.exists() {
+            return;
+        }
+        let found = scan(&[dir.clone()]);
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
+        files.sort();
+        let one_by_one: Vec<FontEntry> = files.iter().flat_map(|f| scan_file(f)).collect();
+        assert!(found.len() > 20);
+        // (its subdirectories', after)
+        let key = |e: &FontEntry| (e.path.clone(), e.index, e.families.clone());
+        assert!(found.iter().zip(&one_by_one).all(|(a, b)| key(a) == key(b)));
+        assert!(found.len() >= one_by_one.len());
+    }
 }

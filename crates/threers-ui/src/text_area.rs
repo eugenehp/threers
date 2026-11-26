@@ -188,7 +188,9 @@ impl TextArea {
         if !matches!(key, "ArrowUp" | "ArrowDown" | "PageUp" | "PageDown") {
             self.goal = None;
         }
-        match key {
+        let line = self.line_col(self.caret).0;
+        let reads = self.lines()[line].to_owned();
+        match crate::bidi::reading_key(&reads, key) {
             "Escape" => FieldKey::Cancel,
             "Enter" => {
                 // `newlineAndIndent`, keeping the line's indentation.

@@ -203,7 +203,18 @@ let mirrored = null;
 let composing = false;
 let focusedAt = -1e9;
 const fieldKey = () => `${demo.field_text()}\u0000${demo.field_selection().join("\u0000")}`;
+// A password's input is one too: the browser does not copy, correct,
+// suggest or learn what is in it. Before it is given the text, and emptied
+// before it stops being one.
+function keepSecret() {
+  const type = demo.text_is_secret() ? "password" : "text";
+  if (ime.type === type) return;
+  ime.value = "";
+  ime.type = type;
+  mirrored = null;
+}
 function mirror() {
+  keepSecret();
   const text = demo.field_text();
   const [a, c] = demo.field_selection();
   const key = fieldKey();
@@ -304,7 +315,10 @@ function fromInput() {
 // where the phone put the caret stands.
 ime.addEventListener("focus", () => {
   if (touchScreen) {
-    demo.focus_field(true);
+    // Tapped itself; else it was focused for a text control that has focus
+    // already (a search box, a password), which keeps it: what is typed is
+    // that control's.
+    if (!demo.wants_text()) demo.focus_field(true);
     kick();
     return;
   }
@@ -350,6 +364,8 @@ function tick(t) {
   const more = demo.frame(t, w, h, dpr);
   showLink();
   canvas.style.cursor = demo.cursor();
+  // (a password's focus gone, the input is emptied of it)
+  keepSecret();
   cover();
   if (demo.wants_text()) {
     if (document.activeElement === ime) mirror();

@@ -24,5 +24,5 @@ default = []
 openscad = ["threers/openscad", "threers-physics/openscad"]
 
 [dependencies]
-threers = { path = "../..", version = "0.1.1" }
-threers-physics = { path = "../threers-physics", version = "0.1.1", features = ["mechanism"] }
+threers = { path = "../..", version = "0.1.2" }
+threers-physics = { path = "../threers-physics", version = "0.1.2", features = ["mechanism"] }

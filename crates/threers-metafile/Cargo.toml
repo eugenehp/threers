@@ -1,0 +1,18 @@
+[package]
+name = "threers-metafile"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+authors = ["Eugene Hauptmann"]
+repository = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-metafile"
+description = "Windows metafiles (EMF and WMF), as Office documents carry their drawings: read into paths, text and pictures, written out as PDF or SVG, with no dependencies"
+keywords = ["emf", "wmf", "metafile", "pdf", "svg"]
+categories = ["graphics", "multimedia::images"]
+
+[lib]
+bench = false
+
+[dependencies]
+# the PDF's streams compressed (Flate)
+miniz_oxide = "0.9"

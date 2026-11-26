@@ -7,7 +7,7 @@
 //!   native and `wasm32`. Latin-1 accented letters fold to their base letter
 //!   (`é` → `e`) so European text stays readable; anything else draws as a
 //!   hollow box.
-//! - [`CaptionFont::ui`] / [`CaptionFont::try_sf_compact`] — SF Compact on macOS
+//! - [`CaptionFont::ui`] — SF Compact on macOS, SF Pro on iOS, tvOS and visionOS,
 //!   when installed; [`CaptionFont::builtin`] elsewhere. [`CaptionPainter::new`](super::CaptionPainter::new)
 //!   uses this by default.
 //! - [`CaptionFont::from_ttf_bytes`] — a real TrueType face, rasterized from
@@ -81,14 +81,13 @@ static VARIABLE_FACES: std::sync::Mutex<Vec<(FontBytes, u16, TtfFace)>> =
 type FontBytes = std::sync::Arc<[u8]>;
 const VARIABLE_FACES_KEPT: usize = 16;
 
-/// SF Compact's upright and italic files, read once (macOS).
-#[cfg(target_os = "macos")]
-static SF_COMPACT_FILES: std::sync::OnceLock<Option<(FontBytes, Option<FontBytes>)>> =
-    std::sync::OnceLock::new();
+/// An Apple face's upright and italic files, read once.
+type AppleFiles = std::sync::OnceLock<Option<(FontBytes, Option<FontBytes>)>>;
 
 /// Faces [`CaptionFont::ui`] falls back to for characters the UI face
 /// lacks, in order: the app's ([`CaptionFont::add_ui_fallback`]), then the
-/// system's symbol fonts, then CJK if asked for
+/// system's symbol fonts, then the faces for the languages asked for
+/// ([`CaptionFont::use_system_fallback_for`]), then CJK if asked for
 /// ([`CaptionFont::use_system_cjk_fallback`]). `None` until first used.
 static UI_FALLBACKS: std::sync::Mutex<Option<UiFallbacks>> = std::sync::Mutex::new(None);
 
@@ -99,13 +98,36 @@ struct UiFallbacks {
     color: Option<std::sync::Arc<super::color_emoji::ColorGlyphs>>,
     app: Vec<std::sync::Arc<TtfFont>>,
     system: Vec<std::sync::Arc<TtfFont>>,
+    /// A face per language (its tag, lower case), the one asked for last first.
+    script: Vec<(String, std::sync::Arc<TtfFont>)>,
     cjk: Vec<std::sync::Arc<TtfFont>>,
 }
 
 impl UiFallbacks {
     fn all(&self) -> impl Iterator<Item = &std::sync::Arc<TtfFont>> {
-        self.app.iter().chain(&self.system).chain(&self.cjk)
+        self.app
+            .iter()
+            .chain(&self.system)
+            .chain(self.script.iter().map(|(_, f)| f))
+            .chain(&self.cjk)
     }
+}
+
+/// Puts `language`'s `face` first among the UI's script fallbacks (once per
+/// language: asked again, it moves to the front).
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn put_ui_script_fallback(language: &str, face: std::sync::Arc<TtfFont>) {
+    let language = language.to_ascii_lowercase();
+    ui_fallbacks(|fb| {
+        fb.script.retain(|(l, _)| *l != language);
+        fb.script.insert(0, (language, face));
+    });
+}
+
+/// How many script faces the UI falls back to, for tests.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(super) fn ui_script_fallback_count() -> usize {
+    ui_fallbacks(|fb| fb.script.len())
 }
 
 /// The UI fallbacks, the system's symbol fonts read on first use.
@@ -570,7 +592,7 @@ impl TtfFace {
         if let Some(w) = wght {
             at.push((*b"wght", w));
         }
-        let base = std::sync::Arc::new(TtfFont::parse_variation(&bytes, &at)?);
+        let base = std::sync::Arc::new(TtfFont::parse_variation_lazy(&bytes, &at)?);
         let family = Family {
             upright: FamilyFile::Bytes(bytes.clone()),
             italic: None,
@@ -604,7 +626,13 @@ impl TtfFace {
         let Some((lo, hi)) = src.opsz else {
             return self.base.clone();
         };
-        let opsz = size.clamp(lo, hi);
+        let mut opsz = size.clamp(lo, hi);
+        // Each is an instance of the font, kept: by the point over a wide range, and by four at
+        // display sizes, where a point changes nothing seen.
+        if hi - lo > 16.0 {
+            let step = if opsz > 32.0 { 4.0 } else { 1.0 };
+            opsz = ((opsz / step).round() * step).clamp(lo, hi);
+        }
         let key = (opsz * 4.0).round() as u32;
         let mut sized = src.sized.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(f) = sized.get(&key) {
@@ -614,7 +642,7 @@ impl TtfFace {
         if let Some(w) = src.wght {
             at.push((*b"wght", w));
         }
-        let font = TtfFont::parse_variation(&src.bytes, &at)
+        let font = TtfFont::parse_variation_lazy(&src.bytes, &at)
             .map(std::sync::Arc::new)
             .unwrap_or_else(|_| self.base.clone());
         sized.insert(key, font.clone());
@@ -738,12 +766,26 @@ pub struct CaptionFont {
     grown: HashMap<(u32, u32, u32, u32), GlyphBitmap>,
     /// Text already laid out, by its string, style and width: a HUD draws the
     /// same strings every frame, and shaping them again was half of its cost.
-    pub(crate) layouts: HashMap<u64, super::layout::LaidOutText>,
+    pub(crate) layouts: HashMap<u64, super::layout::LaidOutText, super::layout::KeyHash>,
     /// The generation before `layouts` (see [`layout`](super::layout::layout)).
-    pub(crate) layouts_old: HashMap<u64, super::layout::LaidOutText>,
+    pub(crate) layouts_old: HashMap<u64, super::layout::LaidOutText, super::layout::KeyHash>,
+    /// Runs already shaped, by their characters, script and size: measuring
+    /// text (a layout wrapping it, word by word, again and again) shaped the
+    /// same runs each time, and parsed the face's GSUB table for each. Kept
+    /// in two generations of [`SHAPED_KEPT`] runs: when the newer fills, the
+    /// older goes, so what a busy screen shapes each layout (a settings page
+    /// wraps thousands of words) stays, where a cache cleared whole at its
+    /// limit would start over every layout.
+    shaped: std::sync::Mutex<(ShapedRuns, ShapedRuns)>,
+    /// Glyphs the platform drew for characters no face here has (see
+    /// [`set_system_rasterizer`](Self::set_system_rasterizer)), by
+    /// character and quarter-pixel size.
+    rastered: HashMap<(u32, u32), GlyphBitmap>,
     /// The optical size glyphs are drawn at regardless of their pixel size;
     /// `None` follows the size. See [`set_optical_size`](Self::set_optical_size).
     optical_size: Option<f32>,
+    /// Pixels a point; see [`set_optical_scale`](Self::set_optical_scale).
+    optical_scale: f32,
     /// See [`set_hinting`](Self::set_hinting).
     hinting: Hinting,
     /// See [`set_font_smoothing`](Self::set_font_smoothing).
@@ -757,6 +799,16 @@ pub struct CaptionFont {
 /// face, `k` for the `k`th fallback. The rest is the face's own index (a glyph
 /// id, or a codepoint for the character-keyed faces: both are below 2²⁴).
 const FACE_SHIFT: u32 = 24;
+type Rasterizer = Box<dyn Fn(char, f32) -> Option<GlyphBitmap> + Send + Sync>;
+
+/// See [`CaptionFont::set_system_rasterizer`].
+static SYSTEM_RASTERIZER: std::sync::RwLock<Option<Rasterizer>> = std::sync::RwLock::new(None);
+
+/// How many shaped runs a face keeps (see `CaptionFont::shaped`).
+const SHAPED_KEPT: usize = 16384;
+
+/// Runs shaped: (characters, script, size in quarter pixels) → (glyph, cluster).
+type ShapedRuns = HashMap<(Box<[char]>, [u8; 4], u32), Vec<(u32, usize)>>;
 const FACE_MASK: u32 = (1 << FACE_SHIFT) - 1;
 
 impl Default for CaptionFont {
@@ -795,9 +847,12 @@ impl CaptionFont {
             face,
             cache: HashMap::new(),
             grown: HashMap::new(),
-            layouts: HashMap::new(),
-            layouts_old: HashMap::new(),
+            layouts: HashMap::default(),
+            layouts_old: HashMap::default(),
+            shaped: Default::default(),
+            rastered: HashMap::new(),
             optical_size: None,
+            optical_scale: 1.0,
             hinting: Hinting::None,
             font_smoothing: false,
             fallbacks: Vec::new(),
@@ -822,9 +877,12 @@ impl CaptionFont {
             face: Face::Ttf(Box::new(face)),
             cache: HashMap::new(),
             grown: HashMap::new(),
-            layouts: HashMap::new(),
-            layouts_old: HashMap::new(),
+            layouts: HashMap::default(),
+            layouts_old: HashMap::default(),
+            shaped: Default::default(),
+            rastered: HashMap::new(),
             optical_size: None,
+            optical_scale: 1.0,
             hinting: Hinting::None,
             font_smoothing: false,
             fallbacks: Vec::new(),
@@ -838,9 +896,12 @@ impl CaptionFont {
             face: Face::Ttf(Box::new(TtfFace::shared(font))),
             cache: HashMap::new(),
             grown: HashMap::new(),
-            layouts: HashMap::new(),
-            layouts_old: HashMap::new(),
+            layouts: HashMap::default(),
+            layouts_old: HashMap::default(),
+            shaped: Default::default(),
+            rastered: HashMap::new(),
             optical_size: None,
+            optical_scale: 1.0,
             hinting: Hinting::None,
             font_smoothing: false,
             fallbacks: Vec::new(),
@@ -854,9 +915,12 @@ impl CaptionFont {
             face: Face::Ttf(Box::new(TtfFace::fixed(font))),
             cache: HashMap::new(),
             grown: HashMap::new(),
-            layouts: HashMap::new(),
-            layouts_old: HashMap::new(),
+            layouts: HashMap::default(),
+            layouts_old: HashMap::default(),
+            shaped: Default::default(),
+            rastered: HashMap::new(),
             optical_size: None,
+            optical_scale: 1.0,
             hinting: Hinting::None,
             font_smoothing: false,
             fallbacks: Vec::new(),
@@ -870,9 +934,12 @@ impl CaptionFont {
             face: Face::Sdf(glyphs),
             cache: HashMap::new(),
             grown: HashMap::new(),
-            layouts: HashMap::new(),
-            layouts_old: HashMap::new(),
+            layouts: HashMap::default(),
+            layouts_old: HashMap::default(),
+            shaped: Default::default(),
+            rastered: HashMap::new(),
             optical_size: None,
+            optical_scale: 1.0,
             hinting: Hinting::None,
             font_smoothing: false,
             fallbacks: Vec::new(),
@@ -887,9 +954,12 @@ impl CaptionFont {
             face: Face::Bitmap(glyphs),
             cache: HashMap::new(),
             grown: HashMap::new(),
-            layouts: HashMap::new(),
-            layouts_old: HashMap::new(),
+            layouts: HashMap::default(),
+            layouts_old: HashMap::default(),
+            shaped: Default::default(),
+            rastered: HashMap::new(),
             optical_size: None,
+            optical_scale: 1.0,
             hinting: Hinting::None,
             font_smoothing: false,
             fallbacks: Vec::new(),
@@ -924,9 +994,12 @@ impl CaptionFont {
             face: Face::Ttf(Box::new(TtfFace::variable(bytes.into(), weight)?)),
             cache: HashMap::new(),
             grown: HashMap::new(),
-            layouts: HashMap::new(),
-            layouts_old: HashMap::new(),
+            layouts: HashMap::default(),
+            layouts_old: HashMap::default(),
+            shaped: Default::default(),
+            rastered: HashMap::new(),
             optical_size: None,
+            optical_scale: 1.0,
             hinting: Hinting::None,
             font_smoothing: false,
             fallbacks: Vec::new(),
@@ -951,9 +1024,12 @@ impl CaptionFont {
             )),
             cache: HashMap::new(),
             grown: HashMap::new(),
-            layouts: HashMap::new(),
-            layouts_old: HashMap::new(),
+            layouts: HashMap::default(),
+            layouts_old: HashMap::default(),
+            shaped: Default::default(),
+            rastered: HashMap::new(),
             optical_size: self.optical_size,
+            optical_scale: self.optical_scale,
             hinting: self.hinting,
             font_smoothing: self.font_smoothing,
             // Each fallback in the same style: real where it has one, a plain copy where it has none.
@@ -985,8 +1061,9 @@ impl CaptionFont {
         self.style().map(|s| s.0)
     }
 
-    /// The face set with [`set_ui`](Self::set_ui); else SF Compact when the
-    /// system ships it (macOS), otherwise [`builtin`](Self::builtin).
+    /// The face set with [`set_ui`](Self::set_ui); else, when the system
+    /// ships it, SF Compact (macOS) or SF Pro (iOS, tvOS, visionOS);
+    /// otherwise [`builtin`](Self::builtin).
     ///
     /// This is the preferred UI face for burned-in labels and data graphics.
     pub fn ui() -> Self {
@@ -1002,7 +1079,7 @@ impl CaptionFont {
             ) = (italic, bold, bold_italic);
             return Self::from_face(Face::Ttf(Box::new(face))).with_ui_fallbacks_only();
         }
-        Self::try_sf_compact()
+        Self::apple_ui()
             .map(Self::with_ui_fallbacks_only)
             .unwrap_or_else(Self::builtin)
     }
@@ -1076,7 +1153,7 @@ impl CaptionFont {
     /// Not by default: they are tens of megabytes each. Returns how many
     /// were found; calling it again does nothing.
     pub fn use_system_cjk_fallback() -> usize {
-        if let Some(n) = ui_fallbacks(|fb| (!fb.cjk.is_empty()).then(|| fb.cjk.len())) {
+        if let Some(n) = ui_fallbacks(|fb| (!fb.cjk.is_empty()).then_some(fb.cjk.len())) {
             return n;
         }
         let fonts: Vec<_> = Self::system_fallback_paths(true)
@@ -1093,30 +1170,10 @@ impl CaptionFont {
 
     /// The system's fallback font files that exist here: symbol fonts
     /// (arrows, dingbats, technical and math symbols), then with `cjk`
-    /// the Chinese, Japanese and Korean ones. Apple platforms only (on the
-    /// iOS simulator, inside its runtime); empty elsewhere.
+    /// the Chinese, Japanese and Korean ones (Apple platforms; elsewhere
+    /// [`with_system_fallbacks`](Self::with_system_fallbacks) finds those).
     pub fn system_fallback_paths(cjk: bool) -> Vec<std::path::PathBuf> {
-        let mut roots = Vec::new();
-        if cfg!(target_os = "macos") {
-            roots.push(std::path::PathBuf::from("/System/Library/Fonts"));
-        } else if cfg!(any(target_os = "ios", target_os = "visionos", target_os = "tvos")) {
-            let base = std::env::var("IPHONE_SIMULATOR_ROOT")
-                .or_else(|_| std::env::var("SIMULATOR_ROOT"))
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| "/".into())
-                .join("System/Library/Fonts");
-            roots.push(base.join("Core"));
-            roots.push(base.join("CoreAddition"));
-            roots.push(base.join("LanguageSupport"));
-        }
-        let symbols = ["Apple Symbols.ttf", "AppleSymbols.ttf", "CJKSymbolsFallback.ttc"];
-        let east = [
-            "Hiragino Sans GB.ttc",
-            "HiraginoKakuGothic.ttc",
-            "ヒラギノ角ゴシック W3.ttc",
-            "AppleSDGothicNeo.ttc",
-        ];
-        let names: Vec<&str> = if cjk { symbols.iter().chain(&east).copied().collect() } else { symbols.to_vec() };
+        let (roots, names) = Self::fallback_candidates(std::env::consts::OS, cjk);
         let mut out = Vec::new();
         for name in names {
             if let Some(p) = roots.iter().map(|r| r.join(name)).find(|p| p.is_file()) {
@@ -1124,10 +1181,78 @@ impl CaptionFont {
                 if name.starts_with("Hiragino") && out.iter().any(|q: &std::path::PathBuf| q.to_string_lossy().contains("Hiragino")) {
                     continue;
                 }
+                // one file in several roots (Linux's font folders): once
+                if out.contains(&p) {
+                    continue;
+                }
                 out.push(p);
             }
         }
         out
+    }
+
+    /// The folders an Apple `os` (as [`std::env::consts::OS`] names it) keeps
+    /// its fonts in: one on macOS, several under it elsewhere — on a
+    /// simulator, inside its runtime, not the Mac's. None for any other.
+    pub(super) fn apple_font_dirs(os: &str) -> Vec<std::path::PathBuf> {
+        match os {
+            "macos" => vec!["/System/Library/Fonts".into()],
+            "ios" | "visionos" | "tvos" => {
+                let base = std::env::var("IPHONE_SIMULATOR_ROOT")
+                    .or_else(|_| std::env::var("SIMULATOR_ROOT"))
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|_| "/".into())
+                    .join("System/Library/Fonts");
+                ["Core", "CoreAddition", "LanguageSupport", "UnicodeSupport", "AppFonts"]
+                    .map(|d| base.join(d))
+                    .into()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Where `os` (as [`std::env::consts::OS`] names it) keeps its symbol
+    /// fonts, and their file names, best first: the folders to look in and
+    /// the names to look for in each.
+    fn fallback_candidates(os: &str, cjk: bool) -> (Vec<std::path::PathBuf>, Vec<&'static str>) {
+        let mut roots = Vec::new();
+        let names: Vec<&'static str> = match os {
+            "macos" | "ios" | "visionos" | "tvos" => {
+                roots = Self::apple_font_dirs(os);
+                // Apple Symbols has arrows and technical symbols but not the
+                // Dingbats block (✕ ✔ ✚ ❯): Zapf Dingbats has those, in 150 KB.
+                let symbols = ["Apple Symbols.ttf", "AppleSymbols.ttf", "ZapfDingbats.ttf", "CJKSymbolsFallback.ttc"];
+                let east = [
+                    "Hiragino Sans GB.ttc",
+                    "HiraginoKakuGothic.ttc",
+                    "ヒラギノ角ゴシック W3.ttc",
+                    "AppleSDGothicNeo.ttc",
+                ];
+                if cjk { symbols.iter().chain(&east).copied().collect() } else { symbols.to_vec() }
+            }
+            // Segoe UI Symbol: arrows, dingbats, technical, geometric shapes.
+            "windows" => {
+                roots.push(std::path::PathBuf::from("C:/Windows/Fonts"));
+                vec!["seguisym.ttf"]
+            }
+            // DejaVu Sans covers the common UI symbols; Noto Sans Symbols 2
+            // the rest of the dingbats, where it is installed.
+            "linux" | "freebsd" | "openbsd" | "netbsd" => {
+                for r in [
+                    "/usr/share/fonts/truetype/dejavu",
+                    "/usr/share/fonts/TTF",
+                    "/usr/share/fonts/dejavu",
+                    "/usr/share/fonts/truetype/noto",
+                    "/usr/share/fonts/noto",
+                    "/usr/share/fonts/google-noto",
+                ] {
+                    roots.push(std::path::PathBuf::from(r));
+                }
+                vec!["DejaVuSans.ttf", "NotoSansSymbols2-Regular.ttf"]
+            }
+            _ => vec![],
+        };
+        (roots, names)
     }
 
     /// Make the TrueType or OpenType font in `bytes` what [`ui`](Self::ui)
@@ -1165,36 +1290,48 @@ impl CaptionFont {
 
     /// [`try_sf_compact`](Self::try_sf_compact) at a CSS weight (100–900).
     pub fn try_sf_compact_weight(weight: u16) -> Option<Self> {
-        #[cfg(target_os = "macos")]
-        {
-            const PATHS: &[&str] = &[
-                "/System/Library/Fonts/SFCompact.ttf",
-                "/System/Library/Fonts/SFCompactRounded.ttf",
-            ];
-            // Read once: UI text asks for this font for every run it rasterises.
-            let files = SF_COMPACT_FILES.get_or_init(|| {
-                PATHS.iter().find_map(|path| {
-                    let bytes: std::sync::Arc<[u8]> = std::fs::read(path).ok()?.into();
+        static FILES: AppleFiles = AppleFiles::new();
+        Self::apple_face(&FILES, &["SFCompact", "SFCompactRounded"], weight)
+    }
+
+    /// Load Apple's SF Pro, the system face of iOS, at a CSS weight
+    /// (100–900): `SFUI.ttf` on iOS, tvOS and visionOS, `SFNS.ttf` on macOS.
+    pub fn try_sf_pro_weight(weight: u16) -> Option<Self> {
+        static FILES: AppleFiles = AppleFiles::new();
+        Self::apple_face(&FILES, &["SFUI", "SFNS"], weight)
+    }
+
+    /// The face Apple's system here has its UI in, as [`ui`](Self::ui) draws
+    /// it: SF Compact on macOS; SF Pro, or else SF Compact, on the others.
+    pub(super) fn apple_ui() -> Option<Self> {
+        if cfg!(target_os = "macos") {
+            return Self::try_sf_compact();
+        }
+        Self::try_sf_pro_weight(400).or_else(Self::try_sf_compact)
+    }
+
+    /// The first of `names` there is among Apple's fonts, read into `files`
+    /// once: UI text asks for this font for every run it rasterises.
+    fn apple_face(files: &AppleFiles, names: &[&str], weight: u16) -> Option<Self> {
+        let files = files.get_or_init(|| {
+            let dirs = Self::apple_font_dirs(std::env::consts::OS);
+            names.iter().find_map(|name| {
+                dirs.iter().find_map(|dir| {
+                    let bytes: FontBytes =
+                        std::fs::read(dir.join(format!("{name}.ttf"))).ok()?.into();
                     TtfFace::variable_cached(bytes.clone(), 400).ok()?;
                     // Its italic is a file of its own.
-                    let italic = std::fs::read(path.replace(".ttf", "Italic.ttf"))
+                    let italic = std::fs::read(dir.join(format!("{name}Italic.ttf")))
                         .ok()
                         .map(Into::into);
                     Some((bytes, italic))
                 })
-            });
-            if let Some((bytes, italic)) = files
-                && let Ok(mut face) = TtfFace::variable_cached(bytes.clone(), weight)
-            {
-                face.family.italic = italic.clone();
-                return Some(Self::from_face(Face::Ttf(Box::new(face))));
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = weight;
-        }
-        None
+            })
+        });
+        let (bytes, italic) = files.as_ref()?;
+        let mut face = TtfFace::variable_cached(bytes.clone(), weight).ok()?;
+        face.family.italic = italic.clone();
+        Some(Self::from_face(Face::Ttf(Box::new(face))))
     }
 
     /// Whether this face is the built-in bitmap one.
@@ -1218,6 +1355,27 @@ impl CaptionFont {
         self.optical_size = size;
         self.clear_cache();
         true
+    }
+
+    /// Take optical sizes in points, `scale` pixels each, rather than in
+    /// pixels: on a 3× screen a 45-pixel glyph is 15-point text, and has
+    /// that size's shapes and spacing, as CoreText's does. 1 by default. A
+    /// fixed [`set_optical_size`](Self::set_optical_size) is kept as given.
+    pub fn set_optical_scale(&mut self, scale: f32) {
+        let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+        if self.optical_scale == scale {
+            return;
+        }
+        self.optical_scale = scale;
+        for f in &mut self.fallbacks {
+            f.set_optical_scale(scale);
+        }
+        self.clear_cache();
+    }
+
+    /// The optical size of type `size` pixels per em.
+    fn optical(&self, size: f32) -> f32 {
+        self.optical_size.unwrap_or(size / self.optical_scale)
     }
 
     /// Fit glyphs to the pixel grid from now on, or not; see [`Hinting`].
@@ -1376,7 +1534,32 @@ impl CaptionFont {
     /// see and keep the cache four entries a glyph rather than unbounded.
     pub fn glyph_at(&mut self, c: char, size: f32, phase: usize) -> &GlyphBitmap {
         let gid = self.gid(c);
+        // no face here has it (its glyph is the missing box): the
+        // platform's own, where one's been given
+        if gid == 0 && !c.is_whitespace() && !c.is_control() {
+            let key = (c as u32, (size * 4.0).round() as u32);
+            if !self.rastered.contains_key(&key) {
+                let drawn = SYSTEM_RASTERIZER.read().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|r| r(c, size));
+                if let Some(g) = drawn {
+                    self.rastered.insert(key, g);
+                } else {
+                    // (none: the box, and not asked again)
+                    self.rastered.insert(key, GlyphBitmap::default());
+                }
+            }
+            if self.rastered.get(&key).is_some_and(|g| !g.is_blank()) {
+                return &self.rastered[&key];
+            }
+        }
         self.glyph_of(gid, size, phase)
+    }
+
+    /// The platform's text drawing, for characters no face (nor fallback)
+    /// has: `f(c, size)` draws one (its coverage, placed as any glyph is),
+    /// or `None`. For what the fonts on disk can't give: iOS's Chinese face
+    /// keeps its outlines in a form these readers don't take. Process-wide.
+    pub fn set_system_rasterizer(f: impl Fn(char, f32) -> Option<GlyphBitmap> + Send + Sync + 'static) {
+        *SYSTEM_RASTERIZER.write().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(f));
     }
 
     /// The same, by the index [`Self::gid`] gives.
@@ -1403,11 +1586,11 @@ impl CaptionFont {
             let bitmap = match &self.face {
                 Face::Builtin => raster_builtin(c, size, shift),
                 Face::Ttf(face) => raster_ttf(
-                    &face.at(self.optical_size.unwrap_or(size)),
+                    &face.at(self.optical(size)),
                     gid,
                     size,
                     shift,
-                    self.optical_size.unwrap_or(size),
+                    self.optical(size),
                     Synthesis {
                         hint: self.hinting == Hinting::Slight,
                         darken: self.darkening(size),
@@ -1472,7 +1655,7 @@ impl CaptionFont {
             (radius.max(0.0) * 16.0).round() as u32,
         );
         if !self.grown.contains_key(&key) {
-            let font = face.at(self.optical_size.unwrap_or(size));
+            let font = face.at(self.optical(size));
             let shift = phase as f32 / SUBPIXEL_PHASES as f32;
             let syn = Synthesis {
                 hint: self.hinting == Hinting::Slight,
@@ -1485,7 +1668,7 @@ impl CaptionFont {
                 size,
                 shift + syn.outset,
                 key.3 as f32 / 16.0 + syn.outset,
-                self.optical_size.unwrap_or(size),
+                self.optical(size),
                 syn,
             );
             bitmap.advance += 2.0 * syn.outset;
@@ -1540,12 +1723,21 @@ impl CaptionFont {
         self.fallbacks
             .iter()
             .position(|f| f.has_glyph(c))
+            .or_else(|| self.fallbacks.iter().position(|f| f.colour_last_resort(c)))
             .map_or(0, |i| i + 1)
     }
 
     /// Whether this face or one of its fallbacks has a glyph for `c`: what can be drawn.
     pub fn can_draw(&self, c: char) -> bool {
-        self.has_glyph(c) || self.fallbacks.iter().any(|f| f.has_glyph(c))
+        self.has_glyph(c)
+            || self.fallbacks.iter().any(|f| f.has_glyph(c))
+            || self.fallbacks.iter().any(|f| f.colour_last_resort(c))
+    }
+
+    /// A colour emoji face's picture for a symbol shown as text by default (⏱): drawn in
+    /// colour only when no face has it as text, rather than as a box.
+    fn colour_last_resort(&self, c: char) -> bool {
+        matches!(&self.face, Face::Color(set) if set.has_any(c))
     }
 
     /// Whether every character of `text` can be drawn, by this face or a fallback. White space and
@@ -1593,9 +1785,12 @@ impl CaptionFont {
             face,
             cache: HashMap::new(),
             grown: HashMap::new(),
-            layouts: HashMap::new(),
-            layouts_old: HashMap::new(),
+            layouts: HashMap::default(),
+            layouts_old: HashMap::default(),
+            shaped: Default::default(),
+            rastered: HashMap::new(),
             optical_size: self.optical_size,
+            optical_scale: self.optical_scale,
             hinting: self.hinting,
             font_smoothing: self.font_smoothing,
             fallbacks: Vec::new(),
@@ -1645,7 +1840,7 @@ impl CaptionFont {
         let Face::Ttf(face) = &self.face else {
             return blank();
         };
-        let font = face.at(self.optical_size.unwrap_or(size));
+        let font = face.at(self.optical(size));
         if font.gpos.is_empty() {
             return blank();
         }
@@ -1751,9 +1946,45 @@ impl CaptionFont {
                 .map(|(i, c)| (*c as u32, i))
                 .collect();
         };
-        let font = face.at(self.optical_size.unwrap_or(size));
+        // Word by word (each ending after its spaces), each from the cache
+        // where it's been shaped before: a layout measuring a paragraph's
+        // lines as it wraps them measures the same words in every line it
+        // tries. No substitution reaches across a space (a ligature, a
+        // contextual form), and kerning is the glyph walk's, after this.
+        if chars.len() > 1 && chars[..chars.len() - 1].iter().any(|c| *c == ' ') {
+            let mut out = Vec::with_capacity(chars.len());
+            let mut start = 0;
+            for i in 0..chars.len() {
+                let end_of_word = chars[i] == ' ' && chars.get(i + 1).is_none_or(|n| *n != ' ');
+                if end_of_word || i + 1 == chars.len() {
+                    let piece = self.shape_piece(face, &chars[start..=i], script, size);
+                    out.extend(piece.into_iter().map(|(g, c)| (g, c + start)));
+                    start = i + 1;
+                }
+            }
+            return out;
+        }
+        self.shape_piece(face, chars, script, size)
+    }
+
+    /// A stretch shaped (once: then from the cache, `shaped`).
+    fn shape_piece(&self, face: &TtfFace, chars: &[char], script: &[u8; 4], size: f32) -> Vec<(u32, usize)> {
+        let key = (Box::<[char]>::from(chars), *script, (self.optical(size) * 4.0).round() as u32);
+        {
+            let mut cache = self.shaped.lock().unwrap_or_else(|e| e.into_inner());
+            let (newer, older) = &mut *cache;
+            if let Some(done) = newer.get(&key) {
+                return done.clone();
+            }
+            // the older generation's, still wanted: brought into the newer
+            if let Some(done) = older.remove(&key) {
+                newer.insert(key, done.clone());
+                return done;
+            }
+        }
+        let font = face.at(self.optical(size));
         let gsub = crate::loaders::shape::gsub::Gsub::parse(&font.gsub);
-        crate::loaders::shape::shape(
+        let out: Vec<(u32, usize)> = crate::loaders::shape::shape(
             // A character the face does not cover becomes glyph **0**, not nothing. The
             // shaper this came from drops it, which is right there — it sits behind a
             // fallback cascade that will try the next face. A `CaptionFont` is one face,
@@ -1766,7 +1997,14 @@ impl CaptionFont {
         )
         .into_iter()
         .map(|s| (u32::from(s.glyph), s.cluster))
-        .collect()
+        .collect();
+        let mut cache = self.shaped.lock().unwrap_or_else(|e| e.into_inner());
+        let (newer, older) = &mut *cache;
+        if newer.len() >= SHAPED_KEPT {
+            *older = std::mem::take(newer);
+        }
+        newer.insert(key, out.clone());
+        out
     }
 
     /// Whether this face can be shaped: whether [`Self::gid`] means a glyph id.
@@ -1802,7 +2040,7 @@ impl CaptionFont {
         match &self.face {
             Face::Builtin => size,
             Face::Ttf(face) => {
-                let optical = self.optical_size.unwrap_or(size);
+                let optical = self.optical(size);
                 let font = face.at(optical);
                 font.glyphs.get(gid as usize).map_or(0.0, |g| {
                     (g.advance_width as f32 + font.tracking_at(optical)) * size
@@ -1840,7 +2078,7 @@ impl CaptionFont {
         let Face::Ttf(face) = &self.face else {
             return 0.0;
         };
-        let font = face.at(self.optical_size.unwrap_or(size));
+        let font = face.at(self.optical(size));
         if font.kerning.is_empty() && font.gpos_kerning.is_empty() {
             return 0.0;
         }
@@ -1873,7 +2111,7 @@ impl CaptionFont {
         let Face::Ttf(face) = &self.face else {
             return None;
         };
-        let font = face.at(self.optical_size.unwrap_or(size));
+        let font = face.at(self.optical(size));
         let gid = font.cmap.get(&(c as u32)).copied().unwrap_or(0);
         let glyph = font.glyphs.get(gid as usize)?;
         let scale = size.max(1.0) / font.units_per_em.max(1) as f32;
@@ -3261,6 +3499,87 @@ mod tests {
     }
 
     #[test]
+    fn every_desktop_has_somewhere_to_look_for_ui_symbols() {
+        for os in ["macos", "windows", "linux"] {
+            let (roots, names) = CaptionFont::fallback_candidates(os, false);
+            assert!(!roots.is_empty() && !names.is_empty(), "{os}");
+        }
+        let (_, mac) = CaptionFont::fallback_candidates("macos", false);
+        assert!(mac.contains(&"ZapfDingbats.ttf"), "the Dingbats block (✕ ✔)");
+        assert!(CaptionFont::fallback_candidates("wasm", false).1.is_empty());
+    }
+
+    /// iOS and its kin keep their fonts in folders of their own; another
+    /// system has none of Apple's.
+    #[test]
+    fn apple_systems_have_somewhere_to_look_for_the_ui_face() {
+        assert_eq!(CaptionFont::apple_font_dirs("macos").len(), 1);
+        for os in ["ios", "tvos", "visionos"] {
+            let dirs = CaptionFont::apple_font_dirs(os);
+            assert!(dirs[0].ends_with("System/Library/Fonts/Core"), "{os}: {dirs:?}");
+        }
+        assert!(CaptionFont::apple_font_dirs("linux").is_empty());
+    }
+
+    /// The UI face on every Apple system is a real one, and draws what the
+    /// kit does. (On a simulator: `simctl spawn` this test.)
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+    #[test]
+    fn the_ui_face_on_apple_systems_is_a_real_one() {
+        let mut ui = CaptionFont::ui();
+        assert!(!ui.is_builtin());
+        for c in "Aé•✕✔→Привет".chars() {
+            assert!(ui.can_draw(c), "{c}");
+        }
+        assert!(ui.advance('i', 16.0) < ui.advance('m', 16.0) - 2.0);
+        for (weight, italic) in [(700, false), (400, true)] {
+            assert_eq!(ui.styled(weight, italic).unwrap().style(), Some((weight, italic)));
+        }
+        // iOS's is SF Pro; the Mac's is not.
+        let width = |f: Option<CaptionFont>| f.map(|mut f| f.advance('m', 16.0));
+        let mac = cfg!(target_os = "macos");
+        let (same, other) = (width(CaptionFont::try_sf_compact()), width(CaptionFont::try_sf_pro_weight(400)));
+        let (same, other) = if mac { (same, other) } else { (other, same) };
+        assert_eq!(Some(ui.advance('m', 16.0)), same);
+        assert_ne!(same, other);
+    }
+
+    /// Text at 3× has the shapes and spacing of its size in points.
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+    #[test]
+    fn optical_sizes_can_be_in_points() {
+        let Some(mut font) = CaptionFont::try_sf_pro_weight(400) else { return };
+        let pixels = font.advance('a', 45.0);
+        let points = font.advance('a', 15.0) * 3.0;
+        assert!(points > pixels + 0.1, "text cut {points}, display cut {pixels}");
+        font.set_optical_scale(3.0);
+        assert!((font.advance('a', 45.0) - points).abs() < 1e-2);
+        let mut bold = font.styled(700, false).unwrap();
+        let mut one = CaptionFont::try_sf_pro_weight(700).unwrap();
+        assert!((bold.advance('a', 45.0) - one.advance('a', 15.0) * 3.0).abs() < 1e-2, "kept by a style");
+        // A wide range of sizes is read at few of them.
+        for s in 0..400 {
+            font.advance('a', 30.0 + s as f32);
+        }
+        let Face::Ttf(f) = &font.face else { panic!() };
+        let sized = f.source.as_ref().unwrap().sized.lock().unwrap().len();
+        assert!((2..=40).contains(&sized), "{sized}");
+    }
+
+    /// The symbols UIs draw as icons come out as glyphs, not boxes, where
+    /// the system has the fonts (macOS here: Zapf Dingbats for ✕ and ✔).
+    #[test]
+    fn common_ui_symbols_are_covered_on_macos() {
+        if !std::path::Path::new("/System/Library/Fonts/ZapfDingbats.ttf").is_file() {
+            return;
+        }
+        let ui = CaptionFont::ui();
+        for c in "✕✔✓×⚠●○→⌘…".chars() {
+            assert!(ui.has_glyph(c) || ui.fallbacks.iter().any(|f| f.has_glyph(c)), "{c} U+{:04X}", c as u32);
+        }
+    }
+
+    #[test]
     fn a_fallback_is_asked_for_what_the_first_face_lacks() {
         let plain = CaptionFont::builtin();
         let with = with_greek();
@@ -3499,5 +3818,23 @@ mod tests {
         let mut owned = CaptionFont::from_ttf(TtfFont::parse(bytes).unwrap());
         assert_eq!(a.advance('g', 20.0), owned.advance('g', 20.0));
         assert_eq!(a.glyph('g', 20.0).coverage, b.glyph('g', 20.0).coverage);
+    }
+
+    /// A symbol no face has as text (⏱, ⏹) comes from the colour emoji face rather than as
+    /// a box, while one a text face has (→) stays text.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_symbol_only_the_emoji_face_has_is_drawn_from_it() {
+        assert!(CaptionFont::use_color_emoji());
+        let ui = CaptionFont::ui();
+        for c in ['⏱', '⏹'] {
+            assert!(ui.can_draw(c), "{c}");
+            assert!(
+                matches!(ui.fallbacks[ui.face_for(c) - 1].face, Face::Color(_)),
+                "{c}"
+            );
+        }
+        let arrow = ui.face_for('→');
+        assert!(arrow == 0 || !matches!(ui.fallbacks[arrow - 1].face, Face::Color(_)));
     }
 }

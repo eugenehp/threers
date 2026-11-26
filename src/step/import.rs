@@ -309,7 +309,7 @@ impl<'a> Reader<'a> {
                 out.reverse();
             }
             let closed = out.len() > 2 && v3::dist(out[0], *out.last()?) < self.tolerance;
-            return Some((out, closed));
+            return Some((ended(out, start, end), closed));
         }
         if let Some(c) = geom.part("CIRCLE") {
             let (center, axis, x) = self.placement(self.get(c.get(1)?)?)?;
@@ -332,7 +332,10 @@ impl<'a> Reader<'a> {
             if !same_sense {
                 sweep -= std::f64::consts::TAU;
             }
-            let n = segments(radius, sweep.abs(), tolerance);
+            // To a quarter of the tolerance, as the kernel's own booleans
+            // hold their edges: at the whole of it, a solid came back a
+            // coarser one than it left, by a thousandth of its volume.
+            let n = segments(radius, sweep.abs(), tolerance * 0.25);
             let pts: Vec<V3> = (0..=n)
                 .map(|i| {
                     let t = t0 + sweep * i as f64 / n as f64;
@@ -345,7 +348,7 @@ impl<'a> Reader<'a> {
                     )
                 })
                 .collect();
-            return Some((pts, closed));
+            return Some((ended(pts, start, end), closed));
         }
 
         let name = if geom.name.is_empty() {
@@ -966,6 +969,22 @@ impl<'a> Reader<'a> {
 ///
 /// The largest gap between consecutive samples separates them: a full wrap has
 /// no gap, and a partial face has exactly one large one.
+/// A sampled edge from the very vertices the file gives it.
+///
+/// The samples come from the curve, and a curve only passes by its vertices
+/// as near as the writer's tolerance: an arc's ends, recomputed from angles on
+/// its circle, were 2e-4 off vertices the edges beside it ended on exactly.
+/// Two edges then met at two points, and the face between them stayed open.
+fn ended(mut pts: Vec<V3>, start: V3, end: V3) -> Vec<V3> {
+    if let Some(p) = pts.first_mut() {
+        *p = start;
+    }
+    if let Some(p) = pts.last_mut() {
+        *p = end;
+    }
+    pts
+}
+
 /// Signed area of a closed polygon in parameter space.
 fn shoelace(uv: &[[f64; 2]]) -> f64 {
     let n = uv.len();

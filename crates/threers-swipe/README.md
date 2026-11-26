@@ -147,7 +147,7 @@ crate, which turns on the `swipe` feature of `threers-ui`. Without it the
 keyboard has no swipe code at all and a slide types the key it ends on.
 
 ```toml
-threers-swipe = { version = "0.1.1", features = ["keyboard"] }
+threers-swipe = { version = "0.1.2", features = ["keyboard"] }
 ```
 
 ```rust,ignore

@@ -42,6 +42,7 @@ use threers::ui::input::{Event, PointerButton, TouchPhase};
 use threers::ui::native::{self, Control};
 use threers::xr::{ray_pose, Frame, TargetRayMode, XrEvent, XrEventKind, XrInput};
 
+use crate::gestures::{is_step, said, Inputs, KeyHeld, Pinch};
 use crate::surface_ui::SurfaceUi;
 use crate::{App, CameraRequest, Place, Request, Surface};
 
@@ -53,6 +54,49 @@ pub enum Mode {
     Ar = 1,
 }
 
+thread_local!(static MARKS: std::cell::RefCell<(Option<Instant>, Vec<(&'static str, f64, u32)>)> = Default::default());
+
+/// THREERS_PERF's stages: the time since the last mark, summed under `name`.
+fn mark(name: &'static str) {
+    MARKS.with(|m| {
+        let mut m = m.borrow_mut();
+        let now = Instant::now();
+        let Some(last) = m.0 else { return };
+        let ms = now.duration_since(last).as_secs_f64() * 1e3;
+        m.0 = Some(now);
+        match m.1.iter_mut().find(|e| e.0 == name) {
+            Some(e) => {
+                e.1 += ms;
+                e.2 += 1;
+            }
+            None => m.1.push((name, ms, 1)),
+        }
+    });
+}
+
+fn mark_reset() {
+    MARKS.with(|m| m.borrow_mut().0 = Some(Instant::now()));
+}
+
+/// Each stage's mean, ms, and forgotten.
+fn mark_report() -> String {
+    MARKS.with(|m| {
+        let mut m = m.borrow_mut();
+        let out = m.1.iter().map(|(n, t, k)| format!("{n} {:.1}", t / *k as f64)).collect::<Vec<_>>().join(", ");
+        m.1.clear();
+        out
+    })
+}
+
+/// The share of the window's pixels (each way) a frame is drawn at while
+/// the view moves (a gesture, a flight, a spin), and seconds still before
+/// it is drawn whole again.
+const MOVING_SCALE: f32 = 0.7;
+const STILL: f32 = 0.15;
+
+/// Seconds a reframe is flown in.
+const FLIGHT: f32 = 0.6;
+
 /// What [`View::set`] sets: a key and three floats, one calling
 /// convention across the language boundary. An unknown key does nothing.
 #[repr(u32)]
@@ -63,7 +107,9 @@ pub enum Key {
     /// One finger: `a` its phase (0 began, 1 moved, 2 ended, 3 cancelled),
     /// `b`, `c` where it is, in pixels from the top left.
     Touch = 1,
-    /// A pinch: `a` its scale since the last call (above 1 spreads).
+    /// A pinch: `a` its scale since the last call (above 1 spreads); `b`,
+    /// `c` where its fingers are, in pixels (0, 0: not said, the middle).
+    /// `a` 0: the fingers lifted.
     Pinch = 2,
     /// Two fingers dragged: `a`, `b` pixels since the last call.
     Pan = 3,
@@ -72,8 +118,13 @@ pub enum Key {
     /// The safe area's insets, pixels: `a` top, `b` bottom, `c` either side.
     Insets = 5,
     /// A hardware keyboard's key: `a` its code point (the function keys as
-    /// Apple's, Escape 27), `b` 1 with Shift held. To [`App::key`].
+    /// Apple's, Escape 27), `b` 1 with Shift held, `c` the others held (1
+    /// Control, 2 Option, 4 Command). To [`App::key_with`].
     Keyboard = 6,
+    /// The app at the front (`a` 1) or leaving it (0). To [`App::active`].
+    Active = 7,
+    /// The hardware keyboard's key last down, let go.
+    KeyUp = 8,
 }
 
 /// A key's name as the web's `KeyboardEvent.key` gives it: `Escape`,
@@ -81,6 +132,9 @@ pub enum Key {
 pub fn key_name(code: u32) -> Option<String> {
     Some(match code {
         27 => "Escape".into(),
+        8 | 0x7F => "Backspace".into(),
+        9 => "Tab".into(),
+        0xF728 => "Delete".into(),
         13 | 3 => "Enter".into(),
         0xF700 => "ArrowUp".into(),
         0xF701 => "ArrowDown".into(),
@@ -131,6 +185,13 @@ pub struct View<A: App> {
     offscreen: Option<threers::metal::MetalHeadlessRenderer>,
     /// A recorded turn's own (its size the video's, not the window's).
     recorder: Option<threers::metal::MetalHeadlessRenderer>,
+    /// The window's frame while a gesture or a flight moves it: drawn at
+    /// `MOVING_SCALE` of its pixels (the GPU fills them, not its triangles:
+    /// a frame at half the pixels comes in two thirds of the time), sharp
+    /// again the moment it stops.
+    moving: Option<threers::metal::MetalHeadlessRenderer>,
+    /// seconds since a gesture or a flight last moved the view
+    still_for: f32,
     surface: MetalSurface,
     scene: Scene,
     app: A,
@@ -140,10 +201,26 @@ pub struct View<A: App> {
     camera: PerspectiveCamera,
     controls: OrbitControls,
     framed: bool,
+    /// Seconds a gesture still counts as held: the gap between a pinch's
+    /// or a pan's steps is not a release.
+    held: f32,
     /// Input since the last frame, for the controls.
     turn: (f32, f32),
     pan: (f32, f32),
     zoom: f32,
+    /// the pinch's fingers, pixels; and the point it zooms toward (what was
+    /// under them when it began), with how far off its last step was
+    pinch_at: Option<(f32, f32)>,
+    pinch_anchor: Option<(Vector3, f32)>,
+    /// The pinch going on, offered to the app.
+    app_pinch: Pinch,
+    /// What came since the last frame.
+    inputs: Inputs,
+    /// The key held, and since when it is timed.
+    key_held: KeyHeld,
+    key_clock: Instant,
+    /// a reframe flown to: from (position, target), to, seconds in
+    flight: Option<(Vector3, Vector3, Vector3, Vector3, f32)>,
     touch: Option<Touch>,
     /// The finger as a transient pointer (AR), or a tap's ray (window).
     pointer: Option<[f32; 16]>,
@@ -159,6 +236,8 @@ pub struct View<A: App> {
     /// Pixels a UI point, and the safe area (top, right, bottom, left) in
     /// pixels.
     scale: f32,
+    /// The app's UI zoom (`App::ui_zoom`): UI pixels to points
+    ui_zoom: f32,
     insets: [f32; 4],
     spin: bool,
     start: Instant,
@@ -182,12 +261,25 @@ impl<A: App> View<A> {
     /// over each, and an activation comes back by its key
     /// ([`crate::threers_ios_press`]). `None` while they are as they were.
     pub fn controls(&mut self) -> Option<&str> {
-        let v = native::version(&self.native);
+        // (a zoom changed: the same controls at other points)
+        let v = native::version(&self.native) ^ u64::from(self.ui_zoom.to_bits());
         if self.native_sent == Some(v) {
             return None;
         }
         self.native_sent = Some(v);
-        self.native_json = native::to_json(&self.native);
+        // in points: the UI's pixels, zoomed
+        let z = self.ui_zoom;
+        let points: Vec<Control> = self
+            .native
+            .iter()
+            .cloned()
+            .map(|mut c| {
+                c.rect = threers::ui::Rect { x: c.rect.x * z, y: c.rect.y * z, width: c.rect.width * z, height: c.rect.height * z };
+                c.radius *= z;
+                c
+            })
+            .collect();
+        self.native_json = native::to_json(&points);
         Some(&self.native_json)
     }
 
@@ -230,17 +322,27 @@ impl<A: App> View<A> {
             renderer,
             offscreen: None,
             recorder: None,
+            moving: None,
+            still_for: 1.0,
             surface,
             scene,
             app,
-            ui: SurfaceUi::default(),
+            ui: SurfaceUi::on_gpu(),
             mode: Mode::Window,
             camera,
             controls,
             framed: false,
+            held: 0.0,
             turn: (0.0, 0.0),
             pan: (0.0, 0.0),
             zoom: 1.0,
+            pinch_at: None,
+            app_pinch: Pinch::default(),
+            inputs: Inputs::default(),
+            key_held: KeyHeld::default(),
+            key_clock: Instant::now(),
+            pinch_anchor: None,
+            flight: None,
             touch: None,
             pointer: None,
             events: Vec::new(),
@@ -250,6 +352,7 @@ impl<A: App> View<A> {
             session: None,
             layer_ptr: layer,
             scale: 2.0,
+            ui_zoom: 1.0,
             insets: [0.0; 4],
             spin: false,
             start: Instant::now(),
@@ -305,6 +408,21 @@ impl<A: App> View<A> {
 
     /// Set one thing; see [`Key`].
     pub fn set(&mut self, key: u32, a: f32, b: f32, c: f32) {
+        // fingers and keys wait for the frame, merged
+        if Inputs::waits(key) {
+            self.inputs.push((key, a, b, c));
+        } else {
+            self.apply(key, a, b, c);
+        }
+    }
+
+    fn apply(&mut self, key: u32, a: f32, b: f32, c: f32) {
+        // THREERS_TOUCH_LOG: each finger, pinch and pan as it comes, and
+        // where it went (the UI or the view)
+        static LOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *LOG.get_or_init(|| std::env::var_os("THREERS_TOUCH_LOG").is_some()) && (1..=3).contains(&key) {
+            eprintln!("touchlog key {key} a {a:.3} b {b:.1} c {c:.1} on_ui {} zoom {} scale {}", self.on_ui(), self.ui_zoom, self.scale);
+        }
         match key {
             k if k == Key::Resize as u32 => {
                 let (w, h) = ((a as u32).max(1), (b as u32).max(1));
@@ -314,8 +432,13 @@ impl<A: App> View<A> {
                 self.camera.aspect = w as f32 / h as f32;
             }
             k if k == Key::Touch as u32 => self.touch(a as u32, (b, c)),
-            k if k == Key::Pinch as u32 && a.is_finite() && a > 0.0 && !self.on_ui() => {
-                self.zoom *= a
+            // a pinch the app takes (zooming a page); over, with no scale
+            k if k == Key::Pinch as u32 && a == 0.0 => self.pinch_over(),
+            k if k == Key::Pinch as u32 && is_step(a) => {
+                if !self.pinch_app(a, (b, c)) && !self.on_ui() {
+                    self.zoom *= a;
+                    self.pinch_at = said((b, c)).then_some((b, c));
+                }
             }
             k if k == Key::Pan as u32 && !self.on_ui() => {
                 self.pan.0 += a;
@@ -325,9 +448,16 @@ impl<A: App> View<A> {
             k if k == Key::Insets as u32 => {
                 self.insets = [a, c, b, c].map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 })
             }
+            k if k == Key::Active as u32 => {
+                self.key_held.up();
+                self.app.active(a > 0.5);
+            }
+            k if k == Key::KeyUp as u32 => self.key_held.up(),
             k if k == Key::Keyboard as u32 && a.is_finite() && a >= 0.0 => {
                 if let Some(name) = key_name(a as u32) {
-                    self.app.key(&name, b > 0.5);
+                    let held = crate::KeyModifiers::from_shell(b, c);
+                    self.key_held.down(&name, held, self.key_clock.elapsed().as_secs_f64());
+                    self.app.key_with(&name, held);
                 }
             }
             _ => {}
@@ -351,7 +481,9 @@ impl<A: App> View<A> {
         let slot = if record { &mut self.recorder } else { &mut self.offscreen };
         let r = match slot {
             Some(r) => r,
-            slot => slot.insert(threers::metal::MetalHeadlessRenderer::builder().size(w, h).msaa(SAMPLES).build_on(&device).map_err(|e| format!("{e:?}"))?),
+            slot => {
+                slot.insert(threers::metal::MetalHeadlessRenderer::builder().size(w, h).msaa(SAMPLES).build_on(&device).map_err(|e| format!("{e:?}"))?)
+            }
         };
         r.resize(w, h).map_err(|e| format!("{e:?}"))?;
         r.renderer_mut().set_tone_mapping(tone, exposure);
@@ -421,13 +553,32 @@ impl<A: App> View<A> {
         self.start.elapsed().as_secs_f64()
     }
 
+    /// A pinch's step (`step` its scale since the last, about the fingers'
+    /// midpoint `at`, pixels) to the app ([`App::pinch`]). Whether the pinch
+    /// is the app's. (No finger is down for it: the platform takes the first
+    /// one's touch away as the second lands.)
+    fn pinch_app(&mut self, step: f32, at: (f32, f32)) -> bool {
+        let k = self.scale * self.ui_zoom;
+        let (w, h) = self.surface.size();
+        let middle = (w as f32 / 2.0 / k, h as f32 / 2.0 / k);
+        let app = &mut self.app;
+        self.app_pinch.step(step, (at.0 / k, at.1 / k), middle, |s, x, y, phase| app.pinch(s, x, y, phase))
+    }
+
+    /// The fingers lifted.
+    fn pinch_over(&mut self) {
+        let app = &mut self.app;
+        self.app_pinch.over(|s, x, y, phase| app.pinch(s, x, y, phase));
+    }
+
     /// The finger to the UI, in its points. Whether the UI took it.
     fn touch_ui(&mut self, phase: TouchPhase, at: (f32, f32)) -> bool {
         // the finger may move the focus: the next text clicks its control again
         self.typing = None;
-        let (x, y) = (at.0 / self.scale, at.1 / self.scale);
+        let k = self.scale * self.ui_zoom;
+        let (x, y) = (at.0 / k, at.1 / k);
         let time = self.time();
-        self.app.ui_event(
+        let took = self.app.ui_event(
             Place::Screen,
             Event::Touch {
                 id: 0,
@@ -437,7 +588,16 @@ impl<A: App> View<A> {
                 time,
             },
             time,
-        )
+        );
+        if std::env::var_os("THREERS_TOUCH_LOG").is_some() {
+            eprintln!("touchlog ui {phase:?} at ({x:.1}, {y:.1}) took {took}");
+        }
+        took
+    }
+
+    /// `kind`, of the one finger.
+    fn event(&mut self, kind: XrEventKind) {
+        self.events.push(XrEvent { kind, slot: 0 });
     }
 
     fn touch(&mut self, phase: u32, at: (f32, f32)) {
@@ -462,14 +622,8 @@ impl<A: App> View<A> {
                 });
                 if self.mode == Mode::Ar {
                     self.pointer = self.ray_at(at);
-                    self.events.push(XrEvent {
-                        kind: XrEventKind::Connected,
-                        slot: 0,
-                    });
-                    self.events.push(XrEvent {
-                        kind: XrEventKind::SelectStart,
-                        slot: 0,
-                    });
+                    self.event(XrEventKind::Connected);
+                    self.event(XrEventKind::SelectStart);
                 }
             }
             (1, Some(t)) if t.ui => {
@@ -504,29 +658,14 @@ impl<A: App> View<A> {
                     }
                     // A tap is a whole select, in one frame.
                     self.pointer = self.ray_at(at);
-                    self.events.push(XrEvent {
-                        kind: XrEventKind::Connected,
-                        slot: 0,
-                    });
-                    self.events.push(XrEvent {
-                        kind: XrEventKind::SelectStart,
-                        slot: 0,
-                    });
+                    self.event(XrEventKind::Connected);
+                    self.event(XrEventKind::SelectStart);
                 }
-                self.events.push(XrEvent {
-                    kind: XrEventKind::SelectEnd,
-                    slot: 0,
-                });
+                self.event(XrEventKind::SelectEnd);
                 if tap {
-                    self.events.push(XrEvent {
-                        kind: XrEventKind::Select,
-                        slot: 0,
-                    });
+                    self.event(XrEventKind::Select);
                 }
-                self.events.push(XrEvent {
-                    kind: XrEventKind::Disconnected,
-                    slot: 0,
-                });
+                self.event(XrEventKind::Disconnected);
                 self.release = true;
             }
             _ => {}
@@ -545,6 +684,32 @@ impl<A: App> View<A> {
             world: Matrix4 { elements: world },
             projection: with_depth(projection, lens.near, lens.far),
         });
+    }
+
+    /// What a pinch zooms toward: the nearest surface under its fingers, else
+    /// the point at the target's depth under them, else the target.
+    fn zoom_point(&mut self) -> Vector3 {
+        let t = self.camera.target;
+        let Some(at) = self.pinch_at else { return t };
+        let (w, h) = self.surface.size();
+        let ndc = threers::math::Vector2::new(2.0 * at.0 / w as f32 - 1.0, 1.0 - 2.0 * at.1 / h as f32);
+        self.scene.update_world();
+        let mut ray = threers::Raycaster::default();
+        ray.first_hit_only = true;
+        // (the camera's picture is shifted off a docked sidebar: undone for
+        // the ray, its offset left out)
+        let mut cam = self.camera.clone();
+        cam.view_offset = None;
+        ray.set_from_camera(ndc, &cam);
+        let hits = ray.intersect_object(&self.scene.arena, self.scene.root, true);
+        if let Some(hit) = hits.first() {
+            return hit.point;
+        }
+        // none: at the target's depth along the ray
+        let d = ray.ray.direction;
+        let along = (t - ray.ray.origin).dot(self.camera.target - self.camera.position) / (self.camera.target - self.camera.position).length().max(1e-9);
+        let cos = d.dot((self.camera.target - self.camera.position).normalize()).max(0.2);
+        ray.ray.origin + d * (along / cos)
     }
 
     /// The ray from the camera through the pixel `at`, in the reference
@@ -591,6 +756,56 @@ impl<A: App> View<A> {
     }
 
     pub fn frame(&mut self) -> bool {
+        for (key, a, b, c) in self.inputs.take() {
+            self.apply(key, a, b, c);
+        }
+        if let Some((name, held)) = self.key_held.due(self.key_clock.elapsed().as_secs_f64()) {
+            self.app.key_repeat(&name, held);
+        }
+        // THREERS_PERF: each 120 frames, how long apart they came and what
+        // building one took here (the GPU's share is the rest); the view
+        // spun so frames keep coming. THREERS_NO_AO: without the app's
+        // ambient occlusion, to compare.
+        static PERF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if !*PERF.get_or_init(|| std::env::var_os("THREERS_PERF").is_some()) {
+            return self.frame_inner();
+        }
+        self.spin = true;
+        let t0 = Instant::now();
+        mark_reset();
+        let drew = self.frame_inner();
+        mark("draw");
+        let built = t0.elapsed().as_secs_f64() * 1e3;
+        thread_local!(static STATS: std::cell::RefCell<(Option<Instant>, Vec<f64>, Vec<f64>)> = Default::default());
+        STATS.with(|s| {
+            let mut s = s.borrow_mut();
+            if let Some(last) = s.0 {
+                let gap = t0.duration_since(last).as_secs_f64() * 1e3;
+                s.1.push(gap);
+                s.2.push(built);
+            }
+            s.0 = Some(t0);
+            if s.1.len() >= 120 {
+                let med = |v: &mut Vec<f64>| {
+                    v.sort_by(f64::total_cmp);
+                    (v[v.len() / 2], v[v.len() * 95 / 100])
+                };
+                let (g, g95) = med(&mut s.1);
+                let (b, b95) = med(&mut s.2);
+                eprintln!("threers perf stages: {}", mark_report());
+                if let Some(r) = self.offscreen.as_ref() {
+                    let st = r.stats();
+                    eprintln!("threers perf scene: {} draws, {} triangles, {} culled, {} uploads, size {:?}", st.draw_calls, st.triangles, st.culled, st.geometry_uploads, self.surface.size());
+                }
+                eprintln!("threers perf: frames {g:.1} ms apart (95% {g95:.1}), built in {b:.1} ms (95% {b95:.1}), ao {}", self.app.ambient_occlusion().is_some() && std::env::var_os("THREERS_NO_AO").is_none());
+                s.1.clear();
+                s.2.clear();
+            }
+        });
+        drew
+    }
+
+    fn frame_inner(&mut self) -> bool {
         #[cfg(all(target_os = "ios", target_arch = "aarch64"))]
         if let Some(session) = &self.session {
             let lens = self.app.lens();
@@ -634,7 +849,12 @@ impl<A: App> View<A> {
             self.release = false;
             self.pointer = None;
         }
+        if self.mode == Mode::Window {
+            self.app.window_camera(&self.camera);
+        }
+        mark("before update");
         self.app.update(&mut self.scene, &frame);
+        mark("update");
         let view = match self.mode {
             Mode::Window => {
                 self.orbit(dt as f32);
@@ -656,7 +876,9 @@ impl<A: App> View<A> {
             }
         };
         let (w, h) = self.surface.size();
-        let k = self.scale;
+        // the UI in its pixels, the app's zoom of a point each
+        self.ui_zoom = self.app.ui_zoom(w as f32 / self.scale, h as f32 / self.scale).clamp(0.5, 3.0);
+        let k = self.scale * self.ui_zoom;
         let surface = Surface {
             place: Place::Screen,
             width: w as f32 / k,
@@ -668,7 +890,7 @@ impl<A: App> View<A> {
         // A control activated by assistive technology (its element's
         // `accessibilityActivate`): a click at its middle, on what shows.
         let pressed: Vec<(f32, f32)> =
-            crate::take_presses_for(|k| native::find(&self.native, k).is_some())
+            crate::take_presses_for(0, |k| native::find(&self.native, k).is_some())
                 .into_iter()
                 .filter_map(|k| native::find(&self.native, k))
                 .map(|c| c.centre())
@@ -681,6 +903,9 @@ impl<A: App> View<A> {
                 .ui_event(Place::Screen, Event::PointerDown { x, y, button }, time);
             self.app
                 .ui_event(Place::Screen, Event::PointerUp { x, y, button }, time);
+            // and away: no pointer is left over it (no hover look stays)
+            self.app
+                .ui_event(Place::Screen, Event::PointerMove { x: -1e6, y: -1e6 }, time);
         }
         // typed into a native text field over a text control (the shell's,
         // for the on-screen keyboard): the control focused (a click on it),
@@ -689,7 +914,7 @@ impl<A: App> View<A> {
         // counts, and a control still focused from the last is not clicked
         // again (a click rebuilt the UI on every key).
         let mut typed: Vec<(u64, String)> = vec![];
-        for (k, t) in crate::take_texts_for(|k| native::find(&self.native, k).is_some()) {
+        for (k, t) in crate::take_texts_for(0, |k| native::find(&self.native, k).is_some()) {
             match typed.iter_mut().find(|e| e.0 == k) {
                 Some(e) => e.1 = t,
                 None => typed.push((k, t)),
@@ -706,11 +931,16 @@ impl<A: App> View<A> {
             }
             self.typing = self.app.ui_text(Place::Screen, text).then_some(k);
         }
-        let (shown, _) = self.ui.update(&mut self.app, &surface);
-        self.native = match (shown, self.app.ui(&surface)) {
-            (true, Some(ui)) => native::controls(ui),
-            _ => vec![],
-        };
+        mark("orbit and the rest");
+        let (shown, changed) = self.ui.update(&mut self.app, &surface);
+        mark("ui");
+        // the controls again only when the UI's pixels changed (a walk of
+        // the whole tree, 2–3 ms a frame on an iPad, for the same answer)
+        if !shown {
+            self.native.clear();
+        } else if changed || self.native.is_empty() {
+            self.native = self.app.ui(&surface).map(|ui| native::controls(ui)).unwrap_or_default();
+        }
         let (tone, exposure) = self.app.tone_mapping();
         self.renderer.set_tone_mapping(tone, exposure);
         // a turn being recorded: its next frame, once the shell has the last
@@ -725,24 +955,36 @@ impl<A: App> View<A> {
                 Err(e) => eprintln!("threers: snapshot: {e}"),
             }
         }
+        mark("record, snapshot");
         let Some(next) = self.surface.next_frame() else {
             return false;
         };
+        mark("next drawable");
         let pass = next.attachments();
         // the app's ambient occlusion: the scene drawn offscreen with its
         // SSAO, on this device, then shown, the UI over it
-        if self.mode == Mode::Window && self.app.ambient_occlusion().is_some() {
+        if self.mode == Mode::Window && self.app.ambient_occlusion().is_some() && std::env::var_os("THREERS_NO_AO").is_none() {
             let camera = self.camera.clone();
+            // moving: the smaller frame (its own renderer, kept, so a
+            // gesture's start allocates nothing), filtered up
+            let moving = self.still_for < STILL;
+            if moving {
+                std::mem::swap(&mut self.offscreen, &mut self.moving);
+            }
+            let (dw, dh) = if moving { (((w as f32) * MOVING_SCALE).round() as u32, ((h as f32) * MOVING_SCALE).round() as u32) } else { (w, h) };
             let texture = self
-                .draw_offscreen(false, w, h, &camera, |r, scene| r.render_to_texture(scene, &camera));
+                .draw_offscreen(false, dw, dh, &camera, |r, scene| r.render_to_texture(scene, &camera));
+            if moving {
+                std::mem::swap(&mut self.offscreen, &mut self.moving);
+            }
+            let copy = |r: &mut threers::metal::MetalRenderer, t, p: &_| if moving { r.draw_texture_scaled(t, p) } else { r.draw_texture(t, p) };
             match texture {
                 Ok(t) => {
                     let drawn = if shown {
-                        self.renderer
-                            .draw_texture(t, &pass.without_drawable())
+                        copy(&mut self.renderer, t, &pass.without_drawable())
                             .and_then(|_| self.ui.pixels.draw(&mut self.renderer, &pass))
                     } else {
-                        self.renderer.draw_texture(t, &pass)
+                        copy(&mut self.renderer, t, &pass)
                     };
                     if let Err(e) = drawn {
                         eprintln!("threers: frame: {e}");
@@ -753,13 +995,14 @@ impl<A: App> View<A> {
                 Err(e) => eprintln!("threers: the frame offscreen: {e}"),
             }
         }
+        let scene = &mut self.scene;
         let drawn = if shown {
             self.renderer
-                .render_views(&mut self.scene, &[view], &pass.without_drawable())
+                .render_views(scene, &[view], &pass.without_drawable())
                 .and_then(|_| self.ui.pixels.draw(&mut self.renderer, &pass))
         } else {
             self.renderer
-                .render_views(&mut self.scene, &[view], &pass)
+                .render_views(scene, &[view], &pass)
                 .map(drop)
         };
         if let Err(e) = drawn {
@@ -794,7 +1037,7 @@ impl<A: App> View<A> {
         // left): the picture shifted to centre there, and framed to fit it
         let (sw, sh) = self.surface.size();
         let (sw, sh) = (sw as f32, sh.max(1) as f32);
-        let left = (self.app.covered_left() * self.scale).clamp(0.0, sw * 0.6);
+        let left = (self.app.covered_left() * self.scale * self.ui_zoom).clamp(0.0, sw * 0.6);
         self.camera.view_offset = (left > 0.0).then(|| threers::cameras::ViewOffset { full_width: sw, full_height: sh, x: -left * 0.5, y: 0.0, width: sw, height: sh });
         let aspect = (sw - left) / sh;
         self.app.view_aspect(aspect);
@@ -805,11 +1048,24 @@ impl<A: App> View<A> {
             // fit the narrower way: across, on a phone held upright
             let across = 2.0 * ((self.camera.fov * 0.5).tan() * aspect).atan();
             let distance = radius / (self.camera.fov.min(across) * 0.5).sin() * 1.1;
+            // the first time, from the front; after, flown there, seen the
+            // way it was (it jumped, turned back to the front)
+            let first = self.camera.position == self.camera.target || self.camera.position.length_sq() == 0.0;
+            let way = (self.camera.position - self.camera.target).normalize();
+            let way = if first || !way.x.is_finite() { Vector3::new(0.0, 0.0, 1.0) } else { way };
+            let (from, from_target) = (self.camera.position, self.camera.target);
             self.camera.target = centre;
-            self.camera.position = centre + Vector3::new(0.0, 0.0, distance);
+            self.camera.position = centre + way * distance;
+            if !first {
+                self.flight = Some((from, from_target, self.camera.position, centre, 0.0));
+            }
+            self.pinch_anchor = None;
             self.camera.near = distance * 0.01;
             self.camera.far = distance * 100.0;
-            self.controls.min_distance = radius * 0.2;
+            // near enough to look into a thousandth of what is framed (a
+            // cubic millimetre of cortex, framed in a whole brain); the near
+            // plane follows the camera in (below)
+            self.controls.min_distance = radius * 0.001;
             self.controls.max_distance = distance * 20.0;
             self.controls.reseed_from_camera(&self.camera);
             self.framed = true;
@@ -824,6 +1080,66 @@ impl<A: App> View<A> {
             panning: false,
             cursor: (0.0, 0.0),
         };
+        // Damping by time, not by frames: under the fingers the brain keeps
+        // up with them (half the way in a 60th of a second), let go it
+        // glides a moment. At three.js's 0.05 a frame it trailed a drag by
+        // half a second at 30 fps, more when frames came slower.
+        if self.touch.is_some() || self.zoom != 1.0 || self.pan != (0.0, 0.0) {
+            self.held = 0.1;
+        } else {
+            self.held = (self.held - dt).max(0.0);
+        }
+        let per_60th = if self.held > 0.0 { 0.5 } else { 0.12 };
+        self.controls.damping = 1.0 - (1.0f32 - per_60th).powf((dt * 60.0).clamp(0.0, 8.0));
+        if std::env::var_os("THREERS_TOUCH_LOG").is_some() && (self.turn != (0.0, 0.0) || self.zoom != 1.0 || self.pan != (0.0, 0.0)) {
+            eprintln!("touchlog orbit dt {dt:.3} turn {:?} zoom {:.3} pan {:?} touch {} on_ui {} distance {:.4}", self.turn, self.zoom, self.pan, self.touch.is_some(), self.on_ui(), (self.camera.position - self.camera.target).length());
+        }
+        // what moves the view now (a finger, a pinch, two fingers, a flight)
+        let moving = self.turn != (0.0, 0.0) || self.pan != (0.0, 0.0) || self.zoom != 1.0 || self.flight.is_some() || (self.spin && self.touch.is_none());
+        self.still_for = if moving { 0.0 } else { self.still_for + dt };
+        // flying to a reframe: eased there, any input ending it
+        if let Some((p0, t0, p1, t1, t)) = self.flight.as_mut() {
+            *t += dt;
+            let k = (*t / FLIGHT).min(1.0);
+            let e = k * k * (3.0 - 2.0 * k);
+            let (p0, t0, p1, t1) = (*p0, *t0, *p1, *t1);
+            let touched = self.turn != (0.0, 0.0) || self.pan != (0.0, 0.0) || self.zoom != 1.0;
+            if k >= 1.0 || touched {
+                self.camera.position = p1;
+                self.camera.target = t1;
+                self.flight = None;
+            } else {
+                // the target eased straight; the camera eased along, kept
+                // as far from the target as the ends are (no dip through)
+                let target = t0 + (t1 - t0) * e;
+                let (d0, d1) = ((p0 - t0).length(), (p1 - t1).length());
+                let way = ((p0 - t0) * (1.0 - e) + (p1 - t1) * e).normalize();
+                self.camera.target = target;
+                self.camera.position = target + way * (d0 * (d1 / d0.max(1e-9)).powf(e));
+            }
+            self.controls.reseed_from_camera(&self.camera);
+        }
+        // a pinch: toward what is under the fingers, at once (eased, it lagged
+        // and drifted on), stopping short of it (it went through the brain)
+        let zoom = std::mem::replace(&mut self.zoom, 1.0);
+        if (zoom - 1.0).abs() > 1e-6 {
+            let anchor = match self.pinch_anchor {
+                Some(a) if a.1 < 0.35 => a.0,
+                _ => self.zoom_point(),
+            };
+            self.pinch_anchor = Some((anchor, 0.0));
+            let (p, t) = (self.camera.position, self.camera.target);
+            let near = (p - anchor).length();
+            let k = (1.0 / zoom).clamp(0.2, 5.0);
+            // no nearer it than a hair, nor farther than the controls allow
+            let k = k.max(self.controls.min_distance * 0.5 / near.max(1e-9)).min(self.controls.max_distance / (p - t).length().max(1e-9));
+            self.camera.position = anchor + (p - anchor) * k;
+            self.camera.target = anchor + (t - anchor) * k;
+            self.controls.reseed_from_camera(&self.camera);
+        }
+        if let Some(a) = self.pinch_anchor.as_mut() {
+            a.1 += dt;
+        }
         let mut turn = std::mem::take(&mut self.turn);
         if self.spin && !self.on_ui() && self.touch.is_none() {
             turn.0 += SPIN * self.scale * dt;
@@ -855,20 +1171,15 @@ impl<A: App> View<A> {
                 dt,
             );
         }
-        // The controls scale the distance by 1 − wheel·0.001·zoom_speed; a
-        // pinch's scale s divides it by s.
-        let zoom = std::mem::replace(&mut self.zoom, 1.0);
-        let wheel = if (zoom - 1.0).abs() > 1e-6 {
-            (1.0 - 1.0 / zoom) / (0.001 * self.controls.zoom_speed.max(1e-6))
-        } else {
-            0.0
-        };
         // Every frame, with or without input: damping eases on after a fling.
-        self.controls
-            .update_dt(PointerEvent { wheel, ..none }, &mut self.camera, size, dt);
-        // The far plane follows a zoom out.
+        if self.flight.is_none() {
+            self.controls.update_dt(none, &mut self.camera, size, dt);
+        }
+        // The far plane follows a zoom out; the near one a zoom in (fixed
+        // when framed, it cut off what the camera came close to)
         let distance = (self.camera.position - self.camera.target).length();
         self.camera.far = self.camera.far.max(distance * 10.0);
+        self.camera.near = (distance * 0.01).clamp(self.camera.far * 1e-7, self.camera.far * 1e-3);
     }
 
     pub fn scene(&mut self) -> &mut Scene {

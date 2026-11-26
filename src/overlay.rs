@@ -62,6 +62,16 @@ pub(crate) fn erf_approx(x: f32) -> f32 {
     s - s / (t * t)
 }
 
+/// How much of the pixel at `p` a rounded box `(x, y, width, height,
+/// radius)` covers.
+fn rounded_cover((x, y, w, h, r): (f32, f32, f32, f32, f32), p: (f32, f32)) -> f32 {
+    let r = r.clamp(0.0, w.min(h) / 2.0);
+    let dx = (p.0 - x - w / 2.0).abs() - (w / 2.0 - r);
+    let dy = (p.1 - y - h / 2.0).abs() - (h / 2.0 - r);
+    let d = dx.max(0.0).hypot(dy.max(0.0)) + dx.max(dy).min(0.0) - r;
+    (0.5 - d).clamp(0.0, 1.0)
+}
+
 /// How much of a box shadow covers `point`: the rounded box `(x0, y0, x1,
 /// y1)` with corner `radius`, blurred by `sigma`. Wallace's closed form; see
 /// [`Overlay::shadow`].
@@ -146,6 +156,46 @@ pub(crate) fn wave_coverage(
     sdf::coverage_stroke(d + half, half, w)
 }
 
+/// Where see-through colours are mixed with what is under them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BlendSpace {
+    /// In linear light: physically right, and edges anti-alias evenly; a
+    /// 14 % wash shows as about a third of the way to its colour.
+    #[default]
+    Linear,
+    /// On the sRGB-encoded values, as CSS and browsers mix: a design made
+    /// for the web looks as it did there (a 14 % wash is 14 % of the way).
+    Srgb,
+}
+
+/// The byte's value as `space` mixes it: linear light, or the encoded
+/// value itself.
+fn decode_table(space: BlendSpace) -> &'static [f32; 256] {
+    match space {
+        BlendSpace::Linear => srgb_decode_table(),
+        BlendSpace::Srgb => {
+            static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+            TABLE.get_or_init(|| std::array::from_fn(|i| i as f32 / 255.0))
+        }
+    }
+}
+
+/// A mixed value in `space` back to an sRGB-encoded byte.
+fn encode_in(space: BlendSpace, v: f32) -> u8 {
+    match space {
+        BlendSpace::Linear => srgb_encode(v),
+        BlendSpace::Srgb => (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
+    }
+}
+
+/// A linear colour as `space` mixes it.
+fn colour_in(space: BlendSpace, linear: [f32; 3]) -> [f32; 3] {
+    match space {
+        BlendSpace::Linear => linear,
+        BlendSpace::Srgb => linear.map(|c| srgb_encode(c) as f32 / 255.0),
+    }
+}
+
 /// sRGB-encoded byte to linear float, for the 256 values a byte can hold.
 fn srgb_decode_table() -> &'static [f32; 256] {
     static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
@@ -181,7 +231,31 @@ fn srgb_decode_table() -> &'static [f32; 256] {
 /// than serialising; two overlapping full-viewport fills measure ~9 ms either
 /// way on a loaded machine, so this is a faster function and not a measured
 /// frame-time win.
-fn srgb_encode(v: f32) -> u8 {
+pub(crate) fn srgb_encode(v: f32) -> u8 {
+    // Where `v`'s 1/4096th of the range starts is a byte found once; the few
+    // thresholds past it within the bucket (two at most, near black where
+    // they crowd) are stepped over. The same byte as the search below, from
+    // a load and a compare or two.
+    let (start, thresholds) = srgb_encode_buckets();
+    let v = v.clamp(0.0, 1.0);
+    // `v * 4096` is exact (a power of two), so `v` is in its bucket
+    let mut b = start[((v * 4096.0) as usize).min(4095)] as usize;
+    while b < 255 && v >= thresholds[b + 1] {
+        b += 1;
+    }
+    b as u8
+}
+
+/// [`srgb_encode`]'s first byte of each 1/4096th of `0.0..=1.0`, and the
+/// thresholds.
+fn srgb_encode_buckets() -> (&'static [u8; 4096], &'static [f32; 256]) {
+    static START: std::sync::OnceLock<[u8; 4096]> = std::sync::OnceLock::new();
+    let start = START.get_or_init(|| std::array::from_fn(|i| srgb_encode_search(i as f32 / 4096.0)));
+    (start, srgb_encode_thresholds())
+}
+
+/// The byte for `v` by searching the thresholds.
+fn srgb_encode_search(v: f32) -> u8 {
     let thresholds = srgb_encode_thresholds();
     let v = v.clamp(0.0, 1.0);
     // Branchless binary search: eight steps, each committing one bit of the
@@ -279,6 +353,8 @@ pub struct Overlay {
     /// Straight (non-premultiplied) sRGB-encoded RGBA8, row-major from the
     /// top-left — exactly what the compositing pass uploads.
     pixels: Vec<u8>,
+    /// Where see-through colours mix (see [`Overlay::set_blend_space`]).
+    blend: BlendSpace,
     fill: Option<Paint>,
     stroke: Option<Paint>,
     stroke_weight: f32,
@@ -290,6 +366,16 @@ pub struct Overlay {
     /// Cleared only by [`Overlay::mark_uploaded`], so skipping a frame's
     /// composite does not lose track of what changed during it.
     dirty: Bands,
+    /// The columns those rows differ in, as one span (`x0..x1`; empty while
+    /// nothing is outstanding): a write that says where it was (`put_image_data`,
+    /// a repainted rectangle) keeps the upload to it, anything else is the
+    /// whole width.
+    dirty_cols: (u32, u32),
+    /// Where shapes and shadows may be drawn (`x0, y0, x1, y1`), if not
+    /// the whole canvas: see [`Overlay::set_window`].
+    window: Option<(u32, u32, u32, u32)>,
+    /// What `fill_inside` has filled of the shape about to be painted.
+    filled: Option<(u32, u32, u32, u32)>,
     /// Rows drawn on since the last [`Overlay::clear`] — which is the band the
     /// GPU will hold ink in once this frame is uploaded, and therefore the band
     /// the *next* clear has to mark dirty. Without it, erasing a panel would
@@ -303,6 +389,8 @@ pub struct Overlay {
     text_weight: u16,
     #[cfg(feature = "captions")]
     text_italic: bool,
+    /// Pixels after each character, for text from now on.
+    text_letter_spacing: f32,
     /// The painter's face in the other styles used, so switching back and
     /// forth keeps each one's glyph cache.
     #[cfg(feature = "captions")]
@@ -317,12 +405,16 @@ impl Overlay {
             width,
             height,
             pixels: vec![0; width as usize * height as usize * 4],
+            blend: BlendSpace::Linear,
             fill: Some(Paint::new(Color::WHITE, 1.0)),
             stroke: None,
             stroke_weight: 1.0,
             text_size: 16.0,
             touched: false,
             dirty: Bands::default(),
+            dirty_cols: (u32::MAX, 0),
+            window: None,
+            filled: None,
             content: Bands::default(),
             #[cfg(feature = "captions")]
             painter: None,
@@ -330,8 +422,49 @@ impl Overlay {
             text_weight: 400,
             #[cfg(feature = "captions")]
             text_italic: false,
+            text_letter_spacing: 0.0,
             #[cfg(feature = "captions")]
             other_weights: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Draws shapes and shadows only into the pixels `x0..x1 × y0..y1` (all
+    /// of them again with `None`), as if the canvas ended there: each pixel
+    /// is worked out by itself, so those inside come out as they would
+    /// have. For painting one rectangle of a larger picture: a box that
+    /// reaches it is filled there, not whole.
+    pub fn set_window(&mut self, window: Option<(u32, u32, u32, u32)>) {
+        self.window = window;
+    }
+
+    /// The [`set_window`](Self::set_window) window (for the UI's painter).
+    #[cfg(feature = "ui")]
+    pub(crate) fn window(&self) -> Option<(u32, u32, u32, u32)> {
+        self.window
+    }
+
+    /// The [`set_window`](Self::set_window) window, or the whole canvas.
+    #[cfg(feature = "ui")]
+    pub(crate) fn window_or_all(&self) -> (u32, u32, u32, u32) {
+        self.windowed((0, 0, self.width, self.height))
+    }
+
+    /// Trades text painters (their fonts, and the glyphs drawn so far) with
+    /// `other`: for a canvas made for a moment, whose text would else start
+    /// from nothing.
+    #[cfg(all(feature = "captions", feature = "ui"))]
+    pub(crate) fn swap_text(&mut self, other: &mut Self) {
+        std::mem::swap(&mut self.painter, &mut other.painter);
+        std::mem::swap(&mut self.other_weights, &mut other.other_weights);
+        std::mem::swap(&mut self.text_weight, &mut other.text_weight);
+        std::mem::swap(&mut self.text_italic, &mut other.text_italic);
+    }
+
+    /// The pixel span `lo..hi` across and down, cut to the window.
+    fn windowed(&self, (lo_x, lo_y, hi_x, hi_y): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
+        match self.window {
+            Some((x0, y0, x1, y1)) => (lo_x.max(x0), lo_y.max(y0), hi_x.min(x1), hi_y.min(y1)),
+            None => (lo_x, lo_y, hi_x, hi_y),
         }
     }
 
@@ -363,6 +496,10 @@ impl Overlay {
             self.pixels[a * stride..b * stride].fill(0);
         }
         self.touched = false;
+        // (their columns not kept: the whole width)
+        if !self.content.0.is_empty() {
+            self.dirty_cols = (0, self.width);
+        }
         // Rows that had ink have none now. The CPU buffer knows; the texture
         // does not, so they stay dirty until something uploads the zeroes.
         //
@@ -408,16 +545,30 @@ impl Overlay {
     /// Say that the texture now matches the buffer.
     pub fn mark_uploaded(&mut self) {
         self.dirty = Bands::default();
+        self.dirty_cols = (u32::MAX, 0);
+    }
+
+    /// The columns the [`dirty_bands`](Self::dirty_bands) differ in, `x0..x1`
+    /// (the whole width when not known).
+    pub fn dirty_columns(&self) -> (u32, u32) {
+        let (a, b) = (self.dirty_cols.0.min(self.width), self.dirty_cols.1.min(self.width));
+        if a < b { (a, b) } else { (0, self.width) }
     }
 
     /// Record that `y0..y1` was drawn on: outstanding for the texture, and part
     /// of this frame's ink.
     fn mark_rows(&mut self, y0: u32, y1: u32) {
-        if y0 >= y1 {
+        self.mark_rect(0, self.width, y0, y1);
+    }
+
+    /// [`mark_rows`](Self::mark_rows), the columns `x0..x1` alone changed.
+    fn mark_rect(&mut self, x0: u32, x1: u32, y0: u32, y1: u32) {
+        if y0 >= y1 || x0 >= x1 {
             return;
         }
         self.dirty.add(y0, y1);
         self.content.add(y0, y1);
+        self.dirty_cols = (self.dirty_cols.0.min(x0), self.dirty_cols.1.max(x1));
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -463,7 +614,34 @@ impl Overlay {
             self.pixels[dst..dst + row].copy_from_slice(&rgba[src..src + row]);
         }
         self.touched = true;
-        self.mark_rows(y0 as u32, y1 as u32);
+        self.mark_rect(x0 as u32, x1 as u32, y0 as u32, y1 as u32);
+    }
+
+    /// Move the `width × height` pixels at `(sx, sy)` to `(dx, dy)` in
+    /// place (the source and destination may overlap), as a canvas's
+    /// `drawImage` of itself: a terminal scrolled by a line moves what it
+    /// has and paints the new line alone. Clipped to the canvas (both ends).
+    pub fn copy_rect(&mut self, sx: i32, sy: i32, width: u32, height: u32, dx: i32, dy: i32) {
+        let (cw, ch) = (self.width as i32, self.height as i32);
+        // what of the rect lies on the canvas at both ends
+        let left = (-sx).max(-dx).max(0);
+        let top = (-sy).max(-dy).max(0);
+        let right = (width as i32).min(cw - sx).min(cw - dx);
+        let bottom = (height as i32).min(ch - sy).min(ch - dy);
+        if left >= right || top >= bottom {
+            return;
+        }
+        let row = (right - left) as usize * 4;
+        let at = |x: i32, y: i32| (y as usize * self.width as usize + x as usize) * 4;
+        // bottom up when moving down, so no row is read after it's written
+        let rows: Box<dyn Iterator<Item = i32>> =
+            if dy > sy { Box::new((top..bottom).rev()) } else { Box::new(top..bottom) };
+        for r in rows {
+            let from = at(sx + left, sy + r);
+            self.pixels.copy_within(from..from + row, at(dx + left, dy + r));
+        }
+        self.touched = true;
+        self.mark_rect((dx + left) as u32, (dx + right) as u32, (dy + top) as u32, (dy + bottom) as u32);
     }
 
     /// Whether anything has been drawn since the last [`Overlay::clear`].
@@ -508,7 +686,7 @@ impl Overlay {
 
     /// Draw text in `font` from now on, instead of the UI face
     /// ([`CaptionFont::ui`](crate::captions::CaptionFont::ui): SF Compact on
-    /// macOS, the bitmap face elsewhere).
+    /// macOS, SF Pro on iOS, the bitmap face elsewhere).
     #[cfg(feature = "captions")]
     pub fn set_font(&mut self, font: crate::captions::CaptionFont) {
         self.painter = Some(crate::captions::CaptionPainter::with_font(font));
@@ -528,6 +706,19 @@ impl Overlay {
     pub fn text_weight(&mut self, weight: u16) -> bool {
         self.text_weight = weight.clamp(1, 1000);
         self.apply_text_style()
+    }
+
+    /// Take text's optical sizes in points, `scale` pixels each; see
+    /// [`CaptionFont::set_optical_scale`](crate::captions::CaptionFont::set_optical_scale).
+    #[cfg(feature = "captions")]
+    pub fn text_optical_scale(&mut self, scale: f32) {
+        let painter = self
+            .painter
+            .get_or_insert_with(crate::captions::CaptionPainter::new);
+        painter.font.set_optical_scale(scale);
+        for f in self.other_weights.values_mut() {
+            f.set_optical_scale(scale);
+        }
     }
 
     /// Italic text from now on, or upright: the family's italic where it
@@ -570,6 +761,23 @@ impl Overlay {
         self.text_size = pixels.max(1.0);
     }
 
+    /// Mix see-through colours in `space` from now on: linear light (the
+    /// default) or the encoded values, as CSS does.
+    pub fn set_blend_space(&mut self, space: BlendSpace) {
+        self.blend = space;
+    }
+
+    /// Where see-through colours mix.
+    pub fn blend_space(&self) -> BlendSpace {
+        self.blend
+    }
+
+    /// Pixels between characters for text from now on (CSS's
+    /// `letter-spacing`; 0, the font's own spacing).
+    pub fn text_letter_spacing(&mut self, pixels: f32) {
+        self.text_letter_spacing = pixels;
+    }
+
     /// An image — `image_width × image_height` RGBA8, sRGB-encoded, straight
     /// alpha — scaled to the rectangle at `(x, y)`, `width × height`, at
     /// `alpha`, and drawn only inside `clip` (`x0, y0, x1, y1`) when given.
@@ -592,6 +800,27 @@ impl Overlay {
         alpha: f32,
         clip: Option<(f32, f32, f32, f32)>,
     ) {
+        self.image_from(x, y, width, height, rgba, image_width, image_height, alpha, clip, None);
+    }
+
+    /// [`image`](Self::image), its inside copied from `kept` where that's
+    /// given: the same opaque image drawn to this size at this fraction of a
+    /// pixel (`Overlay::image` on its own canvas), and where on this one the
+    /// canvas's corner is.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn image_from(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        rgba: &[u8],
+        image_width: u32,
+        image_height: u32,
+        alpha: f32,
+        clip: Option<(f32, f32, f32, f32)>,
+        kept: Option<(&Overlay, i32, i32)>,
+    ) {
         let (iw, ih) = (image_width as usize, image_height as usize);
         if width <= 0.0
             || height <= 0.0
@@ -612,7 +841,8 @@ impl Overlay {
         if x1 <= x0 || y1 <= y0 {
             return;
         }
-        let table = srgb_decode_table();
+        let space = self.blend;
+        let table = decode_table(space);
         // A texel, decoded and premultiplied.
         let texel = |tx: usize, ty: usize| -> [f32; 4] {
             let i = (ty * iw + tx) * 4;
@@ -653,12 +883,95 @@ impl Overlay {
             (x1.ceil() as u32 + 1).min(self.width),
         );
         self.mark_rows(py0, py1);
+        // Wholly covered and opaque, nothing under it shows: its pixels are
+        // written, not mixed, a large one's by several threads. (A picture
+        // zoomed with the fingers is drawn whole at each step.)
+        let (ix0, iy0) = ((x0 + 1.5).ceil() as u32, (y0 + 1.5).ceil() as u32);
+        let (ix1, iy1) = ((x1 - 1.5).floor().max(0.0) as u32, (y1 - 1.5).floor().max(0.0) as u32);
+        let solid = alpha >= 1.0
+            && ix1 > ix0
+            && iy1 > iy0
+            && (kept.is_some() || rgba[..iw * ih * 4].chunks_exact(4).all(|p| p[3] == 255));
+        let kept = kept.filter(|(k, kx, ky)| {
+            ix0 as i32 >= *kx && iy0 as i32 >= *ky && ix1 as i32 - kx <= k.width as i32 && iy1 as i32 - ky <= k.height as i32
+        });
+        if let (true, Some((k, kx, ky))) = (solid, kept) {
+            let (stride, n) = (self.width as usize * 4, (ix1 - ix0) as usize * 4);
+            for py in iy0..iy1 {
+                let from = ((py as i32 - ky) as usize * k.width as usize + (ix0 as i32 - kx) as usize) * 4;
+                let to = py as usize * stride + ix0 as usize * 4;
+                self.pixels[to..to + n].copy_from_slice(&k.pixels[from..from + n]);
+            }
+            self.touched = true;
+        } else if solid {
+            // Where each column's samples are: the same in every row.
+            let cols: Vec<(usize, usize, f32)> = (ix0..ix1)
+                .map(|px| {
+                    let u = ((px as f32 + 0.5 - x) / width * iw as f32 - 0.5).clamp(0.0, (iw - 1) as f32);
+                    let t = u.floor() as usize;
+                    (t * 4, (t + 1).min(iw - 1) * 4, u - u.floor())
+                })
+                .collect();
+            let encode = |v: f32| encode_in(space, v);
+            let row = |py: u32, out: &mut [u8]| {
+                let v = ((py as f32 + 0.5 - y) / height * ih as f32 - 0.5).clamp(0.0, (ih - 1) as f32);
+                let (ty0, fy) = (v.floor() as usize, v - v.floor());
+                let ty1 = (ty0 + 1).min(ih - 1);
+                let (r0, r1) = (&rgba[ty0 * iw * 4..][..iw * 4], &rgba[ty1 * iw * 4..][..iw * 4]);
+                for (dst, &(i0, i1, fx)) in out.chunks_exact_mut(4).zip(&cols) {
+                    for k in 0..3 {
+                        let (a, b) = (table[r0[i0 + k] as usize], table[r0[i1 + k] as usize]);
+                        let (c, d) = (table[r1[i0 + k] as usize], table[r1[i1 + k] as usize]);
+                        let top = a + (b - a) * fx;
+                        let bottom = c + (d - c) * fx;
+                        dst[k] = encode(top + (bottom - top) * fy);
+                    }
+                    dst[3] = 255;
+                }
+            };
+            let stride = self.width as usize * 4;
+            let (from, to) = (ix0 as usize * 4, ix1 as usize * 4);
+            let rows = (iy1 - iy0) as usize;
+            let body = &mut self.pixels[iy0 as usize * stride..iy1 as usize * stride];
+            let most = if cfg!(target_arch = "wasm32") || rows * cols.len() < 200_000 {
+                1
+            } else {
+                std::thread::available_parallelism().map_or(1, |n| n.get()).min(4)
+            };
+            let each = rows.div_ceil(most);
+            if most <= 1 {
+                for (k, r) in body.chunks_exact_mut(stride).enumerate() {
+                    row(iy0 + k as u32, &mut r[from..to]);
+                }
+            } else {
+                std::thread::scope(|s| {
+                    for (n, part) in body.chunks_mut(each * stride).enumerate() {
+                        let row = &row;
+                        s.spawn(move || {
+                            for (k, r) in part.chunks_exact_mut(stride).enumerate() {
+                                row(iy0 + (n * each + k) as u32, &mut r[from..to]);
+                            }
+                        });
+                    }
+                });
+            }
+            self.touched = true;
+        }
         for py in py0..py1 {
             // Texel coordinates of this row's pixel centres.
             let v = ((py as f32 + 0.5 - y) / height * ih as f32 - 0.5).clamp(0.0, (ih - 1) as f32);
             let (ty0, fy) = (v.floor() as usize, v - v.floor());
             let ty1 = (ty0 + 1).min(ih - 1);
-            for px in px0..px1 {
+            let inner = solid && py >= iy0 && py < iy1;
+            let mut next = px0;
+            while next < px1 {
+                let px = next;
+                next += 1;
+                // (those above: done)
+                if inner && px == ix0 {
+                    next = ix1;
+                    continue;
+                }
                 let cover = coverage(px as f32 + 0.5, py as f32 + 0.5);
                 if cover <= 0.0 {
                     continue;
@@ -696,7 +1009,8 @@ impl Overlay {
                 let out_a = src_a + da * (1.0 - src_a);
                 for k in 0..3 {
                     let under = table[dst[k] as usize];
-                    dst[k] = srgb_encode((lin[k] * src_a + under * da * (1.0 - src_a)) / out_a);
+                    dst[k] =
+                        encode_in(space, (lin[k] * src_a + under * da * (1.0 - src_a)) / out_a);
                 }
                 dst[3] = (out_a * 255.0 + 0.5) as u8;
                 self.touched = true;
@@ -706,7 +1020,9 @@ impl Overlay {
 
     /// Composites linear `color` at `alpha` into pixel `i` (a byte index).
     fn blend_linear(&mut self, i: usize, color: [f32; 3], alpha: f32) {
-        let table = srgb_decode_table();
+        let space = self.blend;
+        let table = decode_table(space);
+        let color = colour_in(space, color);
         let dst = &mut self.pixels[i..i + 4];
         let da = dst[3] as f32 / 255.0;
         let out_a = alpha + da * (1.0 - alpha);
@@ -715,7 +1031,10 @@ impl Overlay {
         }
         for k in 0..3 {
             let under = table[dst[k] as usize];
-            dst[k] = srgb_encode((color[k] * alpha + under * da * (1.0 - alpha)) / out_a);
+            dst[k] = encode_in(
+                space,
+                (color[k] * alpha + under * da * (1.0 - alpha)) / out_a,
+            );
         }
         dst[3] = (out_a * 255.0 + 0.5) as u8;
         self.touched = true;
@@ -730,16 +1049,33 @@ impl Overlay {
     /// blur pass, and the GPU UI pass computes the same thing. A `sigma`
     /// under half a pixel is a sharp rounded rectangle.
     pub fn shadow(&mut self, x: f32, y: f32, width: f32, height: f32, radius: f32, sigma: f32) {
+        self.shadow_around(x, y, width, height, radius, sigma, None);
+    }
+
+    /// [`shadow`](Self::shadow) with none of it in `hole`: a rounded box's
+    /// `(x, y, width, height, radius)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn shadow_around(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        radius: f32,
+        sigma: f32,
+        hole: Option<(f32, f32, f32, f32, f32)>,
+    ) {
         let Some(paint) = self.fill else { return };
         if width <= 0.0 || height <= 0.0 || paint.alpha <= 0.0 {
             return;
         }
-        if sigma < 0.5 {
+        if sigma < 0.5 && hole.is_none() {
             let stroke = self.stroke.take();
             self.rounded_rect(x, y, width, height, radius);
             self.stroke = stroke;
             return;
         }
+        let sigma = sigma.max(0.5);
         let reach = 3.0 * sigma;
         let (px0, py0) = (
             (x - reach).floor().max(0.0) as u32,
@@ -747,6 +1083,7 @@ impl Overlay {
         );
         let px1 = ((x + width + reach).ceil().max(0.0) as u32).min(self.width);
         let py1 = ((y + height + reach).ceil().max(0.0) as u32).min(self.height);
+        let (px0, py0, px1, py1) = self.windowed((px0, py0, px1, py1));
         if px0 >= px1 || py0 >= py1 {
             return;
         }
@@ -758,7 +1095,8 @@ impl Overlay {
                     (px as f32 + 0.5, py as f32 + 0.5),
                     sigma,
                     radius,
-                ) * paint.alpha;
+                ) * paint.alpha
+                    * hole.map_or(1.0, |h| 1.0 - rounded_cover(h, (px as f32 + 0.5, py as f32 + 0.5)));
                 if a > 1.0 / 512.0 {
                     let i = (py as usize * self.width as usize + px as usize) * 4;
                     self.blend_linear(i, paint.linear, a);
@@ -812,6 +1150,7 @@ impl Overlay {
         let r = radius.clamp(0.0, hx.abs().min(hy.abs()));
         let half = Vector2::new(hx.abs(), hy.abs());
         let sdf = move |px: f32, py: f32| d2::round_rect(Vector2::new(px - cx, py - cy), half, r);
+        self.fill_inside(cx - hx.abs(), cy - hy.abs(), cx + hx.abs(), cy + hy.abs(), r);
         self.shape(
             cx - hx.abs(),
             cy - hy.abs(),
@@ -984,10 +1323,74 @@ impl Overlay {
             x1 = x1.max(p.x);
             y1 = y1.max(p.y);
         }
+        if points.len() >= 48 {
+            return self.polygon_of_many(points, (x0, y0, x1, y1));
+        }
         // Borrowed, not copied into the closure: `shape` does not outlive this
         // call, and a `move` here was an allocation per polygon per frame.
         self.shape(x0, y0, x1, y1, |px, py| {
             d2::polygon(Vector2::new(px, py), points)
+        });
+    }
+
+    /// [`polygon`](Self::polygon) with many edges (a chart's area): each
+    /// pixel measures only the edges near it, filed by tile as
+    /// [`polyline`](Self::polyline)'s are, and is in or out by the crossings
+    /// of its row, found once. Far from any edge the distance is just "far".
+    fn polygon_of_many(&mut self, points: &[Vector2], (x0, y0, x1, y1): (f32, f32, f32, f32)) {
+        const TILE: f32 = 8.0;
+        let half = if self.stroke.is_some() { self.stroke_weight * 0.5 } else { 0.0 };
+        let n = points.len();
+        // (no less than a tile across, so one sample settles a whole tile)
+        let pad = half + 8.0;
+        let (gx, gy) = (x0 - pad, y0 - pad);
+        let cols = ((x1 - x0 + 2.0 * pad) / TILE) as usize + 1;
+        let rows = ((y1 - y0 + 2.0 * pad) / TILE) as usize + 1;
+        let mut tiles: Vec<Vec<u32>> = vec![Vec::new(); cols * rows];
+        let tile = |v: f32, origin: f32, most: usize| (((v - origin) / TILE).max(0.0) as usize).min(most - 1);
+        for i in 0..n {
+            let (a, b) = (points[i], points[(i + 1) % n]);
+            let (c0, c1) = (tile(a.x.min(b.x) - pad, gx, cols), tile(a.x.max(b.x) + pad, gx, cols));
+            let (r0, r1) = (tile(a.y.min(b.y) - pad, gy, rows), tile(a.y.max(b.y) + pad, gy, rows));
+            for r in r0..=r1 {
+                for c in c0..=c1 {
+                    tiles[r * cols + c].push(i as u32);
+                }
+            }
+        }
+        // Where a row is crossed, left to right: found once for each height
+        // measured at, the pixels' middles and half way between them.
+        let crossed = |py: f32| {
+            let mut at: Vec<f32> = (0..n)
+                .filter_map(|i| {
+                    let (a, b) = (points[i], points[(i + 1) % n]);
+                    ((a.y > py) != (b.y > py)).then(|| a.x + (py - a.y) / (b.y - a.y) * (b.x - a.x))
+                })
+                .collect();
+            at.sort_by(f32::total_cmp);
+            at
+        };
+        let (_, top, _, bottom) = self.windowed((0, 0, self.width, self.height));
+        let first = ((y0 - pad).max(top as f32) * 2.0) as usize;
+        let last = ((y1 + pad).min(bottom as f32).max(0.0) * 2.0) as usize + 1;
+        let crossings: Vec<Vec<f32>> = (first..=last).map(|k| crossed(k as f32 * 0.5)).collect();
+        let inside = |px: f32, py: f32| {
+            let odd = |at: &[f32]| at.partition_point(|x| *x <= px) % 2 == 1;
+            match crossings.get(((py * 2.0) as usize).wrapping_sub(first)) {
+                Some(at) => odd(at),
+                None => odd(&crossed(py)),
+            }
+        };
+        self.shape_wide(x0, y0, x1, y1, |px, py| {
+            let (c, r) = ((px - gx) / TILE, (py - gy) / TILE);
+            let mut d = pad;
+            if c >= 0.0 && r >= 0.0 && c < cols as f32 && r < rows as f32 {
+                let p = Vector2::new(px, py);
+                for &i in &tiles[r as usize * cols + c as usize] {
+                    d = d.min(d2::segment(p, points[i as usize], points[(i as usize + 1) % n]));
+                }
+            }
+            if inside(px, py) { -d } else { d }
         });
     }
 
@@ -1259,8 +1662,7 @@ impl Overlay {
             .painter
             .get_or_insert_with(crate::captions::CaptionPainter::new);
         painter.set_style(style);
-        let laid = painter.measure(text, 1 << 24);
-        (laid.width, laid.height)
+        painter.measure_size(text, 1 << 24)
     }
 
     /// The current fill, stroke and type size as a caption style. Text with no
@@ -1292,6 +1694,7 @@ impl Overlay {
             },
             padding: 0.0,
             margin: 0.0,
+            letter_spacing: self.text_letter_spacing,
             ..Default::default()
         }
     }
@@ -1333,6 +1736,52 @@ impl Overlay {
         });
     }
 
+    /// [`shape`](Self::shape) of a field dear to measure: see
+    /// [`paint_wide`](Self::paint_wide).
+    fn shape_wide<F>(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, sdf: F)
+    where
+        F: Fn(f32, f32) -> f32 + Sync,
+    {
+        if let Some(paint) = self.fill {
+            self.paint_wide(x0 - 1.0, y0 - 1.0, x1 + 1.0, y1 + 1.0, &paint, |px, py| {
+                (sdf(px, py), f32::INFINITY)
+            });
+        }
+        if let Some(paint) = self.stroke {
+            let half = self.stroke_weight * 0.5;
+            let pad = half + 1.0;
+            self.paint_wide(x0 - pad, y0 - pad, x1 + pad, y1 + pad, &paint, |px, py| {
+                (sdf(px, py).abs() - half, half)
+            });
+        }
+    }
+
+    /// The inside of a rectangle with corners of radius `r`, between its
+    /// corners' rows, a pixel and more from its edges: where an opaque fill
+    /// covers wholly, written a row at a time (a panel of a window is most of
+    /// what a UI paints). What's filled so the next `paint` passes over.
+    fn fill_inside(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, r: f32) {
+        let Some(paint) = self.fill.filter(|p| p.alpha >= 1.0) else { return };
+        let up = |v: f32| v.ceil().max(0.0) as u32;
+        let down = |v: f32| v.floor().max(0.0) as u32;
+        let (ix0, iy0) = (up(x0 + 1.0), up(y0 + r + 1.0));
+        let (ix1, iy1) = (down(x1 - 1.0).min(self.width), down(y1 - r - 1.0).min(self.height));
+        let (ix0, iy0, ix1, iy1) = self.windowed((ix0, iy0, ix1, iy1));
+        // (a small one's tiles cost as little)
+        if ix1 <= ix0 + 64 || iy1 <= iy0 + 16 {
+            return;
+        }
+        let px = [paint.encoded[0], paint.encoded[1], paint.encoded[2], 255];
+        self.mark_rows(iy0, iy1);
+        for py in iy0..iy1 {
+            let row = (py as usize * self.width as usize + ix0 as usize) * 4;
+            let (pixels, _) = self.pixels[row..row + (ix1 - ix0) as usize * 4].as_chunks_mut::<4>();
+            pixels.fill(px);
+        }
+        self.touched = true;
+        self.filled = Some((ix0, iy0, ix1, iy1));
+    }
+
     /// Rasterise one field over a bounding box.
     ///
     /// `field` gives, at a pixel centre, the distance outside the shape's edge
@@ -1346,143 +1795,77 @@ impl Overlay {
     where
         F: Fn(f32, f32) -> (f32, f32),
     {
-        if paint.alpha <= 0.0 {
+        let Some((filled, b)) = self.painted(x0, y0, x1, y1, paint) else {
             return;
+        };
+        let (space, width) = (self.blend, self.width as usize);
+        let rows = &mut self.pixels[b.1 as usize * width * 4..b.3 as usize * width * 4];
+        self.touched |= paint_band(rows, width, space, paint, filled, b, &field);
+    }
+
+    /// [`paint`](Self::paint) of a field dear to measure, over the cores when
+    /// it is large (`parallel`). The bands are whole tiles, so the picture is
+    /// the same to the byte.
+    fn paint_wide<F>(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, paint: &Paint, field: F)
+    where
+        F: Fn(f32, f32) -> (f32, f32) + Sync,
+    {
+        #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+        {
+            use rayon::prelude::*;
+            /// Rows in a band (tiles are 8), and the pixels worth splitting.
+            const BAND_ROWS: u32 = 32;
+            const WORTH: u32 = 40_000;
+            let Some((filled, b)) = self.painted(x0, y0, x1, y1, paint) else {
+                return;
+            };
+            let (space, width) = (self.blend, self.width as usize);
+            let rows = &mut self.pixels[b.1 as usize * width * 4..b.3 as usize * width * 4];
+            self.touched |= if (b.2 - b.0) * (b.3 - b.1) < WORTH {
+                paint_band(rows, width, space, paint, filled, b, &field)
+            } else {
+                rows.par_chunks_mut(BAND_ROWS as usize * width * 4)
+                    .enumerate()
+                    .map(|(i, rows)| {
+                        let y = b.1 + i as u32 * BAND_ROWS;
+                        let band = (b.0, y, b.2, (y + BAND_ROWS).min(b.3));
+                        paint_band(rows, width, space, paint, filled, band, &field)
+                    })
+                    .reduce(|| false, |a, b| a | b)
+            };
+        }
+        #[cfg(not(all(feature = "parallel", not(target_arch = "wasm32"))))]
+        self.paint(x0, y0, x1, y1, paint, field);
+    }
+
+    /// What painting in a box starts with: the part `fill_inside` has done and
+    /// the pixels to walk, which are marked; nothing if there are none.
+    #[allow(clippy::type_complexity)]
+    fn painted(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        paint: &Paint,
+    ) -> Option<(Option<(u32, u32, u32, u32)>, (u32, u32, u32, u32))> {
+        let filled = self.filled.take();
+        if paint.alpha <= 0.0 {
+            return None;
         }
         let lo_x = x0.floor().max(0.0) as u32;
         let lo_y = y0.floor().max(0.0) as u32;
         let hi_x = (x1.ceil().max(0.0) as u32 + 1).min(self.width);
         let hi_y = (y1.ceil().max(0.0) as u32 + 1).min(self.height);
+        let (lo_x, lo_y, hi_x, hi_y) = self.windowed((lo_x, lo_y, hi_x, hi_y));
         if lo_x >= hi_x || lo_y >= hi_y {
-            return;
+            return None;
         }
         // Once per primitive, from its bounding box, rather than per pixel in
         // the loop below. Conservative by at most a row of coverage either side
         // of the shape, which is a row of upload and not a wrong picture.
         self.mark_rows(lo_y, hi_y);
-        let table = srgb_decode_table();
-        // How far either side of an edge a pixel can be partly covered: half
-        // the widest footprint a pixel has across an edge, at 45 degrees.
-        const BAND: f32 = std::f32::consts::FRAC_1_SQRT_2;
-        let outer = |px: f32, py: f32| field(px, py).0;
-        // Walked in tiles so whole tiles can be settled from one evaluation.
-        // A signed distance field is 1-Lipschitz — moving a pixel changes it by
-        // at most a pixel — so if the centre of a tile is further than the
-        // tile's own radius from the edge, every sample in it is on the same
-        // side and none of them needs evaluating. Coverage ramps over
-        // `d` in `-BAND..BAND`, so that is the margin to clear.
-        //
-        // This is most of the cost of a large shape. `polygon` measures the
-        // distance to every edge at every pixel, and a Voronoi cell covering an
-        // eighth of a 1000x640 view is 80,000 pixels of which perhaps 3,000 are
-        // near an edge. Eight such cells, filled and stroked, with the Delaunay
-        // edges over the top: 96 ms a frame before tiling, 5 ms after. A
-        // read-out and a gradient legend — which is what most frames draw — is
-        // 183 us either way, so this costs nothing in the common case.
-        const TILE: u32 = 8;
-        for ty in (lo_y..hi_y).step_by(TILE as usize) {
-            let ty1 = (ty + TILE).min(hi_y);
-            for tx in (lo_x..hi_x).step_by(TILE as usize) {
-                let tx1 = (tx + TILE).min(hi_x);
-                // Furthest a sample centre in this tile can be from its middle.
-                // The tile may be clipped, so this is measured and not assumed.
-                let rx = (tx1 - tx) as f32 * 0.5 - 0.5;
-                let ry = (ty1 - ty) as f32 * 0.5 - 0.5;
-                let radius = (rx * rx + ry * ry).sqrt();
-                let middle = outer((tx + tx1) as f32 * 0.5, (ty + ty1) as f32 * 0.5);
-                if middle - radius >= BAND {
-                    continue; // wholly outside
-                }
-                // Wholly inside, so every sample is fully covered and the
-                // field never has to be asked again. A stroke thinner than
-                // the band never gets here: its outer distance is at least
-                // minus its half-width.
-                let solid = middle + radius <= -BAND;
-
-                // Opaque over anything: every pixel of a solid tile becomes the
-                // paint's own encoded colour, whatever was under it, so the
-                // blend (two transfer functions a channel) can be skipped and
-                // the tile written as rows of one colour. Panels painted over
-                // panels — the common case in a UI — are mostly this.
-                if solid && paint.alpha >= 1.0 {
-                    let px = [paint.encoded[0], paint.encoded[1], paint.encoded[2], 255];
-                    for py in ty..ty1 {
-                        let row = (py as usize * self.width as usize + tx as usize) * 4;
-                        for dst in self.pixels[row..row + (tx1 - tx) as usize * 4].chunks_exact_mut(4) {
-                            dst.copy_from_slice(&px);
-                        }
-                    }
-                    self.touched = true;
-                    continue;
-                }
-
-                for py in ty..ty1 {
-                    let row = py as usize * self.width as usize;
-                    for px in tx..tx1 {
-                        let alpha = if solid {
-                            paint.alpha
-                        } else {
-                            let (cx, cy) = (px as f32 + 0.5, py as f32 + 0.5);
-                            let (d, half) = field(cx, cy);
-                            let coverage = if d >= BAND {
-                                0.0
-                            } else if d <= -BAND {
-                                1.0
-                            } else {
-                                // In the band: how wide the pixel is across the
-                                // edge here sets how wide the ramp is. Forward
-                                // differences for an edge. A stroke's distance is
-                                // folded about its centre line, and a step across
-                                // that crease shortens the difference on its
-                                // axis — so per axis the larger of the forward
-                                // and backward one, which a crease cannot shorten
-                                // both of.
-                                let e = 0.5;
-                                let mut gx = (outer(cx + e, cy) - d) / e;
-                                let mut gy = (outer(cx, cy + e) - d) / e;
-                                if half.is_finite() {
-                                    gx = gx.abs().max(((d - outer(cx - e, cy)) / e).abs());
-                                    gy = gy.abs().max(((d - outer(cx, cy - e)) / e).abs());
-                                }
-                                let w = sdf::footprint(Vector2::new(gx, gy));
-                                if half.is_finite() {
-                                    sdf::coverage_stroke(d + half, half, w)
-                                } else {
-                                    sdf::coverage_edge(d, w)
-                                }
-                            };
-                            if coverage <= 0.0 {
-                                continue;
-                            }
-                            paint.alpha * coverage
-                        };
-                        let i = (row + px as usize) * 4;
-                        let dst = &mut self.pixels[i..i + 4];
-                        let da = dst[3] as f32 / 255.0;
-                        if da <= 0.0 {
-                            // Nothing underneath, so there is nothing to mix
-                            // with and the encoded colour goes straight down.
-                            // The common case on a cleared canvas, and it skips
-                            // both transfer functions.
-                            dst[0] = paint.encoded[0];
-                            dst[1] = paint.encoded[1];
-                            dst[2] = paint.encoded[2];
-                            dst[3] = (alpha * 255.0 + 0.5) as u8;
-                        } else {
-                            let out_a = alpha + da * (1.0 - alpha);
-                            for c in 0..3 {
-                                let under = table[dst[c] as usize];
-                                let mixed =
-                                    (paint.linear[c] * alpha + under * da * (1.0 - alpha)) / out_a;
-                                dst[c] = srgb_encode(mixed);
-                            }
-                            dst[3] = (out_a * 255.0 + 0.5) as u8;
-                        }
-                        self.touched = true;
-                    }
-                }
-            }
-        }
+        Some((filled, (lo_x, lo_y, hi_x, hi_y)))
     }
 }
 
@@ -1525,8 +1908,201 @@ impl Bands {
     }
 }
 
+/// What [`Overlay::paint`] paints, of one band of rows: `pixels` are whole rows
+/// of `width` from `lo_y`. Whether it put anything down.
+#[allow(clippy::too_many_arguments)]
+fn paint_band<F>(
+    pixels: &mut [u8],
+    width: usize,
+    space: BlendSpace,
+    paint: &Paint,
+    filled: Option<(u32, u32, u32, u32)>,
+    (lo_x, lo_y, hi_x, hi_y): (u32, u32, u32, u32),
+    field: &F,
+) -> bool
+where
+    F: Fn(f32, f32) -> (f32, f32),
+{
+    let mut touched = false;
+    let table = decode_table(space);
+    let colour = colour_in(space, paint.linear);
+    // How far either side of an edge a pixel can be partly covered: half
+    // the widest footprint a pixel has across an edge, at 45 degrees.
+    const BAND: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    let outer = |px: f32, py: f32| field(px, py).0;
+    // Walked in tiles so whole tiles can be settled from one evaluation.
+    // A signed distance field is 1-Lipschitz — moving a pixel changes it by
+    // at most a pixel — so if the centre of a tile is further than the
+    // tile's own radius from the edge, every sample in it is on the same
+    // side and none of them needs evaluating. Coverage ramps over
+    // `d` in `-BAND..BAND`, so that is the margin to clear.
+    //
+    // This is most of the cost of a large shape. `polygon` measures the
+    // distance to every edge at every pixel, and a Voronoi cell covering an
+    // eighth of a 1000x640 view is 80,000 pixels of which perhaps 3,000 are
+    // near an edge. Eight such cells, filled and stroked, with the Delaunay
+    // edges over the top: 96 ms a frame before tiling, 5 ms after. A
+    // read-out and a gradient legend — which is what most frames draw — is
+    // 183 us either way, so this costs nothing in the common case.
+    const TILE: u32 = 8;
+    for ty in (lo_y..hi_y).step_by(TILE as usize) {
+        let ty1 = (ty + TILE).min(hi_y);
+        for tx in (lo_x..hi_x).step_by(TILE as usize) {
+            let tx1 = (tx + TILE).min(hi_x);
+            if filled.is_some_and(|(x0, y0, x1, y1)| tx >= x0 && tx1 <= x1 && ty >= y0 && ty1 <= y1) {
+                continue; // done (`fill_inside`)
+            }
+            // Furthest a sample centre in this tile can be from its middle.
+            // The tile may be clipped, so this is measured and not assumed.
+            let rx = (tx1 - tx) as f32 * 0.5 - 0.5;
+            let ry = (ty1 - ty) as f32 * 0.5 - 0.5;
+            let radius = (rx * rx + ry * ry).sqrt();
+            let middle = outer((tx + tx1) as f32 * 0.5, (ty + ty1) as f32 * 0.5);
+            if middle - radius >= BAND {
+                continue; // wholly outside
+            }
+            // Wholly inside, so every sample is fully covered and the
+            // field never has to be asked again. A stroke thinner than
+            // the band never gets here: its outer distance is at least
+            // minus its half-width.
+            let solid = middle + radius <= -BAND;
+
+            // Opaque over anything: every pixel of a solid tile becomes the
+            // paint's own encoded colour, whatever was under it, so the
+            // blend (two transfer functions a channel) can be skipped and
+            // the tile written as rows of one colour. Panels painted over
+            // panels — the common case in a UI — are mostly this.
+            if solid && paint.alpha >= 1.0 {
+                let px = [paint.encoded[0], paint.encoded[1], paint.encoded[2], 255];
+                for py in ty..ty1 {
+                    let row = ((py - lo_y) as usize * width + tx as usize) * 4;
+                    let (run, _) = pixels[row..row + (tx1 - tx) as usize * 4].as_chunks_mut::<4>();
+                    run.fill(px);
+                }
+                touched = true;
+                continue;
+            }
+
+            for py in ty..ty1 {
+                let row = (py - lo_y) as usize * width;
+                for px in tx..tx1 {
+                    let alpha = if solid {
+                        paint.alpha
+                    } else {
+                        let (cx, cy) = (px as f32 + 0.5, py as f32 + 0.5);
+                        let (d, half) = field(cx, cy);
+                        let coverage = if d >= BAND {
+                            0.0
+                        } else if d <= -BAND {
+                            1.0
+                        } else {
+                            // In the band: how wide the pixel is across the
+                            // edge here sets how wide the ramp is. Forward
+                            // differences for an edge. A stroke's distance is
+                            // folded about its centre line, and a step across
+                            // that crease shortens the difference on its
+                            // axis — so per axis the larger of the forward
+                            // and backward one, which a crease cannot shorten
+                            // both of.
+                            let e = 0.5;
+                            let mut gx = (outer(cx + e, cy) - d) / e;
+                            let mut gy = (outer(cx, cy + e) - d) / e;
+                            if half.is_finite() {
+                                gx = gx.abs().max(((d - outer(cx - e, cy)) / e).abs());
+                                gy = gy.abs().max(((d - outer(cx, cy - e)) / e).abs());
+                            }
+                            let w = sdf::footprint(Vector2::new(gx, gy));
+                            if half.is_finite() {
+                                sdf::coverage_stroke(d + half, half, w)
+                            } else {
+                                sdf::coverage_edge(d, w)
+                            }
+                        };
+                        if coverage <= 0.0 {
+                            continue;
+                        }
+                        paint.alpha * coverage
+                    };
+                    let i = (row + px as usize) * 4;
+                    let dst = &mut pixels[i..i + 4];
+                    let da = dst[3] as f32 / 255.0;
+                    if da <= 0.0 {
+                        // Nothing underneath, so there is nothing to mix
+                        // with and the encoded colour goes straight down.
+                        // The common case on a cleared canvas, and it skips
+                        // both transfer functions.
+                        dst[0] = paint.encoded[0];
+                        dst[1] = paint.encoded[1];
+                        dst[2] = paint.encoded[2];
+                        dst[3] = (alpha * 255.0 + 0.5) as u8;
+                    } else {
+                        let out_a = alpha + da * (1.0 - alpha);
+                        for c in 0..3 {
+                            let under = table[dst[c] as usize];
+                            let mixed = (colour[c] * alpha + under * da * (1.0 - alpha)) / out_a;
+                            dst[c] = encode_in(space, mixed);
+                        }
+                        dst[3] = (out_a * 255.0 + 0.5) as u8;
+                    }
+                    touched = true;
+                }
+            }
+        }
+    }
+    touched
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// A panel filled a row at a time is the one its field paints.
+    #[test]
+    fn a_rounded_rect_filled_inside_is_the_same_picture() {
+        for (x, y, w, h, r) in [(10.0, 10.0, 300.0, 200.0, 12.0), (3.4, 7.7, 211.3, 120.6, 20.0), (-20.0, -15.0, 400.0, 300.0, 0.0), (5.5, 5.5, 90.0, 30.0, 15.0)] {
+            for stroke in [false, true] {
+                let blank = || {
+                    let mut a = Overlay::new(320, 240);
+                    a.fill(Color::from_srgb([0.2, 0.4, 0.7]));
+                    if stroke {
+                        a.stroke(Color::WHITE);
+                        a.stroke_weight(6.0);
+                    } else {
+                        a.no_stroke();
+                    }
+                    a
+                };
+                let (mut a, mut b) = (blank(), blank());
+                a.rounded_rect(x, y, w, h, r);
+                let (hx, hy) = (w * 0.5, h * 0.5);
+                let (cx, cy) = (x + hx, y + hy);
+                let half = Vector2::new(hx, hy);
+                b.shape(x, y, x + w, y + h, |px, py| d2::round_rect(Vector2::new(px - cx, py - cy), half, r));
+                assert!(a.pixels() == b.pixels(), "{x} {y} {w} {h} {r} {stroke}");
+            }
+        }
+    }
+
+    #[test]
+    fn copy_rect_moves_pixels_in_place_and_clips() {
+        let mut o = Overlay::new(4, 4);
+        // rows coloured by their index
+        for y in 0..4u8 {
+            o.put_image_data(0, y as i32, 4, 1, &[y * 10, 0, 0, 255].repeat(4));
+        }
+        o.mark_uploaded();
+        // up a row (a terminal scrolling): rows 1..4 to 0..3
+        o.copy_rect(0, 1, 4, 3, 0, 0);
+        let red = |o: &Overlay, y: usize| o.pixels()[y * 16];
+        assert_eq!([red(&o, 0), red(&o, 1), red(&o, 2), red(&o, 3)], [10, 20, 30, 30]);
+        assert_eq!(o.dirty_rows(), Some((0, 3)));
+        // down a row, overlapping
+        o.copy_rect(0, 0, 4, 3, 0, 1);
+        assert_eq!([red(&o, 0), red(&o, 1), red(&o, 2), red(&o, 3)], [10, 10, 20, 30]);
+        // half off the canvas, either end: clipped, not a panic
+        o.copy_rect(-2, -2, 100, 100, 1, 1);
+        o.copy_rect(3, 3, 5, 5, -10, -10);
+        o.copy_rect(0, 0, 4, 4, 10, 10);
+    }
     /// An opaque fill over existing pixels takes the fast path: the same
     /// bytes the blend gives, and the edges still anti-aliased.
     #[test]
@@ -2043,6 +2619,21 @@ mod tests {
         assert!(fast.pixels().iter().any(|&p| p > 0));
     }
 
+    /// A rectangle put in (a repainted part of a UI) keeps the upload to its
+    /// columns; drawing that does not say where widens it to the whole row.
+    #[test]
+    fn put_pixels_are_uploaded_only_where_they_went() {
+        let mut o = Overlay::new(200, 100);
+        o.put_image_data(30, 10, 40, 20, &vec![255; 40 * 20 * 4]);
+        assert_eq!(o.dirty_columns(), (30, 70));
+        o.put_image_data(120, 50, 10, 10, &vec![255; 10 * 10 * 4]);
+        assert_eq!(o.dirty_columns(), (30, 130), "both, as one span");
+        o.mark_uploaded();
+        o.no_stroke();
+        o.rect(5.0, 5.0, 5.0, 5.0);
+        assert_eq!(o.dirty_columns(), (0, 200), "a shape: the whole width");
+    }
+
     /// A panel at the top and one at the bottom are two bands, and clearing
     /// zeroes their rows and nothing else.
     #[test]
@@ -2340,5 +2931,86 @@ mod tests {
         let mut blank = Overlay::new(64, 32);
         assert!(!blank.text(0.0, 0.0, "   "));
         assert!(!blank.touched());
+    }
+
+    /// Painted over the cores, a large shape is the picture one core paints,
+    /// over what was there and inside a window too.
+    #[test]
+    fn a_wide_shape_is_as_painted_by_one_core() {
+        let mut points: Vec<Vector2> = (0..200)
+            .map(|i| Vector2::new(10.0 + i as f32 * 3.0, 150.0 + 90.0 * (i as f32 * 0.21).sin()))
+            .collect();
+        points.push(Vector2::new(607.0, 390.0));
+        points.push(Vector2::new(10.0, 390.0));
+        for window in [None, Some((33, 41, 590, 377))] {
+            let draw = |wide: bool| {
+                let mut o = Overlay::new(640, 400);
+                o.fill(crate::math::Color::new(0.2, 0.4, 0.1));
+                o.rect(0.0, 0.0, 300.0, 400.0);
+                o.window = window;
+                o.fill_alpha(crate::math::Color::WHITE, 0.5);
+                o.stroke_alpha(crate::math::Color::WHITE, 0.7);
+                o.stroke_weight(3.0);
+                let field = |x: f32, y: f32| d2::polygon(Vector2::new(x, y), &points);
+                if wide {
+                    o.shape_wide(10.0, 60.0, 607.0, 390.0, field);
+                } else {
+                    o.shape(10.0, 60.0, 607.0, 390.0, field);
+                }
+                (o.pixels().to_vec(), o.touched())
+            };
+            assert!(draw(true) == draw(false), "{window:?}");
+        }
+    }
+
+    /// What painting a chart's area takes, with and without `parallel`.
+    #[test]
+    #[ignore = "a timing"]
+    fn time_of_a_chart_area() {
+        let mut points: Vec<Vector2> = (0..240)
+            .map(|i| Vector2::new(i as f32 * 8.0, 200.0 + 150.0 * (i as f32 * 0.4).sin()))
+            .collect();
+        points.push(Vector2::new(1912.0, 600.0));
+        points.push(Vector2::new(0.0, 600.0));
+        let mut o = Overlay::new(1920, 640);
+        o.no_stroke();
+        o.fill_alpha(crate::math::Color::WHITE, 0.3);
+        let mut best = f64::MAX;
+        for _ in 0..30 {
+            let t = std::time::Instant::now();
+            o.polygon(&points);
+            best = best.min(t.elapsed().as_secs_f64() * 1e3);
+        }
+        println!("chart area: {best:.2} ms");
+    }
+
+    /// A polygon of many edges is the picture measuring every edge gives.
+    #[test]
+    fn a_polygon_of_many_edges_is_as_measured_whole() {
+        let mut points: Vec<Vector2> = (0..120)
+            .map(|i| Vector2::new(8.0 + i as f32 * 1.5, 40.0 + 25.0 * ((i * 37 % 19) as f32 / 9.5 - 1.0)))
+            .collect();
+        points.push(Vector2::new(190.0, 90.0));
+        points.push(Vector2::new(8.0, 90.0));
+        for stroked in [false, true] {
+            let draw = |many: bool| {
+                let mut o = Overlay::new(200, 100);
+                o.fill_alpha(crate::math::Color::WHITE, 0.5);
+                if stroked {
+                    o.stroke_alpha(crate::math::Color::WHITE, 1.0);
+                    o.stroke_weight(3.0);
+                } else {
+                    o.no_stroke();
+                }
+                if many {
+                    o.polygon(&points);
+                } else {
+                    o.distance_field(8.0, 10.0, 190.0, 90.0, |p| d2::polygon(p, &points));
+                }
+                o.pixels().to_vec()
+            };
+            let far = draw(true).iter().zip(draw(false)).map(|(a, b)| a.abs_diff(b)).max();
+            assert!(far <= Some(1), "{stroked}: {far:?}");
+        }
     }
 }

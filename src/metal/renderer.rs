@@ -583,6 +583,12 @@ impl PassAttachments {
     pub fn reverse_z(&self) -> bool {
         self.reverse_z
     }
+
+    /// The texture that reaches the screen: the resolve target where the
+    /// colour is multisampled, else the colour. Borrowed — do not release.
+    pub fn shown(&self) -> Id {
+        if self.resolve.is_null() { self.color } else { self.resolve }
+    }
 }
 
 /// One view of a frame: a camera, and where its pixels land.
@@ -1181,8 +1187,9 @@ impl MetalRenderer {
         let (width, height) = overlay.size();
         // An empty band still composites: the frame underneath is new.
         let bands = overlay.dirty_bands();
+        let cols = overlay.dirty_columns();
         self.overlay
-            .composite(&self.device, overlay.pixels(), width, height, Some(&bands), pass)?;
+            .composite(&self.device, overlay.pixels(), width, height, Some(&bands), Some(cols), pass)?;
         overlay.mark_uploaded();
         Ok(())
     }
@@ -1196,7 +1203,7 @@ impl MetalRenderer {
         height: u32,
         pass: &PassAttachments,
     ) -> Result<(), MetalError> {
-        self.overlay.composite(&self.device, rgba, width, height, None, pass)
+        self.overlay.composite(&self.device, rgba, width, height, None, None, pass)
     }
 
     /// Draw `texture` — a frame the size of `pass`, on this renderer's
@@ -1207,6 +1214,13 @@ impl MetalRenderer {
     /// post-processed scene so, with its overlay drawn after.
     pub fn draw_texture(&mut self, texture: Id, pass: &PassAttachments) -> Result<(), MetalError> {
         self.overlay.draw_texture(&self.device, texture, pass)
+    }
+
+    /// [`draw_texture`](Self::draw_texture) from a texture of any size (a
+    /// scene drawn at a share of the frame's pixels while it moves),
+    /// filtered up to fill the frame.
+    pub fn draw_texture_scaled(&mut self, texture: Id, pass: &PassAttachments) -> Result<(), MetalError> {
+        self.overlay.draw_texture_scaled(&self.device, texture, pass)
     }
 
     /// Blend `texture` — premultiplied linear colour the size of `pass`, on

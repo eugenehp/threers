@@ -54,6 +54,7 @@
 //! assert_eq!(app.clicks, 2);
 //! ```
 
+use crate::number_stepper::HoldRepeat;
 use std::any::TypeId;
 use std::collections::HashMap;
 
@@ -196,6 +197,23 @@ type RefreshHandler<S> = Box<dyn FnMut(&mut S, &mut Ui)>;
 type FocusHandler<S> = Box<dyn FnMut(&mut S, &mut Ui)>;
 type DragMoveHandler<S> = Box<dyn FnMut(&mut S, &mut Ui, &dyn std::any::Any, f32, f32)>;
 type FilesHandler<S> = Box<dyn FnMut(&mut S, &mut Ui, &[DroppedFile], f32, f32)>;
+/// What a press held on a node does ([`Input::on_repeat`]).
+struct Repeat<S> {
+    name: String,
+    hold: HoldRepeat,
+    f: Box<dyn FnMut(&mut S, &mut Ui)>,
+}
+
+/// A press held on one: its timing, whether it has repeated, and, the
+/// host's own, where it is.
+struct Repeating {
+    node: NodeId,
+    name: String,
+    hold: HoldRepeat,
+    fired: bool,
+    host: Option<(f32, f32)>,
+}
+
 type TimerFn<S> = Box<dyn FnMut(&mut S, &mut Ui)>;
 type AfterHook<S> = Box<dyn FnMut(&mut Input<S>, &mut Ui, &mut S) -> bool>;
 
@@ -250,8 +268,9 @@ pub enum SwipePhase {
 }
 
 /// A row slid sideways in a swipeable list: which row, how far (negative,
-/// to the left, in pixels), and what it is doing. The app moves the row's
-/// content by `offset` and shows the action in the space it leaves.
+/// towards where its lines start, in pixels: the left, or the right where
+/// it reads right to left), and what it is doing. The app moves the row's
+/// content by `offset` (as its `left`, which is from its start) and shows the action in the space it leaves.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Swipe {
     pub container: NodeId,
@@ -294,6 +313,15 @@ pub enum Gesture {
     },
 }
 
+/// Which way a swipe goes (see [`Input::on_swipe`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Toward {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 /// How far a finger travels before it is a pan rather than a tap.
 pub const TOUCH_SLOP: f32 = 8.0;
 /// How far left of a scrollbar's thumb a finger still takes it: a thumb is
@@ -301,6 +329,10 @@ pub const TOUCH_SLOP: f32 = 8.0;
 const FINGER_REACH: f32 = 16.0;
 /// How long a finger rests before it is a long press, in seconds.
 pub const LONG_PRESS: f64 = 0.5;
+/// How long a finger rests on a control before it shows pressed
+/// (`:active`), in seconds: long enough that one landing to scroll does not
+/// light up what it lands on.
+pub const PRESS_SHOWS: f64 = 0.08;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TouchMode {
@@ -555,6 +587,10 @@ pub struct Input<S = ()> {
     /// A snapping box the wheel last moved sideways, and when: it settles
     /// once the wheel stops.
     wheel_x: Option<(NodeId, f64)>,
+    /// What a press held repeats ([`on_repeat`](Self::on_repeat)), and the
+    /// one held now: whose, its timing, and whether it has repeated.
+    repeats: HashMap<NodeId, Repeat<S>>,
+    repeating: Option<Repeating>,
     /// The speed content was gliding at when a finger caught it: a flick
     /// the same way adds to it.
     carry: f32,
@@ -674,6 +710,8 @@ impl<S> Input<S> {
             pan_target_x: None,
             pan_scrolled_x: None,
             wheel_x: None,
+            repeats: HashMap::new(),
+            repeating: None,
             carry: 0.0,
             focus_in: HashMap::new(),
             focus_out: HashMap::new(),
@@ -908,6 +946,19 @@ impl<S> Input<S> {
             .find(|n| self.text_targets.contains_key(n))?;
         let (text, a, c) = (self.text_targets[&n].0)(state);
         Some((n, text, a, c))
+    }
+
+    /// Whether the focused text control holds a secret
+    /// ([`Semantics::secret`](crate::Semantics::secret)): a host mirroring it
+    /// ([`focused_text`](Self::focused_text)) makes its own input a secure
+    /// one, and an on-screen keyboard does not suggest, correct or learn.
+    pub fn focused_text_is_secret(&self, ui: &Ui) -> bool {
+        self.focus
+            .filter(|&f| ui.contains(f))
+            .is_some_and(|f| {
+                ui.ancestors(f)
+                    .any(|n| ui.semantics(n).is_some_and(|s| s.secret))
+            })
     }
 
     /// Gives the focused text control new text and selection (what the
@@ -1261,6 +1312,98 @@ impl<S> Input<S> {
             .min_by(|a, b| a.total_cmp(b))
     }
 
+    /// Calls `f` again and again while a press (a finger's, the primary
+    /// button's) is held on `node`, as `hold` times it, from ticks. Having
+    /// repeated, the press isn't a click or a tap when it's let go, nor a
+    /// long press before; off `node` it waits, and one that goes on to
+    /// scroll is over. A press let go before is a click as ever: give
+    /// `node` its [`on_click`](Self::on_click) too.
+    pub fn on_repeat(&mut self, node: NodeId, hold: HoldRepeat, f: impl FnMut(&mut S, &mut Ui) + 'static) {
+        self.repeats.insert(node, Repeat { name: String::new(), hold, f: Box::new(f) });
+    }
+
+    /// [`on_repeat`](Self::on_repeat) with a name, by which a press held is
+    /// carried to the next tree ([`carry_repeat`](Self::carry_repeat)) in a
+    /// UI that is built anew as it changes.
+    pub fn on_repeat_named(
+        &mut self,
+        node: NodeId,
+        name: impl Into<String>,
+        hold: HoldRepeat,
+        f: impl FnMut(&mut S, &mut Ui) + 'static,
+    ) {
+        self.repeats.insert(node, Repeat { name: name.into(), hold, f: Box::new(f) });
+    }
+
+    /// Whether a press held has repeated.
+    pub fn repeating(&self) -> bool {
+        self.repeating.as_ref().is_some_and(|r| r.fired)
+    }
+
+    /// A press at `(x, y)` that the host follows itself (its own gestures, a
+    /// tree built anew under it): held on something that repeats, it does,
+    /// till [`end_repeat`](Self::end_repeat). Whether it's on one.
+    pub fn press_repeat(&mut self, ui: &Ui, x: f32, y: f32) -> bool {
+        self.repeating = ui.hit_test(x, y).and_then(|t| self.repeat_at(ui, t));
+        if let Some(r) = &mut self.repeating {
+            r.host = Some((x, y));
+        }
+        self.repeating.is_some()
+    }
+
+    /// The host's press moved: off what repeats, it waits.
+    pub fn move_repeat(&mut self, x: f32, y: f32) {
+        if let Some(at) = self.repeating.as_mut().and_then(|r| r.host.as_mut()) {
+            *at = (x, y);
+        }
+    }
+
+    /// The host's press is over; whether it repeated (then it's no click).
+    pub fn end_repeat(&mut self) -> bool {
+        self.repeating.take().is_some_and(|r| r.fired)
+    }
+
+    /// The press held in `old`, the input of the tree before, goes on in
+    /// this one: on what has the same name (nothing having it, it's over).
+    pub fn carry_repeat(&mut self, old: &mut Input<S>) {
+        let Some(r) = old.repeating.take() else { return };
+        let node = self.repeats.iter().find(|(_, n)| !n.name.is_empty() && n.name == r.name).map(|(n, _)| *n);
+        self.repeating = node.map(|node| Repeating { node, ..r });
+    }
+
+    /// Time passing for a press held, alone: for a host that does not call
+    /// [`tick`](Self::tick), which does this too. The steps made.
+    pub fn tick_repeat(&mut self, ui: &mut Ui, state: &mut S, time: f64) -> u32 {
+        let Some(mut r) = self.repeating.take() else { return 0 };
+        if (r.host.is_none() && self.pressed.is_none()) || !ui.contains(r.node) {
+            return 0;
+        }
+        if !r.hold.held() {
+            r.hold.press(time);
+        }
+        // off it, no steps are made (or owed)
+        let due = r.hold.steps(time);
+        let (x, y) = r.host.unwrap_or(self.pointer);
+        let on = ui.hit_test(x, y).is_some_and(|h| ui.ancestors(h).any(|a| a == r.node));
+        let made = if on { due } else { 0 };
+        if made > 0 && let Some(n) = self.repeats.get_mut(&r.node) {
+            r.fired = true;
+            for _ in 0..made {
+                (n.f)(state, ui);
+            }
+        }
+        self.repeating = Some(r);
+        if made > 0 {
+            self.run_after_hooks(ui, state);
+        }
+        made
+    }
+
+    fn repeat_at(&self, ui: &Ui, node: NodeId) -> Option<Repeating> {
+        let (node, n) = ui.ancestors(node).find_map(|n| self.repeats.get(&n).map(|r| (n, r)))?;
+        Some(Repeating { node, name: n.name.clone(), hold: n.hold, fired: false, host: None })
+    }
+
     fn run_timers(&mut self, ui: &mut Ui, state: &mut S, time: f64) {
         self.timers
             .retain(|t| t.owner.is_none_or(|o| ui.contains(o)));
@@ -1390,9 +1533,16 @@ impl<S> Input<S> {
                 .map(|n| ui.ancestors(n).collect())
                 .unwrap_or_default()
         };
+        // A finger's press shows once it has rested a moment, as iOS's
+        // scroll views delay theirs: a finger that lands on a row to scroll
+        // the list does not flash it. (A pointer's shows at once.)
+        let rested = match self.touches.mode {
+            Some(TouchMode::Pending) => self.now.is_some_and(|n| n - self.touches.start_time >= PRESS_SHOWS),
+            _ => true,
+        };
         let interaction = super::states::Interaction {
             hovered: self.hovered.clone(),
-            pressed: path(self.pressed.map(|p| p.0)),
+            pressed: path(self.pressed.map(|p| p.0).filter(|_| rested)),
             focused: self.focus.filter(|&f| ui.contains(f)),
             focus_visible: self.focus_visible,
         };
@@ -1461,7 +1611,9 @@ impl<S> Input<S> {
                 };
                 out.target = Some(t);
                 self.pressed = Some((t, *button));
+                self.repeating = None;
                 if *button == PointerButton::Primary {
+                    self.repeating = self.repeat_at(ui, t);
                     self.armed = ui
                         .ancestors(t)
                         .find(|n| self.drag_sources.contains_key(n))
@@ -1499,7 +1651,8 @@ impl<S> Input<S> {
                 }
                 let target = self.pointer_target(ui, *x, *y);
                 self.captured = None;
-                let pressed = self.pressed.take();
+                let repeated = self.repeating.take().is_some_and(|r| r.fired);
+                let pressed = self.pressed.take().filter(|_| !repeated);
                 self.hover(ui, state, *x, *y);
                 let Some(t) = target else { return out };
                 out.target = Some(t);
@@ -2006,11 +2159,17 @@ impl<S> Input<S> {
         let mut out = Dispatched::default();
         let dt = self.now.map_or(0.0, |n| (time - n).max(0.0)) as f32;
         self.now = Some(time);
+        // transitions, springs, scrollbars fading: moved on, unless the host
+        // steps them itself
+        if !std::mem::take(&mut ui.host_steps) {
+            ui.advance(dt);
+        }
         ui.poll_jobs();
         self.autoscroll(ui, dt);
         self.glide(ui, dt);
         self.settle_pull(ui, dt);
         self.run_timers(ui, state, time);
+        self.tick_repeat(ui, state, time);
         self.run_after_hooks(ui, state);
         self.settle_swipe(ui, dt);
         // The wheel has stopped moving a snapping box: it settles.
@@ -2031,6 +2190,7 @@ impl<S> Input<S> {
         if t.mode == Some(TouchMode::Pending)
             && t.down.len() == 1
             && time - t.start_time >= LONG_PRESS
+            && self.repeating.is_none()
         {
             let (x, y) = t.down[0].2;
             self.touches.mode = Some(TouchMode::Done);
@@ -2161,20 +2321,18 @@ impl<S> Input<S> {
         };
         let r = ui.rect(scroller);
         let y = self.pointer.1;
-        let past = if y < r.y {
-            y - r.y
-        } else if y > r.y + r.height {
-            y - (r.y + r.height)
-        } else {
+        // (as every drag that selects: `range_drag`)
+        let edge = crate::range_drag::EdgeScroll::with_config(crate::range_drag::EdgeConfig::past());
+        let speed = edge.speed(r, y);
+        if speed == 0.0 {
             return;
-        };
+        }
         self.autoscrolling = true;
-        let speed = (past.abs() * 10.0).max(60.0) * past.signum();
         let (content, view, _) = ui.scroll_extent(scroller);
         let now = ui.style(scroller).scroll_top;
         let to = (now + speed * dt).clamp(0.0, (content - view).max(0.0));
         if to != now {
-            ui.style_mut(scroller).scroll_top = to;
+            ui.set_scroll_top(scroller, to);
         }
     }
 
@@ -2200,6 +2358,7 @@ impl<S> Input<S> {
             || self.touching()
             || self.drag.is_some()
             || self.autoscrolling
+            || self.repeating.is_some()
             || self.fling.is_some()
             || self.fling_x.is_some()
             || self.wheel_x.is_some()
@@ -2216,6 +2375,55 @@ impl<S> Input<S> {
     /// indicator in.
     pub fn on_refresh(&mut self, container: NodeId, f: impl FnMut(&mut S, &mut Ui) + 'static) {
         self.refresh.insert(container, Box::new(f));
+    }
+
+    /// Calls `f`, once a finger has gone `reach` pixels `toward` one side
+    /// across `node` (or what is inside it), more that way than across: a
+    /// drawer swiped shut, a sidebar swiped in from a strip at the window's
+    /// edge. What is under the finger scrolls as it would, so it can sit on
+    /// a scrolling list; a finger that starts in a box scrolling the same
+    /// way (a wide table, swiped sideways) scrolls that instead.
+    pub fn on_swipe(
+        &mut self,
+        node: NodeId,
+        toward: Toward,
+        reach: f32,
+        mut f: impl FnMut(&mut S, &mut Ui) + 'static,
+    ) {
+        // how far the finger went since it began, and whether it has acted
+        let mut went = (0.0f32, 0.0f32, false);
+        self.on(node, Phase::Bubble, move |s, ui, e, cx| {
+            let &Event::Gesture(Gesture::Pan { dx, dy, phase, .. }) = e else {
+                return;
+            };
+            let sideways = matches!(toward, Toward::Left | Toward::Right);
+            let scrolls_so = |a: NodeId| {
+                let st = ui.style(a);
+                if sideways { st.scroll_x } else { st.scroll }
+            };
+            if ui
+                .ancestors(cx.target)
+                .take_while(|&a| a != cx.current)
+                .any(scrolls_so)
+            {
+                return;
+            }
+            if phase == GesturePhase::Began {
+                went = (0.0, 0.0, false);
+            }
+            went.0 += dx;
+            went.1 += dy;
+            let (along, across) = match toward {
+                Toward::Left => (-went.0, went.1),
+                Toward::Right => (went.0, went.1),
+                Toward::Up => (-went.1, went.0),
+                Toward::Down => (went.1, went.0),
+            };
+            if !went.2 && along >= reach && along > 1.5 * across.abs() {
+                went.2 = true;
+                f(s, ui);
+            }
+        });
     }
 
     /// Makes the rows of `container` (its children: a virtual list's rows)
@@ -2267,10 +2475,15 @@ impl<S> Input<S> {
         };
         if ui.contains(s.row) {
             let r = ui.rect(s.row);
+            let along = if ui.nodes[s.row.0].rtl {
+                r.x + r.width - x
+            } else {
+                x - r.x
+            };
             let on_action = y >= r.y
                 && y < r.y + r.height
-                && x >= r.x + r.width + s.offset
-                && x < r.x + r.width;
+                && along >= r.width + s.offset
+                && along < r.width;
             if on_action {
                 return false;
             }
@@ -2675,7 +2888,8 @@ impl<S> Input<S> {
                             self.touches.mode = Some(TouchMode::Swipe { base });
                             self.pressed = None;
                             self.fling = None;
-                            let offset = (base + x - start.0).min(0.0);
+                            let way = if ui.nodes[row.0].rtl { -1.0 } else { 1.0 };
+                            let offset = (base + (x - start.0) * way).min(0.0);
                             self.swipe = Some(Swipe {
                                 container,
                                 row,
@@ -2728,7 +2942,8 @@ impl<S> Input<S> {
                     Some(TouchMode::Swipe { base }) if Some(id) == primary => {
                         if let Some(s) = &mut self.swipe {
                             let width = ui.rect(s.row).width.max(1.0);
-                            s.offset = (base + x - start.0).clamp(-width, 0.0);
+                            let way = if ui.nodes[s.row.0].rtl { -1.0 } else { 1.0 };
+                            s.offset = (base + (x - start.0) * way).clamp(-width, 0.0);
                         }
                     }
                     Some(TouchMode::Pinch { start }) if self.touches.down.len() >= 2 => {
@@ -2754,9 +2969,12 @@ impl<S> Input<S> {
                 let cancel = phase == TouchPhase::Cancel;
                 match self.touches.mode {
                     Some(TouchMode::Pending) if !cancel => {
+                        let repeated = self.repeating();
                         out = self.dispatch(ui, state, Event::PointerUp { x, y, button: b });
-                        let mut tap = Dispatched::default();
-                        self.gesture(ui, state, Gesture::Tap { x, y }, &mut tap);
+                        if !repeated {
+                            let mut tap = Dispatched::default();
+                            self.gesture(ui, state, Gesture::Tap { x, y }, &mut tap);
+                        }
                     }
                     Some(TouchMode::Drag | TouchMode::Held) if Some(id) == primary => {
                         if cancel {
@@ -2863,7 +3081,8 @@ impl<S> Input<S> {
                             } else {
                                 0.0
                             };
-                            let aim = ui.style(c).scroll_left + glide;
+                            let way = if ui.nodes[c.0].rtl { -1.0 } else { 1.0 };
+                            let aim = ui.style(c).scroll_left + glide * way;
                             ui.settle_x(c, aim);
                         } else if !prevented
                             && vx.abs() > 100.0
@@ -2930,6 +3149,7 @@ impl<S> Input<S> {
 
     fn forget_removed(&mut self, ui: &Ui) {
         self.listeners.retain(|n, _| ui.contains(*n));
+        self.repeats.retain(|n, _| ui.contains(*n));
         self.actions.retain(|n, _| ui.contains(*n));
         self.contexts.retain(|n, _| ui.contains(*n));
         self.hovered.retain(|&n| ui.contains(n));
@@ -3286,7 +3506,8 @@ impl<S> Input<S> {
             let (content, visible, _) = ui.scroll_extent_x(n);
             let max = (content - visible).max(0.0);
             let scrolled = ui.style(n).scroll_left.clamp(0.0, max);
-            let to = (scrolled + dx).clamp(0.0, max);
+            let way = if ui.nodes[n.0].rtl { -1.0 } else { 1.0 };
+            let to = (scrolled + dx * way).clamp(0.0, max);
             if to != scrolled {
                 // Scrolled directly: settling onto a snap point gives way.
                 ui.stop_animations(n, Some(super::animation::Property::ScrollLeft));
@@ -3379,7 +3600,7 @@ impl<S> Input<S> {
             if to != scrolled {
                 // Scrolled directly: any notch animating it gives way.
                 ui.stop_animations(n, Some(super::animation::Property::ScrollTop));
-                ui.style_mut(n).scroll_top = to;
+                ui.set_scroll_top(n, to);
                 return Some(n);
             }
         }

@@ -20,7 +20,7 @@
 //! assert!(bar.thumb.height < bar.track.height);
 //! ```
 
-use super::style::{Rgba, Scrollbar, ScrollbarVisibility};
+use super::style::{Display, Position, Rgba, Scrollbar, ScrollbarVisibility};
 use super::tree::{NodeId, Rect, Ui};
 
 /// Where a scrolling box's scrollbar is, as last laid out.
@@ -51,17 +51,123 @@ pub enum ScrollStrategy {
     Bottom,
 }
 
+/// `id` and what is inside it moved down by `dy`, but for fixed boxes.
+fn shift(ui: &mut Ui, id: NodeId, dy: f32) {
+    let mut stack = vec![id.0];
+    while let Some(i) = stack.pop() {
+        let n = &mut ui.nodes[i];
+        if n.style.display == Display::None || (n.style.position == Position::Fixed && i != id.0) {
+            continue;
+        }
+        n.rect.y += dy;
+        stack.extend(n.children.iter().map(|c| c.0));
+    }
+}
+
 /// A thumb is never shorter than this, to stay grabbable.
 const MIN_THUMB: f32 = 20.0;
 
 impl Ui {
+    /// Moves each sticky box (`position: sticky`) into its scrolling box's
+    /// view, as far as its `top` (or `bottom`) asks and its parent's content
+    /// box lets it, from where the flow put it. Outermost first, so one
+    /// inside another moves with it.
+    pub(crate) fn place_sticky(&mut self) {
+        let mut sticky = vec![];
+        let mut stack = vec![self.root()];
+        while let Some(id) = stack.pop() {
+            let n = &self.nodes[id.0];
+            if n.style.display == Display::None {
+                continue;
+            }
+            if n.style.position == Position::Sticky && id != self.root() {
+                sticky.push(id);
+            }
+            stack.extend(n.children.iter().rev().copied());
+        }
+        for id in sticky {
+            let Some(parent) = self.nodes[id.0].parent else { continue };
+            let (vw, vh) = self.viewport;
+            // what it stays in view of: its scrolling box's padding box, or
+            // the window's
+            let view = match self.scroll_container(parent) {
+                Some(sc) => {
+                    let (r, s) = (self.nodes[sc.0].rect, &self.nodes[sc.0].style);
+                    Rect {
+                        x: r.x + s.border.left,
+                        y: r.y + s.border.top,
+                        width: (r.width - s.border.horizontal()).max(0.0),
+                        height: (r.height - s.border.vertical()).max(0.0),
+                    }
+                }
+                None => Rect { x: 0.0, y: 0.0, width: vw, height: vh },
+            };
+            let (p, ps) = (self.nodes[parent.0].rect, &self.nodes[parent.0].style);
+            let (lo, hi) = (
+                p.y + ps.border.top + ps.padding.top,
+                p.y + p.height - ps.border.bottom - ps.padding.bottom,
+            );
+            let s = &self.nodes[id.0].style;
+            let r = self.nodes[id.0].rect;
+            let (top, bottom) = (s.top.resolve(Some(view.height)), s.bottom.resolve(Some(view.height)));
+            let (above, below) = (s.margin.top, s.margin.bottom);
+            let mut dy = 0.0f32;
+            if let Some(t) = top {
+                let want = view.y + t - r.y;
+                if want > 0.0 {
+                    dy = want.min(hi - below - (r.y + r.height)).max(0.0);
+                }
+            }
+            if let (Some(b), 0.0) = (bottom, dy) {
+                let want = view.y + view.height - b - (r.y + r.height);
+                if want < 0.0 {
+                    dy = want.max(lo + above - r.y).min(0.0);
+                }
+            }
+            if dy != 0.0 {
+                shift(self, id, dy);
+                self.stuck.push((id, dy));
+            }
+        }
+    }
+
+    /// Sticky boxes put back where the flow has them, innermost first.
+    pub(crate) fn unstick(&mut self) {
+        for (id, dy) in std::mem::take(&mut self.stuck).into_iter().rev() {
+            if self.contains(id) {
+                shift(self, id, -dy);
+            }
+        }
+    }
+
+    /// Defers fixed boxes (painted last, outside clips, hit first), and
+    /// undoes it for those that stopped being fixed.
+    pub(crate) fn defer_fixed(&mut self) {
+        for id in std::mem::take(&mut self.fixed_deferred) {
+            if self.contains(id) && self.nodes[id.0].style.position != Position::Fixed {
+                self.nodes[id.0].deferred = None;
+            }
+        }
+        for i in 1..self.nodes.len() {
+            let n = &mut self.nodes[i];
+            if n.removed || n.style.position != Position::Fixed {
+                continue;
+            }
+            let id = NodeId(i, n.generation);
+            if n.deferred.is_none() {
+                n.deferred = Some(0);
+            } else if n.deferred != Some(0) {
+                continue;
+            }
+            self.fixed_deferred.push(id);
+        }
+    }
+
     /// Scrolls `container` to `offset` (clamped to its content).
     pub fn scroll_to(&mut self, container: NodeId, offset: f32) {
         let (content, view, _) = self.scroll_extent(container);
         let to = offset.clamp(0.0, (content - view).max(0.0));
-        if self.style(container).scroll_top != to {
-            self.style_mut(container).scroll_top = to;
-        }
+        self.set_scroll_top(container, to);
     }
 
     /// Scrolls every scrolling box around `id`, innermost first, by as
@@ -150,7 +256,11 @@ impl Ui {
         }
         let r = self.rect(container);
         let track = Rect {
-            x: r.x + r.width - s.border.right - width,
+            // At the end of its lines: the left, right to left.
+            x: match self.nodes[container.0].rtl {
+                false => r.x + r.width - s.border.right - width,
+                true => r.x + s.border.right,
+            },
             y: r.y + s.border.top,
             width,
             height: view,
@@ -185,7 +295,7 @@ impl Ui {
         self.ancestors(hit).find_map(|n| {
             let g = self.scrollbar(n)?;
             let grab = Rect {
-                x: g.thumb.x - reach,
+                x: g.thumb.x - if self.nodes[n.0].rtl { 0.0 } else { reach },
                 width: g.thumb.width + reach,
                 ..g.thumb
             };
@@ -296,7 +406,7 @@ impl Ui {
     /// Sideways, as [`scroll_into_view`](Self::scroll_into_view) is down:
     /// every box around `id` that scrolls sideways, by as little as shows
     /// it (its start, if it is wider).
-    fn scroll_into_view_x(&mut self, id: NodeId) {
+    pub(crate) fn scroll_into_view_x(&mut self, id: NodeId) {
         let target = self.rect(id);
         let (mut left, mut right) = (target.x, target.x + target.width);
         let containers: Vec<NodeId> = self
@@ -323,8 +433,10 @@ impl Ui {
                 (delta * ratio + 1e-3).floor() / ratio
             };
             if delta != 0.0 {
-                self.scroll_to_x(c, now + delta);
-                let moved = self.style(c).scroll_left - now;
+                // (right to left, further along is further left)
+                let way = if self.nodes[c.0].rtl { -1.0 } else { 1.0 };
+                self.scroll_to_x(c, now + delta * way);
+                let moved = (self.style(c).scroll_left - now) * way;
                 left -= moved;
                 right -= moved;
             }

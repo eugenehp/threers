@@ -50,6 +50,8 @@ use super::{Painter, Rect, Rgba, TextMeasure, TextStyle};
 pub struct Culled<'a> {
     inner: &'a mut dyn Painter,
     view: Rect,
+    /// The transforms in force.
+    turned: usize,
 }
 
 /// Room around the rectangle for ink that spills past its box: a bold line is drawn twice, half a pixel apart.
@@ -57,11 +59,15 @@ const SPILL: f32 = 2.0;
 
 impl<'a> Culled<'a> {
     pub fn new(inner: &'a mut dyn Painter, view: Rect) -> Self {
-        Self { inner, view }
+        Self { inner, view, turned: 0 }
     }
 
     /// Whether anything drawn in `r` can reach the rectangle.
     fn visible(&self, r: Rect) -> bool {
+        // Turned, it is not drawn where its box is.
+        if self.turned > 0 {
+            return true;
+        }
         let v = self.view;
         r.x < v.x + v.width + SPILL
             && r.x + r.width > v.x - SPILL
@@ -146,14 +152,17 @@ impl Painter for Culled<'_> {
     }
 
     fn push_transform(&mut self, m: [f32; 6]) {
+        self.turned += 1;
         self.inner.push_transform(m);
     }
 
     fn pop_transform(&mut self) {
+        self.turned = self.turned.saturating_sub(1);
         self.inner.pop_transform();
     }
 
     fn push_projective(&mut self, h: [f32; 9], affine: [f32; 6]) {
+        self.turned += 1;
         self.inner.push_projective(h, affine);
     }
 
@@ -188,6 +197,28 @@ impl Painter for Culled<'_> {
         };
         if self.visible(wide) {
             self.inner.shadow(rect, radius, blur, color);
+        }
+    }
+
+    fn shadow_around(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        blur: f32,
+        color: Rgba,
+        hole: Rect,
+        hole_radius: f32,
+    ) {
+        let reach = 1.5 * blur;
+        let wide = Rect {
+            x: rect.x - reach,
+            y: rect.y - reach,
+            width: rect.width + 2.0 * reach,
+            height: rect.height + 2.0 * reach,
+        };
+        if self.visible(wide) {
+            self.inner
+                .shadow_around(rect, radius, blur, color, hole, hole_radius);
         }
     }
 

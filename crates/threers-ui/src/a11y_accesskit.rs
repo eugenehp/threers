@@ -83,6 +83,8 @@ fn role(r: Role) -> accesskit::Role {
         Role::Row => A::Row,
         Role::Cell => A::Cell,
         Role::ColumnHeader => A::ColumnHeader,
+        Role::Tree => A::Tree,
+        Role::TreeItem(_) => A::TreeItem,
     }
 }
 
@@ -93,7 +95,11 @@ pub fn tree_update(ui: &Ui, focus: Option<NodeId>) -> accesskit::TreeUpdate {
     let tree = ui.accessibility_tree();
     let mut nodes = Vec::with_capacity(tree.len());
     for a in &tree {
-        let mut n = accesskit::Node::new(role(a.role));
+        let mut n = accesskit::Node::new(if a.secret {
+            accesskit::Role::PasswordInput
+        } else {
+            role(a.role)
+        });
         if !a.name.is_empty() {
             n.set_label(a.name.clone());
         }
@@ -103,7 +109,7 @@ pub fn tree_update(ui: &Ui, focus: Option<NodeId>) -> accesskit::TreeUpdate {
         if let Some(v) = &a.value {
             n.set_value(v.clone());
         }
-        if let Role::Heading(level) = a.role {
+        if let Role::Heading(level) | Role::TreeItem(level) = a.role {
             n.set_level(level as usize);
         }
         if let Some(r) = a.range {

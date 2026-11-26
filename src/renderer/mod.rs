@@ -98,6 +98,10 @@ pub use window::{MarksFrame, WindowBackend, WindowRenderer};
 // A winit window drawn and presented on a thread of its own, with the event
 // loop forwarding to it.
 #[cfg(winit_window)]
+pub mod live_resize;
+#[cfg(winit_window)]
+pub mod titlebar;
+#[cfg(winit_window)]
 pub mod window_thread;
 #[cfg(winit_window)]
 pub use window_thread::{ThreadControl, ThreadEvent, ThreadWaker, WindowThread};

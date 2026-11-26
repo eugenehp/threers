@@ -250,6 +250,11 @@ impl Key {
         Self::new(KeyAction::Modifier(Modifier::Alt), "alt", KeyLook::Function)
     }
 
+    /// Command (the platform's key: ⌘, ⊞) held for the next key (`cmd`).
+    pub fn command() -> Self {
+        Self::new(KeyAction::Modifier(Modifier::Meta), "cmd", KeyLook::Function)
+    }
+
     /// Escape (`esc`).
     pub fn escape() -> Self {
         Self::named("Escape", "esc").look(KeyLook::Function)

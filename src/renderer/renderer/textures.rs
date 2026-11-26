@@ -74,8 +74,7 @@ impl Renderer {
         if !self.tex_cache.contains_key(&key) {
             // Drop stale GPU copies for this logical texture (older upload_seq).
             self.tex_cache.retain(|k, _| k.0 != t.id);
-            self.tex_bg_cache.clear();
-            self.variant_bg_cache.clear();
+            self.drop_texture_bind_groups(|id| id == t.id);
             if t.is_handle() {
                 // A handle carries no pixels: it can only ever resolve to an
                 // upload its full twin already made. Reaching here means that
@@ -104,17 +103,36 @@ impl Renderer {
                 .get_or_insert_with(|| MipGenerator::new(&self.device));
             let gt = GpuTexture::upload_with_mipgen(&self.device, &self.queue, t, mipgen);
             self.tex_cache.insert(key, gt);
-            self.tex_bg_cache.clear();
-            self.variant_bg_cache.clear();
+            self.drop_texture_bind_groups(|id| id == t.id);
         }
     }
 
-    /// A streamed texture: made once, then the newest frame put into it
-    /// whenever the stream has moved on: RGBA copied in, YUV converted by a
-    /// GPU pass, and the mip chain rebuilt after. The key, the view and the
-    /// bind groups stay the same from frame to frame.
+    /// Drop the bind groups naming a texture whose id `changed` says yes to,
+    /// and leave the rest: a texture arriving or leaving is no business of
+    /// another material's. A group keyed by an address as well (a morph or
+    /// uv-set geometry, an environment cube) goes too, since an address may
+    /// be handed out again.
+    fn drop_texture_bind_groups(&mut self, changed: impl Fn(u64) -> bool) {
+        self.tex_bg_cache.retain(|(maps, morph, _, uv), _| {
+            morph.0 == 0 && uv.0 == 0 && !maps.iter().flatten().any(|(k, _)| changed(k.0))
+        });
+        self.variant_bg_cache
+            .retain(|((_, maps, morph, _, env), uv), _| {
+                morph.0 == 0
+                    && uv.0 == 0
+                    && *env == 0
+                    && !maps.iter().any(|(k, ..)| changed(k.0))
+            });
+    }
+
+    /// Texture bind groups made so far, for tests of their cache.
+    #[doc(hidden)]
+    pub fn texture_bind_groups_built(&self) -> u64 {
+        self.tex_bgs_built
+    }
+
     /// Let go of the GPU copies of textures nothing has drawn for
-    /// `cache_retention` frames, and of every bind group, which may hold them.
+    /// `cache_retention` frames, and of the bind groups holding them.
     pub(super) fn evict_unused_textures(&mut self, now: u64) {
         if self.cache_retention == u64::MAX {
             return;
@@ -123,17 +141,25 @@ impl Renderer {
         let pinned = &self.tex_pinned;
         let last = &mut self.tex_last_used;
         last.retain(|k, &mut frame| frame >= cutoff || pinned.contains(&k.0));
-        let before = self.tex_cache.len();
-        self.tex_cache
-            .retain(|k, _| last.contains_key(k) || pinned.contains(&k.0));
-        if self.tex_cache.len() != before {
-            self.tex_bg_cache.clear();
-            self.variant_bg_cache.clear();
+        let mut gone = std::collections::HashSet::new();
+        self.tex_cache.retain(|k, _| {
+            let keep = last.contains_key(k) || pinned.contains(&k.0);
+            if !keep {
+                gone.insert(k.0);
+            }
+            keep
+        });
+        if !gone.is_empty() {
+            self.drop_texture_bind_groups(|id| gone.contains(&id));
             let live: std::collections::HashSet<u64> = self.tex_cache.keys().map(|k| k.0).collect();
             self.stream_uploads.retain(|id, _| live.contains(id));
         }
     }
 
+    /// A streamed texture: made once, then the newest frame put into it
+    /// whenever the stream has moved on: RGBA copied in, YUV converted by a
+    /// GPU pass, and the mip chain rebuilt after. The key, the view and the
+    /// bind groups stay the same from frame to frame.
     pub(super) fn ensure_stream_uploaded(
         &mut self,
         t: &Arc<Texture>,
@@ -148,8 +174,7 @@ impl Renderer {
             let max = self.device.limits().max_texture_dimension_2d;
             self.tex_cache
                 .insert(key, GpuTexture::streamed(&self.device, t, max));
-            self.tex_bg_cache.clear();
-            self.variant_bg_cache.clear();
+            self.drop_texture_bind_groups(|id| id == t.id);
         }
         if !fresh && self.stream_uploads.get(&t.id) == Some(&stream.frames()) {
             return;

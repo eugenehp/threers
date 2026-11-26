@@ -6,7 +6,7 @@
 //! validator becomes a NaN mesh a long way from here.
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
 
-use super::basis::{basis_funcs, binomial, ders_basis_funcs, find_span, knots_valid};
+use super::basis::{basis_funcs, binomial, ders_basis_funcs, ders_sized, find_span, knots_valid};
 use super::v3;
 use super::{project, NurbsError, V3, V4};
 
@@ -213,8 +213,22 @@ impl NurbsSurface {
 
         let su = find_span(p, self.n_u, &self.knots_u, u);
         let sv = find_span(q, self.n_v, &self.knots_v, v);
+        // The basis on the stack where the degrees allow: a point is
+        // evaluated very many times (point inversion seeds a grid of them).
+        if let (Some(fu), Some(fv)) = (
+            super::basis::basis_funcs_fixed(su, u, p, &self.knots_u),
+            super::basis::basis_funcs_fixed(sv, v, q, &self.knots_v),
+        ) {
+            return self.contract(su, sv, &fu[..=p], &fv[..=q]);
+        }
         let nu = basis_funcs(su, u, p, &self.knots_u);
         let nv = basis_funcs(sv, v, q, &self.knots_v);
+        self.contract(su, sv, &nu, &nv)
+    }
+
+    /// The point from its basis values in u and v about the spans.
+    fn contract(&self, su: usize, sv: usize, nu: &[f64], nv: &[f64]) -> V3 {
+        let (p, q) = (self.degree_u, self.degree_v);
 
         // Contract in v first, then in u — (p+1)(q+1) products either way, but
         // this order touches each control row contiguously.
@@ -234,6 +248,156 @@ impl NurbsSurface {
             acc[3] += bu * row[3];
         }
         project(acc)
+    }
+
+    /// [`Self::derivatives`] to the second order (or the first) in a fixed
+    /// array: the same arithmetic in the same order, and no allocation, which
+    /// is what point inversion spends its time on.
+    pub fn derivatives_fixed(&self, u: f64, v: f64, k: usize) -> [[V3; 3]; 3] {
+        if self.degree_u.max(self.degree_v) < 4 {
+            self.derivatives_sized::<4>(u, v, k)
+        } else if self.degree_u.max(self.degree_v) < 8 {
+            self.derivatives_sized::<8>(u, v, k)
+        } else if self.degree_u.max(self.degree_v) < 12 {
+            self.derivatives_sized::<12>(u, v, k)
+        } else {
+            self.derivatives_sized::<16>(u, v, k)
+        }
+    }
+
+    /// The surface along `u` at one `v`: its rows of poles summed over once,
+    /// for an integral that asks at many `u` for the same `v`.
+    pub fn along_u(&self, v: f64) -> AlongU<'_> {
+        let q = self.degree_v;
+        let (v0, v1) = self.domain_v();
+        let v = v.clamp(v0, v1);
+        let span = find_span(q, self.n_v, &self.knots_v, v);
+        let ders = ders_basis_funcs(span, v, q, 1.min(q), &self.knots_v);
+        let rows = (0..self.n_u)
+            .map(|i| {
+                let mut row = [[0.0f64; 4]; 2];
+                for (out, b) in row.iter_mut().zip(&ders) {
+                    for (s, b) in b.iter().enumerate() {
+                        let c = self.control[i * self.n_v + (span - q + s)];
+                        for (x, y) in out.iter_mut().zip(c) {
+                            *x += b * y;
+                        }
+                    }
+                }
+                row
+            })
+            .collect();
+        AlongU { of: self, rows }
+    }
+
+    /// The basis along `u` at one `u`, for [`AlongU::frame_at`].
+    pub fn at_u(&self, u: f64) -> AtU {
+        let p = self.degree_u;
+        let (u0, u1) = self.domain_u();
+        let u = u.clamp(u0, u1);
+        let span = find_span(p, self.n_u, &self.knots_u, u);
+        let d = ders_basis_funcs(span, u, p, 1.min(p), &self.knots_u);
+        AtU {
+            first: span - p,
+            basis: (0..=p)
+                .map(|r| [d[0][r], d.get(1).map_or(0.0, |s| s[r])])
+                .collect(),
+        }
+    }
+
+    fn derivatives_sized<const N: usize>(&self, u: f64, v: f64, k: usize) -> [[V3; 3]; 3] {
+        let general = |k: usize| {
+            let d = self.derivatives(u, v, k);
+            let mut out = [[[0.0f64; 3]; 3]; 3];
+            for (row, from) in out.iter_mut().zip(&d) {
+                for (x, y) in row.iter_mut().zip(from) {
+                    *x = *y;
+                }
+            }
+            out
+        };
+        let k = k.min(2);
+        let (cu, cv) = {
+            let (u0, u1) = self.domain_u();
+            let (v0, v1) = self.domain_v();
+            (u.clamp(u0, u1), v.clamp(v0, v1))
+        };
+        let (p, q) = (self.degree_u, self.degree_v);
+        let (du, dv) = (k.min(p), k.min(q));
+        let su = find_span(p, self.n_u, &self.knots_u, cu);
+        let sv = find_span(q, self.n_v, &self.knots_v, cv);
+        let (Some(ndu), Some(ndv)) = (
+            ders_sized::<N>(su, cu, p, du, &self.knots_u),
+            ders_sized::<N>(sv, cv, q, dv, &self.knots_v),
+        ) else {
+            return general(k);
+        };
+        let mut aders = [[[0.0f64; 3]; 3]; 3];
+        let mut wders = [[0.0f64; 3]; 3];
+        let mut sums = [[[0.0f64; 4]; 3]; 3];
+        for r in 0..=p {
+            // Along v first, whose poles lie one after another.
+            let mut row = [[0.0f64; 4]; 3];
+            let at = (su - p + r) * self.n_v + sv - q;
+            for (s, c) in self.control[at..=at + q].iter().enumerate() {
+                for (b, t) in row.iter_mut().enumerate().take(dv + 1) {
+                    let w = ndv[b][s];
+                    for e in 0..4 {
+                        t[e] += w * c[e];
+                    }
+                }
+            }
+            for (a, sum) in sums.iter_mut().enumerate().take(du + 1) {
+                let w = ndu[a][r];
+                for b in 0..=(k - a).min(dv) {
+                    for e in 0..4 {
+                        sum[b][e] += w * row[b][e];
+                    }
+                }
+            }
+        }
+        for a in 0..=du {
+            for b in 0..=(k - a).min(dv) {
+                let acc = sums[a][b];
+                aders[a][b] = [acc[0], acc[1], acc[2]];
+                wders[a][b] = acc[3];
+            }
+        }
+        let w00 = if wders[0][0].abs() < 1e-300 {
+            1.0
+        } else {
+            wders[0][0]
+        };
+        let mut skl = [[[0.0f64; 3]; 3]; 3];
+        for a in 0..=k {
+            for b in 0..=(k - a) {
+                let mut val = aders[a][b];
+                for j in 1..=b {
+                    let c = binomial(b, j) * wders[0][j];
+                    for e in 0..3 {
+                        val[e] -= c * skl[a][b - j][e];
+                    }
+                }
+                for i in 1..=a {
+                    let ci = binomial(a, i);
+                    for e in 0..3 {
+                        val[e] -= ci * wders[i][0] * skl[a - i][b][e];
+                    }
+                    let mut v2 = [0.0f64; 3];
+                    for j in 1..=b {
+                        let cj = binomial(b, j) * wders[i][j];
+                        for e in 0..3 {
+                            v2[e] += cj * skl[a - i][b - j][e];
+                        }
+                    }
+                    for e in 0..3 {
+                        val[e] -= ci * v2[e];
+                    }
+                }
+                skl[a][b] = [val[0] / w00, val[1] / w00, val[2] / w00];
+            }
+        }
+        skl
     }
 
     /// Partial derivatives up to total order `k`.
@@ -380,7 +544,7 @@ impl NurbsSurface {
     /// * **Parallel partials.** Both non-zero but collinear, so there is no
     ///   local frame. That one is what the cross-product ratio is for.
     fn normal_raw(&self, u: f64, v: f64) -> Option<V3> {
-        let d = self.derivatives(u, v, 1);
+        let d = self.derivatives_fixed(u, v, 1);
         let (su, sv) = (d[1][0], d[0][1]);
         let (lu, lv) = (v3::norm(su), v3::norm(sv));
         let big = lu.max(lv);
@@ -396,6 +560,82 @@ impl NurbsSurface {
         }
         v3::normalize(n)
     }
+}
+
+/// A surface at one `v`. See [`NurbsSurface::along_u`].
+pub struct AlongU<'a> {
+    of: &'a NurbsSurface,
+    /// Each row's pole there, and how it moves with `v`.
+    rows: Vec<[[f64; 4]; 2]>,
+}
+
+/// The basis along `u` at one `u`: the same for every `v`.
+#[derive(Debug, Clone)]
+pub struct AtU {
+    first: usize,
+    /// Each function's value and slope.
+    basis: Vec<[f64; 2]>,
+}
+
+impl AlongU<'_> {
+    /// As [`AlongU::frame`], at a `u` worked out before.
+    pub fn frame_at(&self, at: &AtU) -> [V3; 3] {
+        let mut h = [[0.0f64; 4]; 3];
+        for (row, [value, slope]) in self.rows[at.first..].iter().zip(&at.basis) {
+            for c in 0..4 {
+                h[0][c] += value * row[0][c];
+                h[1][c] += slope * row[0][c];
+                h[2][c] += value * row[1][c];
+            }
+        }
+        unweighted(&h)
+    }
+
+    /// The point at `u`, and the derivatives along `u` and `v`.
+    pub fn frame(&self, u: f64) -> [V3; 3] {
+        let p = self.of.degree_u;
+        if p < 4 {
+            self.frame_sized::<4>(u)
+        } else if p < 8 {
+            self.frame_sized::<8>(u)
+        } else {
+            self.frame_sized::<16>(u)
+        }
+    }
+
+    fn frame_sized<const N: usize>(&self, u: f64) -> [V3; 3] {
+        let p = self.of.degree_u;
+        let (u0, u1) = self.of.domain_u();
+        let u = u.clamp(u0, u1);
+        let span = find_span(p, self.of.n_u, &self.of.knots_u, u);
+        // The point, and along u, and along v, still weighted.
+        let mut h = [[0.0f64; 4]; 3];
+        let mut add = |value: &[f64], slope: &[f64]| {
+            for (r, row) in self.rows[span - p..=span].iter().enumerate() {
+                for c in 0..4 {
+                    h[0][c] += value[r] * row[0][c];
+                    h[1][c] += slope.get(r).copied().unwrap_or(0.0) * row[0][c];
+                    h[2][c] += value[r] * row[1][c];
+                }
+            }
+        };
+        match ders_sized::<N>(span, u, p, 1.min(p), &self.of.knots_u) {
+            Some(d) => add(&d[0][..=p], &d[1][..=p]),
+            None => {
+                let d = ders_basis_funcs(span, u, p, 1.min(p), &self.of.knots_u);
+                add(&d[0], d.get(1).map_or(&[], |x| x));
+            }
+        }
+        unweighted(&h)
+    }
+}
+
+/// A point and its derivatives from theirs still weighted.
+fn unweighted(h: &[[f64; 4]; 3]) -> [V3; 3] {
+    let w = if h[0][3].abs() < 1e-300 { 1.0 } else { h[0][3] };
+    let point = [0, 1, 2].map(|c| h[0][c] / w);
+    let along = |d: &[f64; 4]| [0, 1, 2].map(|c| (d[c] - d[3] * point[c]) / w);
+    [point, along(&h[1]), along(&h[2])]
 }
 
 fn breaks(knots: &[f64], (a, b): (f64, f64)) -> Vec<f64> {
@@ -550,6 +790,39 @@ mod tests {
                 );
                 assert!(v3::dist(d[1][0], fd_u) < 1e-4, "Sᵤ at ({u}, {v})");
                 assert!(v3::dist(d[0][1], fd_v) < 1e-4, "Sᵥ at ({u}, {v})");
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_derivatives_are_the_derivatives() {
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        // Rational, and of different degrees each way.
+        let mut poles = Vec::new();
+        for (i, wi) in [1.0, w, 1.0, 0.8].into_iter().enumerate() {
+            for j in 0..2 {
+                let (x, y) = (i as f64, j as f64);
+                poles.push([x * wi, y * wi, (x * x - y) * wi, wi]);
+            }
+        }
+        let ku = vec![0.0, 0.0, 0.0, 0.4, 1.0, 1.0, 1.0];
+        let kv = vec![0.0, 0.0, 1.0, 1.0];
+        let s = NurbsSurface::from_homogeneous(2, 1, ku, kv, 4, 2, poles).unwrap();
+        for u in [0.0, 0.1, 0.4, 0.77, 1.0] {
+            for v in [0.0, 0.3, 1.0] {
+                for k in 1..=2 {
+                    let (d, f) = (s.derivatives(u, v, k), s.derivatives_fixed(u, v, k));
+                    for a in 0..=k {
+                        for b in 0..=(k - a) {
+                            // To rounding: worked out by another way.
+                            let off = v3::dist(d[a][b], f[a][b]);
+                            assert!(
+                                off <= 1e-13 * (1.0 + v3::norm(d[a][b])),
+                                "{u} {v}: {a} {b}: {off}"
+                            );
+                        }
+                    }
+                }
             }
         }
     }

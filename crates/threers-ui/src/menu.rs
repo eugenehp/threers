@@ -229,14 +229,27 @@ pub fn open_menu<S: 'static>(
 pub fn popover_menu<S: 'static>(
     input: &mut Input<S>,
     trigger: NodeId,
-    mut items: impl FnMut(&S) -> Vec<MenuItem> + 'static,
+    items: impl FnMut(&S) -> Vec<MenuItem> + 'static,
     on_pick: impl FnMut(&mut S, &mut Ui, &str) + 'static,
 ) {
+    let items = Rc::new(RefCell::new(items));
     let pick: Pick<S> = Rc::new(RefCell::new(on_pick));
     let shown: Rc<RefCell<Option<MenuHandle>>> = Rc::default();
     // Its listeners need `&mut Input`, which a listener does not get: the
     // trigger asks, and the next `Input::tick` or dispatch opens it.
     let wanted: Rc<RefCell<Option<Vec<MenuItem>>>> = Rc::default();
+    // A combo box's keys (a button's press it already).
+    let (w, it) = (wanted.clone(), items.clone());
+    input.on_key(trigger, move |state: &mut S, ui, key, m, _| {
+        let combo = ui
+            .semantics(trigger)
+            .is_some_and(|s| s.role == Role::ComboBox && !s.disabled);
+        if !combo || !opens_combo_box(key, m) {
+            return false;
+        }
+        *w.borrow_mut() = Some((it.borrow_mut())(state));
+        true
+    });
     let (w, s) = (wanted.clone(), shown.clone());
     input.on_click(trigger, move |state: &mut S, ui, _| {
         let open = s.borrow().as_ref().is_some_and(|m| m.is_open(ui));
@@ -245,10 +258,19 @@ pub fn popover_menu<S: 'static>(
                 m.open.borrow_mut().closing = true;
             }
         } else {
-            *w.borrow_mut() = Some(items(state));
+            *w.borrow_mut() = Some((items.borrow_mut())(state));
         }
     });
     input.on_after_dispatch(move |input, ui, state| {
+        // Its button gone (another screen), its menu goes too.
+        if !ui.contains(trigger) {
+            if let Some(m) = shown.borrow_mut().take()
+                && m.is_open(ui)
+            {
+                m.close(ui, input, state);
+            }
+            return false;
+        }
         // Kept for as long as the button is there.
         let Some(items) = wanted.borrow_mut().take() else {
             return ui.contains(trigger);
@@ -284,16 +306,25 @@ fn build<S: 'static>(
         parent,
         style! {
             position: absolute; display: flex; flex-direction: column; min-width: 160px; padding: 4px;
-            border-radius: 8px; background: #22262f; border: 1px solid #3a4150;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.5); font-size: 13px; color: #e5e7eb;
+            border-radius: 8px; border: 1px solid;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5); font-size: 13px;
+            max-height: 360px; overflow-y: auto;
         },
     );
     ui.set_semantics(root, Semantics::new(Role::Menu).tab_index(-1));
-    // In the light appearance, a light menu (see `Ui::appearance_style`).
+    // In the theme's colours (as a popover is).
+    ui.token_style(
+        root,
+        &[
+            ("background", crate::environment::Token::Raised),
+            ("border-color", crate::environment::Token::Border),
+            ("color", crate::environment::Token::Text),
+        ],
+    );
     ui.appearance_style(
         root,
         crate::states::Appearance::Light,
-        "background: #ffffff; border: 1px solid #d5d9e0; color: #1f2329",
+        "box-shadow: 0 8px 24px rgba(0,0,0,0.15)",
     );
     ui.defer(root, 1000);
     let anchor = match at {
@@ -307,18 +338,25 @@ fn build<S: 'static>(
     };
     ui.anchor(root, anchor.fit(Fit::Flip));
     let mut rows = vec![];
-    for (i, item) in items.iter().enumerate() {
+    for item in &items {
         let row = match item {
             MenuItem::Separator => {
                 let s = ui.add_box(
                     root,
-                    style! { height: 1px; margin: 4px 6px; background: #3a4150; },
+                    style! { height: 1px; margin: 4px 6px; },
                 );
-                ui.appearance_style(s, crate::states::Appearance::Light, "background: #e3e6eb");
+                ui.token_style(
+                    s,
+                    &[("background", crate::environment::Token::Separator)],
+                );
                 s
             }
             MenuItem::Header(label) => {
-                let h = ui.add_box(root, style! { padding: 6px 10px 2px; font-size: 11px; font-weight: bold; color: #8b93a5; });
+                let h = ui.add_box(root, style! { padding: 6px 10px 2px; font-size: 11px; font-weight: bold; });
+                ui.token_style(
+                    h,
+                    &[("color", crate::environment::Token::SecondaryText)],
+                );
                 ui.add_text(h, label.clone());
                 h
             }
@@ -326,38 +364,29 @@ fn build<S: 'static>(
                 label,
                 shortcut,
                 disabled,
-                destructive,
                 ..
             } => {
                 let r = ui.add_box(root, style! { display: flex; gap: 24px; justify-content: space-between; padding: 6px 10px; border-radius: 5px; });
-                let t = ui.add_text(r, label.clone());
-                if *destructive {
-                    let mut st = ui.style(t).clone();
-                    st.color = ui.token(crate::environment::Token::Destructive);
-                    ui.set_style(t, st);
-                }
+                ui.add_text(r, label.clone());
                 if let Some(s) = shortcut {
-                    let k = ui.add_box(r, style! { color: #8b93a5; });
+                    let k = ui.add_box(r, style! {});
                     ui.add_text(k, s.clone());
                 }
                 let mut sem = Semantics::new(Role::MenuItem).label(label.clone());
                 sem.disabled = *disabled;
                 ui.set_semantics(r, sem);
-                if *disabled {
-                    ui.style_mut(r).color = [0.45, 0.48, 0.55, 1.0];
-                }
                 r
             }
             MenuItem::Submenu { label, .. } => {
                 let r = ui.add_box(root, style! { display: flex; gap: 24px; justify-content: space-between; padding: 6px 10px; border-radius: 5px; });
                 ui.add_text(r, label.clone());
-                let k = ui.add_box(r, style! { color: #8b93a5; });
+                let k = ui.add_box(r, style! {});
                 ui.add_text(k, "›");
                 ui.set_semantics(r, Semantics::new(Role::MenuItem).label(label.clone()));
                 r
             }
         };
-        let _ = i;
+        color_row(ui, row, item, false);
         rows.push(row);
     }
     let open = Rc::new(RefCell::new(Open {
@@ -412,6 +441,7 @@ fn build<S: 'static>(
             }
             None
         };
+        let key = ui.reading_key(root, key);
         match key {
             "ArrowDown" | "ArrowUp" => {
                 let h = step(o.borrow().highlighted, key == "ArrowDown");
@@ -548,30 +578,50 @@ impl Open {
     }
 }
 
+/// Whether `key` opens a combo box: Enter, Space, or an arrow up or down.
+pub(crate) fn opens_combo_box(key: &str, m: crate::KeyModifiers) -> bool {
+    !m.control && !m.meta && !m.shift && matches!(key, "Enter" | " " | "ArrowDown" | "ArrowUp")
+}
+
+/// An item's row in the theme's colours: on the accent while highlighted,
+/// its shortcut (or a submenu's arrow) with it.
+fn color_row(ui: &mut Ui, row: NodeId, item: &MenuItem, on: bool) {
+    use crate::environment::Token;
+    let quiet = match item {
+        MenuItem::Separator | MenuItem::Header(_) => return,
+        MenuItem::Action { disabled: true, .. } => Token::SecondaryText,
+        MenuItem::Action {
+            destructive: true, ..
+        } => Token::Destructive,
+        _ => Token::Text,
+    };
+    if on {
+        ui.token_style(
+            row,
+            &[("background", Token::Accent), ("color", Token::OnAccent)],
+        );
+    } else {
+        ui.clear_token_style(row, "background");
+        ui.token_style(row, &[("color", quiet)]);
+    }
+    if let Some(&end) = ui.children(row).get(1) {
+        let c = if on { Token::OnAccent } else { Token::SecondaryText };
+        ui.token_style(end, &[("color", c)]);
+    }
+}
+
 fn highlight(ui: &mut Ui, open: &Rc<RefCell<Open>>, to: Option<usize>) {
     let mut o = open.borrow_mut();
     if o.highlighted == to {
         return;
     }
-    if let Some(r) = o
-        .highlighted
-        .and_then(|h| o.rows.get(h).copied())
-        .filter(|&r| ui.contains(r))
-    {
-        let st = ui.style_mut(r);
-        st.background = None;
-        // Back to the menu's colour (the default inherits it).
-        st.color = [1.0; 4];
-    }
-    if let Some(r) = to
-        .and_then(|h| o.rows.get(h).copied())
-        .filter(|&r| ui.contains(r))
-    {
-        let st = ui.style_mut(r);
-        st.background = Some([0.145, 0.388, 0.922, 1.0]);
-        // White on the blue, in either appearance (not the default white,
-        // which would inherit the menu's).
-        st.color = [0.99, 0.99, 0.99, 1.0];
+    for (at, on) in [(o.highlighted, false), (to, true)] {
+        let Some((&r, item)) = at.and_then(|i| o.rows.get(i).zip(o.items.get(i))) else {
+            continue;
+        };
+        if ui.contains(r) {
+            color_row(ui, r, item, on);
+        }
     }
     o.highlighted = to;
 }

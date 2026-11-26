@@ -41,6 +41,7 @@ use std::rc::Rc;
 use crate::animation::{Animation, Property, Value};
 use crate::binding::Binding;
 use crate::environment::Token;
+use crate::i18n::{word, Word};
 use crate::input::{Event, Input, Phase};
 use crate::transitions::Transition;
 use crate::tree::{NodeId, Ui};
@@ -125,7 +126,7 @@ fn open<S: 'static>(
         &[("background", Token::Raised), ("color", Token::Text)],
     );
     let mut sem = Semantics::new(Role::Dialog).label(label).tab_index(-1);
-    sem.description = Some("Drag down or press Escape to close".into());
+    sem.description = Some(word(Word::SheetHint));
     ui.set_semantics(panel, sem);
     let grab = ui.add_box(panel, style! { display: flex; justify-content: center; padding: 8px 0 10px 0; cursor: grab; flex-shrink: 0; });
     let bar = ui.add_box(

@@ -41,7 +41,7 @@ pub enum Material {
 impl Material {
     /// Blur (standard deviation, px), saturation, and the tint's opacity
     /// over white (light) and near-black (dark).
-    fn recipe(self) -> (f32, f32, f32, f32) {
+    pub(crate) fn recipe(self) -> (f32, f32, f32, f32) {
         match self {
             Material::UltraThin => (10.0, 1.8, 0.28, 0.32),
             Material::Thin => (16.0, 1.8, 0.45, 0.48),

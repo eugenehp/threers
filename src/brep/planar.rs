@@ -20,6 +20,9 @@
 /// point. Relative, because parameter spaces are not all the same size: a
 /// plane's is in model units, a cylinder's `u` is radians.
 const SNAP: f64 = 1e-7;
+/// How far past the boundary, relative to the region's size, a chord's end
+/// may run and still be taken as ending on it.
+const OVERSHOOT: f64 = 1e-4;
 
 /// A closed ring of parameter-space points, and where each came from.
 ///
@@ -333,8 +336,28 @@ pub fn subdivide(boundary: &[[f64; 2]], chords: &[Vec<[f64; 2]>]) -> Option<Vec<
                 continue;
             }
             let (seg, t, at) = nearest_on_boundary(boundary, p)?;
-            if dist(at, p) > snap {
-                return None; // stops in open space: not a cut
+            // A hair *outside* is a cut that ran on past the boundary: where
+            // the face meets a neighbour tangentially, the two surfaces are
+            // within any tolerance of each other for a stretch, and the end
+            // found there lands somewhere along it. The cut ends where it
+            // leaves the face. Inside, short of the boundary, it stops in
+            // open space and is not a cut.
+            // Short of it by as little, heading for it, is the same end seen
+            // from the neighbour's side.
+            let n = chord.len();
+            let heading = if k == 0 {
+                [chord[0][0] - chord[1][0], chord[0][1] - chord[1][1]]
+            } else {
+                [
+                    chord[n - 1][0] - chord[n - 2][0],
+                    chord[n - 1][1] - chord[n - 2][1],
+                ]
+            };
+            let towards = (at[0] - p[0]) * heading[0] + (at[1] - p[1]) * heading[1] > 0.0;
+            let overshoot =
+                (towards || !point_in_ring(boundary, p)) && dist(at, p) <= scale * OVERSHOOT;
+            if dist(at, p) > snap && !overshoot {
+                return None;
             }
             // Reuse an existing corner when the end lands on one.
             got[k] = if t <= SNAP {

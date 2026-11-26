@@ -620,7 +620,7 @@ pub fn model_view<S: 'static>(
     let mut sem = Semantics::new(Role::Image).label(label).tab_index(0);
     sem.description = Some("Drag or use the arrow keys to turn it; plus and minus to zoom".into());
     ui.set_semantics(node, sem);
-    ui.focus_visible_style(node, "box-shadow: 0 0 0 2px #93c5fd");
+    ui.focus_visible_style(node, "box-shadow: 0 0 0 2px var(--focus)");
     // Dragged: turned by how far.
     let drag = Rc::new(std::cell::Cell::new(None::<(f32, f32)>));
     let (o, d) = (orbit.clone(), drag.clone());

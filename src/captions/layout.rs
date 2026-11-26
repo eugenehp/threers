@@ -54,17 +54,21 @@ pub fn layout(
 ) -> LaidOutText {
     // Two generations of this many: when the newer fills, the older goes,
     // so what is still in use survives (a cache cleared whole at its limit
-    // starts over just when it is busiest).
-    const KEEP: usize = 1024;
+    // starts over just when it is busiest). Larger than what one layout of a
+    // busy screen asks: a settings page wraps thousands of words, each
+    // measured on its own, and fewer than that is a miss for every one,
+    // every layout.
+    const KEEP: usize = 16384;
     // Laid out at its natural width, a block fits any width at least as
     // wide unchanged (every line already fits): one entry serves them all.
-    let natural = layout_key(text, style, None);
+    let base = text_key(text, style);
+    let natural = at_width(base, None);
     if let Some(laid) = cached(font, natural)
         && laid.width <= max_width
     {
         return laid;
     }
-    let bounded = layout_key(text, style, Some(max_width));
+    let bounded = at_width(base, Some(max_width));
     if let Some(laid) = cached(font, bounded) {
         return laid;
     }
@@ -81,34 +85,79 @@ pub fn layout(
 
 /// A layout from the cache, the older generation's moved to the newer.
 fn cached(font: &mut CaptionFont, key: u64) -> Option<LaidOutText> {
-    if let Some(l) = font.layouts.get(&key) {
-        return Some(l.clone());
-    }
-    let l = font.layouts_old.remove(&key)?;
-    font.layouts.insert(key, l.clone());
-    Some(l)
+    cached_ref(font, key).cloned()
 }
 
-/// What a layout depends on: the text, the size, spacing and line height,
-/// and the width (`None`: as wide as it is). FNV-1a, as this runs for every
-/// string measured or drawn.
-fn layout_key(text: &str, style: &CaptionStyle, width: Option<f32>) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut eat = |bytes: &[u8]| {
-        for &b in bytes {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x0100_0000_01b3);
-        }
-    };
-    eat(text.as_bytes());
-    eat(&style.font_size.to_bits().to_le_bytes());
-    eat(&style.letter_spacing.to_bits().to_le_bytes());
-    eat(&style.line_height.to_bits().to_le_bytes());
-    match width {
-        Some(w) => eat(&w.to_bits().to_le_bytes()),
-        None => eat(b"natural"),
+/// [`cached`], looked at where it is: no copy of its lines.
+fn cached_ref(font: &mut CaptionFont, key: u64) -> Option<&LaidOutText> {
+    if !font.layouts.contains_key(&key) {
+        let l = font.layouts_old.remove(&key)?;
+        font.layouts.insert(key, l);
     }
+    font.layouts.get(&key)
+}
+
+/// [`layout`]'s width and height alone. What a measure asks, many times a
+/// layout of a UI: from the cache it is a lookup, where `layout` copies the
+/// lines and their strings out of it each time.
+pub fn size(font: &mut CaptionFont, text: &str, style: &CaptionStyle, max_width: f32) -> (f32, f32) {
+    let base = text_key(text, style);
+    if let Some(laid) = cached_ref(font, at_width(base, None))
+        && laid.width <= max_width
+    {
+        return (laid.width, laid.height);
+    }
+    if let Some(laid) = cached_ref(font, at_width(base, Some(max_width))) {
+        return (laid.width, laid.height);
+    }
+    let laid = layout(font, text, style, max_width);
+    (laid.width, laid.height)
+}
+
+/// What a layout depends on but its width: the text, the size, spacing
+/// and line height. Eight bytes at a step (FxHash's mix), as this runs for
+/// every string measured or drawn — a UI's layout measures thousands.
+fn text_key(text: &str, style: &CaptionStyle) -> u64 {
+    const K: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+    let mut h: u64 = text.len() as u64;
+    let mut mix = |w: u64| h = (h.rotate_left(5) ^ w).wrapping_mul(K);
+    let bytes = text.as_bytes();
+    let mut words = bytes.chunks_exact(8);
+    for w in &mut words {
+        mix(u64::from_le_bytes(w.try_into().expect("eight")));
+    }
+    let mut tail = [0u8; 8];
+    tail[..words.remainder().len()].copy_from_slice(words.remainder());
+    mix(u64::from_le_bytes(tail));
+    mix(style.font_size.to_bits() as u64 | (style.letter_spacing.to_bits() as u64) << 32);
+    mix(style.line_height.to_bits() as u64);
     h
+}
+
+/// [`text_key`] at a width (`None`: as wide as it is).
+fn at_width(base: u64, width: Option<f32>) -> u64 {
+    let w = width.map_or(u64::MAX, |w| w.to_bits() as u64);
+    (base.rotate_left(5) ^ w).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95)
+}
+
+/// The layout cache's keys are hashes already: they index the map as they are.
+pub(crate) type KeyHash = std::hash::BuildHasherDefault<KeyHasher>;
+
+#[derive(Default)]
+pub(crate) struct KeyHasher(u64);
+
+impl std::hash::Hasher for KeyHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0.rotate_left(8)) ^ b as u64;
+        }
+    }
+    fn write_u64(&mut self, v: u64) {
+        self.0 = v;
+    }
 }
 
 fn layout_uncached(

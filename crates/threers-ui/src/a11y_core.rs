@@ -144,7 +144,12 @@ impl Ui {
             width: r.width + 2.0 * (gap + w),
             height: r.height + 2.0 * (gap + w),
         };
-        let rr = radius + gap + w;
+        let rr = (radius + gap + w).min(outer.width.min(outer.height) / 2.0);
+        // Round what is round, and as square as what is not.
+        if radius > 0.0 {
+            crate::paint::rounded_ring(painter, outer, rr, w, c);
+            return;
+        }
         for side in [
             Rect { height: w, ..outer },
             Rect {

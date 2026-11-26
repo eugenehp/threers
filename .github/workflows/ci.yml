@@ -70,7 +70,8 @@ jobs:
       # The volume's WGSL through naga into MSL, which needs no GPU, and the
       # parity with wgpu where there is one (the drawing tests skip without).
       # With `render` on because the crate's other unit tests assume it.
-      - run: cargo test -p threers --lib --no-default-features --features metal,fluid,metal-fluid -- metal::fluid3d metal::fluid::
+      # (quoted: a plain YAML value may not end in `:`)
+      - run: 'cargo test -p threers --lib --no-default-features --features metal,fluid,metal-fluid -- metal::fluid3d metal::fluid::'
       # Nothing the 2D fluid needs may pull wgpu back in.
       - name: metal-fluid (and the C libraries) build without wgpu
         run: |

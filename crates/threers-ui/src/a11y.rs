@@ -82,6 +82,10 @@ pub enum Role {
     Cell,
     /// A column's heading (`columnheader`).
     ColumnHeader,
+    /// Rows that open onto more (`tree`).
+    Tree,
+    /// A row of a tree (`treeitem`), and how deep: 1 for the outermost.
+    TreeItem(u8),
 }
 
 impl Role {
@@ -127,6 +131,8 @@ impl Role {
             Role::Row => "row",
             Role::Cell => "cell",
             Role::ColumnHeader => "columnheader",
+            Role::Tree => "tree",
+            Role::TreeItem(_) => "treeitem",
         }
     }
 
@@ -143,6 +149,7 @@ impl Role {
                 | Role::Heading(_)
                 | Role::Option
                 | Role::ListItem
+                | Role::TreeItem(_)
                 | Role::Cell
                 | Role::ColumnHeader
                 | Role::Tab
@@ -243,6 +250,10 @@ pub struct Semantics {
     pub row_index: Option<(usize, usize)>,
     /// How a column is sorted (`aria-sort`): `Some(true)` ascending.
     pub sort: Option<bool>,
+    /// A text control that holds a secret (a password): a host mirroring it
+    /// makes its own input a secure one, and an on-screen keyboard does not
+    /// suggest, correct or learn what is typed.
+    pub secret: bool,
 }
 
 impl Semantics {
@@ -273,7 +284,14 @@ impl Semantics {
             described_by: None,
             row_index: None,
             sort: None,
+            secret: false,
         }
+    }
+
+    /// Says it holds a secret (see [`secret`](Self::secret)).
+    pub fn secret(mut self) -> Self {
+        self.secret = true;
+        self
     }
 
     pub fn label(mut self, label: impl Into<String>) -> Self {
@@ -379,6 +397,8 @@ pub struct AccessNode {
     pub row_index: Option<(usize, usize)>,
     /// See [`Semantics::sort`].
     pub sort: Option<bool>,
+    /// See [`Semantics::secret`].
+    pub secret: bool,
     /// The name a link reaches it by (see [`anchors`](crate::anchors)).
     pub anchor: Option<String>,
     /// Its border box, as last laid out.
@@ -490,6 +510,7 @@ impl Ui {
             modal: false,
             row_index: None,
             sort: None,
+            secret: false,
             anchor: None,
             bounds: self.rect(self.root()),
             children: vec![],
@@ -562,6 +583,7 @@ impl Ui {
             modal: self.a11y_modal == Some(id),
             row_index: s.row_index,
             sort: s.sort,
+            secret: s.secret,
             anchor: self.anchor_name(id),
             bounds: node.rect,
             children: vec![],

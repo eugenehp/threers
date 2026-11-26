@@ -1842,6 +1842,12 @@ impl App {
         }
     }
 
+    /// Whether the text control with focus holds a password: the page's input
+    /// is a password's too.
+    pub fn text_is_secret(&self) -> bool {
+        self.input.focused_text_is_secret(&self.ui)
+    }
+
     /// Whether the platform's keyboard should be up: a text control has
     /// focus and the on-screen keyboard is not standing in for it.
     pub fn wants_text(&self) -> bool {

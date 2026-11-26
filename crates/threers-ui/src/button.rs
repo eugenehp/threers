@@ -66,7 +66,7 @@ pub fn button<S: 'static>(
     let colour = match role {
         ButtonRole::Destructive => Token::Destructive,
         ButtonRole::Normal | ButtonRole::Cancel => Token::Text,
-        ButtonRole::Primary => Token::Accent,
+        ButtonRole::Primary => Token::AccentText,
     };
     let filled = match style {
         ButtonStyle::Prominent => true,
@@ -74,12 +74,12 @@ pub fn button<S: 'static>(
         ButtonStyle::Borderless => false,
     };
     if filled {
-        let fill = if role == ButtonRole::Destructive {
-            Token::DestructiveFill
+        let (fill, on) = if role == ButtonRole::Destructive {
+            (Token::DestructiveFill, Token::OnAccent)
         } else {
-            Token::Accent
+            (Token::Prominent, Token::OnProminent)
         };
-        ui.token_style(b, &[("background", fill), ("color", Token::OnAccent)]);
+        ui.token_style(b, &[("background", fill), ("color", on)]);
     } else if style == ButtonStyle::Bordered {
         ui.token_style(b, &[("border-color", Token::Border), ("color", colour)]);
     } else {
@@ -88,7 +88,7 @@ pub fn button<S: 'static>(
             &[(
                 "color",
                 if role == ButtonRole::Normal {
-                    Token::Accent
+                    Token::AccentText
                 } else {
                     colour
                 },
@@ -100,11 +100,11 @@ pub fn button<S: 'static>(
         if filled {
             "opacity: 0.88"
         } else {
-            "background: rgba(128,138,160,0.2)"
+            "background: var(--hover)"
         },
     );
     ui.active_style(b, "opacity: 0.75");
-    ui.focus_visible_style(b, "box-shadow: 0 0 0 2px #93c5fd");
+    ui.focus_visible_style(b, "box-shadow: 0 0 0 2px var(--focus)");
     input.on_click(b, move |s, ui, _| on_click(s, ui));
     b
 }

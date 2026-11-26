@@ -55,6 +55,7 @@ extern "C" {
     fn environment_blend_mode(this: &XrSessionJs) -> Option<String>;
 
     #[wasm_bindgen(js_name = XRFrame)]
+    #[derive(Clone)]
     type XrFrame;
     #[wasm_bindgen(method, js_class = "XRFrame", js_name = getViewerPose)]
     fn get_viewer_pose(this: &XrFrame, space: &JsValue) -> Option<XrPose>;
@@ -95,6 +96,7 @@ extern "C" {
     fn matrix(this: &XrRigidTransform) -> Vec<f32>;
 
     #[wasm_bindgen(js_name = XRWebGLLayer)]
+    #[derive(Clone)]
     type XrWebGlLayer;
     #[wasm_bindgen(constructor, catch, js_class = "XRWebGLLayer")]
     fn new(session: &XrSessionJs, gl: &Gl, init: &Object) -> Result<XrWebGlLayer, JsValue>;
@@ -288,6 +290,15 @@ struct Session {
     listeners: Vec<(&'static str, Listener)>,
     ended: bool,
     on_end: Option<Box<dyn FnOnce()>>,
+    /// AR: hit tests from the view (`XRHitTestSource`) and from taps and
+    /// pinches (`XRTransientInputHitTestSource`), once started.
+    hits_from_view: Option<JsValue>,
+    hits_from_taps: Option<JsValue>,
+    /// Anchors by id, each its `XRAnchor` once the browser has made it.
+    anchors: Vec<(u32, Option<JsValue>)>,
+    next_anchor: u32,
+    /// The reference space was reset (the user recentred) since asked.
+    recentered: bool,
 }
 
 impl Session {
@@ -416,7 +427,9 @@ impl XrSession {
     /// gesture, and it lasts a few seconds) with `reference_space` (three.js's
     /// default is `"local-floor"`) and hand tracking where offered, and
     /// attaches it as [`attach`](Self::attach) does. `features` are further
-    /// optional features to ask for.
+    /// optional features to ask for. In AR, hit tests and anchors are asked
+    /// for too ([`start_hit_test`](Self::start_hit_test),
+    /// [`add_anchor`](Self::add_anchor)).
     pub async fn request(
         mode: &str,
         canvas: HtmlCanvasElement,
@@ -424,12 +437,30 @@ impl XrSession {
         framebuffer_scale: f32,
         features: &[String],
     ) -> Result<XrSession, JsValue> {
+        Self::request_with_overlay(mode, canvas, reference_space, framebuffer_scale, features, None).await
+    }
+
+    /// [`request`](Self::request), with `overlay` (an element of the page)
+    /// shown over the view where the browser offers WebXR's DOM overlay: a
+    /// phone's AR, its HTML buttons and text over the camera.
+    pub async fn request_with_overlay(
+        mode: &str,
+        canvas: HtmlCanvasElement,
+        reference_space: &str,
+        framebuffer_scale: f32,
+        features: &[String],
+        overlay: Option<&web_sys::Element>,
+    ) -> Result<XrSession, JsValue> {
         let xr = xr_system().ok_or("WebXR is not available here")?;
         let optional = Array::new();
+        let ar: &[&str] = if mode == "immersive-ar" { &["hit-test", "anchors"] } else { &[] };
+        let overlaid: &[&str] = if overlay.is_some() { &["dom-overlay"] } else { &[] };
         for f in features
             .iter()
             .map(String::as_str)
             .chain([reference_space, "hand-tracking"])
+            .chain(ar.iter().copied())
+            .chain(overlaid.iter().copied())
         {
             if !optional.includes(&f.into(), 0) {
                 optional.push(&f.into());
@@ -437,6 +468,11 @@ impl XrSession {
         }
         let init = Object::new();
         set(&init, "optionalFeatures", optional);
+        if let Some(root) = overlay {
+            let o = Object::new();
+            set(&o, "root", root);
+            set(&init, "domOverlay", o);
+        }
         let session = JsFuture::from(Promise::from(call(
             &xr,
             "requestSession",
@@ -520,6 +556,11 @@ impl XrSession {
             listeners: vec![],
             ended: false,
             on_end: None,
+            hits_from_view: None,
+            hits_from_taps: None,
+            anchors: vec![],
+            next_anchor: 0,
+            recentered: false,
         }));
         let weak = Rc::downgrade(&inner);
         let mut listeners = vec![];
@@ -572,6 +613,20 @@ impl XrSession {
         ));
         for (name, l) in &listeners {
             session.add_event_listener_with_callback(name, l.as_ref().unchecked_ref())?;
+        }
+        // the user recentred: the space's origin moved under them
+        {
+            let w = weak.clone();
+            let reset = Listener::new(move |_| {
+                if let Some(s) = w.upgrade() {
+                    s.borrow_mut().recentered = true;
+                }
+            });
+            let space = inner.borrow().space.clone();
+            if let Ok(f) = get(&space, "addEventListener").dyn_into::<Function>() {
+                let _ = f.call2(&space, &"reset".into(), reset.as_ref().unchecked_ref());
+            }
+            listeners.push(("reset", reset));
         }
         {
             let mut s = inner.borrow_mut();
@@ -801,6 +856,202 @@ impl XrSession {
             });
         }
         out
+    }
+}
+
+/// A hit test result's pose in `base` (`XRHitTestResult.getPose`).
+fn pose_in(result: &JsValue, base: &JsValue) -> Option<[f32; 16]> {
+    let pose = call(result, "getPose", std::slice::from_ref(base)).ok()?;
+    if pose.is_undefined() || pose.is_null() {
+        return None;
+    }
+    to16(&pose.unchecked_into::<XrPose>().transform().matrix())
+}
+
+impl XrSession {
+    /// AR: from now on, each frame's [`hits`](Self::hits) are where the
+    /// middle of the view meets a real surface (a floor, a table), nearest
+    /// first: where to put a reticle, or a model. Needs the session to have
+    /// `hit-test` (asked for in AR).
+    pub async fn start_hit_test(&self) -> Result<(), JsValue> {
+        let session: JsValue = self.inner.borrow().session.clone().into();
+        let viewer = JsFuture::from(Promise::from(call(&session, "requestReferenceSpace", &["viewer".into()])?)).await?;
+        let init = Object::new();
+        set(&init, "space", viewer);
+        let source = JsFuture::from(Promise::from(call(&session, "requestHitTestSource", &[init.into()])?)).await?;
+        self.inner.borrow_mut().hits_from_view = Some(source);
+        Ok(())
+    }
+
+    /// AR: from now on, each frame's [`tap_hits`](Self::tap_hits) are where
+    /// a tap on a phone's screen, or a pinch, meets a real surface.
+    /// `profile`: `"generic-touchscreen"` for a phone's taps.
+    pub async fn start_tap_hit_test(&self, profile: &str) -> Result<(), JsValue> {
+        let session: JsValue = self.inner.borrow().session.clone().into();
+        let init = Object::new();
+        set(&init, "profile", profile);
+        let source = JsFuture::from(Promise::from(call(&session, "requestHitTestSourceForTransientInput", &[init.into()])?)).await?;
+        self.inner.borrow_mut().hits_from_taps = Some(source);
+        Ok(())
+    }
+
+    /// This frame's hits from the view, nearest first, in the reference
+    /// space (empty outside a frame, before
+    /// [`start_hit_test`](Self::start_hit_test), or with nothing found).
+    pub fn hits(&self) -> Vec<[f32; 16]> {
+        let s = self.inner.borrow();
+        let (Some(frame), Some(source)) = (&s.frame, &s.hits_from_view) else { return vec![] };
+        let Ok(results) = call(frame, "getHitTestResults", std::slice::from_ref(source)) else { return vec![] };
+        Array::from(&results).iter().filter_map(|r| pose_in(&r, &s.space)).collect()
+    }
+
+    /// This frame's hits from taps and pinches: each input's slot (while it
+    /// is one of the [`inputs`](Self::inputs)) and its hits, nearest first.
+    pub fn tap_hits(&self) -> Vec<(Option<usize>, Vec<[f32; 16]>)> {
+        let s = self.inner.borrow();
+        let (Some(frame), Some(source)) = (&s.frame, &s.hits_from_taps) else { return vec![] };
+        let Ok(all) = call(frame, "getHitTestResultsForTransientInput", std::slice::from_ref(source)) else { return vec![] };
+        Array::from(&all)
+            .iter()
+            .map(|one| {
+                let slot = s.slots.slot_of(&get(&one, "inputSource"));
+                let hits = Array::from(&get(&one, "results")).iter().filter_map(|r| pose_in(&r, &s.space)).collect();
+                (slot, hits)
+            })
+            .collect()
+    }
+
+    /// AR: an anchor at `pose` (in the reference space; a hit's, say),
+    /// which the device keeps where it is in the room as its map of the
+    /// room improves: its id. Inside a frame only; the browser makes it
+    /// over the next frames ([`anchors`](Self::anchors) gives it a pose
+    /// then). Needs `anchors` (asked for in AR).
+    pub fn add_anchor(&self, pose: [f32; 16]) -> Result<u32, JsValue> {
+        let (frame, space, id) = {
+            let mut s = self.inner.borrow_mut();
+            let frame: JsValue = s.frame.clone().ok_or("not inside a frame")?.into();
+            let id = s.next_anchor;
+            s.next_anchor += 1;
+            s.anchors.push((id, None));
+            (frame, s.space.clone(), id)
+        };
+        let (at, turn, _) = Matrix4 { elements: pose }.decompose();
+        let (p, q) = (Object::new(), Object::new());
+        for (k, v) in [("x", at.x), ("y", at.y), ("z", at.z), ("w", 1.0)] {
+            set(&p, k, v);
+        }
+        for (k, v) in [("x", turn.x), ("y", turn.y), ("z", turn.z), ("w", turn.w)] {
+            set(&q, k, v);
+        }
+        let make: Function = get(&web_sys::window().ok_or("no window")?.into(), "XRRigidTransform").dyn_into()?;
+        let transform = Reflect::construct(&make, &Array::of2(&p, &q))?;
+        let made = Promise::from(call(&frame, "createAnchor", &[transform, space])?);
+        let weak = Rc::downgrade(&self.inner);
+        wasm_bindgen_futures::spawn_local(async move {
+            let anchor = JsFuture::from(made).await.ok();
+            if let Some(s) = weak.upgrade() {
+                let mut s = s.borrow_mut();
+                match s.anchors.iter_mut().find(|a| a.0 == id) {
+                    Some(a) => a.1 = anchor,
+                    // removed while it was being made
+                    None => {
+                        if let Some(a) = anchor {
+                            let _ = call(&a, "delete", &[]);
+                        }
+                    }
+                }
+            }
+        });
+        Ok(id)
+    }
+
+    /// This frame's anchors: each id and its pose (`None` while the
+    /// browser is still making it, or has lost it).
+    pub fn anchors(&self) -> Vec<(u32, Option<[f32; 16]>)> {
+        let s = self.inner.borrow();
+        let Some(frame) = &s.frame else { return s.anchors.iter().map(|a| (a.0, None)).collect() };
+        s.anchors
+            .iter()
+            .map(|(id, a)| {
+                let pose = a.as_ref().and_then(|a| {
+                    let space = get(a, "anchorSpace");
+                    frame.get_pose(&space, &s.space).and_then(|p| to16(&p.transform().matrix()))
+                });
+                (*id, pose)
+            })
+            .collect()
+    }
+
+    /// Lets go of anchor `id`.
+    pub fn remove_anchor(&self, id: u32) {
+        let mut s = self.inner.borrow_mut();
+        if let Some(i) = s.anchors.iter().position(|a| a.0 == id)
+            && let (_, Some(a)) = s.anchors.remove(i)
+        {
+            let _ = call(&a, "delete", &[]);
+        }
+    }
+
+    /// A buzz on the controller in `slot`: `intensity` 0 to 1 for `ms`
+    /// milliseconds. Whether it has something to buzz with.
+    pub fn pulse(&self, slot: usize, intensity: f32, ms: f32) -> bool {
+        let Some(src) = self.source(slot) else { return false };
+        let pad = get(&src, "gamepad");
+        if pad.is_undefined() || pad.is_null() {
+            return false;
+        }
+        let strength = f64::from(intensity.clamp(0.0, 1.0));
+        let actuators = get(&pad, "hapticActuators");
+        let first = Reflect::get_u32(&actuators, 0).unwrap_or(JsValue::UNDEFINED);
+        if !first.is_undefined() && !first.is_null() && call(&first, "pulse", &[strength.into(), f64::from(ms).into()]).is_ok() {
+            return true;
+        }
+        let rumble = get(&pad, "vibrationActuator");
+        if rumble.is_undefined() || rumble.is_null() {
+            return false;
+        }
+        let effect = Object::new();
+        set(&effect, "duration", f64::from(ms));
+        set(&effect, "strongMagnitude", strength);
+        set(&effect, "weakMagnitude", strength);
+        call(&rumble, "playEffect", &["dual-rumble".into(), effect.into()]).is_ok()
+    }
+
+    /// `"visible"`, `"visible-blurred"` (the system draws over the app, a
+    /// menu: it is shown but has no input) or `"hidden"`.
+    pub fn visibility(&self) -> String {
+        let session: JsValue = self.inner.borrow().session.clone().into();
+        get(&session, "visibilityState").as_string().unwrap_or_else(|| "visible".into())
+    }
+
+    /// Whether the user recentred the view since the last call: what was
+    /// placed in front of them should be put there again.
+    pub fn take_recentered(&self) -> bool {
+        std::mem::take(&mut self.inner.borrow_mut().recentered)
+    }
+
+    /// The frame rates the device offers (empty where it does not say).
+    pub fn frame_rates(&self) -> Vec<f32> {
+        let session: JsValue = self.inner.borrow().session.clone().into();
+        let rates = get(&session, "supportedFrameRates");
+        if rates.is_undefined() || rates.is_null() {
+            return vec![];
+        }
+        Array::from(&rates).iter().filter_map(|r| r.as_f64()).map(|r| r as f32).collect()
+    }
+
+    /// Asks the device for `hz` frames a second (one of
+    /// [`frame_rates`](Self::frame_rates)): whether it can be asked.
+    pub fn set_frame_rate(&self, hz: f32) -> bool {
+        let session: JsValue = self.inner.borrow().session.clone().into();
+        call(&session, "updateTargetFrameRate", &[f64::from(hz).into()]).is_ok()
+    }
+
+    /// How much less the edges of each eye are drawn in, 0 (none) to 1:
+    /// fixed foveation, where the device does it.
+    pub fn set_foveation(&self, level: f32) {
+        let layer: JsValue = self.inner.borrow().layer.clone().into();
+        let _ = Reflect::set(&layer, &"fixedFoveation".into(), &f64::from(level.clamp(0.0, 1.0)).into());
     }
 }
 

@@ -3766,7 +3766,7 @@ dependencies = [
 
 [[package]]
 name = "threers"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "arboard",
  "bytemuck",
@@ -3809,7 +3809,7 @@ dependencies = [
 
 [[package]]
 name = "threers-animation"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "threers",
  "threers-physics",
@@ -3817,14 +3817,14 @@ dependencies = [
 
 [[package]]
 name = "threers-audio"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "threers-math",
 ]
 
 [[package]]
 name = "threers-candles"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "objc2 0.6.5",
  "objc2-core-foundation",
@@ -3834,11 +3834,11 @@ dependencies = [
 
 [[package]]
 name = "threers-captions"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "threers-codec"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "libc",
  "rayon",
@@ -3847,11 +3847,11 @@ dependencies = [
 
 [[package]]
 name = "threers-connectome"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "threers-continuum"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "threers",
  "threers-physics",
@@ -3859,7 +3859,7 @@ dependencies = [
 
 [[package]]
 name = "threers-ecs"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "block2 0.6.2",
  "console_error_panic_hook",
@@ -3887,7 +3887,7 @@ dependencies = [
 
 [[package]]
 name = "threers-fem"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "pollster 1.0.1",
  "rayon",
@@ -3897,7 +3897,7 @@ dependencies = [
 
 [[package]]
 name = "threers-fluid-ios"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "objc2 0.6.5",
  "objc2-core-foundation",
@@ -3907,18 +3907,18 @@ dependencies = [
 
 [[package]]
 name = "threers-fluid2d"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "threers",
 ]
 
 [[package]]
 name = "threers-font"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "threers-hop"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rayon",
  "threers",
@@ -3931,7 +3931,7 @@ dependencies = [
 
 [[package]]
 name = "threers-ios"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "objc2 0.6.5",
  "objc2-core-foundation",
@@ -3941,15 +3941,15 @@ dependencies = [
 
 [[package]]
 name = "threers-js"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "threers-math"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "threers-mechanism-tour"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "console_error_panic_hook",
  "threers",
@@ -3958,8 +3958,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "threers-metafile"
+version = "0.1.2"
+dependencies = [
+ "miniz_oxide",
+]
+
+[[package]]
 name = "threers-node"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "napi",
  "napi-build",
@@ -3972,7 +3979,7 @@ dependencies = [
 
 [[package]]
 name = "threers-ocean"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
@@ -3987,7 +3994,7 @@ dependencies = [
 
 [[package]]
 name = "threers-physics"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -4001,7 +4008,7 @@ dependencies = [
 
 [[package]]
 name = "threers-physics-bench"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "console_error_panic_hook",
  "threers-physics",
@@ -4010,7 +4017,7 @@ dependencies = [
 
 [[package]]
 name = "threers-probe"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "rlx",
@@ -4020,7 +4027,7 @@ dependencies = [
 
 [[package]]
 name = "threers-py"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -4032,7 +4039,7 @@ dependencies = [
 
 [[package]]
 name = "threers-robot-arm"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "threers-physics",
  "wasm-bindgen",
@@ -4040,7 +4047,7 @@ dependencies = [
 
 [[package]]
 name = "threers-softbody"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bytemuck",
  "libm",
@@ -4049,18 +4056,18 @@ dependencies = [
 
 [[package]]
 name = "threers-spell"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "threers-splat-sort"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "threers-swipe"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "half",
  "libc",
@@ -4074,7 +4081,7 @@ dependencies = [
 
 [[package]]
 name = "threers-swipe-web"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "js-sys",
  "threers-swipe",
@@ -4085,7 +4092,7 @@ dependencies = [
 
 [[package]]
 name = "threers-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "accesskit",
  "cpal",
@@ -4093,6 +4100,7 @@ dependencies = [
  "serde_json",
  "threers-captions",
  "threers-math",
+ "threers-spell",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "web-sys",
@@ -4100,7 +4108,7 @@ dependencies = [
 
 [[package]]
 name = "threers-ui-demo"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "js-sys",
  "threers",
@@ -4113,7 +4121,7 @@ dependencies = [
 
 [[package]]
 name = "threers-ui-demo-visionos"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "threers",
  "threers-ui",
@@ -4122,7 +4130,7 @@ dependencies = [
 
 [[package]]
 name = "threers-video"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "js-sys",
  "log",

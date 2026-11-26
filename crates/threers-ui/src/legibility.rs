@@ -117,6 +117,9 @@ pub(crate) fn stronger(token: Token, c: Rgba, text: Rgba) -> Rgba {
     };
     match token {
         Token::SecondaryText => toward(0.5),
+        // A shade on glass is what words stand on (a trough, a card): made
+        // solid it would be the text's own colour under them.
+        Token::Separator if c[3] < 0.5 => c,
         Token::Border | Token::Separator => toward(0.35),
         _ => c,
     }

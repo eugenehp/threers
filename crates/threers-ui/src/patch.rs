@@ -602,6 +602,12 @@ impl Patch {
     pub fn hstack(self, gap: f32) -> Self {
         self.row().gap(gap).align(Align::Center)
     }
+    /// A row that wraps onto more lines when it runs out of room (chips,
+    /// tags, buttons), `gap` between its children both ways, each line
+    /// lined up through their middles.
+    pub fn flow(self, gap: f32) -> Self {
+        self.hstack(gap).wrap()
+    }
 }
 
 impl Add for Patch {
@@ -739,7 +745,12 @@ impl Ui {
             self.token_style(node, &tokens);
         }
         for (state, p) in &flat.states {
-            let css = p.to_css();
+            // Its theme colours too, as `var(--token)` (they follow the
+            // theme).
+            let mut css = p.to_css();
+            for (name, t) in &p.tokens {
+                css.push_str(&format!("; {name}: var(--{})", t.css_name()));
+            }
             match state {
                 State::Hover => self.hover_style(node, &css),
                 State::Active => self.active_style(node, &css),
@@ -756,6 +767,31 @@ impl Ui {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A flow wraps what does not fit onto the next line, the gap between
+    /// lines as between items.
+    #[test]
+    fn a_flow_wraps_with_its_gap_both_ways() {
+        use crate::{FixedWidthText, Ui};
+        let mut ui = Ui::new();
+        let root = ui.root();
+        let flow = ui.add_box(
+            root,
+            (Patch::new().flow(Space::S) + Patch::new().width(100.0)).into(),
+        );
+        let items: Vec<_> = (0..3)
+            .map(|_| ui.add_box(flow, Patch::new().width(40.0).height(10.0).into()))
+            .collect();
+        ui.layout(400.0, 200.0, &mut FixedWidthText(7.0));
+        let r = |i: usize| ui.rect(items[i]);
+        assert_eq!(
+            r(1).x - (r(0).x + r(0).width),
+            Space::S,
+            "beside, a gap apart"
+        );
+        assert_eq!(r(2).x, r(0).x, "the third on the next line");
+        assert_eq!(r(2).y - (r(0).y + r(0).height), Space::S, "a gap below");
+    }
 
     #[test]
     fn the_right_one_wins_and_parts_come_away() {

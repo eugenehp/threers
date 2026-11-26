@@ -155,6 +155,7 @@ impl TextField {
         let command = m.control || m.meta;
         let n = self.len();
         let (a, z) = self.selection();
+        let key = crate::bidi::reading_key(&self.text, key);
         match key {
             "Enter" => FieldKey::Commit,
             "Escape" => FieldKey::Cancel,

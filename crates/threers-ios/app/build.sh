@@ -79,7 +79,7 @@ if [[ $kind == mac ]]; then
   shell=("$here/MacHarness.swift" "$here/Reality.swift")
 else
   bin=$app resources=$app plist=$app/Info.plist
-  shell=("$here/Harness.swift" "$here/Reality.swift")
+  shell=("$here/Harness.swift" "$here/Reality.swift" "$here/Pieces.swift")
 fi
 flags=()
 [[ $kind == vision-window ]] && flags=(-D THREERS_WINDOW)

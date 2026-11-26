@@ -106,6 +106,10 @@ fn attributes(n: &AccessNode, parent: Option<&AccessNode>) -> Vec<(String, Strin
             put("role", "heading".into());
             put("aria-level", level.clamp(1, 6).to_string());
         }
+        Role::TreeItem(level) => {
+            put("role", "treeitem".into());
+            put("aria-level", level.max(1).to_string());
+        }
         Role::TextArea => {
             put("role", "textbox".into());
             put("aria-multiline", "true".into());

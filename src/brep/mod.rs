@@ -38,6 +38,7 @@ pub mod blend;
 pub mod body;
 #[cfg(feature = "brep-kernel")]
 pub mod boolean;
+pub mod check;
 pub mod curve3d;
 #[cfg(feature = "brep-kernel")]
 pub mod fuse;
@@ -58,6 +59,7 @@ pub use blend::BlendDeclined;
 pub use body::{Body, BodyReport, Defect, Face, Shell, TrimLoop};
 #[cfg(feature = "brep-kernel")]
 pub use boolean::{BooleanOp, Declined};
+pub use check::Tangle;
 pub use curve3d::Curve3d;
 pub use settings::{settings, with_settings, ChamferCorner, Settings};
 #[cfg(feature = "brep-csg")]

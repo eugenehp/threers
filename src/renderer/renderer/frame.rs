@@ -2587,6 +2587,7 @@ impl Renderer {
                     .map(|m| &m.view);
                 let uv = self.uv_cache.get(&d.key).map(|u| &u.view);
                 let bg = std::sync::Arc::new(self.build_tex_bg(&d.slots, morph, uv));
+                self.tex_bgs_built += 1;
                 self.tex_bg_cache.insert(tex_keys[i], bg);
             }
         }

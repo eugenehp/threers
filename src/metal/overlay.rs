@@ -25,6 +25,9 @@ pub(crate) struct MetalOverlay {
     copies: HashMap<NSUInteger, Owned>,
     /// the premultiplied blend's ([`blend_texture`](Self::blend_texture))
     blends: HashMap<NSUInteger, Owned>,
+    /// `copies`, filtered up from a smaller texture
+    scaled: HashMap<NSUInteger, Owned>,
+    scaled_pass: bool,
 }
 
 impl MetalOverlay {
@@ -40,6 +43,7 @@ impl MetalOverlay {
         width: u32,
         height: u32,
         rows: Option<&[(u32, u32)]>,
+        cols: Option<(u32, u32)>,
         pass: &PassAttachments,
     ) -> Result<(), MetalError> {
         if rgba.len() < (width as usize) * (height as usize) * 4 {
@@ -69,6 +73,11 @@ impl MetalOverlay {
             _ => &whole[..],
         };
         let tex = self.texture.as_ref().map(|(t, _, _)| t.id()).expect("just made");
+        // only the columns that changed (a sidebar's, not the frame's width)
+        let (c0, c1) = match cols {
+            Some((a, b)) if !fresh && a < b && b <= width => (a, b),
+            _ => (0, width),
+        };
         for &(first, end) in bands {
             let (first, end) = (first.min(height), end.min(height));
             if end <= first {
@@ -76,9 +85,9 @@ impl MetalOverlay {
             }
             let stride = width as usize * 4;
             let region = MTLRegion {
-                origin: MTLOrigin { x: 0, y: first as NSUInteger, z: 0 },
+                origin: MTLOrigin { x: c0 as NSUInteger, y: first as NSUInteger, z: 0 },
                 size: MTLSize {
-                    width: width as NSUInteger,
+                    width: (c1 - c0) as NSUInteger,
                     height: (end - first) as NSUInteger,
                     depth: 1,
                 },
@@ -89,7 +98,7 @@ impl MetalOverlay {
                     sel!("replaceRegion:mipmapLevel:withBytes:bytesPerRow:"),
                     region,
                     0usize,
-                    rgba[first as usize * stride..].as_ptr() as *const std::ffi::c_void,
+                    rgba[first as usize * stride + c0 as usize * 4..].as_ptr() as *const std::ffi::c_void,
                     stride as NSUInteger,
                 );
             }
@@ -147,6 +156,15 @@ impl MetalOverlay {
         self.texture_pass(device, texture, pass, false)
     }
 
+    /// [`draw_texture`](Self::draw_texture) from a texture of any size,
+    /// filtered to fill the frame.
+    pub(crate) fn draw_texture_scaled(&mut self, device: &MetalDevice, texture: Id, pass: &PassAttachments) -> Result<(), MetalError> {
+        self.scaled_pass = true;
+        let r = self.texture_pass(device, texture, pass, false);
+        self.scaled_pass = false;
+        r
+    }
+
     /// Blend `texture` (premultiplied linear colour, the size of the pass)
     /// over the frame in `pass`, then present the drawable if it has one.
     pub(crate) fn blend_texture(&mut self, device: &MetalDevice, texture: Id, pass: &PassAttachments) -> Result<(), MetalError> {
@@ -156,8 +174,13 @@ impl MetalOverlay {
     fn texture_pass(&mut self, device: &MetalDevice, texture: Id, pass: &PassAttachments, over: bool) -> Result<(), MetalError> {
         let _pool = AutoreleasePool::new();
         let dst = if pass.resolve.is_null() { pass.color } else { pass.resolve };
-        let (pipelines, fragment) =
-            if over { (&mut self.blends, "fs_overlay_premultiplied") } else { (&mut self.copies, "fs_overlay") };
+        let (pipelines, fragment) = if over {
+            (&mut self.blends, "fs_overlay_premultiplied")
+        } else if self.scaled_pass {
+            (&mut self.scaled, "fs_overlay_scaled")
+        } else {
+            (&mut self.copies, "fs_overlay")
+        };
         let pipeline = match pipelines.get(&pass.color_format) {
             Some(p) => p.id(),
             None => {

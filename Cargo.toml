@@ -3,6 +3,7 @@ members = [
     ".",
     "crates/threers-math",
     "crates/threers-font",
+    "crates/threers-metafile",
     "crates/threers-audio",
     "crates/threers-video",
     "crates/threers-captions",
@@ -53,7 +54,7 @@ wgpu-hal = { path = "vendor/wgpu-hal" }
 # crates and the version pins between crates repeat it literally, and
 # `scripts/release-versions.sh` checks that they agree.
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 
 [package]
 name = "threers"
@@ -185,12 +186,15 @@ render = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 # `sketch()` and the winit-window `WindowRenderer`: pulls in winit 0.29. Turn it
 # off (`default-features = false`) for a headless renderer or when the host
 # owns its own window / winit version (`SurfaceRenderer` needs neither).
-sketch = ["render", "dep:winit"]
+sketch = ["render", "dep:winit", "dep:objc2"]
 # Subtitles — SRT + WebVTT, on-screen and burned in.
 captions = ["dep:threers-captions"]
 # A retained UI: CSS-subset styles, flexbox layout, painting and hit-testing
 # (implies captions, for text).
 ui = ["captions", "dep:threers-ui"]
+# The UI's accessibility tree for AccessKit (`threers::ui::a11y_accesskit`):
+# VoiceOver, Narrator and Orca, through its adapter for the window.
+accessibility = ["ui", "threers-ui/accesskit"]
 # The system clipboard for text inputs' copy, cut and paste (⌘/Ctrl+C, X, V)
 # on macOS, Windows and Linux: `threers::ui::system_clipboard`. Without it they
 # copy and paste between the app's own fields.
@@ -257,6 +261,8 @@ gif = ["native-codec", "threers-codec/gif"]
 # layer a headset takes its frames from; the renderer itself may be WebGPU.
 xr = [
     "render",
+    # (a phone's AR reads where its canvas is: `xr::phone`)
+    "web-sys/DomRect",
     "web-sys/WebGl2RenderingContext",
     "web-sys/WebGlFramebuffer",
     "web-sys/WebGlProgram",
@@ -265,7 +271,9 @@ xr = [
     "web-sys/WebGlUniformLocation",
 ]
 # Second renderer on Metal via the Objective-C runtime (macOS/iOS).
-metal = ["render"]
+# (objc2 and objc2-metal, which wgpu already builds on, and pollster: wgpu on
+# the backend's own device, `metal::wgpu_on`.)
+metal = ["render", "dep:objc2", "dep:objc2-metal", "dep:pollster"]
 # The fluids on Metal alone (`metal::MetalFluid`, `metal::MetalFluid3d`): no
 # wgpu, no scene renderer — for an app that owns its MTLDevice and wants only
 # the fluid.
@@ -353,18 +361,18 @@ wasm-full = ["captions", "openscad", "native-codec", "gif", "nurbs", "planet", "
 
 [dependencies]
 # Vectors, matrices, colours and the rest of `threers::math`; no dependencies.
-threers-math = { path = "crates/threers-math", version = "0.1.1" }
+threers-math = { path = "crates/threers-math", version = "0.1.2" }
 # Audio sources, listeners and positional audio as scene nodes (`audio`).
-threers-audio = { path = "crates/threers-audio", version = "0.1.1", optional = true }
+threers-audio = { path = "crates/threers-audio", version = "0.1.2", optional = true }
 # The caption data model (`captions`): tracks, cues, SRT/WebVTT; no dependencies.
-threers-captions = { path = "crates/threers-captions", version = "0.1.1", optional = true }
+threers-captions = { path = "crates/threers-captions", version = "0.1.2", optional = true }
 # The retained UI (`ui`), re-exported as `threers::ui`.
-threers-ui = { path = "crates/threers-ui", version = "0.1.1", optional = true }
+threers-ui = { path = "crates/threers-ui", version = "0.1.2", optional = true }
 # The codecs (`native-codec`, `native-decode`, `gif`, ...): pure Rust, no wgpu/winit.
-threers-codec = { path = "crates/threers-codec", version = "0.1.1", default-features = false, optional = true }
+threers-codec = { path = "crates/threers-codec", version = "0.1.2", default-features = false, optional = true }
 # Soft bodies that tear and regrow (`softbody`): the solver, on its own so the
 # wasm build can optimise it for speed (see `profile.release-wasm` below).
-threers-softbody = { path = "crates/threers-softbody", version = "0.1.1", features = ["gpu"], optional = true }
+threers-softbody = { path = "crates/threers-softbody", version = "0.1.2", features = ["gpu"], optional = true }
 wgpu = { version = "30", optional = true }
 bytemuck = { version = "1.16", features = ["derive"], optional = true }
 # The 3D fluid's WGSL, translated to MSL for the Metal backend (`metal-fluid`):
@@ -394,7 +402,7 @@ zune-jpeg = { version = "0.5", optional = true }
 ruzstd = { version = "0.9", optional = true, default-features = false, features = ["std"] }
 # The splats' back-to-front sort (`splats`), on its own so the wasm build can
 # optimise it for speed (see `profile.release-wasm` below).
-threers-splat-sort = { path = "crates/threers-splat-sort", version = "0.1.1", optional = true }
+threers-splat-sort = { path = "crates/threers-splat-sort", version = "0.1.2", optional = true }
 
 # Native-only deps (pollster only makes sense outside wasm).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -587,6 +595,14 @@ required-features = ["ui"]
 [[example]]
 name = "virtual_keyboards"
 path = "examples/virtual_keyboards.rs"
+required-features = ["ui"]
+
+[[example]]
+name = "swiftui_kit"
+required-features = ["ui"]
+
+[[example]]
+name = "ui_fills"
 required-features = ["ui"]
 
 [[example]]
@@ -979,6 +995,10 @@ name = "headless_metal_backend"
 required-features = ["metal"]
 
 [[test]]
+name = "metal_wgpu_bridge"
+required-features = ["metal", "ui"]
+
+[[test]]
 name = "metal_quad_view"
 required-features = ["metal"]
 
@@ -1033,6 +1053,12 @@ required-features = ["ui"]
 
 [[test]]
 name = "xr_gpu"
+required-features = ["xr"]
+
+# WebXR in a real browser, on a headset the page fakes (wasm only):
+# `FEATURES=xr TEST=webxr_web scripts/wasm-browser-test.sh`.
+[[test]]
+name = "webxr_web"
 required-features = ["xr"]
 
 [[test]]

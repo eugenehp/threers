@@ -111,6 +111,18 @@ pub struct Volume<A: App> {
     /// under it ([`Place::Toolbar`]), or over the screen ([`Place::Screen`]):
     /// [`SURFACES`] in order.
     surfaces: [Strip; 3],
+    /// The app's pieces as of the last frame, [`PIECE_FLOATS`] each, and
+    /// the UI of each by its id.
+    pieces: Vec<f32>,
+    piece_ids: Vec<u32>,
+    /// Those on glass.
+    on_glass: Vec<(u32, bool)>,
+    /// The pieces pressed by looking, as last read, and the dwell on them;
+    /// what the shell shows of it ([`gaze`](Self::gaze)).
+    dwelt: Vec<crate::Piece>,
+    dwell: crate::gaze::Dwell,
+    gaze: [f32; 8],
+    piece_uis: HashMap<u32, Strip>,
     start: Instant,
     last: f64,
     /// Shader materials RealityKit cannot run, drawn by threers for it
@@ -139,6 +151,25 @@ pub struct Volume<A: App> {
 /// view on an iPhone, an iPad or a Mac.
 pub const SURFACES: [Place; 3] = [Place::Image, Place::Toolbar, Place::Screen];
 
+/// A piece's UI is surface `PIECES +` its id to the shell.
+pub const PIECES: usize = 256;
+
+/// Floats a piece ([`Volume::pieces`]): its id, where (0 the volume, 1 the
+/// room), its width and height (UI pixels), metres a pixel, its place (3)
+/// and rotation (4), whether it faces you, its glass (0 none, 1 the
+/// system's, 2 liquid, 3 a plate, 4 feathered, 5 frosted, 6 clear, 7 a
+/// prism, 8 none: bare), the glass's corners (UI pixels), thickness (metres; feathered,
+/// how soft, UI pixels) and tint (4), how far its controls stand out
+/// (metres), whether it can be moved, whether its glass is pale, and how see-through it
+/// is made.
+pub const PIECE_FLOATS: usize = 24;
+
+/// The largest id a piece can have: the shell reads it as a float.
+pub const MAX_PIECE_ID: u32 = 1 << 23;
+
+/// The largest side a piece's UI can have, UI pixels.
+const MAX_PIECE_SIDE: f32 = 2048.0;
+
 /// One of the volume's UI surfaces, as last handed to the shell.
 struct Strip {
     ui: SurfaceUi,
@@ -152,6 +183,14 @@ struct Strip {
     controls: Vec<Control>,
     sent: Option<u64>,
     json: String,
+}
+
+/// What [`Volume::ui`] hands the shell.
+enum Send {
+    Nothing,
+    /// It is not shown now.
+    Hidden,
+    Pixels,
 }
 
 impl Default for Strip {
@@ -186,6 +225,13 @@ impl<A: App> Volume<A> {
             geometry: Geometry::default(),
             yaw: 0.0,
             surfaces: Default::default(),
+            pieces: vec![],
+            piece_ids: vec![],
+            on_glass: vec![],
+            dwelt: vec![],
+            dwell: Default::default(),
+            gaze: [0.0; 8],
+            piece_uis: HashMap::new(),
             start: Instant::now(),
             last: 0.0,
             baker: Default::default(),
@@ -259,6 +305,8 @@ impl<A: App> Volume<A> {
         crate::set_drawn_by_realitykit(self.quad.is_none());
         self.app.update(&mut self.scene, &frame);
         crate::set_drawn_by_realitykit(false);
+        self.read_pieces();
+        self.look(time);
         self.scene.update_world();
         self.items.clear();
         for (id, o) in self.scene.arena.nodes.iter() {
@@ -288,6 +336,137 @@ impl<A: App> Volume<A> {
         self.baked.retain(|id, _| scene.get(*id).is_some());
         self.lights = reality::lights(&self.scene, |id| self.visible(id));
         self.items.len()
+    }
+
+    /// The app's pieces, those that can be shown: finite, of some size, each
+    /// id once.
+    fn read_pieces(&mut self) {
+        self.pieces.clear();
+        self.piece_ids.clear();
+        self.on_glass.clear();
+        self.dwelt.clear();
+        for p in self.app.pieces() {
+            let q = p.rotation;
+            let place = [p.position.x, p.position.y, p.position.z, q.x, q.y, q.z, q.w];
+            let size = [p.width, p.height, p.metres_per_pixel];
+            if p.id > MAX_PIECE_ID
+                || self.piece_ids.contains(&p.id)
+                || !place.iter().all(|v| v.is_finite())
+                || !size.iter().all(|v| v.is_finite() && *v > 0.0)
+                || q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w < 1e-6
+            {
+                continue;
+            }
+            self.piece_ids.push(p.id);
+            if p.dwell > 0.0 && p.dwell.is_finite() {
+                let mut kept = p;
+                (kept.width, kept.height) = (p.width.min(MAX_PIECE_SIDE), p.height.min(MAX_PIECE_SIDE));
+                self.dwelt.push(kept);
+            }
+            if p.glass != crate::Glass::None {
+                self.on_glass.push((p.id, p.glass.is_pale()));
+            }
+            let at = if p.at == crate::PieceIn::Room { 1.0 } else { 0.0 };
+            let (w, h) = (p.width.min(MAX_PIECE_SIDE), p.height.min(MAX_PIECE_SIDE));
+            self.pieces.extend([p.id as f32, at, w, h, p.metres_per_pixel]);
+            self.pieces.extend(place);
+            let some = |v: f32, most: f32| if v.is_finite() { v.clamp(0.0, most) } else { 0.0 };
+            let half = w.min(h) / 2.0;
+            let (kind, radius, thick, tint) = match p.glass {
+                crate::Glass::None => (0.0, 0.0, 0.0, [0.0; 4]),
+                crate::Glass::Bare => (8.0, 0.0, 0.0, [0.0; 4]),
+                crate::Glass::System { radius } => (1.0, some(radius, half), 0.0, [0.0; 4]),
+                crate::Glass::Plate { radius } => (3.0, some(radius, half), 0.0, [0.0; 4]),
+                crate::Glass::Feathered { radius, soft } => (4.0, some(radius, half), some(soft, half), [0.0; 4]),
+                crate::Glass::Frosted { radius } => (5.0, some(radius, half), 0.0, [0.0; 4]),
+                crate::Glass::Clear { radius, thickness } => {
+                    (6.0, some(radius, half), some(thickness, 0.1), [1.0, 1.0, 1.0, 0.08])
+                }
+                crate::Glass::Prism { radius, thickness } => {
+                    (7.0, some(radius, half), some(thickness, 0.1), [1.0, 1.0, 1.0, 0.04])
+                }
+                crate::Glass::Liquid { radius, thickness, tint } => {
+                    (2.0, some(radius, half), some(thickness, 0.1), tint.map(|t| some(t, 1.0)))
+                }
+            };
+            self.pieces.extend([f32::from(u8::from(p.faces_you)), kind, radius, thick]);
+            self.pieces.extend(tint);
+            self.pieces.extend([some(p.raised, 0.05), f32::from(u8::from(p.movable)), f32::from(u8::from(p.glass.is_pale())), if crate::legibility().is_some_and(|l| l.reduce_transparency) { 0.0 } else { some(p.see_through, 0.9) }]);
+        }
+        let ids = &self.piece_ids;
+        self.piece_uis.retain(|id, _| ids.contains(id));
+        for id in ids {
+            self.piece_uis.entry(*id).or_default();
+        }
+    }
+
+    /// Head-gaze dwell ([`Piece::dwell`](crate::Piece::dwell)): the control
+    /// the head points at, pressed once pointed at long enough.
+    fn look(&mut self, now: f64) {
+        // where each is shown: moved by its bar, turned to face you, in its
+        // volume (in the room's coordinates: a volume's piece is pointed at
+        // only while the shell says where it is)
+        let shown: Vec<crate::Piece> = self
+            .dwelt
+            .iter()
+            .filter_map(|p| match crate::piece_pose(p.id) {
+                Some((at, turn, scale)) => {
+                    let mut p = *p;
+                    (p.position, p.rotation, p.faces_you, p.at) = (at, turn, false, crate::PieceIn::Room);
+                    p.metres_per_pixel *= scale;
+                    Some(p)
+                }
+                None => (p.at == crate::PieceIn::Room).then_some(*p),
+            })
+            .collect();
+        let hit = crate::head().and_then(|h| crate::gaze::hit(h, &shown));
+        // (one control while its words change, "Go 1" to "Go 2": by its node)
+        let found = hit.and_then(|h| {
+            let strip = self.piece_uis.get(&h.piece)?;
+            let c = crate::gaze::control_at(&strip.controls, h.x, h.y)?;
+            let mut id = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&c.node, &mut id);
+            Some((h.piece, std::hash::Hasher::finish(&id), c.key))
+        });
+        let target = found.map(|(piece, node, _)| (piece, node));
+        let wait = hit.and_then(|h| shown.iter().find(|p| p.id == h.piece)).map_or(1.0, |p| p.dwell);
+        let (k, press) = self.dwell.step(target, now, wait);
+        if let (true, Some((piece, _, key))) = (press, found) {
+            crate::threers_ios_press_on(PIECES as u32 + piece, key);
+        }
+        self.gaze = match hit {
+            Some(h) => [if target.is_some() { 1.0 } else { 0.5 }, h.at.x, h.at.y, h.at.z, h.normal.x, h.normal.y, h.normal.z, k],
+            None => [0.0; 8],
+        };
+    }
+
+    /// Where the head points, for the shell to show: whether at a piece
+    /// pressed by looking (0 none, 0.5 a piece, 1 one of its controls), the
+    /// point (metres, in the room) and the piece's facing, and how far the
+    /// dwell is along (0 to 1).
+    pub fn gaze(&self) -> [f32; 8] {
+        self.gaze
+    }
+
+    /// The app's pieces as of the last [`frame`](Self::frame),
+    /// [`PIECE_FLOATS`] each.
+    pub fn pieces(&self) -> &[f32] {
+        &self.pieces
+    }
+
+    /// Where surface `which` is: [`SURFACES`], or a piece ([`PIECES`]).
+    fn place(which: usize) -> Option<Place> {
+        match which.checked_sub(PIECES) {
+            Some(id) => u32::try_from(id).ok().map(Place::Piece),
+            None => SURFACES.get(which).copied(),
+        }
+    }
+
+    fn strip(&mut self, which: usize) -> Option<&mut Strip> {
+        match which.checked_sub(PIECES) {
+            Some(id) => self.piece_uis.get_mut(&u32::try_from(id).ok()?),
+            None => self.surfaces.get_mut(which),
+        }
     }
 
     /// The scene's directional, point and spot lights as of the last
@@ -959,17 +1138,45 @@ impl<A: App> Volume<A> {
     /// ([`crate::threers_ios_touch`]) since the last call reach the app
     /// first.
     pub fn ui(&mut self, which: usize, width: u32, height: u32, scale: f32) -> Option<&[u8]> {
-        let place = *SURFACES.get(which)?;
+        let place = Self::place(which)?;
+        // taken out while the app is called, and put back after
+        let mut strip = std::mem::take(self.strip(which)?);
+        let send = self.draw_ui(&mut strip, which, place, width, height, scale);
+        let kept = self.strip(which)?;
+        *kept = strip;
+        match send {
+            Send::Nothing => None,
+            Send::Hidden => Some(&[]),
+            Send::Pixels => Some(kept.ui.pixels.pixels()),
+        }
+    }
+
+    /// [`ui`](Self::ui)'s, for `strip`.
+    fn draw_ui(&mut self, strip: &mut Strip, which: usize, place: Place, width: u32, height: u32, scale: f32) -> Send {
         let surface = self.surface(place, width, height, scale);
         let scale = surface.scale;
-        let strip = &mut self.surfaces[which];
+        if let Place::Piece(id) = place {
+            // colours to be read on glass, unless it has a theme of its own
+            use threers::ui::environment::Tokens;
+            let theme = match self.on_glass.iter().find(|(on, _)| *on == id) {
+                None => Tokens::default(),
+                Some((_, false)) => Tokens::glass(),
+                Some((_, true)) => Tokens::pale_glass(),
+            };
+            if let Some(ui) = self.app.ui(&surface) {
+                let ours = [Tokens::default(), Tokens::glass(), Tokens::pale_glass()];
+                if *ui.tokens() != theme && ours.contains(ui.tokens()) {
+                    ui.set_tokens(theme);
+                }
+            }
+        }
         // lay it out first: the input lands on what is shown (and what
         // changed by itself — the room opening, the data arriving — counts)
         let (_, before) = strip.ui.update(&mut self.app, &surface);
         let button = PointerButton::Primary;
         // a press on a control's native view: a click at its middle
         let pressed: Vec<(f32, f32)> =
-            crate::take_presses_for(|k| native::find(&strip.controls, k).is_some())
+            crate::take_presses_for(which as u32, |k| native::find(&strip.controls, k).is_some())
                 .into_iter()
                 .filter_map(|k| native::find(&strip.controls, k))
                 .map(|c| c.centre())
@@ -989,12 +1196,14 @@ impl<A: App> Volume<A> {
                 .ui_event(place, Event::PointerDown { x, y, button }, time);
             self.app
                 .ui_event(place, Event::PointerUp { x, y, button }, time);
+            // and away: a press is no pointer left over it (its hover look
+            // would stay till the next)
+            self.app.ui_event(place, Event::PointerMove { x: -1e6, y: -1e6 }, time);
         }
         // typed into a native text field: its control focused (a click on
         // it), then given the text
-        let strip = &self.surfaces[which];
         let typed: Vec<((f32, f32), String)> =
-            crate::take_texts_for(|k| native::find(&strip.controls, k).is_some())
+            crate::take_texts_for(which as u32, |k| native::find(&strip.controls, k).is_some())
                 .into_iter()
                 .filter_map(|(k, t)| native::find(&strip.controls, k).map(|c| (c.centre(), t)))
                 .collect();
@@ -1027,7 +1236,6 @@ impl<A: App> Volume<A> {
                 time,
             );
         }
-        let strip = &mut self.surfaces[which];
         let (shown, changed) = strip.ui.update(&mut self.app, &surface);
         let changed = changed || before;
         strip.controls = match (shown, self.app.ui(&surface)) {
@@ -1038,11 +1246,11 @@ impl<A: App> Volume<A> {
             // hidden: say so once, and paint it whole when it comes back
             strip.fresh = true;
             let tell = !std::mem::replace(&mut strip.told_hidden, true);
-            return tell.then_some(&[][..]);
+            return if tell { Send::Hidden } else { Send::Nothing };
         }
         strip.told_hidden = false;
         let fresh = std::mem::replace(&mut strip.fresh, false);
-        (changed || fresh).then(|| strip.ui.pixels.pixels())
+        if changed || fresh { Send::Pixels } else { Send::Nothing }
     }
 
     /// The controls of surface `which` as [`ui`](Self::ui) last drew them,
@@ -1052,7 +1260,7 @@ impl<A: App> Volume<A> {
     /// its key ([`crate::threers_ios_press`]). `None` while they are as they
     /// were.
     pub fn controls(&mut self, which: usize) -> Option<&str> {
-        let strip = self.surfaces.get_mut(which)?;
+        let strip = self.strip(which)?;
         let v = native::version(&strip.controls);
         if strip.sent == Some(v) {
             return None;
@@ -1311,6 +1519,29 @@ pub unsafe fn lights<A: App>(v: *mut c_void, len: *mut usize) -> *const f32 {
 }
 
 /// # Safety
+/// As [`get`]; `len` writable. The floats hold until the next frame.
+#[doc(hidden)]
+pub unsafe fn pieces<A: App>(v: *mut c_void, len: *mut usize) -> *const f32 {
+    let (Some(v), false) = (unsafe { get::<A>(v) }, len.is_null()) else {
+        return std::ptr::null();
+    };
+    let p = v.pieces();
+    unsafe { *len = p.len() };
+    p.as_ptr()
+}
+
+/// # Safety
+/// As [`get`]; `out` writable for 8 floats ([`Volume::gaze`]).
+#[doc(hidden)]
+pub unsafe fn gaze<A: App>(v: *mut c_void, out: *mut f32) {
+    let (Some(v), false) = (unsafe { get::<A>(v) }, out.is_null()) else {
+        return;
+    };
+    let g = v.gaze();
+    unsafe { std::ptr::copy_nonoverlapping(g.as_ptr(), out, g.len()) };
+}
+
+/// # Safety
 /// As [`get`].
 #[doc(hidden)]
 pub unsafe fn lighting<A: App>(v: *mut c_void) -> u32 {
@@ -1530,5 +1761,230 @@ mod tests {
         assert_eq!(sky.len(), 32 * 16 * 4);
         assert!(sky[2] > sky[0], "blue above");
         assert!(v.environment(32).is_none(), "unchanged: nothing");
+    }
+
+    /// A picture beside the volume, opaque and see-through, in a scene of
+    /// nothing else.
+    struct Picture(threers::ui::Ui);
+
+    impl App for Picture {
+        fn setup(_: &mut Scene) -> Self {
+            use threers::ui::{image::Image, style, Ui};
+            let mut ui = Ui::new();
+            let root = ui.root();
+            for (x, c) in [(10.0, [200, 40, 20, 255]), (60.0, [20, 40, 200, 128])] {
+                let image = Image::new(4, 4, c.repeat(16)).unwrap();
+                let n = ui.add_image(root, style! { position: absolute; top: 10px; width: 40px; height: 40px; }, image);
+                ui.update_style(n, |s| s.left = threers::ui::Length::Px(x));
+            }
+            Picture(ui)
+        }
+        fn ui(&mut self, _: &Surface) -> Option<&mut threers::ui::Ui> {
+            Some(&mut self.0)
+        }
+    }
+
+    /// The shell shows a surface's pixels and nothing under them: its
+    /// images are there, none left to the GPU.
+    #[test]
+    fn a_surfaces_images_are_in_its_pixels() {
+        for which in 0..SURFACES.len() {
+            let mut v = Volume::<Picture>::new();
+            let px = v.ui(which, 240, 160, 2.0).expect("painted").to_vec();
+            let at = |x: usize, y: usize| &px[(y * 240 + x) * 4..][..4];
+            assert_eq!(at(60, 60), [200, 40, 20, 255], "{:?}: opaque", SURFACES[which]);
+            assert!(at(160, 60)[3] > 100, "{:?}: see-through", SURFACES[which]);
+            assert_eq!(at(220, 140)[3], 0, "{:?}", SURFACES[which]);
+        }
+    }
+
+    /// Two buttons alike, each a piece by itself, and one hidden.
+    struct Pieces {
+        uis: HashMap<u32, (threers::ui::Ui, threers::ui::input::Input<u32>, u32)>,
+        list: Vec<crate::Piece>,
+    }
+
+    impl App for Pieces {
+        fn setup(_: &mut Scene) -> Self {
+            use threers::ui::{input::Input, style, Role, Semantics, Ui};
+            let uis = [1, 2]
+                .map(|id| {
+                    let (mut ui, mut input) = (Ui::new(), Input::new());
+                    let root = ui.root();
+                    let b = ui.add_box(root, style! { width: 100px; height: 40px; background: #ff0000; });
+                    ui.set_semantics(b, Semantics::new(Role::Button).label("Go"));
+                    input.on_click(b, |n: &mut u32, _, _| *n += 1);
+                    (id, (ui, input, 0))
+                })
+                .into();
+            let at = |id, x| crate::Piece::new(id, crate::PieceIn::Room, 100.0, 40.0, Vector3::new(x, 1.2, -1.0));
+            let list = vec![at(1, 0.0), at(2, 0.3), at(2, 9.0), at(3, f32::NAN), at(u32::MAX, 0.0)];
+            Pieces { uis, list }
+        }
+        fn pieces(&mut self) -> Vec<crate::Piece> {
+            self.list.clone()
+        }
+        fn ui(&mut self, s: &Surface) -> Option<&mut threers::ui::Ui> {
+            match s.place {
+                Place::Piece(id) => self.uis.get_mut(&id).map(|u| &mut u.0),
+                _ => None,
+            }
+        }
+        fn ui_event(&mut self, place: Place, event: Event, _: f64) -> bool {
+            let Place::Piece(id) = place else { return false };
+            let (ui, input, n) = self.uis.get_mut(&id).unwrap();
+            input.dispatch(ui, n, event);
+            true
+        }
+    }
+
+    /// A piece is a UI of its own: drawn by itself, pressed by itself though
+    /// another is just like it, gone when the app leaves it out.
+    #[test]
+    fn pieces_stand_by_themselves() {
+        let mut v = Volume::<Pieces>::new();
+        v.frame();
+        let p = v.pieces().to_vec();
+        assert_eq!(p.len(), 2 * PIECE_FLOATS, "each once, the impossible left out");
+        assert_eq!((p[0], p[1], p[2], p[3], p[6]), (1.0, 1.0, 100.0, 40.0, 1.2));
+        assert_eq!((p[PIECE_FLOATS], p[13]), (2.0, 0.0));
+        let draw = |v: &mut Volume<Pieces>, id: usize| v.ui(PIECES + id, 200, 80, 2.0).map(<[u8]>::to_vec);
+        for id in [1, 2] {
+            assert_eq!(draw(&mut v, id).expect("drawn")[..4], [255, 0, 0, 255]);
+        }
+        assert!(draw(&mut v, 1).is_none(), "as it was");
+        assert!(draw(&mut v, 7).is_none(), "there is none");
+        let json = |v: &mut Volume<Pieces>, id: usize| v.controls(PIECES + id).map(str::to_owned);
+        let (a, b) = (json(&mut v, 1).unwrap(), json(&mut v, 2).unwrap());
+        assert_eq!(a, b, "alike, key and all");
+        let key: u64 = a.split("\"key\":\"").nth(1).unwrap().split('"').next().unwrap().parse().unwrap();
+        crate::threers_ios_press_on((PIECES + 2) as u32, key);
+        draw(&mut v, 1);
+        draw(&mut v, 2);
+        assert_eq!((v.app().uis[&1].2, v.app().uis[&2].2), (0, 1), "the one pressed");
+        // a finger on it: down and up
+        for phase in [0, 2] {
+            crate::threers_ios_touch((PIECES + 1) as u32, phase, 40.0, 40.0);
+        }
+        draw(&mut v, 2);
+        draw(&mut v, 1);
+        assert_eq!((v.app().uis[&1].2, v.app().uis[&2].2), (1, 1));
+        // left out, it goes; back, it is drawn whole
+        v.app().list.truncate(1);
+        v.frame();
+        assert_eq!(v.pieces().len(), PIECE_FLOATS);
+        assert!(draw(&mut v, 2).is_none());
+        let mut again = crate::Piece::new(2, crate::PieceIn::Volume, 100.0, 40.0, Vector3::ZERO);
+        again.glass = crate::Glass::Liquid { radius: 99.0, thickness: 0.02, tint: [0.2, 0.4, f32::NAN, 0.5] };
+        v.app().list.push(again);
+        v.frame();
+        assert_eq!(v.pieces()[PIECE_FLOATS + 1], 0.0, "in the volume");
+        assert_eq!(v.pieces()[PIECE_FLOATS + 13..][..7], [2.0, 20.0, 0.02, 0.2, 0.4, 0.0, 0.5], "its glass, as far as it can be");
+        assert!(draw(&mut v, 2).is_some());
+    }
+
+    /// A piece in the volume is pressed by looking only while the shell says
+    /// where it is shown in the room.
+    #[test]
+    fn a_volume_piece_is_looked_at_where_it_is_shown() {
+        struct One(threers::ui::Ui, u32);
+        impl App for One {
+            fn setup(_: &mut Scene) -> Self {
+                let mut ui = threers::ui::Ui::new();
+                let b = ui.add_box(ui.root(), threers::ui::style! { width: 100%; height: 100%; });
+                ui.set_semantics(b, threers::ui::Semantics::new(threers::ui::Role::Button).label("Go"));
+                One(ui, 0)
+            }
+            fn pieces(&mut self) -> Vec<crate::Piece> {
+                let mut p = crate::Piece::new(77, crate::PieceIn::Volume, 100.0, 100.0, Vector3::ZERO);
+                p.dwell = 0.2;
+                vec![p]
+            }
+            fn ui(&mut self, s: &crate::Surface) -> Option<&mut threers::ui::Ui> {
+                matches!(s.place, Place::Piece(77)).then_some(&mut self.0)
+            }
+            fn ui_event(&mut self, _: Place, e: threers::ui::input::Event, _: f64) -> bool {
+                if matches!(e, threers::ui::input::Event::PointerUp { .. }) {
+                    self.1 += 1;
+                }
+                true
+            }
+        }
+        let mut v: Volume<One> = Volume::new();
+        let frame = |v: &mut Volume<One>| {
+            crate::threers_ios_head(0.0, 1.5, 0.0, 0.0, 0.0, 0.0, 1.0);
+            v.frame();
+            v.ui(PIECES + 77, 100, 100, 1.0);
+            v.gaze()[0]
+        };
+        frame(&mut v);
+        assert_eq!(frame(&mut v), 0.0, "where in the room is not known");
+        crate::threers_ios_piece_pose(77, 0.0, 1.5, -1.0, 0.0, 0.0, 0.0, 1.0, 1.5);
+        assert_eq!(frame(&mut v), 1.0, "shown a metre ahead");
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        crate::threers_ios_piece_pose(77, 0.0, 1.5, -1.0, 0.0, 0.0, 0.0, 1.0, 1.5);
+        frame(&mut v);
+        crate::threers_ios_piece_pose(77, 0.0, 1.5, -1.0, 0.0, 0.0, 0.0, 1.0, 1.5);
+        frame(&mut v);
+        assert_eq!(v.app().1, 1, "pressed");
+    }
+
+    /// Pieces laid in rows and columns meet at their edges and line up.
+    #[test]
+    fn pieces_line_up() {
+        use crate::{Align, Piece, PieceIn};
+        use threers::math::Quaternion;
+        let some = || {
+            [(200.0, 100.0), (100.0, 300.0), (400.0, 50.0)].map(|(w, h)| {
+                let mut p = Piece::new(0, PieceIn::Room, w, h, Vector3::ZERO);
+                p.metres_per_pixel = 0.001;
+                p
+            })
+        };
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-5;
+        let middle = Vector3::new(1.0, 1.5, -2.0);
+        for align in [Align::Start, Align::Center, Align::End] {
+            let mut p = some();
+            Piece::row(&mut p, middle, Quaternion::IDENTITY, 0.02, align);
+            for w in p.windows(2) {
+                let gap = (w[1].position.x - w[1].metres().0 / 2.0) - (w[0].position.x + w[0].metres().0 / 2.0);
+                assert!(near(gap, 0.02), "{gap}");
+            }
+            let (l, r) = (p[0].position.x - 0.1, p[2].position.x + 0.2);
+            assert!(near((l + r) / 2.0, 1.0), "centred");
+            let edge = |q: &Piece| match align {
+                Align::Start => q.position.y + q.metres().1 / 2.0,
+                Align::Center => q.position.y,
+                Align::End => q.position.y - q.metres().1 / 2.0,
+            };
+            assert!(p.iter().all(|q| near(edge(q), edge(&p[0])) && near(q.position.z, -2.0)), "{align:?}");
+            let mut p = some();
+            Piece::column(&mut p, middle, Quaternion::IDENTITY, 0.02, align);
+            for w in p.windows(2) {
+                let gap = (w[0].position.y - w[0].metres().1 / 2.0) - (w[1].position.y + w[1].metres().1 / 2.0);
+                assert!(near(gap, 0.02), "{gap}");
+            }
+            let edge = |q: &Piece| match align {
+                Align::Start => q.position.x - q.metres().0 / 2.0,
+                Align::Center => q.position.x,
+                Align::End => q.position.x + q.metres().0 / 2.0,
+            };
+            assert!(p.iter().all(|q| near(edge(q), edge(&p[0]))), "{align:?}");
+        }
+        // turned, a row turns whole
+        let mut p = some();
+        let turn = Quaternion::from_axis_angle(Vector3::new(0.0, 1.0, 0.0), std::f32::consts::FRAC_PI_2);
+        Piece::row(&mut p, middle, turn, 0.0, Align::Center);
+        assert!(p.iter().all(|q| near(q.position.x, 1.0) && near(q.position.y, 1.5)));
+        // round you: each as far off, facing back
+        let mut p = some();
+        Piece::around(&mut p, 1.4, 1.5, 1.2);
+        for q in &p {
+            assert!(near(q.position.x.hypot(q.position.z), 1.5));
+            let facing = Vector3::new(0.0, 0.0, 1.0).apply_quaternion(q.rotation);
+            assert!(near(facing.x, -q.position.x / 1.5) && near(facing.z, -q.position.z / 1.5), "{facing:?}");
+        }
+        assert!(p[0].position.x < 0.0 && p[2].position.x > 0.0);
+        Piece::row(&mut [], middle, turn, 0.1, Align::Start);
     }
 }

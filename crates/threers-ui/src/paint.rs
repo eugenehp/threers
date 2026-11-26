@@ -1,6 +1,7 @@
 //! Painting a laid-out [`Ui`]: backgrounds, borders, text and paths, in tree
 //! order, through a [`Painter`].
 
+use crate::environment::LayoutDirection;
 use super::layout::TextMeasure;
 use super::style::{Display, FontWeight, Rgba, Style};
 use super::tree::{NodeId, NodeKind, Rect, Ui};
@@ -20,6 +21,8 @@ pub struct TextStyle {
     /// then the run's box, taller than wide.
     pub vertical: bool,
     pub italic: bool,
+    /// Pixels after each character (`letter-spacing`).
+    pub letter_spacing: f32,
 }
 
 impl TextStyle {
@@ -32,6 +35,7 @@ impl TextStyle {
             line_through: style.line_through,
             vertical: style.vertical,
             italic: style.italic,
+            letter_spacing: style.letter_spacing,
         }
     }
 
@@ -291,6 +295,15 @@ pub trait Painter: TextMeasure {
         self.fill_rect(rect, color);
     }
 
+    /// A rectangle with each corner its own radius (top-left, top-right,
+    /// bottom-right, bottom-left: `border-radius: 8px 0 0 8px`). By default
+    /// a path (each corner a quarter ellipse's Bézier), which every painter
+    /// draws; one with a better way may override it.
+    fn fill_rounded_rect_corners(&mut self, rect: Rect, radii: [f32; 4], color: Rgba) {
+        let d = corners_path(rect.width, rect.height, radii);
+        self.path(rect, &[d], [0.0, 0.0, rect.width.max(1e-3), rect.height.max(1e-3)], None, true, color);
+    }
+
     /// A left-to-right linear gradient through `stops` (fractions of the
     /// width, ascending), blurred by `blur` px (Gaussian standard deviation).
     /// By default: bands of interpolated colour, unblurred.
@@ -465,6 +478,42 @@ pub trait Painter: TextMeasure {
         }
     }
 
+    /// [`shadow`](Self::shadow), but none of it inside `hole` (its corners
+    /// `hole_radius` round). By default none in all of `hole`'s box, its
+    /// corners square.
+    fn shadow_around(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        blur: f32,
+        color: Rgba,
+        hole: Rect,
+        hole_radius: f32,
+    ) {
+        let _ = hole_radius;
+        let reach = blur * 2.0 + 2.0;
+        let (x0, x1) = (rect.x - reach, rect.x + rect.width + reach);
+        let (y0, y1) = (rect.y - reach, rect.y + rect.height + reach);
+        let (right, bottom) = (hole.x + hole.width, hole.y + hole.height);
+        for (x, y, to_x, to_y) in [
+            (x0, y0, x1, hole.y),
+            (x0, bottom, x1, y1),
+            (x0, hole.y, hole.x, bottom),
+            (right, hole.y, x1, bottom),
+        ] {
+            if to_x > x && to_y > y {
+                self.push_clip(Rect {
+                    x,
+                    y,
+                    width: to_x - x,
+                    height: to_y - y,
+                });
+                self.shadow(rect, radius, blur, color);
+                self.pop_clip();
+            }
+        }
+    }
+
     /// A line under text, `thickness` thick and centred on `y`, from `x`
     /// for `width`: straight, or a wave of amplitude
     /// [`WAVE_AMPLITUDE`]` × thickness` and period [`WAVE_PERIOD`]` ×
@@ -559,6 +608,7 @@ impl Ui {
         visible: Rect,
     ) {
         let node = &self.nodes[id.0];
+        let rtl = node.rtl;
         // Text and shapes in the colour they inherit now, not the one they
         // were made with (see `Ui::color_of`).
         let inherited;
@@ -571,6 +621,28 @@ impl Ui {
             &inherited
         } else {
             &node.style
+        };
+        // Its sides and corners the other way round, as its content is.
+        let mirrored;
+        let lopsided = |s: &Style| {
+            s.border.left != s.border.right
+                || s.padding.left != s.padding.right
+                || s.corner_radii.is_some_and(|c| c[0] != c[1] || c[2] != c[3])
+                || matches!(s.gradient_shape, crate::GradientShape::Linear(_)) && !s.background_gradient.is_empty()
+        };
+        let s = if rtl && lopsided(s) {
+            let mut st = s.clone();
+            std::mem::swap(&mut st.border.left, &mut st.border.right);
+            std::mem::swap(&mut st.padding.left, &mut st.padding.right);
+            st.corner_radii = st.corner_radii.map(|[a, b, c, d]| [b, a, d, c]);
+            // A gradient along the line starts where lines do.
+            if let crate::GradientShape::Linear(degrees) = &mut st.gradient_shape {
+                *degrees = 360.0 - *degrees;
+            }
+            mirrored = st;
+            &mirrored
+        } else {
+            s
         };
         if s.display == Display::None {
             return;
@@ -623,7 +695,22 @@ impl Ui {
                 .border_radius
                 .resolve(Some(r.width.min(r.height)))
                 .map_or(0.0, |v| (v + sh.spread).max(0.0));
-            painter.shadow(rect, radius, sh.blur, fade(sh.color));
+            let color = fade(sh.color);
+            // (an outer shadow is outside its box, as CSS has it: under a box
+            // that is not solid — glass, a see-through shade, none — it
+            // would show through)
+            let solid = s.background.is_some_and(|c| c[3] >= 0.999) || !s.background_gradient.is_empty();
+            if s.backdrop_blur <= 0.0 && solid {
+                painter.shadow(rect, radius, sh.blur, color);
+            } else {
+                // Round, not under it.
+                let (rx, ry) = (
+                    s.border_radius.resolve(Some(r.width)).unwrap_or(0.0),
+                    s.border_radius.resolve(Some(r.height)).unwrap_or(0.0),
+                );
+                let hole = rx.min(ry).min(r.width.min(r.height) / 2.0);
+                painter.shadow_around(rect, radius, sh.blur, color, r, hole);
+            }
         }
         // `background-clip: content-box`.
         let bg_rect = if s.background_clip_content {
@@ -646,6 +733,17 @@ impl Ui {
         }
         let b = s.border;
         let uniform = b.top > 0.0 && b.top == b.right && b.top == b.bottom && b.top == b.left;
+        // corners apart, over a background: it (and a uniform border round
+        // it) drawn with them; everything else goes by `border_radius`
+        let per_corner = s
+            .corner_radii
+            .filter(|_| s.background.is_some() && !s.background_clip_content)
+            .map(|c| {
+                let most = r.width.min(r.height) / 2.0;
+                c.map(|l| l.resolve(Some(r.width.min(r.height))).unwrap_or(0.0).clamp(0.0, most))
+            })
+            .filter(|c| c.iter().any(|&v| v > 0.0));
+        let corner_border = per_corner.is_some() && uniform && s.border_color[3] > 0.0 && !s.border_dashed;
         let (orx, ory) = (
             s.border_radius
                 .resolve(Some(r.width))
@@ -667,7 +765,8 @@ impl Ui {
         // background used to get square corners.
         let w = b.top;
         let opaque = |c: Rgba| fade(c)[3] >= 1.0;
-        let ring = uniform
+        let ring = per_corner.is_none()
+            && uniform
             && w > 0.0
             && orx >= w
             && (orx - ory).abs() < 0.01
@@ -679,6 +778,7 @@ impl Ui {
         // colour over the whole rounded box, the background inset from it
         // with the inner radii (`radius − border`).
         let rounded_border = !ring
+            && per_corner.is_none()
             && uniform
             && orx > 0.0
             && ory > 0.0
@@ -686,7 +786,21 @@ impl Ui {
             && s.background.is_some()
             && !s.background_clip_content
             && !s.border_dashed;
-        if ring {
+        if let (Some(c), Some(bg)) = (per_corner, s.background) {
+            if corner_border {
+                // the border's colour over the box, the background inset
+                painter.fill_rounded_rect_corners(r, c, fade(s.border_color));
+                let inner = Rect {
+                    x: r.x + w,
+                    y: r.y + w,
+                    width: (r.width - 2.0 * w).max(0.0),
+                    height: (r.height - 2.0 * w).max(0.0),
+                };
+                painter.fill_rounded_rect_corners(inner, c.map(|v| (v - w).max(0.0)), fade(bg));
+            } else {
+                painter.fill_rounded_rect_corners(r, c, fade(bg));
+            }
+        } else if ring {
             if let Some(bg) = s.background {
                 let inner = Rect {
                     x: r.x + w,
@@ -755,6 +869,7 @@ impl Ui {
             dashes(painter, r, orx.min(ory), b.top, fade(s.border_color));
         } else if !rounded_border
             && !ring
+            && !corner_border
             && s.border_color[3] > 0.0
             && (b.top > 0.0 || b.right > 0.0 || b.bottom > 0.0 || b.left > 0.0)
         {
@@ -814,7 +929,7 @@ impl Ui {
                         .unwrap_or(content.width)
                         .min(content.width);
                     let r = Rect {
-                        x: content.x,
+                        x: content.x + s.text_align.offset_in(rtl, content.width - w),
                         y: content.y + i as f32 * h + h * 0.2,
                         width: w,
                         height: h * 0.6,
@@ -841,8 +956,12 @@ impl Ui {
                 for p in &node.pieces {
                     let run = runs.get(p.run as usize);
                     let st = run.map_or_else(|| s.clone(), |r| r.style(s));
+                    let shift = node
+                        .line_widths
+                        .get(p.line as usize)
+                        .map_or(0.0, |w| s.text_align.offset_in(rtl, content.width - w));
                     let line = Rect {
-                        x: content.x + p.x,
+                        x: content.x + shift + p.x,
                         y: content.y + p.line as f32 * h,
                         width: p.width,
                         height: if n > 1 { h } else { content.height },
@@ -852,7 +971,13 @@ impl Ui {
                     }
                     let mut ts = TextStyle::of(&st);
                     ts.color = fade(ts.color);
-                    painter.text(line, &t[p.start as usize..p.end as usize], &ts);
+                    let piece = &t[p.start as usize..p.end as usize];
+                    let marked = match p.rtl {
+                        Some(true) => crate::bidi::marked(piece, LayoutDirection::RightToLeft),
+                        Some(false) => crate::bidi::marked(piece, LayoutDirection::LeftToRight),
+                        None => piece.into(),
+                    };
+                    painter.text(line, &marked, &ts);
                     if st.underline {
                         let (y, thick) = underline_position(line, st.font_size);
                         let c = fade(st.decoration_color.unwrap_or(st.color));
@@ -863,6 +988,19 @@ impl Ui {
             NodeKind::Text(t) => {
                 let mut style = TextStyle::of(s);
                 style.color = fade(style.color);
+                // A line reads as its paragraph does, not as it starts.
+                let layout = if rtl {
+                    LayoutDirection::RightToLeft
+                } else {
+                    LayoutDirection::LeftToRight
+                };
+                let both = crate::bidi::has_rtl(t);
+                let base = crate::bidi::base(t, layout);
+                let lines = t.contains('\n');
+                let as_read = |line: &str| {
+                    let base = if lines { crate::bidi::base(line, layout) } else { base };
+                    crate::bidi::marked(line, base).into_owned()
+                };
                 let decorate = |painter: &mut dyn Painter, line: Rect, i: usize| {
                     if let (true, Some(&w)) = (s.underline, node.line_widths.get(i)) {
                         let (y, thick) = underline_position(line, s.font_size);
@@ -878,14 +1016,18 @@ impl Ui {
                         let shift = node
                             .line_widths
                             .get(i)
-                            .map_or(0.0, |w| s.text_align.offset(content.width - w));
+                            .map_or(0.0, |w| s.text_align.offset_in(rtl, content.width - w));
                         let r = Rect {
                             x: content.x + shift,
                             y: content.y + i as f32 * h,
                             width: content.width - shift,
                             height: h,
                         };
-                        painter.text(r, line.trim_end_matches([' ', '\u{200b}']), &style);
+                        let line = line.trim_end_matches([' ', '\u{200b}']);
+                        match both {
+                            true => painter.text(r, &as_read(line), &style),
+                            false => painter.text(r, line, &style),
+                        }
                         decorate(painter, r, i);
                     }
                 } else if let [line] = node.lines.as_slice() {
@@ -893,17 +1035,34 @@ impl Ui {
                     let shift = node
                         .line_widths
                         .first()
-                        .map_or(0.0, |w| s.text_align.offset(content.width - w));
+                        .map_or(0.0, |w| s.text_align.offset_in(rtl, content.width - w));
                     let r = Rect {
                         x: content.x + shift,
                         width: content.width - shift,
                         ..content
                     };
-                    painter.text(r, line, &style);
+                    match both {
+                        true => painter.text(r, &as_read(line), &style),
+                        false => painter.text(r, line, &style),
+                    }
                     decorate(painter, r, 0);
                 } else {
-                    painter.text(content, t, &style);
-                    decorate(painter, content, 0);
+                    // One line: across the box when it is aligned (or the
+                    // layout reads right to left), as measured.
+                    let shift = node
+                        .line_widths
+                        .first()
+                        .map_or(0.0, |w| s.text_align.offset_in(rtl, content.width - w));
+                    let r = Rect {
+                        x: content.x + shift,
+                        width: content.width - shift,
+                        ..content
+                    };
+                    match both {
+                        true => painter.text(r, &as_read(t), &style),
+                        false => painter.text(r, t, &style),
+                    }
+                    decorate(painter, r, 0);
                 }
             }
             NodeKind::Path {
@@ -911,7 +1070,7 @@ impl Ui {
                 view_box,
                 stroke,
                 fill,
-            } => match node.transform {
+            } => match turned(node) {
                 Some(t) => {
                     let centre = (
                         view_box[0] + view_box[2] / 2.0,
@@ -1005,7 +1164,16 @@ impl Ui {
                     || dest.y < content.y
                     || dest.x + dest.width > content.x + content.width
                     || dest.y + dest.height > content.y + content.height;
-                if spills {
+                // Its own corners: as far in as its border and padding.
+                let inner = |radius: f32, by: f32| (radius - by).max(0.0);
+                let (irx, iry) = (
+                    inner(orx, s.border.left + s.padding.left),
+                    inner(ory, s.border.top + s.padding.top),
+                );
+                let round = irx > 0.0 && iry > 0.0;
+                if round {
+                    painter.push_clip_rounded(content, irx, iry);
+                } else if spills {
                     painter.push_clip(content);
                 }
                 match &node.kind {
@@ -1013,7 +1181,7 @@ impl Ui {
                     NodeKind::Surface { id, .. } => painter.surface(dest, *id, opacity),
                     _ => unreachable!(),
                 }
-                if spills {
+                if round || spills {
                     painter.pop_clip();
                 }
             }
@@ -1165,7 +1333,31 @@ const EVERYWHERE: Rect = Rect {
 /// `radius`: four quarter arcs and four straight sides, none overlapping
 /// (the sides stop half a border short of each arc, whose round cap covers
 /// the rest), so a translucent colour is laid down once everywhere.
-fn rounded_ring(painter: &mut dyn Painter, r: Rect, radius: f32, width: f32, color: Rgba) {
+/// A `w × h` box's outline (SVG path data, its own coordinates) with each
+/// corner's radius: top-left, top-right, bottom-right, bottom-left.
+pub(crate) fn corners_path(w: f32, h: f32, [tl, tr, br, bl]: [f32; 4]) -> String {
+    // a quarter circle as a cubic Bézier: its handles this far along
+    const K: f32 = 0.552_284_8;
+    let mut d = format!("M{tl} 0 L{} 0", w - tr);
+    if tr > 0.0 {
+        d += &format!(" C{} 0 {w} {} {w} {tr}", w - tr + tr * K, tr - tr * K);
+    }
+    d += &format!(" L{w} {}", h - br);
+    if br > 0.0 {
+        d += &format!(" C{w} {} {} {h} {} {h}", h - br + br * K, w - br + br * K, w - br);
+    }
+    d += &format!(" L{bl} {h}");
+    if bl > 0.0 {
+        d += &format!(" C{} {h} 0 {} 0 {}", bl - bl * K, h - bl + bl * K, h - bl);
+    }
+    d += &format!(" L0 {tl}");
+    if tl > 0.0 {
+        d += &format!(" C0 {} {} 0 {tl} 0", tl - tl * K, tl - tl * K);
+    }
+    d + " Z"
+}
+
+pub(crate) fn rounded_ring(painter: &mut dyn Painter, r: Rect, radius: f32, width: f32, color: Rgba) {
     use std::f32::consts::{FRAC_PI_2, PI};
     let (half, mid) = (width / 2.0, radius - width / 2.0);
     let (l, t, rt, bt) = (r.x + radius, r.y + radius, r.x + r.width - radius, r.y + r.height - radius);
@@ -1225,7 +1417,9 @@ fn dashes(painter: &mut dyn Painter, r: Rect, radius: f32, width: f32, color: Rg
             (cx + rad * a.cos(), cy + rad * a.sin())
         };
         let pi = std::f32::consts::PI;
-        let segs: [(f32, &dyn Fn(f32) -> (f32, f32)); 8] = [
+        // Each side's or corner's length, and the point that far along it.
+        type Seg<'a> = (f32, &'a dyn Fn(f32) -> (f32, f32));
+        let segs: [Seg<'_>; 8] = [
             (w, &|u| (x0 + rad + u, y0)),
             (arc, &|u| corner(x1 - rad, y0 + rad, -pi / 2.0, u)),
             (h, &|u| (x1, y0 + rad + u)),
@@ -1264,6 +1458,20 @@ fn dashes(painter: &mut dyn Painter, r: Rect, radius: f32, width: f32, color: Rg
         }
         t += step;
     }
+}
+
+/// How a shape is turned: as it was told, and the other way round where it
+/// flips with the reading direction.
+fn turned(node: &crate::tree::Node) -> Option<crate::transform::Transformation> {
+    if !node.flipped {
+        return node.transform;
+    }
+    let mut t = node.transform.unwrap_or_default();
+    // Mirrored after it is turned: turned the other way, mirrored first.
+    t.rotate = -t.rotate;
+    t.scale.0 = -t.scale.0;
+    t.translate.0 = -t.translate.0;
+    Some(t)
 }
 
 #[cfg(test)]
@@ -1417,10 +1625,11 @@ mod arc_tests {
                 _ => None,
             })
             .collect();
-        // The track and the fill, 96 px across: radius 40 of 100, 9.6 wide.
+        // The track's edge, its middle and the fill, 96 px across: radius 40
+        // of 100, 9.6 wide, the middle a pixel in from each side.
         assert_eq!(
             arcs.len(),
-            2,
+            3,
             "{:?}",
             scene
                 .items
@@ -1433,7 +1642,11 @@ mod arc_tests {
             "{arcs:?}"
         );
         assert!(
-            (arcs[1].0.sweep - 0.75 * PI).abs() < 1e-3,
+            (arcs[1].0.radius - 38.4).abs() < 0.01 && (arcs[1].1 - 7.6).abs() < 0.01,
+            "{arcs:?}"
+        );
+        assert!(
+            (arcs[2].0.sweep - 0.75 * PI).abs() < 1e-3,
             "half of three quarters: {arcs:?}"
         );
     }
@@ -1498,6 +1711,58 @@ mod tests {
         assert_eq!(rec.0[0], "rect 0 0 20 20 [0.0, 0.0, 0.0, 0.5]");
         assert_eq!(rec.0.len(), 6, "{:?}", rec.0);
         assert_eq!(rec.0[5], "text 3 1 ab 400 13px sans-serif");
+    }
+
+    /// Right to left, a line starts at the right end of its box: a short
+    /// label in a wide box sits against the right edge, as Hebrew reads.
+    #[test]
+    fn right_to_left_text_starts_at_the_right() {
+        let x_of_text = |rtl: bool| {
+            let mut ui = Ui::new();
+            if rtl {
+                ui.set_layout_direction(crate::environment::LayoutDirection::RightToLeft);
+            }
+            let root = ui.root();
+            ui.set_style(root, Style::flex(FlexDirection::Column));
+            ui.add_text(root, "ab");
+            let mut rec = Record::default();
+            ui.layout(100.0, 20.0, &mut rec);
+            ui.paint(&mut rec);
+            let line = rec.0.iter().find(|l| l.starts_with("text ")).unwrap().clone();
+            line.split(' ').nth(1).unwrap().parse::<f32>().unwrap()
+        };
+        assert_eq!(x_of_text(false), 0.0);
+        let x = x_of_text(true);
+        assert!(x > 50.0 && x < 100.0, "{x}");
+    }
+
+    /// `border-radius: 8px 0 0 8px` over a background, with a border: the
+    /// border's colour as the box's outline, the background inset, each
+    /// with its corners (as paths), and no square border over them.
+    #[test]
+    fn corners_apart_are_drawn_as_their_outline() {
+        let mut ui = Ui::new();
+        let root = ui.root();
+        ui.set_style(root, Style::flex(FlexDirection::Row));
+        let mut style = Style {
+            width: Length::Px(40.0),
+            height: Length::Px(20.0),
+            box_sizing: BoxSizing::BorderBox,
+            background: Some([1.0; 4]),
+            border: Edges::all(1.0),
+            border_color: [0.5, 0.5, 0.5, 1.0],
+            ..Style::default()
+        };
+        assert!(crate::css::try_apply(&mut style, "border-radius", "8px 0 0 8px"));
+        ui.add_box(root, style);
+        let mut rec = Record::default();
+        ui.layout(100.0, 20.0, &mut rec);
+        ui.paint(&mut rec);
+        assert_eq!(rec.0, ["path 0 0 1", "path 1 1 1"]);
+        // the outline: round at the left, square at the right
+        let d = crate::paint::corners_path(40.0, 20.0, [8.0, 0.0, 0.0, 8.0]);
+        assert!(d.starts_with("M8 0 L40 0 L40 20 L8 20 C"), "{d}");
+        assert!(d.ends_with(" Z"));
     }
 
     #[test]

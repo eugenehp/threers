@@ -7,7 +7,8 @@
 //! - a finger held still (or pressed firmly, where the screen reports
 //!   force) takes the caret, which then follows it until it lifts and
 //!   shows the menu; a finger dragged straight away moves the caret too;
-//! - a selection has two handles (a bar with a knob), each dragging its end;
+//! - a selection has two handles (a bar with a knob), each dragging its end,
+//!   past the other too ([`range_drag`](crate::range_drag));
 //! - the edit menu offers, as iOS's does: over a selection, cut, copy,
 //!   paste, select all, look up, translate, share, and changing case; at a
 //!   caret, paste, select and select all; over text that is only read
@@ -51,9 +52,13 @@
 //! ```
 
 use crate::input::TouchPhase;
+use crate::range_drag::{HandleConfig, RangeEnd, RangeHandles};
 use crate::text_field::TextField;
 use crate::text_hit::word_at;
 use crate::tree::Rect;
+
+/// A view that keeps no knob in: a field's handles stand off its line.
+const ANYWHERE: Rect = Rect { x: -1e6, y: -1e6, width: 2e6, height: 2e6 };
 
 /// How touch editing behaves: its gestures, their timing and reach, and
 /// the edit menu's built-in actions. The default is iOS's.
@@ -227,8 +232,8 @@ enum Press {
         words: Option<(usize, usize)>,
         base_force: Option<f32>,
     },
-    /// Dragging a handle; the finger's offset from the line's middle.
-    Handle { dy: f32 },
+    /// Dragging a handle; the finger's offset from the caret's middle.
+    Handle { dx: f32, dy: f32 },
 }
 
 /// Touch editing for one text field. See the [module docs](self).
@@ -358,47 +363,22 @@ impl TouchSelection {
         inside || self.handle_at(field, x, y, caret_at).is_some()
     }
 
-    /// The handle whose knob is under `(x, y)`: `false` the start, `true`
-    /// the end.
+    /// The end whose handle is under `(x, y)`.
     fn handle_at(
         &self,
         field: &TextField,
         x: f32,
         y: f32,
         caret_at: &mut dyn FnMut(usize) -> Rect,
-    ) -> Option<bool> {
+    ) -> Option<RangeEnd> {
         let h = self.handles(field, caret_at)?;
-        let d = |(kx, ky): (f32, f32)| (kx - x).hypot(ky - y);
-        // Near the knob, or by the bar on the knob's half of the line: a
-        // fingertip lands a little off what it aims at, and the knob is
-        // small. Across the middle of the line, the touch is the text's (a
-        // tap on a short selected word is near both handles).
-        let (reach, bar, knob) = (
-            self.config.handle_reach,
-            self.config.bar_reach,
-            self.config.knob,
-        );
-        let by_bar = |r: Rect, below: bool| {
-            let on_knob_side = if below {
-                y > r.y + r.height * 0.6
-            } else {
-                y < r.y + r.height * 0.4
-            };
-            (x - r.x).abs() <= bar
-                && on_knob_side
-                && y >= r.y - knob - reach
-                && y <= r.y + r.height + knob + reach
-        };
-        let start = (d(h.start_knob) <= reach && y < h.start.y + h.start.height / 2.0)
-            || by_bar(h.start, false);
-        let end =
-            (d(h.end_knob) <= reach && y > h.end.y + h.end.height / 2.0) || by_bar(h.end, true);
-        match (start, end) {
-            (true, true) => Some(d(h.end_knob) < d(h.start_knob)),
-            (true, false) => Some(false),
-            (false, true) => Some(true),
-            (false, false) => None,
-        }
+        let c = &self.config;
+        let handles = RangeHandles::with_config(HandleConfig {
+            knob: c.knob,
+            reach: c.handle_reach,
+            bar_reach: c.bar_reach,
+        });
+        handles.end_at(x, y, Some(h.start), Some(h.end), ANYWHERE)
     }
 
     /// A finger event on the field (the app routes to it every touch that
@@ -422,11 +402,15 @@ impl TouchSelection {
                 if let Some(end) = self.handle_at(field, x, y, caret_at) {
                     // The other end stays put; this one follows the finger.
                     let (lo, hi) = field.selection();
-                    let (fixed, moving) = if end { (lo, hi) } else { (hi, lo) };
+                    let (fixed, moving) = match end {
+                        RangeEnd::Finish => (lo, hi),
+                        RangeEnd::Start => (hi, lo),
+                    };
                     field.anchor = fixed;
                     field.caret = moving;
                     let r = caret_at(moving);
                     self.press = Some(Press::Handle {
+                        dx: x - r.x,
                         dy: y - (r.y + r.height / 2.0),
                     });
                     self.menu = false;
@@ -458,15 +442,13 @@ impl TouchSelection {
                 }
             }
             TouchPhase::Move => match &mut self.press {
-                Some(Press::Handle { dy }) => {
-                    let i = index_at(x, y - *dy);
-                    // Never past the other end: a handle dragged over it
-                    // stops there.
-                    field.caret = if field.caret >= field.anchor {
-                        i.max(field.anchor)
-                    } else {
-                        i.min(field.anchor)
-                    };
+                Some(Press::Handle { dx, dy }) => {
+                    let i = index_at(x - *dx, y - *dy);
+                    // Past the other end it is the selection's other end;
+                    // never to nothing.
+                    if i != field.anchor {
+                        field.caret = i;
+                    }
                 }
                 Some(Press::Text {
                     x: x0,
@@ -1032,7 +1014,7 @@ mod tests {
     }
 
     #[test]
-    fn handles_drag_the_ends_and_stop_at_each_other() {
+    fn handles_drag_the_ends_and_past_each_other() {
         let mut f = TextField::new("one two three");
         f.anchor = 4;
         f.caret = 7;
@@ -1046,8 +1028,8 @@ mod tests {
         );
         // A fingertip landing a little high, by the bar's lower half, still
         // takes it; the middle of the line is the text's.
-        assert_eq!(t.handle_at(&f, 76.0, 13.0, &mut caret), Some(true));
-        assert_eq!(t.handle_at(&f, 36.0, 6.0, &mut caret), Some(false));
+        assert_eq!(t.handle_at(&f, 76.0, 13.0, &mut caret), Some(RangeEnd::Finish));
+        assert_eq!(t.handle_at(&f, 36.0, 6.0, &mut caret), Some(RangeEnd::Start));
         assert_eq!(t.handle_at(&f, 55.0, 10.0, &mut caret), None);
         assert!(!t.wants(&f, 140.0, 80.0, false, &mut caret));
         // The end handle out to the end of the text.
@@ -1070,7 +1052,7 @@ mod tests {
             &mut caret,
         );
         assert_eq!(f.selection(), (4, 13));
-        // Back past the start: it stops at the start.
+        // Back past the start: it is the other end.
         t.touch(
             &mut f,
             TouchPhase::Move,
@@ -1080,7 +1062,7 @@ mod tests {
             &mut at,
             &mut caret,
         );
-        assert_eq!(f.selection(), (4, 4));
+        assert_eq!(f.selection(), (1, 4));
         t.touch(
             &mut f,
             TouchPhase::Move,

@@ -75,6 +75,32 @@ takes frames from a WebGL layer, so the session keeps a small WebGL2
 context and copies the canvas into the layer in one draw after each
 frame. The eye rectangles already match, so one copy covers both eyes.
 
+### AR, the session's state, and the device
+
+- **Hit tests** (`immersive-ar` asks for `hit-test` and `anchors` itself):
+  `session.start_hit_test()` and each frame's `session.hits()` give where
+  the middle of the view meets a real surface, nearest first, as poses
+  in the reference space: where a reticle or a model goes.
+  `start_tap_hit_test("generic-touchscreen")` and `tap_hits()` do the same
+  for taps on a phone's screen and for pinches, each with its input's slot.
+- **Anchors:** `add_anchor(pose)` (inside a frame; a hit's pose, say) keeps
+  a place in the room as the device's map of it improves; `anchors()` gives
+  each one's pose every frame, `remove_anchor(id)` lets it go.
+- **An overlay:** `XrSession::request_with_overlay(…, Some(&element))` asks
+  for WebXR's DOM overlay, so a phone's AR shows that HTML (buttons, text)
+  over the camera.
+- **A buzz:** `pulse(slot, intensity, ms)` vibrates a controller (its
+  `hapticActuators`, or the gamepad's `vibrationActuator`).
+- **Visibility:** `visibility()` is `"visible"`, `"visible-blurred"` (a
+  system menu over the app: shown, but no input) or `"hidden"`.
+- **Recentring:** `take_recentered()` says once that the user recentred, so
+  what was placed in front of them can be put there again.
+- **Frame rate and foveation:** `frame_rates()`, `set_frame_rate(hz)` and
+  `set_foveation(0..1)`, where the device offers them.
+
+`tests/webxr_web.rs` runs all of it in headless Chrome, on a headset the
+page fakes (`FEATURES=xr TEST=webxr_web scripts/wasm-browser-test.sh`).
+
 - **three.js pages** get the same session through `renderer.xr`,
   `VRButton` and `ARButton` (`WebXr` in the bindings). See
   [`web/examples/webxr.html`](../web/examples/webxr.html).

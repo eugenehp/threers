@@ -1881,6 +1881,15 @@ impl Body {
                             if backwards {
                                 inner.reverse();
                             }
+                            if std::env::var("THREERS_BREP_DEBUG_RINGS").is_ok() {
+                                eprintln!(
+                                    "  [brep] {} piece takes {} points of cut {id} at step {i}: {:?} .. {:?}",
+                                    piece.surface.kind(),
+                                    inner.len(),
+                                    first,
+                                    last
+                                );
+                            }
                             for (k, (v, uv)) in inner.into_iter().enumerate() {
                                 l.uv.insert(i + 1 + k, uv);
                                 if l.vertices.len() + 1 == l.uv.len() {
@@ -1945,7 +1954,59 @@ impl Body {
                         .all(|p| v3::dist(a, *p) + v3::dist(*p, z) - v3::dist(a, z) <= tolerance)
                 };
                 for piece in &mut kept {
+                    // A curved piece with an outline of its own is held to it
+                    // the same way: a cylinder cut across between two straight
+                    // risers keeps the stretch of each below the cut, and the
+                    // stretch above it, carried whole, bounds the piece with
+                    // an edge that runs out and back along its rim.
                     if piece.surface.kind() != "plane" {
+                        if piece.loops.is_empty() {
+                            continue;
+                        }
+                        let outline: Vec<Vec<V3>> = piece
+                            .loops
+                            .iter()
+                            .map(|l| {
+                                let mut pts: Vec<V3> =
+                                    l.uv.iter()
+                                        .map(|q| piece.surface.point(q[0], q[1]))
+                                        .collect();
+                                if let Some(&first) = pts.first() {
+                                    pts.push(first);
+                                }
+                                pts
+                            })
+                            .collect();
+                        let mut split: Vec<Carried> = Vec::with_capacity(piece.carried.len());
+                        for c in piece.carried.drain(..) {
+                            if c.3 || c.2.len() < 3 || !straight(&c.2) {
+                                split.push(c);
+                                continue;
+                            }
+                            let mut run: Option<(Vec<V3>, Vec<usize>)> = None;
+                            let named = c.4.len() == c.2.len();
+                            for k in 0..c.2.len() - 1 {
+                                let (p, q) = (c.2[k], c.2[k + 1]);
+                                let mid = v3::scale(v3::add(p, q), 0.5);
+                                let along =
+                                    outline.iter().any(|l| on(mid, l) && on(p, l) && on(q, l));
+                                if along {
+                                    let r = run.get_or_insert_with(|| {
+                                        (vec![p], if named { vec![c.4[k]] } else { Vec::new() })
+                                    });
+                                    r.0.push(q);
+                                    if named {
+                                        r.1.push(c.4[k + 1]);
+                                    }
+                                } else if let Some((pts, ids)) = run.take() {
+                                    split.push((c.0, c.1, pts, false, ids));
+                                }
+                            }
+                            if let Some((pts, ids)) = run.take() {
+                                split.push((c.0, c.1, pts, false, ids));
+                            }
+                        }
+                        piece.carried = split;
                         continue;
                     }
                     // First the piece's sides take the points its edges were
@@ -2105,6 +2166,14 @@ impl Body {
                         f.flipped
                     );
                     eprintln!("  [brep]   surface {:?}", result.surfaces()[f.surface]);
+                    if std::env::var("THREERS_BREP_DEBUG_RINGS").is_ok() {
+                        for l in f.loops.iter().flatten() {
+                            eprintln!(
+                                "  [brep]   ring {:?}",
+                                l.vertices.iter().zip(&l.uv).collect::<Vec<_>>()
+                            );
+                        }
+                    }
                 }
             }
             return Err(Declined::NotWatertight {
@@ -2671,6 +2740,62 @@ impl Body {
                 (t1 > t0).then_some((t0, t1))
             })
             .collect();
+        // A curve that only *touches* the boundary — a pocket's rounded
+        // corner meeting the straight side it is tangent to — leaves the face
+        // for no distance at all, but the margin that finds the runs reads
+        // the stretch where it is within the margin of the edge as outside:
+        // `sqrt(2·r·margin)` either side of the touching point, a micron on a
+        // 4 mm corner. The two runs meet where it touches, and that is where
+        // the edge beside it needs the vertex.
+        let mut spans = spans;
+        if let (Some(o), false) = (outer, clean) {
+            let uv_at = |t: f64| -> Option<[f64; 2]> {
+                let (mut u, mut v) = surface.invert(curve.point(t))?;
+                let (pu, pv) = surface.periodic();
+                if pu {
+                    u = face.u_range.0 + (u - face.u_range.0).rem_euclid(TAU);
+                }
+                if pv {
+                    v = face.v_range.0 + (v - face.v_range.0).rem_euclid(TAU);
+                }
+                Some([u, v])
+            };
+            let off_ring = |t: f64| uv_at(t).map_or(f64::INFINITY, |q| ring_gap(&o.uv, q));
+            for i in 1..spans.len() {
+                let (a, b) = (spans[i - 1].1, spans[i].0);
+                if v3::dist(curve.point(a), curve.point(b)) > 16.0 * tolerance {
+                    continue;
+                }
+                // The nearest approach, by golden section.
+                let (mut lo_t, mut hi_t) = (a, b);
+                for _ in 0..60 {
+                    let m1 = hi_t - (hi_t - lo_t) * 0.618_033_988_75;
+                    let m2 = lo_t + (hi_t - lo_t) * 0.618_033_988_75;
+                    if off_ring(m1) < off_ring(m2) {
+                        hi_t = m2;
+                    } else {
+                        lo_t = m1;
+                    }
+                }
+                let touch = 0.5 * (lo_t + hi_t);
+                if off_ring(touch) <= 4.0 * margin.max(1e-12)
+                    && surface.distance(curve.point(touch)) <= tolerance.max(1e-9)
+                {
+                    spans[i - 1].1 = touch;
+                    spans[i].0 = touch;
+                }
+            }
+        }
+        if std::env::var("THREERS_BREP_DEBUG").is_ok() {
+            for &(t0, t1) in &spans {
+                eprintln!(
+                    "  [brep] clip_to_face {fi} ({}): {:?} .. {:?}",
+                    surface.kind(),
+                    curve.point(t0),
+                    curve.point(t1)
+                );
+            }
+        }
         (!spans.is_empty()).then_some(spans)
     }
 
@@ -2717,6 +2842,18 @@ impl Body {
                 Some((tag, e, pts, edge.closed, ids))
             })
             .collect();
+        if std::env::var("THREERS_BREP_DEBUG_RINGS").is_ok() {
+            for c in &carried {
+                eprintln!(
+                    "  [brep] face {face_index} carries edge {} of {}: {} points, closed {}, ids {:?}",
+                    c.1,
+                    c.0,
+                    c.2.len(),
+                    c.3,
+                    c.4
+                );
+            }
+        }
 
         if curve_ids.is_empty() {
             let Some(sample) = self.face_sample(face_index, &surface, &loops) else {
@@ -4502,6 +4639,21 @@ impl Body {
                 }
                 face_edges.push(e);
             }
+            if std::env::var("THREERS_BREP_DEBUG_RINGS").is_ok() {
+                eprintln!(
+                    "  [brep] piece {} ({}): loops {:?}, carried {:?}",
+                    faces.len(),
+                    surfaces[surfaces.len() - 1].kind(),
+                    p.loops
+                        .iter()
+                        .map(|l| l.vertices.clone())
+                        .collect::<Vec<_>>(),
+                    p.carried
+                        .iter()
+                        .map(|c| (c.1, c.2.len()))
+                        .collect::<Vec<_>>()
+                );
+            }
             faces.push(Face {
                 surface: surfaces.len() - 1,
                 edges: face_edges,
@@ -6024,6 +6176,11 @@ fn parameter_outline(
     let (u0, u1) = face.u_range;
     let (v0, v1) = face.v_range;
     let period = u1 - u0;
+    // Only a face that goes all the way round has its two `u` edges in one
+    // place. A quarter of a cylinder between two flat sides — a rounded
+    // corner — spans a quarter turn, and folding by that span put its far
+    // corner on its near one.
+    let wraps = face.u_wraps || (period - std::f64::consts::TAU).abs() <= 1e-9;
 
     // A rim the face already has *is* that side of the rectangle, and it is
     // shared with whatever lies beyond it. Sampling our own copy instead would
@@ -6040,7 +6197,14 @@ fn parameter_outline(
             for (k, p) in pts.iter().enumerate() {
                 match surface.invert(*p) {
                     Some((u, w)) if (w - v).abs() <= (v1 - v0).abs() * 1e-6 => {
-                        uv.push([u0 + (u - u0).rem_euclid(period), w]);
+                        let u = if wraps {
+                            u0 + (u - u0).rem_euclid(period)
+                        } else {
+                            // Onto the face's own turn, nearest its range.
+                            let mid = 0.5 * (u0 + u1);
+                            u + std::f64::consts::TAU * ((mid - u) / std::f64::consts::TAU).round()
+                        };
+                        uv.push([u, w]);
                         ids.push(names.get(k).copied().unwrap_or(usize::MAX));
                     }
                     _ => {
@@ -6058,6 +6222,19 @@ fn parameter_outline(
             // order the edge stores. Sorting by parameter gives the same points
             // joined by different edges, and a seam is held by edges — the same
             // mistake `seam_chord` made, in the same place, for the same reason.
+            if !wraps {
+                // An open arc keeps its own order, running up in `u` as the
+                // rotated rim of a whole turn does.
+                if uv[0][0] > uv[uv.len() - 1][0] {
+                    uv.reverse();
+                    ids.reverse();
+                }
+                if !forward {
+                    uv.reverse();
+                    ids.reverse();
+                }
+                return Some((uv, ids));
+            }
             if uv.len() > 1 && dist2(uv[0], uv[uv.len() - 1]) <= (period * 1e-9).powi(2) {
                 uv.pop(); // a closed rim repeats its first point
                 ids.pop();
@@ -6589,6 +6766,24 @@ fn same_ring(a: &[[f64; 2]], b: &[[f64; 2]]) -> bool {
 ///
 /// A grazing curve does not *cut* the face — the boundary already describes it —
 /// so the useful question is whether anything is strictly inside.
+/// How far `p` is from the nearest side of `ring`.
+fn ring_gap(ring: &[[f64; 2]], p: [f64; 2]) -> f64 {
+    let n = ring.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (ring[i], ring[(i + 1) % n]);
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let len2 = dx * dx + dy * dy;
+            let t = if len2 <= f64::MIN_POSITIVE {
+                0.0
+            } else {
+                (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2).clamp(0.0, 1.0)
+            };
+            (p[0] - (a[0] + dx * t)).hypot(p[1] - (a[1] + dy * t))
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 fn deep_in_ring(ring: &[[f64; 2]], p: [f64; 2], margin: f64) -> bool {
     if !point_in_ring(ring, p) {
         return false;

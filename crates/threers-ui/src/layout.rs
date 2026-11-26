@@ -21,11 +21,15 @@ use super::tree::{LayoutCache, NodeId, NodeKind, Rect, Ui};
 /// The same box to the bit: a cached layout is put back only for exactly the
 /// box it was computed in, so what comes back is what computing it again
 /// would give.
-fn same_rect(a: Rect, b: Rect) -> bool {
-    [a.x, a.y, a.width, a.height]
-        .iter()
-        .zip([b.x, b.y, b.width, b.height])
-        .all(|(p, q)| p.to_bits() == q.to_bits())
+/// How far `b` is `a` moved, when it is `a` moved: the same size, to the
+/// bit, and with `whole`, by whole device pixels (`ratio` of them a UI
+/// pixel) — layout units put boxes on a grid by where they are, which a
+/// move by a fraction would land them off. `(0, 0)` for the same box.
+fn moved_by(a: Rect, b: Rect, ratio: f32, whole: bool) -> Option<(f32, f32)> {
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let same_size = a.width.to_bits() == b.width.to_bits() && a.height.to_bits() == b.height.to_bits();
+    let whole = |d: f32| !whole || (d * ratio).fract() == 0.0;
+    (same_size && whole(dx) && whole(dy) && a.x + dx == b.x && a.y + dy == b.y).then_some((dx, dy))
 }
 
 /// Measures a line of text: its advance width and its line box height
@@ -122,6 +126,14 @@ struct Ctx<'a> {
     /// How many [`Ui::cache_layout`] boundaries the work in hand is inside:
     /// there, a measurement outlives its pass.
     stable: u32,
+    /// Each node's style, shared for the pass: a box is measured and placed
+    /// many times over (its parent's sizing, its own, its children's), and a
+    /// copy of its style each time — a heap string and a large struct — was
+    /// most of what a layout cost. Styles do not change during one.
+    shared: Vec<Option<std::rc::Rc<Style>>>,
+    /// Each node's min-content width, found once a pass: a flex item's is
+    /// asked by every row around it, and each asks its whole subtree.
+    min_widths: Vec<Option<f32>>,
 }
 
 /// A length as a Blink `LayoutUnit` (`LayoutUnit(float)`): on the 1/64 px
@@ -151,6 +163,8 @@ pub(crate) fn layout(ui: &mut Ui, width: f32, height: f32, text: &mut dyn TextMe
         ui,
         text,
         stable: 0,
+        shared: Vec::new(),
+        min_widths: Vec::new(),
     };
 
     ctx.place(
@@ -172,6 +186,8 @@ pub(crate) fn min_content_width_of(ui: &mut Ui, id: NodeId, text: &mut dyn TextM
         ui,
         text,
         stable: 0,
+        shared: Vec::new(),
+        min_widths: Vec::new(),
     };
     ctx.min_content_width(id)
 }
@@ -207,7 +223,7 @@ impl Ctx<'_> {
             .copied()
             .filter(|&c| {
                 let cs = self.style(c);
-                cs.display != Display::None && cs.position != Position::Absolute
+                cs.display != Display::None && !out_of_flow(cs.position)
             })
             .find_map(|c| {
                 self.first_baseline(c)
@@ -217,6 +233,14 @@ impl Ctx<'_> {
 
     fn style(&self, id: NodeId) -> &Style {
         &self.ui.nodes[id.0].style
+    }
+
+    /// `id`'s style for the rest of the pass, copied once.
+    fn shared(&mut self, id: NodeId) -> std::rc::Rc<Style> {
+        if self.shared.len() <= id.0 {
+            self.shared.resize(self.ui.nodes.len().max(id.0 + 1), None);
+        }
+        self.shared[id.0].get_or_insert_with(|| std::rc::Rc::new(self.ui.nodes[id.0].style.clone())).clone()
     }
 
     /// Whether `id` is a replaced element (an image): sized by its content
@@ -235,7 +259,7 @@ impl Ctx<'_> {
             .copied()
             .filter(|&c| {
                 let s = &self.ui.nodes[c.0].style;
-                s.display != Display::None && s.position != Position::Absolute
+                s.display != Display::None && !out_of_flow(s.position)
             })
             .collect()
     }
@@ -288,7 +312,7 @@ impl Ctx<'_> {
         width: Option<f32>,
         height_base: Option<f32>,
     ) -> (f32, f32) {
-        let style = self.style(id).clone();
+        let style = self.shared(id);
         let (fx, fy) = (frame(&style, true), frame(&style, false));
         if let NodeKind::Text(t) = &self.ui.nodes[id.0].kind {
             let t = t.clone();
@@ -377,7 +401,7 @@ impl Ctx<'_> {
                 let mut main = 0.0f32;
                 let mut cross = 0.0f32;
                 for (i, &c) in children.iter().enumerate() {
-                    let cs = self.style(c).clone();
+                    let cs = self.shared(c);
                     // In a column, each at its own width (a card of 520 px
                     // in a wide column is as tall as it is at 520).
                     let (w, h) = self.outer_size(
@@ -417,7 +441,7 @@ impl Ctx<'_> {
                 let mut w = 0.0f32;
                 let mut h = 0.0f32;
                 for &c in &children {
-                    let cs = self.style(c).clone();
+                    let cs = self.shared(c);
                     let cwidth = match (cs.width.resolve(inner_w), inner_w) {
                         (Some(_), _) => border_box(&cs, cs.width, inner_w, true),
                         (None, _) if self.replaced(c) => None,
@@ -439,7 +463,20 @@ impl Ctx<'_> {
     /// its longest word, other text whole; a row as its items side by side
     /// at theirs; a column or block as its widest child.
     fn min_content_width(&mut self, id: NodeId) -> f32 {
-        let style = self.style(id).clone();
+        if let Some(Some(w)) = self.min_widths.get(id.0) {
+            return *w;
+        }
+        let w = self.min_content_width_now(id);
+        if self.min_widths.len() <= id.0 {
+            self.min_widths.resize(self.ui.nodes.len().max(id.0 + 1), None);
+        }
+        self.min_widths[id.0] = Some(w);
+        w
+    }
+
+    /// [`min_content_width`](Self::min_content_width), worked out.
+    fn min_content_width_now(&mut self, id: NodeId) -> f32 {
+        let style = self.shared(id);
         let fx = frame(&style, true);
         let own = if let Some(w) = border_box(&style, style.width, None, true) {
             w
@@ -504,7 +541,7 @@ impl Ctx<'_> {
         width: Option<f32>,
         height_base: Option<f32>,
     ) -> (f32, f32) {
-        let style = self.style(id).clone();
+        let style = self.shared(id);
         let w = width.or_else(|| border_box(&style, style.width, None, true));
         let h = border_box(&style, style.height, height_base, false);
         let (cw, ch) = if w.is_none() || h.is_none() {
@@ -558,13 +595,26 @@ impl Ctx<'_> {
     /// each time, so a sidebar of them measured tens of thousands of strings
     /// a layout — every key typed into a search box, every frame it scrolled.
     fn wrap(&mut self, node: usize, text: &str, style: &Style, width: f32) -> Vec<String> {
-        if self.ui.nodes[node].runs.is_some() {
-            return self.wrap_now(node, text, style, width);
-        }
         // its own width keys it too: another measurer (another scale, a
         // fixed-width one) breaks it elsewhere
         let natural = self.text.measure(text, style).0;
-        let key = wrap_key(text, style, width, natural, self.ui.layout_units);
+        let mut key = wrap_key(text, style, width, natural, self.ui.layout_units);
+        // in runs: what of them its width is made of (not their colours),
+        // and the whole they're runs of
+        if let (Some(runs), NodeKind::Text(whole)) = (&self.ui.nodes[node].runs, &self.ui.nodes[node].kind) {
+            let mut eat = |v: u64| key = (key ^ v).wrapping_mul(0x0100_0000_01b3);
+            eat(1);
+            for r in runs.iter() {
+                eat(r.len as u64);
+                let w = r.weight.map_or(0, |w| match w {
+                    crate::style::FontWeight::Normal => 400,
+                    crate::style::FontWeight::Bold => 700,
+                    crate::style::FontWeight::Weight(w) => w as u64 + 1,
+                });
+                eat(w << 2 | r.italic.map_or(0, |i| 1 + i as u64));
+            }
+            whole.bytes().for_each(|b| eat(b as u64));
+        }
         if let Some(lines) = self.ui.wrap_memo.get(key) {
             return lines;
         }
@@ -595,6 +645,11 @@ impl Ctx<'_> {
         let styled = self.ui.nodes[node].runs.is_some();
         let fits = |this: &mut Self, before: &str, s: &str| {
             let s = s.trim_end_matches([' ', '\u{200b}']);
+            // In no room nothing fits: not measured to find so. (A minimum
+            // width wraps so, and measured every prefix of every word.)
+            if width <= 0.0 {
+                return s.is_empty();
+            }
             let w = if styled {
                 // Each run in its own style, from where the line starts.
                 this.run_width(node, before.len(), s, style)
@@ -650,7 +705,7 @@ impl Ctx<'_> {
             let mut rest = piece;
             while !fits(self, &before, &rest) {
                 let chars: Vec<char> = rest.chars().collect();
-                let mut n = chars.len();
+                let mut n = if width <= 0.0 { 1 } else { chars.len() };
                 while n > 1 && !fits(self, &before, &chars[..n].iter().collect::<String>()) {
                     n -= 1;
                 }
@@ -704,7 +759,7 @@ impl Ctx<'_> {
                 continue;
             };
             let t = t.clone();
-            let style = self.style(c).clone();
+            let style = self.shared(c);
             let measure = |ctx: &mut Self, s: &str| ctx.text.measure(s, &style).0;
             if measure(self, &t) <= width {
                 continue;
@@ -769,7 +824,15 @@ impl Ctx<'_> {
         for i in 0..self.ui.nodes.len() {
             let n = &self.ui.nodes[i];
             let NodeKind::Text(t) = &n.kind else { continue };
-            let aligned = n.style.text_align != crate::style::TextAlign::Start;
+            // Right to left, a line's start is its right end: measured, so
+            // paint can put it there.
+            let aligned = n.style.text_align != crate::style::TextAlign::Start
+                || n.rtl;
+            let layout = if n.rtl {
+                crate::environment::LayoutDirection::RightToLeft
+            } else {
+                crate::environment::LayoutDirection::LeftToRight
+            };
             if n.removed || !(n.style.underline || n.runs.is_some() || aligned) {
                 if !n.line_widths.is_empty() || !n.pieces.is_empty() {
                     self.ui.nodes[i].line_widths.clear();
@@ -811,9 +874,26 @@ impl Ctx<'_> {
                         .is_some_and(|r| r.starts_with(line.as_str()))
                     {
                         let mut x = 0.0;
-                        for (a, b, k) in
-                            crate::rich_text::split(&text, &runs, offset, offset + line.len())
-                        {
+                        // In the order they are drawn, where the line reads
+                        // both ways.
+                        let mut parts = vec![];
+                        if crate::bidi::has_rtl(line) {
+                            for r in crate::bidi::runs(line, crate::bidi::base(&text, layout)) {
+                                let (a, b) = (offset + r.bytes.start, offset + r.bytes.end);
+                                let mut of = crate::rich_text::split(&text, &runs, a, b);
+                                if r.rtl {
+                                    of.reverse();
+                                }
+                                parts.extend(of.into_iter().map(|p| (p, Some(r.rtl))));
+                            }
+                        } else {
+                            parts.extend(
+                                crate::rich_text::split(&text, &runs, offset, offset + line.len())
+                                    .into_iter()
+                                    .map(|p| (p, None)),
+                            );
+                        }
+                        for ((a, b, k), rtl) in parts {
                             let st = runs
                                 .get(k as usize)
                                 .map_or_else(|| style.clone(), |r| r.style(&style));
@@ -825,6 +905,7 @@ impl Ctx<'_> {
                                 start: a as u32,
                                 end: b as u32,
                                 run: k,
+                                rtl,
                             });
                             x += w;
                         }
@@ -841,22 +922,38 @@ impl Ctx<'_> {
 
     /// Gives `id` its border box and lays out its children inside it — or,
     /// for a [`Ui::cache_layout`] boundary given the same box with nothing
-    /// inside changed, puts back what that produced last time.
+    /// inside changed, puts back what that produced last time. The same
+    /// box moved (a list above it grew a row) is the same layout moved: put
+    /// back, moved.
     fn place(&mut self, id: NodeId, rect: Rect) {
         let node = &self.ui.nodes[id.0];
         if !node.cache_boundary {
             self.place_now(id, rect);
             return;
         }
-        let hit = !node.dirty
-            && node
-                .cache
-                .as_ref()
-                .is_some_and(|c| c.layout_units == self.ui.layout_units && same_rect(c.rect, rect));
-        if hit {
-            let cache = self.ui.nodes[id.0].cache.take().expect("checked");
-            for (i, r, lines, scroll_height, scrolled) in &cache.nodes {
+        let moved = node
+            .cache
+            .as_ref()
+            .filter(|c| !node.dirty && c.layout_units == self.ui.layout_units)
+            .and_then(|c| moved_by(c.rect, rect, self.ui.pixel_ratio.max(1.0), self.ui.layout_units));
+        if let Some((dx, dy)) = moved {
+            let mut cache = self.ui.nodes[id.0].cache.take().expect("checked");
+            cache.rect = rect;
+            // (a fixed box inside is placed against the window, and a hidden
+            // one is not placed: they stay, and what they hold)
+            let mut fixed: Vec<usize> = vec![];
+            for (i, r, lines, scroll_height, scrolled) in &mut cache.nodes {
                 let n = &mut self.ui.nodes[*i];
+                if (dx, dy) != (0.0, 0.0) {
+                    let inside_fixed = n.parent.is_some_and(|p| fixed.contains(&p.0));
+                    let stays = n.style.position == crate::style::Position::Fixed || n.style.display == crate::style::Display::None;
+                    if stays || inside_fixed {
+                        fixed.push(*i);
+                    } else {
+                        r.x += dx;
+                        r.y += dy;
+                    }
+                }
                 n.rect = *r;
                 if n.lines != *lines {
                     n.lines.clone_from(lines);
@@ -898,7 +995,7 @@ impl Ctx<'_> {
             rect
         };
         self.ui.nodes[id.0].rect = rect;
-        let style = self.style(id).clone();
+        let style = self.shared(id);
         // Its own line breaks, each line wrapped too under `pre-wrap`.
         let kept = match &self.ui.nodes[id.0].kind {
             NodeKind::Text(t) => {
@@ -989,7 +1086,7 @@ impl Ctx<'_> {
             let children = self.ui.nodes[id.0].children.clone();
             let bottom = children
                 .iter()
-                .filter(|c| self.style(**c).display != Display::None)
+                .filter(|c| self.style(**c).display != Display::None && self.style(**c).position != Position::Fixed)
                 .map(|c| {
                     let r = self.ui.nodes[c.0].rect;
                     r.y + r.height + self.style(*c).margin.bottom
@@ -1032,7 +1129,7 @@ impl Ctx<'_> {
 
     /// Moves `id` and everything inside it down by `dy`.
     fn translate_x(&mut self, id: NodeId, dx: f32) {
-        if self.style(id).display == Display::None {
+        if self.style(id).display == Display::None || self.style(id).position == Position::Fixed {
             return;
         }
         self.ui.nodes[id.0].rect.x += dx;
@@ -1079,7 +1176,8 @@ impl Ctx<'_> {
     }
 
     fn translate(&mut self, id: NodeId, dy: f32) {
-        if self.style(id).display == Display::None {
+        // a fixed box stays where the window has it
+        if self.style(id).display == Display::None || self.style(id).position == Position::Fixed {
             return;
         }
         self.ui.nodes[id.0].rect.y += dy;
@@ -1091,7 +1189,7 @@ impl Ctx<'_> {
     fn block(&mut self, id: NodeId, content: Rect) {
         let mut y = content.y;
         for c in self.in_flow(id) {
-            let cs = self.style(c).clone();
+            let cs = self.shared(c);
             let width = match border_box(&cs, cs.width, Some(content.width), true) {
                 Some(w) => w,
                 // A replaced element keeps its own width; a box stretches.
@@ -1100,8 +1198,15 @@ impl Ctx<'_> {
             };
             let width = self.clamp(&cs, width, true, None);
             let (_, height) = self.outer_size(c, Some(width), Some(content.height));
+            // auto left and right margins: centred (both), or pushed right
+            let free = (content.width - width - cs.margin.horizontal()).max(0.0);
+            let shift = match (cs.margin_auto[3], cs.margin_auto[1]) {
+                (true, true) => free / 2.0,
+                (true, false) => free,
+                _ => 0.0,
+            };
             let mut r = Rect {
-                x: content.x + cs.margin.left,
+                x: content.x + cs.margin.left + shift,
                 y: y + cs.margin.top,
                 width,
                 height,
@@ -1160,7 +1265,7 @@ impl Ctx<'_> {
         items.sort_by_key(|&c| self.style(c).order);
         let mut list: Vec<FlexItem> = vec![];
         for &c in &items {
-            let cs = self.style(c).clone();
+            let cs = self.shared(c);
             let main_len = if row { cs.width } else { cs.height };
             let base = match cs.flex_basis {
                 Length::Auto => border_box(&cs, main_len, Some(main_size), row),
@@ -1193,7 +1298,9 @@ impl Ctx<'_> {
             // size if smaller; nothing for a box that clips (a scroll
             // container).
             let specified = border_box(&cs, main_len, Some(main_size), row);
-            let automatic = if cs.clip {
+            let given = border_box(&cs, min_len, Some(main_size), row);
+            // (one given is it: the content's isn't measured)
+            let automatic = if cs.clip || given.is_some() {
                 0.0
             } else {
                 let min_content = if row {
@@ -1204,9 +1311,7 @@ impl Ctx<'_> {
                 let suggestion = min_content.min(content_main).min(max);
                 specified.map_or(suggestion, |v| suggestion.min(v))
             };
-            let min = border_box(&cs, min_len, Some(main_size), row)
-                .unwrap_or(automatic)
-                .max(frame(&cs, row));
+            let min = given.unwrap_or(automatic).max(frame(&cs, row));
             let margin_main = if row {
                 (cs.margin.left, cs.margin.right)
             } else {
@@ -1406,7 +1511,7 @@ impl Ctx<'_> {
         let row = style.flex_direction == FlexDirection::Row;
         let mut most = 0.0f32;
         for item in line {
-            let cs = self.style(item.id).clone();
+            let cs = self.shared(item.id);
             let cross_len = if row { cs.height } else { cs.width };
             let cross = match border_box(&cs, cross_len, Some(cross_size), !row) {
                 Some(c) => c,
@@ -1459,7 +1564,18 @@ impl Ctx<'_> {
         // overflow both ends or the start, as in CSS (`unsafe` alignment).
         let leftover = main_size - used;
         let n = list.len();
-        let (mut pos, between) = match style.justify_content {
+        // auto margins along the line (start, end) take the free space
+        // first, shared evenly; then there's none for justify-content
+        let main_autos: Vec<(bool, bool)> = list
+            .iter()
+            .map(|i| {
+                let a = self.shared(i.id).margin_auto;
+                if row { (a[3], a[1]) } else { (a[0], a[2]) }
+            })
+            .collect();
+        let autos = main_autos.iter().map(|&(a, b)| a as usize + b as usize).sum::<usize>();
+        let per_auto = if autos > 0 && leftover > 0.0 { leftover / autos as f32 } else { 0.0 };
+        let (mut pos, between) = if autos > 0 { (0.0, 0.0) } else { match style.justify_content {
             JustifyContent::FlexStart => (0.0, 0.0),
             JustifyContent::Center => (leftover / 2.0, 0.0),
             JustifyContent::FlexEnd => (leftover, 0.0),
@@ -1472,7 +1588,7 @@ impl Ctx<'_> {
                 (leftover / (n + 1) as f32, leftover / (n + 1) as f32)
             }
             JustifyContent::SpaceAround | JustifyContent::SpaceEvenly => (0.0, 0.0),
-        };
+        } };
         // Baseline-aligned items of a row: their baselines on the lowest
         // one's (each item's own, from its top).
         let baseline_of = |ctx: &Self, item: &FlexItem, cross: f32| {
@@ -1481,7 +1597,7 @@ impl Ctx<'_> {
         let mut line_baseline: Option<f32> = None;
         if row {
             for i in list {
-                let cs = self.style(i.id).clone();
+                let cs = self.shared(i.id);
                 if cs.align_self.unwrap_or(style.align_items) != AlignItems::Baseline {
                     continue;
                 }
@@ -1497,9 +1613,21 @@ impl Ctx<'_> {
         // a page's `<button>`), not stretched to its height and drawn at
         // its top.
         let button_row = row && button;
-        for item in list {
-            let cs = self.style(item.id).clone();
+        for (k, item) in list.iter().enumerate() {
+            let cs = self.shared(item.id);
             let mut align = cs.align_self.unwrap_or(style.align_items);
+            // auto margins across the line: centred, or pushed to an end
+            let (cross_a, cross_b) = if row {
+                (cs.margin_auto[0], cs.margin_auto[2])
+            } else {
+                (cs.margin_auto[3], cs.margin_auto[1])
+            };
+            match (cross_a, cross_b) {
+                (true, true) => align = AlignItems::Center,
+                (true, false) => align = AlignItems::FlexEnd,
+                (false, true) => align = AlignItems::FlexStart,
+                _ => {}
+            }
             if button_row
                 && align == AlignItems::Stretch
                 && matches!(self.ui.nodes[item.id.0].kind, NodeKind::Text(_))
@@ -1536,7 +1664,7 @@ impl Ctx<'_> {
                     },
                 }
                 + item.margin_cross.0;
-            pos += item.margin_main.0;
+            pos += item.margin_main.0 + if main_autos[k].0 { per_auto } else { 0.0 };
             // Reversed: the same places, counted from the end.
             let main_at = if style.flex_reverse {
                 main_size - pos - item.main
@@ -1563,7 +1691,7 @@ impl Ctx<'_> {
                 r.y += cs.top.resolve(Some(content.height)).unwrap_or(0.0);
             }
             self.place(item.id, r);
-            pos += item.main + item.margin_main.1 + gap + between;
+            pos += item.main + item.margin_main.1 + gap + between + if main_autos[k].1 { per_auto } else { 0.0 };
         }
     }
 
@@ -1583,11 +1711,15 @@ impl Ctx<'_> {
             .copied()
             .filter(|&c| {
                 let s = &self.ui.nodes[c.0].style;
-                s.display != Display::None && s.position == Position::Absolute
+                s.display != Display::None && out_of_flow(s.position)
             })
             .collect();
+        let (vw, vh) = self.ui.viewport;
+        let window = Rect { x: 0.0, y: 0.0, width: vw, height: vh };
         for c in children {
-            let cs = self.style(c).clone();
+            let cs = self.shared(c);
+            // a fixed box's containing block is the window
+            let pad = if cs.position == Position::Fixed { window } else { pad };
             let left = cs.left.resolve(Some(pad.width));
             let right = cs.right.resolve(Some(pad.width));
             let top = cs.top.resolve(Some(pad.height));
@@ -1631,6 +1763,11 @@ impl Ctx<'_> {
             );
         }
     }
+}
+
+/// Out of the flow: takes no room where it is.
+pub(crate) fn out_of_flow(p: Position) -> bool {
+    matches!(p, Position::Absolute | Position::Fixed)
 }
 
 /// A grid item, its columns and its rows (start, end exclusive).
@@ -1697,7 +1834,31 @@ impl Ctx<'_> {
         let children = self.in_flow(id);
         let col_gap = style.column_gap.unwrap_or(style.gap);
         let row_gap = style.row_gap.unwrap_or(style.gap);
-        let explicit_cols = style.grid_columns.len();
+        // Auto-fill: as many columns of its track as fit the width.
+        let filled;
+        let columns: &[Track] = match (style.grid_auto_fill, inner_w) {
+            (Some(t), Some(w)) => {
+                let least = match t.min {
+                    TrackSize::Px(p) => p,
+                    TrackSize::Percent(p) => w * p / 100.0,
+                    _ => match t.max {
+                        TrackSize::Px(p) => p,
+                        _ => w,
+                    },
+                };
+                let n = ((w + col_gap) / (least.max(1.0) + col_gap))
+                    .floor()
+                    .max(1.0) as usize;
+                filled = vec![t; n];
+                &filled
+            }
+            (Some(t), None) => {
+                filled = vec![t];
+                &filled
+            }
+            _ => &style.grid_columns,
+        };
+        let explicit_cols = columns.len();
         let explicit_rows = style.grid_rows.len();
         // Placement: fixed items first, then the rest row by row.
         let wanted: Vec<_> = children
@@ -1787,13 +1948,13 @@ impl Ctx<'_> {
         let mut need = vec![0.0f32; ncols];
         for &(c, (a, b), _) in &items {
             if b - a == 1 {
-                let cs = self.style(c).clone();
+                let cs = self.shared(c);
                 let (w, _) = self.outer_size(c, None, inner_h);
                 need[a] = need[a].max(w + cs.margin.horizontal());
             }
         }
         for i in 0..ncols {
-            let t = template(&style.grid_columns, i);
+            let t = template(columns, i);
             let min = resolve(t.min, inner_w).unwrap_or(if t.min == TrackSize::Auto {
                 need[i]
             } else {
@@ -1814,7 +1975,7 @@ impl Ctx<'_> {
             col_gap,
             items.iter().map(|&(c, cols, _)| (c, cols)),
             |ctx: &mut Self, c| {
-                let cs = ctx.style(c).clone();
+                let cs = ctx.shared(c);
                 ctx.outer_size(c, None, inner_h).0 + cs.margin.horizontal()
             },
             self,
@@ -1824,7 +1985,7 @@ impl Ctx<'_> {
                 &mut cols,
                 &col_fr,
                 w - col_gap * (ncols - 1) as f32,
-                &style.grid_columns,
+                columns,
             );
         }
 
@@ -1838,7 +1999,7 @@ impl Ctx<'_> {
         let mut need_min = vec![0.0f32; nrows];
         let mut heights = vec![];
         for &(c, ca, (a, b)) in &items {
-            let cs = self.style(c).clone();
+            let cs = self.shared(c);
             let w = cs
                 .width
                 .resolve(Some(GridPlan::span(&cols, col_gap, ca)))
@@ -1925,7 +2086,7 @@ impl Ctx<'_> {
         // as its content).
         let plan = self.grid_plan(id, style, Some(content.width), Some(content.height));
         for &(c, ca, ra) in &plan.items {
-            let cs = self.style(c).clone();
+            let cs = self.shared(c);
             let cell = Rect {
                 x: content.x + GridPlan::offset(&plan.cols, plan.col_gap, ca.0),
                 y: content.y + GridPlan::offset(&plan.rows, plan.row_gap, ra.0),
@@ -2049,6 +2210,41 @@ fn own_width(cs: &Style, avail: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::super::*;
+
+    fn styled(css: &str) -> Style {
+        let mut s = Style::default();
+        for d in css.split(';').filter(|d| !d.trim().is_empty()) {
+            let (n, v) = d.split_once(':').unwrap();
+            assert!(crate::css::try_apply(&mut s, n.trim(), v.trim()), "{d}");
+        }
+        s
+    }
+
+    /// `margin: auto`: along a flex line it takes the free space (an item
+    /// pushed to the end, two sharing it), across one it centres; in a
+    /// block, a box of set width centred, or pushed right.
+    #[test]
+    fn auto_margins_take_the_free_space() {
+        let mut ui = Ui::new();
+        let root = ui.root();
+        ui.set_style(root, styled("display: block; width: 300px"));
+        let row = ui.add_box(root, styled("display: flex; height: 100px; align-items: flex-start"));
+        let a = ui.add_box(row, styled("width: 50px; height: 20px"));
+        let b = ui.add_box(row, styled("width: 50px; height: 20px; margin-left: auto; margin-top: auto; margin-bottom: auto"));
+        let shared = ui.add_box(root, styled("display: flex; justify-content: center"));
+        let c = ui.add_box(shared, styled("width: 40px; height: 10px; margin: 0 auto"));
+        let d = ui.add_box(shared, styled("width: 60px; height: 10px; margin-left: auto"));
+        let centred = ui.add_box(root, styled("width: 100px; height: 10px; margin: 0 auto"));
+        let right = ui.add_box(root, styled("width: 100px; height: 10px; margin-left: auto"));
+        ui.layout(300.0, 400.0, &mut FixedWidthText(7.0));
+        assert_eq!(ui.rect(a).x, 0.0);
+        assert_eq!((ui.rect(b).x, ui.rect(b).y), (250.0, 40.0), "pushed to the end, centred across");
+        // 200 free, three auto margins: c at 66.7, d after c's right one
+        assert!((ui.rect(c).x - 200.0 / 3.0).abs() < 0.01, "{:?}", ui.rect(c));
+        assert!((ui.rect(d).x - 240.0).abs() < 0.01, "{:?}", ui.rect(d));
+        assert_eq!(ui.rect(centred).x, 100.0);
+        assert_eq!(ui.rect(right).x, 200.0);
+    }
 
     fn px(v: f32) -> Length {
         Length::Px(v)

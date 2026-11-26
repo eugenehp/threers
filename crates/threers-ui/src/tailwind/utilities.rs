@@ -405,6 +405,8 @@ fn keyword(u: &str) -> Option<&'static [(&'static str, &'static str)]> {
         "static" => &[("position", "static")],
         "relative" => &[("position", "relative")],
         "absolute" => &[("position", "absolute")],
+        "sticky" => &[("position", "sticky")],
+        "fixed" => &[("position", "fixed")],
         "box-border" => &[("box-sizing", "border-box")],
         "box-content" => &[("box-sizing", "content-box")],
         "flex-row" => &[("flex-direction", "row")],

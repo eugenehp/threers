@@ -28,7 +28,6 @@
 //! ```
 
 use crate::animation::{Animation, Property, Value};
-use crate::environment::LayoutDirection;
 use crate::tree::{NodeId, Ui};
 use crate::{Length, Rect};
 
@@ -88,25 +87,16 @@ impl Ui {
         }
         let mut all = std::mem::take(&mut self.matched);
         all.retain(|m| self.contains(m.indicator) && self.contains(m.target));
-        let width = self.rect(self.root()).width;
-        let rtl = self.layout_direction() == LayoutDirection::RightToLeft;
-        // Laid out left to right, then mirrored: placed in the unmirrored.
-        let unmirror = |r: Rect| {
-            if rtl {
-                Rect {
-                    x: width - r.x - r.width,
-                    ..r
-                }
-            } else {
-                r
-            }
-        };
         let mut moved = false;
         for m in &mut all {
             let Some(parent) = self.parent(m.indicator) else {
                 continue;
             };
-            let (p, t) = (unmirror(self.rect(parent)), unmirror(self.rect(m.target)));
+            let (p, mut t) = (self.rect(parent), self.rect(m.target));
+            // Laid out left to right, then mirrored: placed in the unmirrored.
+            if self.nodes[parent.0].rtl {
+                t.x = p.x + p.width - (t.x - p.x) - t.width;
+            }
             let ps = self.style(parent);
             let node = &self.nodes[parent.0];
             // Inside the parent's border, and where its content would be

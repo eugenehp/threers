@@ -397,6 +397,54 @@ impl Surface {
         Some((u, v))
     }
 
+    /// Invert a point on the surface, on a spline from beside `anchor` where
+    /// it is found there: along a ring the next point is beside the last.
+    pub(crate) fn invert_beside(&self, p: V3, anchor: (f64, f64)) -> Option<(f64, f64)> {
+        if let Surface::Nurbs(s) = self {
+            let near = (
+                anchor.0.clamp(s.domain_u().0, s.domain_u().1),
+                anchor.1.clamp(s.domain_v().0, s.domain_v().1),
+            );
+            let (at, d, _) = self.foot(p, Some(near))?;
+            if d.abs() <= 1e-6 * (1.0 + v3::norm(p)) {
+                return Some(at);
+            }
+        }
+        self.invert(p)
+    }
+
+    /// The end of the domain nearest `anchor`, for a point `p` at `at` on the
+    /// seam of a NURBS surface that closes on itself; `at` for any other.
+    ///
+    /// The surface states no period, so [`Self::invert_near`] leaves such a
+    /// point at whichever end the search came to first.
+    pub fn seam_near(&self, p: V3, at: (f64, f64), anchor: (f64, f64)) -> (f64, f64) {
+        let Surface::Nurbs(n) = self else { return at };
+        let (mut u, mut v) = at;
+        let other = |x: f64, (lo, hi): (f64, f64)| {
+            let edge = 1e-9 * (hi - lo);
+            if (x - lo).abs() <= edge {
+                Some(hi)
+            } else if (x - hi).abs() <= edge {
+                Some(lo)
+            } else {
+                None
+            }
+        };
+        let close = 1e-7 * (1.0 + v3::norm(p));
+        if let Some(x) = other(u, n.domain_u()) {
+            if (x - anchor.0).abs() < (u - anchor.0).abs() && v3::dist(n.point(x, v), p) <= close {
+                u = x;
+            }
+        }
+        if let Some(x) = other(v, n.domain_v()) {
+            if (x - anchor.1).abs() < (v - anchor.1).abs() && v3::dist(n.point(u, x), p) <= close {
+                v = x;
+            }
+        }
+        (u, v)
+    }
+
     // -- evaluation --------------------------------------------------------
 
     pub fn point(&self, u: f64, v: f64) -> V3 {
@@ -660,6 +708,46 @@ impl Surface {
         }
     }
 
+    /// The foot of `p`: its parameters, the signed distance from it and the
+    /// normal there — what [`Self::invert`], [`Self::signed_distance`] and
+    /// [`Self::normal`] say, for one inversion and not three.
+    ///
+    /// Searched for from `near` first, where it is given: walking along a
+    /// spline, the next foot is beside the last, and looking for it over the
+    /// whole surface costs a thousand points each time. A walk that runs to
+    /// the domain's end, or stops short of a foot, searches after all.
+    pub(crate) fn foot(
+        &self,
+        p: V3,
+        near: Option<(f64, f64)>,
+    ) -> Option<((f64, f64), f64, Option<V3>)> {
+        let Surface::Nurbs(s) = self else {
+            let at = self.invert(p)?;
+            return Some((at, self.signed_distance(p), self.normal(at.0, at.1)));
+        };
+        let beside = near.and_then(|(u, v)| {
+            let (u, v, d) = nurbs_polish(s, p, u, v, v3::dist(s.point(u, v), p));
+            let inside = |x: f64, (lo, hi): (f64, f64)| {
+                let edge = 1e-9 * (hi - lo);
+                x > lo + edge && x < hi - edge
+            };
+            if !inside(u, s.domain_u()) || !inside(v, s.domain_v()) {
+                return held_foot(s, p, u, v);
+            }
+            // A foot: what is left runs along the normal.
+            is_foot(s, p, (u, v), d).then_some((u, v))
+        });
+        let (u, v) = match beside {
+            Some(at) => at,
+            None => nurbs_invert(s, p)?,
+        };
+        let q = s.point(u, v);
+        let n = s.normal(u, v);
+        let inside = n.is_some_and(|n| v3::dot(v3::sub(p, q), n) < 0.0);
+        let d = v3::dist(p, q);
+        Some(((u, v), if inside { -d } else { d }, n))
+    }
+
     /// Signed distance to the surface: negative inside, positive outside.
     ///
     /// "Inside" means the side the outward [`Self::normal`] points away from,
@@ -913,44 +1001,301 @@ fn angle_of(rad: V3, axis: V3, x_dir: V3) -> Option<f64> {
 /// seen and rejecting any step that makes things worse costs one distance
 /// evaluation per iteration and removes the failure mode.
 fn nurbs_invert(s: &NurbsSurface, p: V3) -> Option<(f64, f64)> {
-    let (u0, u1) = s.domain_u();
-    let (v0, v1) = s.domain_v();
-
-    // Two samples per control point per direction, floored so small patches are
-    // still seeded properly.
-    let seed_u = (2 * s.n_u()).clamp(12, 96);
-    let seed_v = (2 * s.n_v()).clamp(12, 96);
-
-    let mut seeds: Vec<(f64, f64, f64)> = Vec::with_capacity((seed_u + 1) * (seed_v + 1));
-    for i in 0..=seed_u {
-        for j in 0..=seed_v {
-            let u = u0 + (u1 - u0) * i as f64 / seed_u as f64;
-            let v = v0 + (v1 - v0) * j as f64 / seed_v as f64;
-            seeds.push((v3::dist(s.point(u, v), p), u, v));
-        }
-    }
+    let grid = seed_grid(s);
     // Polished from the best few, not the best one: a surface that closes
     // on itself has both ends of its domain at the same place, and the seed
     // at the wrong end can only walk into the clamp. Measured on a swept
     // ellipse: a point just short of the seam came back at the start of the
     // domain, 0.27 off the surface.
-    seeds.sort_by(|a, b| a.0.total_cmp(&b.0));
+    //
+    // The four nearest seeds, ties to the earlier one, as a stable sort by
+    // distance would give them, without sorting the whole grid or measuring
+    // the rows of it that are further off than the fourth. (The boxes are an
+    // idea of springrep's, as is leaving off at a foot.)
+    let mut nearest: [(f64, usize); 4] = [(f64::INFINITY, usize::MAX); 4];
+    let look = |r: usize, nearest: &mut [(f64, usize); 4]| {
+        let from = r * grid.row;
+        for (i, &(q, _, _)) in grid.points[from..from + grid.row].iter().enumerate() {
+            let at = (v3::dist(q, p), from + i);
+            if at < nearest[3] {
+                let mut k = 3;
+                while k > 0 && at < nearest[k - 1] {
+                    nearest[k] = nearest[k - 1];
+                    k -= 1;
+                }
+                nearest[k] = at;
+            }
+        }
+    };
+    let gap = |b: &(V3, V3)| {
+        (0..3)
+            .map(|k| (b.0[k] - p[k]).max(p[k] - b.1[k]).max(0.0).powi(2))
+            .sum::<f64>()
+            .sqrt()
+    };
+    // The nearest row first, for the rest to be told by.
+    let mut first = (f64::INFINITY, 0);
+    for (r, b) in grid.boxes.iter().enumerate() {
+        first = if gap(b) < first.0 { (gap(b), r) } else { first };
+    }
+    look(first.1, &mut nearest);
+    for (r, b) in grid.boxes.iter().enumerate() {
+        if r != first.1 && gap(b) <= nearest[3].0 {
+            look(r, &mut nearest);
+        }
+    }
+    let count = nearest.iter().filter(|n| n.1 != usize::MAX).count();
     let mut best: Option<(f64, f64, f64)> = None;
-    for &(d, u, v) in seeds.iter().take(4) {
+    for &(d, at) in nearest.iter().take(count) {
+        let (_, u, v) = grid.points[at];
         let (u, v, d) = nurbs_polish(s, p, u, v, d);
         if best.is_none_or(|b| d < b.0) {
             best = Some((d, u, v));
         }
+        // A foot so near that no other part of the surface, which the seeds
+        // tell apart, can be nearer. By the domain's end another place may
+        // be as near, and the first of them is not chosen.
+        let inside = |x: f64, (lo, hi): (f64, f64)| {
+            let edge = 1e-6 * (hi - lo);
+            x > lo + edge && x < hi - edge
+        };
+        if d <= grid.near
+            && inside(u, s.domain_u())
+            && inside(v, s.domain_v())
+            && is_foot(s, p, (u, v), d)
+        {
+            break;
+        }
     }
     best.map(|(_, u, v)| (u, v))
+}
+
+/// A surface's seeds for point inversion, kept by the thread for the
+/// surfaces it inverts on, each found again by its whole definition.
+struct SeedGrid {
+    surface: NurbsSurface,
+    points: std::rc::Rc<Seeds>,
+}
+
+/// Points all over a surface with their parameters, row after row of `row`
+/// along `v`, and the box round each row.
+pub(super) struct Seeds {
+    pub points: Vec<(V3, f64, f64)>,
+    row: usize,
+    boxes: Vec<(V3, V3)>,
+    /// How near a point's foot is for no other to be nearer: a part of the
+    /// way from seed to seed.
+    near: f64,
+}
+
+/// The foot of a point beside the edge of a spline's domain that `u`, `v` is
+/// held at: sought along that edge alone, and taken where the point is off it
+/// the way the surface does not go. (Held so as springrep holds it: a step in
+/// both parameters, cut back to the domain, stalls short of the nearest.)
+fn held_foot(s: &NurbsSurface, p: V3, mut u: f64, mut v: f64) -> Option<(f64, f64)> {
+    let end = |x: f64, (lo, hi): (f64, f64)| {
+        let edge = 1e-9 * (hi - lo);
+        if x <= lo + edge {
+            Some((lo, -1.0))
+        } else if x >= hi - edge {
+            Some((hi, 1.0))
+        } else {
+            None
+        }
+    };
+    let (du, dv) = (s.domain_u(), s.domain_v());
+    // At a corner there is nothing to run along.
+    let (held_u, outward) = match (end(u, du), end(v, dv)) {
+        (Some((at, way)), None) => {
+            u = at;
+            (true, way)
+        }
+        (None, Some((at, way))) => {
+            v = at;
+            (false, way)
+        }
+        _ => return None,
+    };
+    let size = 1.0 + v3::norm(p);
+    for _ in 0..30 {
+        let d = s.derivatives_fixed(u, v, 2);
+        let r = v3::sub(p, d[0][0]);
+        let (along, bend, across) = if held_u {
+            (d[0][1], d[0][2], d[1][0])
+        } else {
+            (d[1][0], d[2][0], d[0][1])
+        };
+        let l = v3::norm(along);
+        if l < 1e-12 * size {
+            return None;
+        }
+        let off = v3::dot(r, along) / l;
+        if off.abs() <= 1e-13 * size + 1e-9 * v3::norm(r) {
+            // Outward of the edge, or on it.
+            let n = v3::normalize(v3::cross(along, across))?;
+            let out = v3::cross(n, v3::scale(along, 1.0 / l));
+            let out = if v3::dot(out, across) * outward < 0.0 {
+                v3::scale(out, -1.0)
+            } else {
+                out
+            };
+            let away = v3::dot(r, out);
+            return (away >= -1e-12 * size).then_some((u, v));
+        }
+        let slope = l * l - v3::dot(r, bend);
+        if slope <= 0.0 {
+            return None;
+        }
+        let step = off * l / slope;
+        let x = if held_u { &mut v } else { &mut u };
+        *x += step;
+        // Past the end of the edge: another place altogether.
+        if end(*x, if held_u { dv } else { du }).is_some() {
+            return None;
+        }
+    }
+    None
+}
+
+/// Is what is left from `p` to its foot along the normal there?
+fn is_foot(s: &NurbsSurface, p: V3, (u, v): (f64, f64), d: f64) -> bool {
+    let Some(n) = s.normal(u, v) else {
+        return false;
+    };
+    let r = v3::sub(p, s.point(u, v));
+    let aside = v3::sub(r, v3::scale(n, v3::dot(r, n)));
+    v3::norm(aside) <= 1e-6 * d + 1e-12 * (1.0 + v3::norm(p))
+}
+
+thread_local! {
+    static SEED_GRIDS: std::cell::RefCell<std::collections::HashMap<u64, Vec<SeedGrid>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The most surfaces whose seeds a thread keeps before it starts afresh.
+const SEED_GRIDS_KEPT: usize = 64;
+
+/// The seed grid's size: the samples across u and across v, less one.
+pub(super) fn seed_counts(s: &NurbsSurface) -> (usize, usize) {
+    ((2 * s.n_u()).clamp(12, 96), (2 * s.n_v()).clamp(12, 96))
+}
+
+/// Two samples per control point per direction, floored so small patches
+/// are still seeded properly: the points and their parameters, u-major.
+/// Made once per surface and thread, as every inversion on it seeds the
+/// same grid.
+pub(super) fn seed_grid(s: &NurbsSurface) -> std::rc::Rc<Seeds> {
+    // The surface asked of last, more often than not, and told apart from
+    // another at the first number they differ in: far less than hashing all
+    // of it, which had come to a tenth of a boolean's time.
+    if let Some(found) = LAST_GRIDS.with(|g| {
+        g.borrow()
+            .iter()
+            .flatten()
+            .find(|e| e.surface == *s)
+            .map(|e| e.points.clone())
+    }) {
+        return found;
+    }
+    let points = hashed_seed_grid(s);
+    LAST_GRIDS.with(|g| {
+        let mut g = g.borrow_mut();
+        g.rotate_right(1);
+        g[0] = Some(SeedGrid {
+            surface: s.clone(),
+            points: points.clone(),
+        });
+    });
+    points
+}
+
+thread_local! {
+    /// The grids found last, the latest first.
+    static LAST_GRIDS: std::cell::RefCell<[Option<SeedGrid>; 4]> =
+        const { std::cell::RefCell::new([const { None }; 4]) };
+}
+
+fn hashed_seed_grid(s: &NurbsSurface) -> std::rc::Rc<Seeds> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (s.degree_u(), s.degree_v(), s.n_u(), s.n_v()).hash(&mut h);
+    for x in s.knots_u().iter().chain(s.knots_v()) {
+        x.to_bits().hash(&mut h);
+    }
+    for c in s.homogeneous() {
+        for x in c {
+            x.to_bits().hash(&mut h);
+        }
+    }
+    let key = h.finish();
+    if let Some(found) = SEED_GRIDS.with(|g| {
+        g.borrow().get(&key).and_then(|list| {
+            list.iter()
+                .find(|e| e.surface == *s)
+                .map(|e| e.points.clone())
+        })
+    }) {
+        return found;
+    }
+    let (u0, u1) = s.domain_u();
+    let (v0, v1) = s.domain_v();
+    let (seed_u, seed_v) = seed_counts(s);
+    let mut points = Vec::with_capacity((seed_u + 1) * (seed_v + 1));
+    for i in 0..=seed_u {
+        for j in 0..=seed_v {
+            let u = u0 + (u1 - u0) * i as f64 / seed_u as f64;
+            let v = v0 + (v1 - v0) * j as f64 / seed_v as f64;
+            points.push((s.point(u, v), u, v));
+        }
+    }
+    let row = seed_v + 1;
+    let boxes = points
+        .chunks(row)
+        .map(|r| {
+            let mut b = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+            for (q, _, _) in r {
+                for k in 0..3 {
+                    b.0[k] = b.0[k].min(q[k]);
+                    b.1[k] = b.1[k].max(q[k]);
+                }
+            }
+            b
+        })
+        .collect();
+    // The shorter way between neighbours, where they are not one point.
+    let apart = points
+        .chunks(row)
+        .flat_map(|r| r.windows(2).map(|w| v3::dist(w[0].0, w[1].0)))
+        .chain(points.windows(row + 1).map(|w| v3::dist(w[0].0, w[row].0)))
+        .filter(|d| *d > 1e-9)
+        .fold(f64::INFINITY, f64::min);
+    let near = if apart.is_finite() { 0.05 * apart } else { 0.0 };
+    let points = std::rc::Rc::new(Seeds {
+        points,
+        row,
+        boxes,
+        near,
+    });
+    SEED_GRIDS.with(|g| {
+        let mut g = g.borrow_mut();
+        if g.values().map(Vec::len).sum::<usize>() >= SEED_GRIDS_KEPT {
+            g.clear();
+        }
+        g.entry(key).or_default().push(SeedGrid {
+            surface: s.clone(),
+            points: points.clone(),
+        });
+    });
+    points
 }
 
 /// Newton on the distance from `p`, from `(u, v)` at distance `best`.
 fn nurbs_polish(s: &NurbsSurface, p: V3, mut u: f64, mut v: f64, mut best: f64) -> (f64, f64, f64) {
     let (u0, u1) = s.domain_u();
     let (v0, v1) = s.domain_v();
+    let size = v3::norm(p);
     for _ in 0..48 {
-        let d = s.derivatives(u, v, 2);
+        let d = s.derivatives_fixed(u, v, 2);
         let r = v3::sub(d[0][0], p);
         let (su, sv) = (d[1][0], d[0][1]);
 
@@ -969,8 +1314,21 @@ fn nurbs_polish(s: &NurbsSurface, p: V3, mut u: f64, mut v: f64, mut best: f64) 
             break;
         }
 
-        let du = (-f * j11 + g * j01) / det;
-        let dv = (-g * j00 + f * j01) / det;
+        let mut du = (-f * j11 + g * j01) / det;
+        let mut dv = (-g * j00 + f * j01) / det;
+        // At an end of the domain and bound past it: along that edge alone,
+        // where both at once and cut back would creep.
+        let held = |x: f64, d: f64, lo: f64, hi: f64| (x <= lo && d < 0.0) || (x >= hi && d > 0.0);
+        if held(u, du, u0, u1) && f * du < 0.0 && j11 > 0.0 {
+            (du, dv) = (0.0, -g / j11);
+        } else if held(v, dv, v0, v1) && g * dv < 0.0 && j00 > 0.0 {
+            (du, dv) = (-f / j00, 0.0);
+        }
+        // No further than rounding: more steps only wander about it.
+        let step = du.abs() * v3::norm(su) + dv.abs() * v3::norm(sv);
+        if step <= 4.0 * f64::EPSILON * size {
+            break;
+        }
 
         // Backtracking line search: a full Newton step that increases the
         // distance is heading for a different stationary point.

@@ -131,6 +131,8 @@ pub(crate) struct Piece {
     pub end: u32,
     /// Which run; `u32::MAX` past the last one (the node's own style).
     pub run: u32,
+    /// Which way it reads, where its line reads both.
+    pub rtl: Option<bool>,
 }
 
 impl Ui {

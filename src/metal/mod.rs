@@ -175,9 +175,19 @@ mod surface;
 #[cfg(metal_backend)]
 mod target;
 #[cfg(all(metal_backend, feature = "ui"))]
+mod quads;
+#[cfg(all(metal_backend, feature = "ui"))]
+pub(crate) mod warp;
+#[cfg(all(metal_backend, feature = "ui"))]
 mod ui;
+#[cfg(all(metal_backend, feature = "ui"))]
+mod ui_images;
 #[cfg(metal_backend)]
 mod video;
+#[cfg(metal_backend)]
+mod wgpu_bridge;
+#[cfg(metal_backend)]
+pub use wgpu_bridge::{wgpu_on, wgpu_texture};
 #[cfg(metal_backend)]
 pub mod viewport;
 
